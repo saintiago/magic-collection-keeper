@@ -18,6 +18,7 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
     .getByLabel("Password", { exact: true })
     .fill(process.env.KEEPER_TAGS_PASSWORD);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.locator(".auth-dialog")).toHaveCount(0);
   await expect(page.locator("#sign-out")).toBeVisible();
   const token = await page.evaluate(
     () => JSON.parse(sessionStorage.getItem("keeper-session")).IdToken,
