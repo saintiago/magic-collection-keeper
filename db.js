@@ -26,7 +26,9 @@ export function openDatabase(path) {
     );
     CREATE TABLE IF NOT EXISTS api_cache (key TEXT PRIMARY KEY, data TEXT NOT NULL, timestamp INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, input TEXT NOT NULL);
-    PRAGMA user_version=1;`);
+    `);
+  if (db.prepare("PRAGMA user_version").get().user_version < 1)
+    db.exec("PRAGMA user_version=1;");
   return db;
 }
 

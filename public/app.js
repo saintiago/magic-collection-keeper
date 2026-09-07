@@ -1,3 +1,4 @@
+import { createTagController, tagBadges, allocationWarning } from "./tags.js";
 import { signIn } from "./auth.js";
 import { api } from "./api.js";
 import { esc, finishName, picture } from "./view.js";
@@ -12,7 +13,12 @@ let owned = [],
   hasMore = false,
   loading = false,
   requestId = 0;
+const tagController = createTagController({ api, onChanged: refresh });
 const detail = createCardDetail({
+  onTags: (row) => {
+    document.getElementById("detail").close();
+    tagController.edit(row);
+  },
   api,
   onSaved: (updated) => {
     owned = updated;
@@ -60,6 +66,9 @@ function render() {
         `${r.card.name} ${r.card.set_name} ${r.card.set} ${r.card.collector_number} ${r.card.type_line} ${r.language} ${r.condition}`
           .toLowerCase()
           .includes(q) &&
+        (!$("tag-filter").value ||
+          (r.locations ?? []).some((a) => a.tag_id === $("tag-filter").value) ||
+          (r.tag_ids ?? []).includes($("tag-filter").value)) &&
         (!$("set-filter").value || r.card.set === $("set-filter").value) &&
         (!$("finish-filter").value || r.finish === $("finish-filter").value) &&
         (!color ||
@@ -77,7 +86,7 @@ function render() {
   $("grid").innerHTML = rows
     .map(
       (r, i) =>
-        `<button class="card" data-index="${i}"><div class="card-image">${picture(r.card)}</div><div class="card-info"><div class="card-title">${esc(r.card.name)}</div><div class="card-meta">${esc(r.card.set.toUpperCase())} · #${esc(r.card.collector_number)} <span>${esc(r.card.lang.toUpperCase())}</span></div><div class="card-bottom"><span>${r.id ? esc(`${finishName[r.finish]} · ${r.condition}`) : esc(r.card.rarity)}</span><b>${r.id ? `${r.quantity} owned` : "+ Add to collection"}</b></div></div></button>`,
+        `<button class="card" data-index="${i}"><div class="card-image">${picture(r.card)}</div><div class="card-info"><div class="card-title">${esc(r.card.name)}</div><div class="card-meta">${esc(r.card.set.toUpperCase())} · #${esc(r.card.collector_number)} <span>${esc(r.card.lang.toUpperCase())}</span></div><div class="card-bottom"><span>${r.id ? esc(`${finishName[r.finish]} · ${r.condition}`) : esc(r.card.rarity)}</span><b>${r.id ? `${r.quantity} owned` : "+ Add to collection"}</b></div>${r.id ? `<div class="card-tags">${tagBadges(r)}</div>${allocationWarning(r)}` : ""}</div></button>`,
     )
     .join("");
   $("grid")
@@ -96,7 +105,7 @@ function render() {
   if ($("first-card")) $("first-card").onclick = () => switchMode("catalog");
   if ($("clear-filters"))
     $("clear-filters").onclick = () => {
-      ["search", "color", "set-filter", "finish-filter"].forEach(
+      ["search", "color", "set-filter", "finish-filter", "tag-filter"].forEach(
         (id) => ($(id).value = ""),
       );
       render();
@@ -144,8 +153,28 @@ async function refresh() {
   message("Updating your collection…");
   try {
     owned = await api("/api/collection");
+    let tagError;
+    try {
+      const tags = await tagController.refresh();
+      const selected = $("tag-filter").value;
+      $("tag-filter").innerHTML =
+        '<option value="">All tags & locations</option>' +
+        tags
+          .map(
+            (t) => '<option value="' + t.id + '">' + esc(t.label) + "</option>",
+          )
+          .join("");
+      $("tag-filter").value = selected;
+    } catch (error) {
+      tagError = error.message;
+    }
     render();
-    message("Collection is up to date. All saved changes loaded.");
+    message(
+      tagError
+        ? "Collection loaded; tags could not be refreshed: " + tagError
+        : "Collection is up to date. All saved changes loaded.",
+      Boolean(tagError),
+    );
   } catch (e) {
     message(e.message, true);
   } finally {
@@ -195,6 +224,7 @@ $("catalog-nav").onclick = () => switchMode("catalog");
 $("add").onclick = () => switchMode("catalog");
 $("close").onclick = () => $("detail").close();
 $("refresh").onclick = refresh;
+$("manage-tags").onclick = () => tagController.manager();
 $("search-form").onsubmit = (e) => {
   e.preventDefault();
   if (mode === "catalog") search();
@@ -202,7 +232,7 @@ $("search-form").onsubmit = (e) => {
 $("search").oninput = () => {
   if (mode === "collection") render();
 };
-["color", "set-filter", "finish-filter", "sort"].forEach(
+["color", "set-filter", "finish-filter", "sort", "tag-filter"].forEach(
   (id) => ($(id).onchange = render),
 );
 $("more").onclick = () => search(true);

@@ -1,3 +1,7 @@
+import { randomUUID, createHash } from "node:crypto";
+import { createTaggedCollection } from "./application/tagged-collection.js";
+import { createSqliteDocumentStore } from "./adapters/document-store.js";
+import { routeCollection } from "./application/routes.js";
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -12,16 +16,23 @@ const db = openDatabase(
   process.env.DB_PATH || resolve(root, "data/collection.sqlite"),
 );
 const adapters = createSqliteAdapters(db);
-const service = createCollectionService({
+const baseService = createCollectionService({
   repository: adapters.repository,
   catalog: createScryfallCatalog(adapters),
+});
+const service = createTaggedCollection({
+  collection: baseService,
+  repository: adapters.repository,
+  store: createSqliteDocumentStore(db),
+  newId: randomUUID,
+  hash: (value) => createHash("sha256").update(value).digest("hex"),
 });
 const port = Number(process.env.PORT || 3000);
 async function body(req) {
   let raw = "";
   for await (const chunk of req) {
     raw += chunk;
-    if (raw.length > 16000)
+    if (raw.length > 150000)
       throw new ApplicationError("Request too large", 413);
   }
   try {
@@ -53,24 +64,26 @@ const server = http.createServer(async (req, res) => {
       return json({ error: "Cross-origin request rejected" }, 403);
     const url = new URL(req.url, `http://localhost:${port}`),
       owner = "local";
-    if (url.pathname === "/api/collection" && req.method === "GET")
-      return json(await service.list(owner));
-    if (url.pathname === "/api/search" && req.method === "GET")
-      return json(
-        await service.search(
-          (url.searchParams.get("q") || "").trim(),
-          Number(url.searchParams.get("page") || 1),
-        ),
+    if (url.pathname.startsWith("/api/")) {
+      const input = ["POST", "PUT", "PATCH"].includes(req.method)
+        ? await body(req)
+        : {};
+      const data = await routeCollection(
+        service,
+        owner,
+        req.method,
+        url.pathname,
+        input,
+        Object.fromEntries(url.searchParams),
       );
-    if (url.pathname === "/api/collection" && req.method === "POST")
-      return json(await service.add(owner, await body(req)), 201);
-    const match = url.pathname.match(/^\/api\/collection\/(\d+)$/);
-    if (match && req.method === "PATCH")
-      return json(
-        await service.setQuantity(owner, match[1], (await body(req)).quantity),
-      );
-    if (match && req.method === "DELETE")
-      return json(await service.remove(owner, match[1]));
+      if (data !== undefined)
+        return json(
+          data,
+          url.pathname === "/api/collection" && req.method === "POST"
+            ? 201
+            : 200,
+        );
+    }
     if (url.pathname.startsWith("/api/"))
       return json({ error: "Not found" }, 404);
     if (url.pathname === "/config.json") return json({ local: true });

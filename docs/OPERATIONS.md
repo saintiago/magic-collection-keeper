@@ -45,6 +45,14 @@ Self-signup is disabled. Owner username: `saint282`; Cognito sent the invitation
 
 For an expired owner invitation, use Cognito's admin resend invitation workflow with the known username; that sends email and requires user authorization. Password recovery currently uses an administrator; there is no self-service reset button. Sign-out clears this browser session. Refresh tokens last 30 days; ID/access tokens one hour. Authenticated users can access only their own collection even if they know another row ID.
 
+## Tag/source deployment and recovery
+
+The live test suite additionally requires `KEEPER_TAGS_USER` and `KEEPER_TAGS_PASSWORD`. The bootstrap creates three dedicated suppressed-email profiles and six GitHub test secrets. `keeper-tags` retains two synthetic source manifests across runs; do not clear them with the legacy empty-profile test or import test sources into the owner's partition. Delete the ignored local credential file after verification.
+
+Tag documents are an additive migration in the existing table/database. Deploy the CORS addition for PUT through the isolated CloudFormation stack, using the current Lambda bundle and a fresh CodeKey, then ship the application through the normal main workflow. No extra CI permissions or cross-project resources are required. A previous application build does not understand these source projections; rolling back must account for temporarily hiding source-derived inventory rather than assuming it disappeared.
+
+An administrator-assisted source import must first verify the Cognito owner UUID against the authorized account and inspect the requested folder in the user's signed-in browser. Use visible supported exports, resolve exact printings against canonical Scryfall data (bulk data for large imports), record excluded sections and preview each source. The import port commits a snapshot with the preview's expected version. Repeat the preview after success: unchanged snapshots must report zero additions. Never infer ownership from unrelated folders or erase existing loose inventory. Keep raw private exports and owner audit reports in ignored local data, not public artifacts or source control. Do not log authentication tokens or passwords.
+
 ## Troubleshooting
 
 | Symptom                          | Check                                                                                                                                                                 |

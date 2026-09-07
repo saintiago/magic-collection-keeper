@@ -1,11 +1,22 @@
+import { randomUUID, createHash } from "node:crypto";
+import { createTaggedCollection } from "./application/tagged-collection.js";
+import { createDynamoDocumentStore } from "./adapters/document-store.js";
+import { routeCollection } from "./application/routes.js";
 import { createCollectionService } from "./application/collection.js";
 import { createDynamoAdapters } from "./adapters/dynamo.js";
 import { createScryfallCatalog } from "./adapters/scryfall.js";
 import { ApplicationError } from "./domain/inventory.js";
 const adapters = createDynamoAdapters(process.env.TABLE_NAME);
-const service = createCollectionService({
+const baseService = createCollectionService({
   repository: adapters.repository,
   catalog: createScryfallCatalog(adapters),
+});
+const service = createTaggedCollection({
+  collection: baseService,
+  repository: adapters.repository,
+  store: createDynamoDocumentStore(process.env.TABLE_NAME),
+  newId: randomUUID,
+  hash: (value) => createHash("sha256").update(value).digest("hex"),
 });
 export async function handler(event) {
   const result = (data, statusCode = 200) => ({
@@ -24,18 +35,9 @@ export async function handler(event) {
       return result({ error: "Sign in to access your collection." }, 401);
     const path = event.rawPath,
       method = event.requestContext.http.method;
-    if (path === "/api/collection" && method === "GET")
-      return result(await service.list(owner));
-    if (path === "/api/search" && method === "GET")
-      return result(
-        await service.search(
-          (event.queryStringParameters?.q || "").trim(),
-          Number(event.queryStringParameters?.page || 1),
-        ),
-      );
     let input = {};
     if (event.body) {
-      if (event.body.length > 16000)
+      if (event.body.length > 150000)
         throw new ApplicationError("Request too large.", 413);
       try {
         input = JSON.parse(event.body);
@@ -43,13 +45,19 @@ export async function handler(event) {
         throw new ApplicationError("Invalid request.");
       }
     }
-    if (path === "/api/collection" && method === "POST")
-      return result(await service.add(owner, input), 201);
-    const match = path.match(/^\/api\/collection\/([a-f0-9]{64})$/);
-    if (match && method === "PATCH")
-      return result(await service.setQuantity(owner, match[1], input.quantity));
-    if (match && method === "DELETE")
-      return result(await service.remove(owner, match[1]));
+    const data = await routeCollection(
+      service,
+      owner,
+      method,
+      path,
+      input,
+      event.queryStringParameters || {},
+    );
+    if (data !== undefined)
+      return result(
+        data,
+        path === "/api/collection" && method === "POST" ? 201 : 200,
+      );
     return result({ error: "Not found" }, 404);
   } catch (error) {
     console.error(error.name, error.message);

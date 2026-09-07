@@ -144,7 +144,7 @@ const template = {
         ProtocolType: "HTTP",
         CorsConfiguration: {
           AllowOrigins: [Sub("https://${Distribution.DomainName}")],
-          AllowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+          AllowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
           AllowHeaders: ["authorization", "content-type"],
           MaxAge: 3600,
         },

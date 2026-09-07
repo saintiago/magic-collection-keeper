@@ -6,6 +6,7 @@ const credentials = {};
 for (const [label, username] of [
   ["TEST", "keeper-e2e"],
   ["OTHER", "keeper-isolation"],
+  ["TAGS", "keeper-tags"],
 ]) {
   const password = `K!8a${randomBytes(24).toString("base64url")}`;
   const input = {
@@ -67,5 +68,5 @@ writeFileSync(".local-secrets/credentials.json", JSON.stringify(credentials), {
   mode: 0o600,
 });
 console.log(
-  "Two isolated test identities created with suppressed email; credentials stored in GitHub Actions secrets and ignored local test file.",
+  "Three isolated test identities created with suppressed email; credentials stored in GitHub Actions secrets and ignored local test file.",
 );

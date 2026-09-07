@@ -77,4 +77,6 @@ jobs:
           KEEPER_TEST_PASSWORD: ${{ secrets.KEEPER_TEST_PASSWORD }}
           KEEPER_OTHER_USER: ${{ secrets.KEEPER_OTHER_USER }}
           KEEPER_OTHER_PASSWORD: ${{ secrets.KEEPER_OTHER_PASSWORD }}
+          KEEPER_TAGS_USER: ${{ secrets.KEEPER_TAGS_USER }}
+          KEEPER_TAGS_PASSWORD: ${{ secrets.KEEPER_TAGS_PASSWORD }}
         run: npx playwright test --config playwright.live.config.js

@@ -39,6 +39,7 @@
           </p>
         </div>
         <div class="actions">
+          <button class="secondary" id="manage-tags">Tags & locations</button>
           <button class="secondary" id="import-list">Import list</button
           ><button class="primary" id="scan">▣ Scan cards</button
           ><button class="secondary" id="refresh">↻ Update collection</button
@@ -83,6 +84,9 @@
             </button>
           </div>
           <div class="filters" id="filters">
+            <select id="tag-filter" aria-label="Filter by tag or location">
+              <option value="">All tags & locations</option>
+            </select>
             <select id="color" aria-label="Filter by color">
               <option value="">All colors</option>
               <option value="W">White</option>

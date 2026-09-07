@@ -23,6 +23,14 @@ Sign in with your invitation. On first sign-in, choose a new password. Your coll
 
 Choose exact printings where the text omits them. Check quantities and attributes before confirming ownership. Unresolved/unselected rows stay out. Batches are limited to 50 card lines. A deck list is never treated as proof of ownership. Moxfield's [official feature documentation](https://github.com/moxfield/moxfield-public/wiki/Features) describes Arena/MTGO export; this app uses pasted exports. No supported public Moxfield API contract was established during this implementation, so URL scraping is not implemented.
 
+## Organize your cards
+
+**Tags & locations** creates deck, binder, box and other locations, plus reusable roles (such as Card Draw) and categories. Labels are editable; each tag has a stable, opaque identity. Open a card and choose **Edit locations & tags** to assign copies, move them between locations, or add/remove classifications. The collection shows location icons and quantities, and filters by any tag.
+
+Owned quantity and location quantities are independently editable. If three copies are assigned but only two owned, the card shows **3 assigned · 2 owned**. This is an inline reminder: saving remains available and no assignment is discarded. Unassigned copies never display as negative.
+
+Verified deck-source imports contribute copies per source while preserving existing loose inventory. Reimporting the same source does not add copies again. Source reductions release copies to loose inventory; they do not delete ownership. Source metadata and exclusions are available under **View deck sources**. Printing, language and finish remain distinct, and source condition is **Unknown (imported)** until physical condition is established. The source import API is an administrator-assisted workflow; the normal **Import list** button remains a reviewed one-off text import and does not create a synchronized deck source.
+
 ## Run locally
 
 Node 24 and npm are required.
