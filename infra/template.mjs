@@ -191,8 +191,8 @@ const template = {
         StageName: "$default",
         AutoDeploy: true,
         DefaultRouteSettings: {
-          ThrottlingBurstLimit: 5,
-          ThrottlingRateLimit: 3,
+          ThrottlingBurstLimit: 30,
+          ThrottlingRateLimit: 20,
         },
       },
     },

@@ -28,6 +28,18 @@ writeFileSync(
     clientId: out.ClientId,
   }),
 );
+const subjectPrefix = JSON.parse(
+  execFileSync(
+    "gh",
+    [
+      "api",
+      "repos/saintiago/magic-collection-keeper/actions/oidc/customization/sub",
+    ],
+    { encoding: "utf8" },
+  ),
+).sub_claim_prefix;
+if (!subjectPrefix)
+  throw new Error("GitHub did not return an OIDC subject prefix.");
 const trust = {
   Version: "2012-10-17",
   Statement: [
@@ -41,8 +53,7 @@ const trust = {
       Condition: {
         StringEquals: {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub":
-            "repo:saintiago/magic-collection-keeper:ref:refs/heads/main",
+          "token.actions.githubusercontent.com:sub": `${subjectPrefix}:ref:refs/heads/main`,
         },
       },
     },

@@ -35,6 +35,8 @@ The private GitHub repository runs `.github/workflows/deploy.yml`. Pull requests
 
 Repository variables are public resource configuration: `AWS_ROLE_ARN`, `WEBSITE_BUCKET`, `DISTRIBUTION_ID`, `API_URL`, `COGNITO_CLIENT_ID`, `WEBSITE_URL`. Four encrypted GitHub secrets contain only the two dedicated test identities. They are not the owner's credentials. `scripts/configure-deployment.mjs` creates/updates the scoped deployment role and variables from completed stack outputs. It is an administrator bootstrap script, not invoked by CI and not a general cross-account provisioner.
 
+New GitHub repositories use an immutable OIDC subject containing owner/repository numeric IDs. The bootstrap reads the actual `sub_claim_prefix` from GitHub and restricts it to `refs/heads/main`; it does not assume the older name-only format. See [GitHub's OIDC reference](https://docs.github.com/en/actions/reference/security/oidc).
+
 Rollback application code by reverting the bad commit on `main` and letting the pipeline redeploy a verified build. Workflow concurrency prevents two deployments for the same branch racing. Database changes must remain compatible with the previous application version; use additive migrations. For data recovery, restore DynamoDB point-in-time recovery to a new table, inspect it, and deliberately update the Lambda/table configuration. Never replace/delete a live table as an application rollback shortcut. Infrastructure changes are deployed separately with CloudFormation by an authorized administrator, not automatically granted to the limited CI role.
 
 ## Accounts and secrets
