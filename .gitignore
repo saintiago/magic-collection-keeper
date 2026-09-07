@@ -1,0 +1,10 @@
+data/
+node_modules/
+test-results/
+*.log
+*.zip
+build/
+public/vendor/
+public/config.json
+infra/outputs.json
+.local-secrets/

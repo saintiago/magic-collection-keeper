@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Collection Keeper · Magic: The Gathering</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/"
+        >✦ <span>KEEPER<small>MAGIC COLLECTION</small></span></a
+      >
+      <div class="nav-label">YOUR WORKSPACE</div>
+      <nav>
+        <button id="collection-nav" class="active">
+          ▦ <span>My collection</span><span id="nav-count">0</span></button
+        ><button id="catalog-nav">⌕ <span>Discover cards</span></button>
+      </nav>
+      <div class="sidebar-bottom">
+        <span class="status-dot"></span> Saved on this device
+        <p>A little order.<br />A lot of Magic.</p>
+        <small>Your collection starts with you.</small>
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div class="breadcrumb">
+          Workspace <span>/</span> <b id="breadcrumb">My collection</b>
+        </div>
+        <span class="local-badge">◉ Local collection</span>
+      </header>
+      <section class="page-heading">
+        <div>
+          <div class="eyebrow">EVERY CARD HAS A PLACE</div>
+          <h1 id="title">My collection<span>.</span></h1>
+          <p id="subtitle">
+            Your cards, thoughtfully kept. Build a collection you know by heart.
+          </p>
+        </div>
+        <div class="actions">
+          <button class="secondary" id="import-list">Import list</button
+          ><button class="primary" id="scan">▣ Scan cards</button
+          ><button class="secondary" id="refresh">↻ Update collection</button
+          ><button class="primary" id="add">+ Add cards</button>
+        </div>
+      </section>
+      <section class="stats" id="stats">
+        <div>
+          <span>Total cards</span><strong id="total">0</strong
+          ><small>Copies in your collection</small>
+        </div>
+        <div>
+          <span>Unique printings</span><strong id="unique">0</strong
+          ><small>Every edition accounted for</small>
+        </div>
+        <div>
+          <span>Sets collected</span><strong id="sets">0</strong
+          ><small>Worlds worth exploring</small>
+        </div>
+        <div>
+          <span>Foil & etched</span><strong id="foils">0</strong
+          ><small>A little extra shine</small>
+        </div>
+      </section>
+      <section class="library">
+        <div class="section-top">
+          <h2 id="section-title">
+            Your library <span id="result-count">0 entries</span>
+          </h2>
+          <span id="view-caption">▦ Card view</span>
+        </div>
+        <form id="search-form">
+          <div class="search-box">
+            <span>⌕</span
+            ><input
+              id="search"
+              aria-label="Search cards"
+              placeholder="Search your collection…"
+              autocomplete="off"
+            /><button id="search-submit" class="primary" hidden>
+              Search cards
+            </button>
+          </div>
+          <div class="filters" id="filters">
+            <select id="color" aria-label="Filter by color">
+              <option value="">All colors</option>
+              <option value="W">White</option>
+              <option value="U">Blue</option>
+              <option value="B">Black</option>
+              <option value="R">Red</option>
+              <option value="G">Green</option>
+              <option value="C">Colorless</option></select
+            ><select id="set-filter" aria-label="Filter by set">
+              <option value="">All sets</option></select
+            ><select id="finish-filter" aria-label="Filter by finish">
+              <option value="">All finishes</option>
+              <option value="nonfoil">Nonfoil</option>
+              <option value="foil">Foil</option>
+              <option value="etched">Etched</option></select
+            ><select id="sort" aria-label="Sort collection">
+              <option value="name">Name: A–Z</option>
+              <option value="recent">Recently added</option>
+              <option value="quantity">Quantity: high to low</option>
+            </select>
+          </div>
+        </form>
+        <p id="search-help" class="hint" hidden>
+          Search by name or exact printing:
+          <button type="button" class="text-button" id="example">
+            set:blb cn:1</button
+          >. Add <code>lang:es</code> for Spanish. Results are catalog cards,
+          not owned cards.
+        </p>
+        <div id="message" role="status" aria-live="polite"></div>
+        <div id="grid" class="card-grid"></div>
+        <div id="empty" class="empty"></div>
+        <button id="more" class="secondary more" hidden>
+          Load more printings
+        </button>
+      </section>
+      <footer>
+        Card data and images from
+        <a href="https://scryfall.com" target="_blank" rel="noreferrer"
+          >Scryfall ↗</a
+        >. Magic: The Gathering © Wizards of the Coast.<span
+          >Made for your next great find.</span
+        >
+      </footer>
+    </main>
+    <dialog id="detail">
+      <button class="close" id="close" aria-label="Close card details">
+        ×
+      </button>
+      <div id="detail-content"></div>
+    </dialog>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
