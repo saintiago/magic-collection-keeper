@@ -327,6 +327,7 @@ export function setupBatch({ api, onSaved }) {
     busy = true;
     updateSave();
     let saved = 0;
+    let failure;
     try {
       for (const row of rows.filter((r) => r.selected && !r.saved)) {
         row.operationId ||= crypto.randomUUID();
@@ -345,19 +346,21 @@ export function setupBatch({ api, onSaved }) {
         saved++;
         render();
       }
-      status(
-        `${saved} reviewed entries added. Unselected or unresolved lines were left out.`,
-      );
-      await onSaved();
     } catch (e) {
-      status(
-        `${saved} entries saved before an error: ${e.message} Saved entries will not be added again when you retry.`,
-      );
-      await onSaved();
-    } finally {
-      busy = false;
-      render();
+      failure = e;
     }
+    try {
+      await onSaved();
+    } catch (error) {
+      failure ||= error;
+    }
+    busy = false;
+    render();
+    status(
+      failure
+        ? `${saved} entries saved before an error: ${failure.message} Saved entries will not be added again when you retry.`
+        : `${saved} reviewed entries added. Unselected or unresolved lines were left out.`,
+    );
   }
   document.getElementById("scan").onclick = () => open("scan");
   document.getElementById("import-list").onclick = () => open("import");

@@ -1,4 +1,35 @@
 import { test, expect } from "@playwright/test";
+test("UC-07 completion waits for collection refresh before allowing close", async ({
+  page,
+}) => {
+  let saved = false,
+    release;
+  await page.route("**/api/collection", async (r) => {
+    if (r.request().method() === "POST") saved = true;
+    else if (saved) await new Promise((resolve) => (release = resolve));
+    await r.fulfill({ json: [] });
+  });
+  await page.route("**/api/search?*", (r) =>
+    r.fulfill({ json: { cards: [card], total: 1, hasMore: false } }),
+  );
+  await page.goto("/");
+  await page.locator("#import-list").click();
+  await page.locator("#import-text").fill("1 Scanned Card");
+  await page.locator("#preview").click();
+  await expect(page.locator(".candidate")).not.toHaveValue("");
+  await page.locator("#ownership").check();
+  await page.locator("#save-batch").click();
+  await expect.poll(() => Boolean(release)).toBe(true);
+  await expect(
+    page.getByText("1 reviewed entries added.", { exact: false }),
+  ).not.toBeVisible();
+  release();
+  await expect(
+    page.getByText("1 reviewed entries added.", { exact: false }),
+  ).toBeVisible();
+  await page.locator("#batch-close").click();
+  await expect(page.locator(".batch-dialog")).not.toBeVisible();
+});
 test("UC-08 permission timeout and invalid uploaded photo give actionable errors", async ({
   page,
 }) => {
@@ -17,13 +48,11 @@ test("UC-08 permission timeout and invalid uploaded photo give actionable errors
       exact: false,
     }),
   ).toBeVisible();
-  await page
-    .locator("#photo")
-    .setInputFiles({
-      name: "invalid.png",
-      mimeType: "image/png",
-      buffer: Buffer.from("not an image"),
-    });
+  await page.locator("#photo").setInputFiles({
+    name: "invalid.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("not an image"),
+  });
   await expect(
     page.getByText("Could not read that image:", { exact: false }),
   ).toBeVisible();
