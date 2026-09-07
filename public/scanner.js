@@ -164,7 +164,10 @@ export function createScanner({ api, onReview }) {
     el("camera-start").disabled = true;
     status("Waiting for camera permission…");
     // Called directly from the initial tap, before awaiting camera permission.
-    const activated = audio.activate();
+    let soundReady = false;
+    void audio.activate().then((ready) => {
+      soundReady = ready;
+    });
     try {
       const candidate = await startCamera(el("camera-video"));
       if (current !== session || !dialog.open || document.hidden) {
@@ -176,7 +179,7 @@ export function createScanner({ api, onReview }) {
       dialog.dataset.running = "true";
       el("camera-start").hidden = true;
       status(
-        `Hold one card inside the guide until the cue, then slide in the next.${(await activated) ? "" : " Sound unavailable; use the visual status."}`,
+        `Hold one card inside the guide until the cue, then slide in the next.${soundReady ? "" : " Use the visual status if sound is unavailable."}`,
       );
       tick(current);
     } catch (error) {

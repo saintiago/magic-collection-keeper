@@ -4,6 +4,7 @@ export function createScanWheel({ viewport, controls, onChange }) {
     selected = -1,
     settleTimer;
   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+  const nativeScrollEnd = "onscrollend" in viewport;
   function paint() {
     const options = [...viewport.children];
     options.forEach((option, index) => {
@@ -24,6 +25,7 @@ export function createScanWheel({ viewport, controls, onChange }) {
     controls.querySelector(".scan-plus").disabled = row.quantity >= 100000;
   }
   function select(index, smooth = true) {
+    clearTimeout(settleTimer);
     selected = Math.max(0, Math.min(rows.length - 1, index));
     paint();
     const target = viewport.children[selected];
@@ -57,11 +59,19 @@ export function createScanWheel({ viewport, controls, onChange }) {
     () => {
       nearest();
       clearTimeout(settleTimer);
-      settleTimer = setTimeout(() => select(selected, false), 160);
+      if (!nativeScrollEnd)
+        settleTimer = setTimeout(() => select(selected, false), 240);
     },
     { passive: true },
   );
-  viewport.addEventListener("scrollend", nearest);
+  viewport.addEventListener("scrollend", () => {
+    clearTimeout(settleTimer);
+    nearest();
+  });
+  for (const event of ["pointerdown", "wheel", "touchstart"])
+    viewport.addEventListener(event, () => clearTimeout(settleTimer), {
+      passive: true,
+    });
   viewport.addEventListener("click", (event) => {
     const option = event.target.closest("[role=option]");
     if (option) select(Number(option.dataset.index));

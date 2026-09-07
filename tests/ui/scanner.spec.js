@@ -278,3 +278,18 @@ test("UC-14 sampling continues during slow OCR and removing the last queued read
   await page.locator("#scan-back").click();
   await expect(page.locator(".batch-dialog")).not.toBeVisible();
 });
+
+test("UC-14 suspended audio cannot block hands-free capture", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    AudioContext.prototype.resume = () => new Promise(() => {});
+  });
+  await fixture(page);
+  await expect(page.locator("#scan-status")).toContainText("matched");
+  await expect(page.locator(".scan-option")).toHaveCount(1);
+  await page.locator("#scan-back").click();
+  expect(
+    await page.evaluate(() => window.testStream.getTracks()[0].readyState),
+  ).toBe("ended");
+});
