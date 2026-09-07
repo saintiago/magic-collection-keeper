@@ -63,13 +63,19 @@ if (new Set(manifest.map((d) => d.source_id)).size !== manifest.length)
   throw new Error("Duplicate source IDs in manifest.");
 const cards = JSON.parse(readFileSync(argument("--cards")));
 const adapters = createDynamoAdapters("magic-collection-keeper");
+const canonicalById = new Map(cards.map((card) => [card.id, card]));
+const repository = {
+  ...adapters.repository,
+  getPrinting: async (id) =>
+    canonicalById.get(id) ?? adapters.repository.getPrinting(id),
+};
 const store = createDynamoDocumentStore("magic-collection-keeper");
 const service = createTaggedCollection({
   collection: createCollectionService({
-    repository: adapters.repository,
+    repository,
     catalog: {},
   }),
-  repository: adapters.repository,
+  repository,
   store,
   newId: randomUUID,
   hash: (value) => createHash("sha256").update(value).digest("hex"),
@@ -103,7 +109,6 @@ if (args.includes("--apply")) {
   const selected = cards.filter((c) => printingIds.has(c.id));
   if (selected.length !== printingIds.size)
     throw new Error("Canonical printing metadata is incomplete.");
-  await store.saveCards(owner, selected);
   const results = [];
   for (const deck of manifest) {
     const current = await service.previewDeck(owner, deck);
@@ -114,6 +119,7 @@ if (args.includes("--apply")) {
         expected_version: current.existing_version,
       })),
     });
+    console.log(JSON.stringify({ imported: deck.name, ...results.at(-1) }));
   }
   const after = await service.list(owner);
   const nativeAfter = await adapters.repository.list(owner);

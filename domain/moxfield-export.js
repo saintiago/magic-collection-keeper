@@ -64,17 +64,10 @@ export function parseMoxfieldExport(source) {
     throw new ApplicationError(
       `Export total ${total} does not match displayed main deck total ${main} for ${source.name}.`,
     );
-  for (const name of commanders)
-    if (
-      !entries.some(
-        (e) => e.section === "commanders" && normalizeCardName(e.name) === name,
-      )
-    )
-      throw new ApplicationError(
-        `Exported commander missing for ${source.name}.`,
-      );
   return {
     ...source,
+    commander_names: [...commanders],
+    companion_names: [...companions],
     entries,
     excluded: [...excluded].map(([section, quantity]) => ({
       section,

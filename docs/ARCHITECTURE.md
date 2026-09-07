@@ -52,6 +52,8 @@ Source printings are stored durably before an atomic source manifest commit. Fai
 
 ## Security and deliberate tradeoffs
 
+Source snapshots can retain pending printing-review lines (name, quantity, original set/number/finish and reason). Pending lines do not create owned lots or allocations. Once resolved, the same source ID adds only the previously missing contribution. Canonical name matching includes alternate flavor names, including commander aliases; source labels remain intact.
+
 `transports/response.js` negotiates gzip for JSON responses larger than 1 kB and uses API Gateway's documented base64 binary response envelope. This keeps multi-deck collections below Lambda's response limit without changing the JSON contract or discarding printing metadata. Clients that do not advertise gzip receive plain JSON; very large collections still need future pagination. Domain code does not depend on compression or HTTP. Unit coverage round-trips a large Unicode collection, and LIVE-03 verifies actual gateway compression and decoding.
 
 CloudFront uses an origin access control to a non-public S3 bucket. API Gateway validates Cognito JWTs; only OPTIONS is unauthenticated, for CORS. Self-signup is disabled. The Lambda role accesses only the app's table and log group. The GitHub role trusts only this repository's `main` branch and can deploy only this app's function/site and invalidate its distribution. No long-lived AWS keys are stored in GitHub.

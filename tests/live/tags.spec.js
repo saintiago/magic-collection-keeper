@@ -77,6 +77,16 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
         },
       ],
       excluded: [{ section: "maybeboard", quantity: 1 }],
+      pending: [
+        {
+          name: "Test pending printing",
+          quantity: 1,
+          reason: "Synthetic review fixture",
+          set: "tst",
+          collector_number: "1",
+          finish: "nonfoil",
+        },
+      ],
     };
     let preview = await api("deck-imports/preview", "POST", deck);
     await api("deck-imports", "POST", {
@@ -221,6 +231,7 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   await page.locator("#manage-tags").click();
   await page.locator("#deck-sources").click();
   await expect(page.locator(".source-card")).toHaveCount(2);
+  await expect(page.locator(".pending-source")).toHaveCount(2);
   await page.locator("#tags-close").click();
   await page.locator("#sign-out").click();
 });

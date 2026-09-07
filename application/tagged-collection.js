@@ -198,6 +198,7 @@ export function createTaggedCollection({
         folder: input.folder,
         entries: normalized.entries,
         excluded: input.excluded,
+        pending: input.pending,
       }),
     );
     return { input, current, plan, fingerprint };

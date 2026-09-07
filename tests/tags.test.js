@@ -108,6 +108,16 @@ test("deck imports aggregate quantity-bearing locations, preserve loose copies a
         },
       ],
       excluded: [{ section: "maybeboard", quantity: 3 }],
+      pending: [
+        {
+          name: "Needs review",
+          quantity: 1,
+          reason: "Paper printing unknown",
+          set: "prm",
+          collector_number: "1",
+          finish: "foil",
+        },
+      ],
     };
     let preview = await s.previewDeck("a", deck);
     assert.equal(preview.additions, 2);
@@ -118,6 +128,7 @@ test("deck imports aggregate quantity-bearing locations, preserve loose copies a
     preview = await s.previewDeck("a", deck);
     assert.equal(preview.unchanged, true);
     assert.equal(preview.additions, 0);
+    assert.equal((await s.decks("a"))[0].pending[0].name, "Needs review");
     const movedSection = {
       ...deck,
       entries: [{ ...deck.entries[0], section: "commanders" }],

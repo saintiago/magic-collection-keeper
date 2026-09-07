@@ -1,4 +1,9 @@
-import { readFileSync, createReadStream, writeFileSync } from "node:fs";
+import {
+  readFileSync,
+  createReadStream,
+  writeFileSync,
+  existsSync,
+} from "node:fs";
 import { createGunzip } from "node:zlib";
 import { createInterface } from "node:readline";
 import {
@@ -6,6 +11,9 @@ import {
   normalizeCardName,
 } from "../domain/moxfield-export.js";
 const directory = "data/imports";
+const overrides = existsSync(`${directory}/printing-overrides.json`)
+  ? JSON.parse(readFileSync(`${directory}/printing-overrides.json`))
+  : [];
 const decks = JSON.parse(readFileSync(`${directory}/commander-decks.json`)).map(
   (d) =>
     parseMoxfieldExport(
@@ -46,7 +54,17 @@ const manifests = decks.map((d) => ({
     .map((e) => {
       const candidates = matches.get(`${e.set}|${e.collector_number}`) ?? [];
       const english = candidates.filter((c) => c.lang === "en");
-      const choices = english.length ? english : candidates;
+      const override = overrides.find(
+        (o) =>
+          o.source_id === d.source_id &&
+          o.set === e.set &&
+          o.collector_number === e.collector_number,
+      );
+      const choices = override
+        ? candidates.filter((c) => c.id === override.printing_id)
+        : english.length
+          ? english
+          : candidates;
       if (choices.length !== 1) {
         problems.push({
           deck: d.name,
@@ -90,11 +108,26 @@ const manifests = decks.map((d) => ({
         printing_id: c.id,
         quantity: e.quantity,
         finish: e.finish,
-        section: e.section,
+        section: names.some((n) => d.commander_names.includes(n))
+          ? "commanders"
+          : names.some((n) => d.companion_names.includes(n))
+            ? "companions"
+            : e.section,
       };
     })
     .filter(Boolean),
 }));
+for (let i = 0; i < decks.length; i++) {
+  const commanders = manifests[i].entries.filter(
+    (e) => e.section === "commanders",
+  );
+  if (commanders.length !== decks[i].commander_names.length)
+    problems.push({
+      deck: decks[i].name,
+      reason:
+        "Canonical commander count does not match the observed commander group.",
+    });
+}
 writeFileSync(
   `${directory}/resolution-report.json`,
   JSON.stringify(

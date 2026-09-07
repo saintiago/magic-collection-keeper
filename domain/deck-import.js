@@ -50,6 +50,19 @@ export function normalizeDeck(input) {
     folder: String(input.folder || "").slice(0, 100),
     retrieved_at: input.retrieved_at || null,
     excluded,
+    pending: (Array.isArray(input.pending) ? input.pending : [])
+      .slice(0, 500)
+      .map((line) => {
+        validateQuantity(line.quantity);
+        return {
+          name: String(line.name || "").slice(0, 200),
+          quantity: line.quantity,
+          reason: String(line.reason || "Printing needs review").slice(0, 300),
+          set: String(line.set || "").slice(0, 20),
+          collector_number: String(line.collector_number || "").slice(0, 40),
+          finish: String(line.finish || "").slice(0, 20),
+        };
+      }),
   };
   return { ...provenance, entries };
 }

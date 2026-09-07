@@ -1,5 +1,49 @@
 import { test, expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+test("UC-13 source printing exceptions remain visible without claiming ownership", async ({
+  page,
+}) => {
+  await page.route("**/api/collection", (r) => r.fulfill({ json: [] }));
+  await page.route("**/api/tags", (r) => r.fulfill({ json: [] }));
+  await page.route("**/api/deck-imports", (r) =>
+    r.fulfill({
+      json: [
+        {
+          name: "Test source",
+          url: "https://moxfield.com/decks/fixture",
+          folder: "Test",
+          updated_at: "2026-09-08T00:00:00Z",
+          lots: [{ allocated_quantity: 99, owned_quantity: 99 }],
+          excluded: [],
+          pending: [
+            {
+              name: "<Unresolved card>",
+              quantity: 1,
+              set: "prm",
+              collector_number: "1",
+              finish: "foil",
+              reason: "Paper printing unknown",
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  await page.goto("/");
+  await page.locator("#manage-tags").click();
+  await page.locator("#deck-sources").click();
+  await expect(page.locator(".source-card")).toContainText(
+    "99 assigned from source",
+  );
+  await expect(page.locator(".pending-source")).toContainText(
+    "<Unresolved card>",
+  );
+  await expect(page.locator(".pending-source")).toContainText(
+    "Paper printing unknown",
+  );
+  await page.locator("#back-tags").click();
+  await page.locator("#tags-close").click();
+});
 const card = {
   id: "p",
   name: "Test Card",

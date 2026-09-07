@@ -33,6 +33,8 @@ Verified deck-source imports contribute copies per source while preserving exist
 
 ## Run locally
 
+Source cards with unresolved or digital-only printing references remain listed under **Printing review needed** in their deck source. They do not increase the physical owned total until their paper printing is resolved. Imports preserve exported variants; they cannot independently verify the edition, condition or finish of a physical card.
+
 Node 24 and npm are required.
 
 ```sh
