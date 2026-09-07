@@ -251,59 +251,6 @@ test("UC-07 import limits, unresolved correction, choices, attributes, partial f
   await page.locator("#batch-close").click();
   await expect(page.locator(".batch-dialog")).not.toBeVisible();
 });
-test("UC-08 synthetic stable camera, duplicate suppression, next copy, pause and close", async ({
-  page,
-}) => {
-  test.setTimeout(45000);
-  await collection(page);
-  await page.addInitScript(() => {
-    navigator.mediaDevices.getUserMedia = async () => {
-      const c = document.createElement("canvas");
-      c.width = 800;
-      c.height = 1000;
-      const ctx = c.getContext("2d");
-      ctx.fillStyle = "white";
-      ctx.fillRect(0, 0, 800, 1000);
-      window.testCanvas = c;
-      window.testStream = c.captureStream(10);
-      return window.testStream;
-    };
-  });
-  await page.route("**/recognition.js", (r) =>
-    r.fulfill({
-      contentType: "text/javascript",
-      body: 'export async function recognizeCard(){return {name:"Alpha",text:"Alpha",confidence:95};}',
-    }),
-  );
-  await page.route("**/api/search?*", (r) =>
-    r.fulfill({ json: { cards: [a], total: 1, hasMore: false } }),
-  );
-  await page.goto("/");
-  await page.locator("#scan").click();
-  await page.locator("#camera-start").click();
-  await expect(page.locator(".review-row")).toHaveCount(1, { timeout: 15000 });
-  await page.evaluate(() => {
-    const ctx = window.testCanvas.getContext("2d");
-    ctx.fillStyle = "black";
-    ctx.fillRect(0, 0, 800, 1000);
-  });
-  await expect(
-    page.getByText("Same card still visible.", { exact: false }),
-  ).toBeVisible({ timeout: 15000 });
-  await expect(page.locator(".review-row")).toHaveCount(1);
-  await page.locator("#next-card").click();
-  await expect(page.locator(".review-row")).toHaveCount(2, { timeout: 15000 });
-  await page.locator("#camera-stop").click();
-  expect(
-    await page.evaluate(() => window.testStream.getTracks()[0].readyState),
-  ).toBe("ended");
-  page.once("dialog", (d) => d.dismiss());
-  await page.locator("#batch-close").click();
-  await expect(page.locator(".batch-dialog")).toBeVisible();
-  page.once("dialog", (d) => d.accept());
-  await page.locator("#batch-close").click();
-  await expect(page.locator(".batch-dialog")).not.toBeVisible();
-});
 test("UC-08 missing camera and uploaded photo recognition failure", async ({
   page,
 }) => {
@@ -316,7 +263,7 @@ test("UC-08 missing camera and uploaded photo recognition failure", async ({
   await page.route("**/recognition.js", (r) =>
     r.fulfill({
       contentType: "text/javascript",
-      body: 'export async function recognizeCard(){throw new Error("Model unavailable")};',
+      body: 'export async function stopRecognition(){}; export async function recognizeCard(){throw new Error("Model unavailable")};',
     }),
   );
   await page.goto("/");
@@ -352,8 +299,8 @@ test("UC-09 mobile layout remains within viewport with working navigation", asyn
   expect(
     await page.evaluate(
       () =>
-        document.querySelector(".batch-dialog").getBoundingClientRect().width <=
-        innerWidth,
+        document.querySelector(".scanner-dialog").getBoundingClientRect()
+          .width <= innerWidth,
     ),
   ).toBe(true);
 });

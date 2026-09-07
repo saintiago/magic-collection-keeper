@@ -72,3 +72,7 @@ For the saved browser-export workflow, `scripts/resolve-moxfield-exports.mjs` re
 ## Extending safely
 
 Keep new business rules in `domain`/`application`; put provider calls and storage details in adapters. Extend the use-case coverage map whenever a control is added. For a new catalog provider, normalize to the existing printing contract and handle ID migration. For an image cache, wrap `public/images.js` and update the CSP narrowly. For recognition, replace `recognizeCard` while retaining candidate review and duplicate controls. For another import format, produce the same parsed-row shape without silently asserting ownership. Large-scale catalog or collection operations should introduce bulk ingestion/pagination and explicit migration tooling rather than growing UI loops indefinitely.
+
+## Scanner acceptance
+
+LIVE-04 uses only `keeper-e2e`, sequentially after the other empty-profile suites. Its generated camera feed drives the actual deployed OCR model, canonical printing lookup, reviewed save and reload persistence; it removes its test entry and signs out. Keep this separate from physical hardware evidence. For phone acceptance, stabilize the camera, scan a card, leave it stationary, remove it, insert a distinct identical copy, then try glare/blur and another clear card. Verify one cue per attempted card, final printing review, thumb scrolling, mute and background/Back shutdown. Never use the owner profile for test writes.

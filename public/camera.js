@@ -55,8 +55,30 @@ export async function startCamera(video) {
 export function stopCamera(stream) {
   stream?.getTracks().forEach((t) => t.stop());
 }
-export function capture(video) {
+export function capture(video, guide) {
   const canvas = document.createElement("canvas");
+  if (guide) {
+    const bounds = video.getBoundingClientRect(),
+      box = guide.getBoundingClientRect();
+    const scale = Math.max(
+      bounds.width / video.videoWidth,
+      bounds.height / video.videoHeight,
+    );
+    const x =
+      (box.left - bounds.left + (video.videoWidth * scale - bounds.width) / 2) /
+      scale;
+    const y =
+      (box.top - bounds.top + (video.videoHeight * scale - bounds.height) / 2) /
+      scale;
+    const width = box.width / scale,
+      height = box.height / scale;
+    canvas.width = Math.round(width);
+    canvas.height = Math.round(height);
+    canvas
+      .getContext("2d")
+      .drawImage(video, x, y, width, height, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
   // The guide corresponds to the central portrait-shaped area of the video.
   const h = video.videoHeight * 0.88,
     w = Math.min(video.videoWidth * 0.9, (h * 488) / 680);

@@ -28,23 +28,38 @@ export function parseRecognition(text) {
       .trim() || "";
   return { text, name, exact };
 }
-let worker;
+let worker,
+  generation = 0,
+  progress = () => {};
 export async function recognizeCard(canvas, onProgress = () => {}) {
+  progress = onProgress;
+  const current = generation;
   if (!worker) {
-    const { createWorker } = await import("/vendor/ocr.js");
-    worker = await createWorker("eng", 1, {
-      workerPath: "/vendor/worker.min.js",
-      corePath: "/vendor/core",
-      langPath: "/vendor/lang",
-      logger: (m) => onProgress(m.status),
-    });
+    worker = import("/vendor/ocr.js").then(({ createWorker }) =>
+      createWorker("eng", 1, {
+        workerPath: "/vendor/worker.min.js",
+        corePath: "/vendor/core",
+        langPath: "/vendor/lang",
+        logger: (m) => progress(m.status),
+      }),
+    );
   }
-  const { data } = await worker.recognize(canvas);
+  let engine;
+  try {
+    engine = await worker;
+  } catch (error) {
+    if (current === generation) worker = undefined;
+    throw error;
+  }
+  if (current !== generation) throw new Error("Reading cancelled.");
+  const { data } = await engine.recognize(canvas);
   return { ...parseRecognition(data.text), confidence: data.confidence };
 }
 export async function stopRecognition() {
-  if (worker) {
-    await worker.terminate();
-    worker = undefined;
-  }
+  generation++;
+  progress = () => {};
+  const previous = worker;
+  worker = undefined;
+  if (previous)
+    await previous.then((engine) => engine.terminate()).catch(() => {});
 }

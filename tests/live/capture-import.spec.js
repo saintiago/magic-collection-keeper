@@ -41,17 +41,16 @@ test("LIVE-02 real text import and deployed OCR photo-review workflow", async ({
     ctx.fillText("M11 EN", 35, 920);
     return canvas.toDataURL("image/png").split(",")[1];
   });
-  await page
-    .locator("#photo")
-    .setInputFiles({
-      name: "ocr-test.png",
-      mimeType: "image/png",
-      buffer: Buffer.from(png, "base64"),
-    });
-  await expect(page.locator(".review-row")).toHaveCount(1, { timeout: 60000 });
-  await expect(
-    page.getByText("Reading added to review.", { exact: false }),
-  ).toBeVisible({ timeout: 30000 });
+  await page.locator("#photo").setInputFiles({
+    name: "ocr-test.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(png, "base64"),
+  });
+  await expect(page.locator(".scan-option")).toHaveCount(1, { timeout: 60000 });
+  await expect(page.locator(".scan-option small")).not.toHaveText("Reading…", {
+    timeout: 60000,
+  });
+  await page.locator("#scan-review").click();
   await page
     .locator(".review-search input")
     .fill('!"Lightning Bolt" set:m11 lang:en');

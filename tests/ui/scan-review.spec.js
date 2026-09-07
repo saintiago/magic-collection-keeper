@@ -81,7 +81,7 @@ test("UC-08 uploaded reading can be corrected, reviewed and saved as a scan batc
   await page.route("**/recognition.js", (r) =>
     r.fulfill({
       contentType: "text/javascript",
-      body: 'export async function recognizeCard(){return {name:"",text:"",confidence:0};}',
+      body: 'export async function stopRecognition(){}; export async function recognizeCard(){return {name:"",text:"",confidence:0};}',
     }),
   );
   await page.route("**/api/search?*", (r) =>
@@ -98,6 +98,7 @@ test("UC-08 uploaded reading can be corrected, reviewed and saved as a scan batc
       exact: false,
     }),
   ).toBeVisible();
+  await page.locator("#scan-review").click();
   await page.locator(".review-search input").fill("set:tst cn:2");
   await page.locator(".resolve").click();
   await expect(page.locator(".candidate")).toHaveValue("scan-print");
