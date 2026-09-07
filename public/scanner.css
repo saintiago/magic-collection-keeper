@@ -1,3 +1,6 @@
+html.scanning {
+  overflow: hidden;
+}
 .scanner-dialog[open] {
   position: fixed;
   inset: 0;

@@ -220,6 +220,11 @@ test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove co
     height: innerHeight,
   }));
   expect(layout.width).toBe(390);
+  expect(
+    await page.evaluate(
+      () => getComputedStyle(document.documentElement).overflow,
+    ),
+  ).toBe("hidden");
   expect(layout.stage / layout.height).toBeCloseTo(0.75, 2);
   await page.screenshot({ path: "test-results/scanner-mobile.png" });
 });
@@ -230,6 +235,11 @@ test("UC-14 back cancels in-flight recognition and background shuts down capture
   await expect(page.locator(".scan-option")).toHaveCount(1);
   await page.locator("#scan-back").click();
   await expect(page.locator(".review-row")).toHaveCount(1);
+  expect(
+    await page.evaluate(() =>
+      document.documentElement.classList.contains("scanning"),
+    ),
+  ).toBe(false);
   await page.waitForTimeout(3200);
   await expect(page.locator(".candidate")).toHaveValue("");
   expect(

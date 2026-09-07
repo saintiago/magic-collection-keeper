@@ -60,6 +60,7 @@ export function createScanner({ api, onReview }) {
     stop();
     wheel.destroy();
     dialog.close();
+    document.documentElement.classList.remove("scanning");
     if (rows.length) onReview(rows);
   }
   dialog.addEventListener("cancel", (event) => {
@@ -134,8 +135,8 @@ export function createScanner({ api, onReview }) {
       update(row === rows.at(-1));
       status(
         row.selected
-          ? `${row.name} matched. Slide in the next card.`
-          : `${row.error} Scanning can continue.`,
+          ? `${row.name} matched. ${running ? "Slide in the next card." : "Upload another photo or start the camera."}`
+          : `${row.error} ${running ? "Scanning can continue." : "Upload another photo or start the camera."}`,
       );
     }
     if (current === session) processing = false;
@@ -239,7 +240,9 @@ export function createScanner({ api, onReview }) {
         }
         event.target.value = "";
       };
+      document.documentElement.classList.add("scanning");
       dialog.showModal();
+      el("camera-start").focus();
       update();
     },
   };
