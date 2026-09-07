@@ -96,6 +96,11 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
     ).toBe(true);
   }
   rows = await api("collection");
+  const compressed = await request.get(`${config.apiUrl}/api/collection`, {
+    headers: { ...headers, "Accept-Encoding": "gzip" },
+  });
+  expect(compressed.headers()["content-encoding"]).toBe("gzip");
+  expect(await compressed.json()).toEqual(rows);
   let imported = rows.find((r) => r.source_managed);
   expect(rows.find((r) => r.id === native.id).quantity).toBe(5);
   const sources = await api("deck-imports");

@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
+import { jsonResponse } from "./transports/response.js";
 import { createTaggedCollection } from "./application/tagged-collection.js";
 import { createDynamoDocumentStore } from "./adapters/document-store.js";
 import { routeCollection } from "./application/routes.js";
@@ -19,14 +20,8 @@ const service = createTaggedCollection({
   hash: (value) => createHash("sha256").update(value).digest("hex"),
 });
 export async function handler(event) {
-  const result = (data, statusCode = 200) => ({
-    statusCode,
-    headers: {
-      "content-type": "application/json",
-      "cache-control": "no-store",
-    },
-    body: JSON.stringify(data),
-  });
+  const result = (data, statusCode = 200) =>
+    jsonResponse(data, statusCode, event.headers?.["accept-encoding"]);
   try {
     if (event.requestContext?.http?.method === "OPTIONS")
       return result({}, 204);

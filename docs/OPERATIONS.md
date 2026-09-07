@@ -55,6 +55,8 @@ An administrator-assisted source import must first verify the Cognito owner UUID
 
 ## Troubleshooting
 
+For the saved browser-export workflow, `scripts/resolve-moxfield-exports.mjs` reads the verified Commander source list and exports from ignored `data/imports`, validates commander and displayed main-deck totals, then resolves set/collector numbers against a downloaded Scryfall all-language bulk file. Inspect its resolution report before applying; unsupported finishes, missing printings and digital-only choices require review. `scripts/import-deck-sources.mjs` takes explicit `--username`, `--email`, `--folder`, `--manifest` and `--cards` arguments. It previews by default; `--apply` requires already established owner/import authorization. It verifies the Cognito account, preserves native inventory, saves an audit locally and rechecks zero-addition repeat imports.
+
 | Symptom                          | Check                                                                                                                                                                 |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Browser says service unreachable | Network and API CORS. OPTIONS must be unauthenticated and return 204; actual routes remain JWT-protected.                                                             |
