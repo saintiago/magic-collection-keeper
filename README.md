@@ -31,6 +31,8 @@ Review fetched-source and reviewed totals separately. **Add** explicitly confirm
 
 ## Organize your cards
 
+Selecting a Discover suggestion by click, tap, or arrow keys and Enter opens its card detail directly. **Your printings & tags** refreshes your collection and lists each owned printing separately, including its language, finish and condition. Use its **Edit locations & tags** button to add/remove tags or location assignments. A failed ownership refresh offers Retry. Cards with no owned copies retain the explicit printing review and Add flow before tags can be assigned.
+
 **Tags & locations** creates deck, binder, box and other locations, plus reusable roles (such as Card Draw) and categories. Labels are editable; each tag has a stable, opaque identity. Open a card and choose **Edit locations & tags** to assign copies, move them between locations, or add/remove classifications. The collection shows location icons and quantities, and filters by any tag.
 
 Click any displayed tag to open its filtered card list. This works on cards, card details, tag management, assignment links and deck-source headings. Navigation closes the current dialog and clears other filters so matching cards are visible. The active tag has a **Clear tag filter** control; browser Back returns to the previous tag and reload preserves the selection. Links use tag IDs, so renaming or duplicate labels cannot change the target. Select menus, checkboxes, Rename and Remove remain editing controls. Clicking an assignment link leaves unsaved edits unsaved.

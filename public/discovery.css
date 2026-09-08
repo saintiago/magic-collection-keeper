@@ -95,3 +95,14 @@
     width: 100%;
   }
 }
+.detail-ownership {
+  margin: 20px 0;
+  padding: 16px 0;
+  border-block: 1px solid var(--line);
+}
+.owned-printing + .owned-printing {
+  margin-top: 20px;
+}
+.owned-printing .card-tags {
+  margin-bottom: 10px;
+}

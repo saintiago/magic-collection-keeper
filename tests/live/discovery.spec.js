@@ -71,7 +71,11 @@ test("LIVE-07 real multilingual bulk names rank English identities and preserve 
   await expect(page.locator(".card-title")).toHaveText(["Lightning Bolt"], {
     timeout: 30000,
   });
-  await page.locator(".card-open").click();
+  await expect(page.locator("#detail")).toBeVisible();
+  await expect(page.locator(".detail-ownership")).toContainText(
+    "No owned copies",
+    { timeout: 30000 },
+  );
   await expect(page.locator(".oracle")).toContainText("3 damage");
   await page
     .getByRole("button", { name: "Change printing or language" })

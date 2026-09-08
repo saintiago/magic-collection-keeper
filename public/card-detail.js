@@ -1,7 +1,15 @@
 import { tagBadges, allocationWarning } from "./tags.js";
 import { esc, finishName, conditions, picture, image } from "./view.js";
+import { ownedPrintings, ownershipContent } from "./card-ownership-view.js";
 const $ = (id) => document.getElementById(id);
-export function createCardDetail({ api, onSaved, notify, onTags, onPrinting }) {
+export function createCardDetail({
+  api,
+  onSaved,
+  notify,
+  onTags,
+  onPrinting,
+  loadOwned,
+}) {
   return function detail(row) {
     const c = row.card;
     const operationId = crypto.randomUUID();
@@ -21,6 +29,31 @@ export function createCardDetail({ api, onSaved, notify, onTags, onPrinting }) {
     if ($("choose-printing"))
       $("choose-printing").onclick = () => onPrinting(c);
     if ($("edit-card-tags")) $("edit-card-tags").onclick = () => onTags(row);
+    if (!row.id) {
+      const section = document.createElement("section");
+      section.className = "detail-ownership";
+      section.setAttribute("aria-label", "Owned printings and tags");
+      $("inventory-form").before(section);
+      async function refreshOwnership() {
+        section.innerHTML =
+          '<h3>Your printings & tags</h3><p role="status">Checking your owned printings…</p>';
+        try {
+          const matching = ownedPrintings(c, await loadOwned());
+          if (!section.isConnected || !$("detail").open) return;
+          section.innerHTML = `<h3>Your printings & tags</h3>${ownershipContent(matching)}`;
+          section.querySelectorAll("[data-owned-tags]").forEach((button) => {
+            button.onclick = () =>
+              onTags(matching[Number(button.dataset.ownedTags)]);
+          });
+        } catch (error) {
+          if (!section.isConnected || !$("detail").open) return;
+          section.innerHTML = `<h3>Your printings & tags</h3><p role="status" class="error">${esc(error.message)}</p><button type="button" class="secondary">Retry owned printings</button>`;
+          section.querySelector("button").onclick = refreshOwnership;
+        }
+      }
+      // Open the card immediately; ownership is independently refreshed, never inferred from catalog data.
+      queueMicrotask(refreshOwnership);
+    }
     let face = 0;
     if ($("flip"))
       $("flip").onclick = () => {

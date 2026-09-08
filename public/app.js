@@ -71,6 +71,13 @@ const printingPicker = createPrintingPicker({
   onChoose: (card) => detail({ card }),
 });
 const detail = createCardDetail({
+  loadOwned: async () => {
+    if (!(await collection.refresh()))
+      throw new Error(
+        "Your collection could not be refreshed. Retry to see your owned printings and tags.",
+      );
+    return collectionState.rows;
+  },
   onPrinting: (card) => {
     $("detail").close();
     printingPicker(card);
@@ -99,7 +106,7 @@ const autocomplete = setupAutocomplete({
   api: request,
   onSelect: (item) => {
     selectedIdentity = item.oracle_id;
-    search();
+    search(false, true);
   },
   onQueryChange: () => {
     selectedIdentity = "";
@@ -359,7 +366,7 @@ async function refreshTags() {
     );
   }
 }
-async function search(more = false) {
+async function search(more = false, openSelection = false) {
   const nextQuery = $("search").value.trim();
   if (!nextQuery) {
     message("Enter a card name or a set and collector number.", true);
@@ -393,6 +400,16 @@ async function search(more = false) {
     cards = more ? [...cards, ...data.cards] : data.cards;
     page = nextPage;
     hasMore = data.hasMore;
+    if (openSelection) {
+      const card = data.cards.find(
+        (card) => card.oracle_id === selectedIdentity,
+      );
+      if (!card)
+        throw new Error(
+          "This card could not be opened. Search again to retry.",
+        );
+      detail({ card });
+    }
     message(
       `${data.total.toLocaleString()} matching cards. English results; choose a card to review its printing.${data.catalog ? ` Names updated ${new Date(data.catalog.updated_at).toLocaleDateString()}.${data.catalog.stale ? " Catalog refresh delayed; showing the last saved names." : ""}` : ""}`,
     );
