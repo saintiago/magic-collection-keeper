@@ -302,6 +302,9 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   await expect(page.locator("#tag-filter")).toHaveValue(beta.tag_id);
   await expect(page.locator("#detail")).not.toBeVisible();
   await page.goBack();
+  await expect(page.locator("#inventory-form")).toBeVisible();
+  await expect(page).toHaveURL(/#card=/);
+  await page.goBack();
   await expect(page.locator("#tag-filter")).toHaveValue(alpha.tag_id);
   await page.reload();
   await expect(page.locator("#tag-filter")).toHaveValue(alpha.tag_id);
