@@ -66,7 +66,7 @@ export function setupAutocomplete({
       try {
         const saved = cache.get(query);
         const result =
-          saved && Date.now() - saved.at < 86400000
+          saved && Date.now() - saved.at < 300000
             ? saved.data
             : await api(`/api/suggest?${new URLSearchParams({ q: query })}`, {
                 signal: AbortSignal.any([

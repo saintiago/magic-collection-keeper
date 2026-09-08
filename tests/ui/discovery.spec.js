@@ -183,6 +183,12 @@ test("UC-25 debounce, repeat cache, Escape and stale suggestions cannot overwrit
   );
   await input.press("Tab");
   await expect(page.locator("#suggestion-panel")).toBeHidden();
+  const beforeExpiry = f.counts().suggestRequests;
+  await page.clock.install();
+  await page.clock.fastForward(300001);
+  await input.fill("relampa");
+  await expect(page.getByRole("option")).toHaveCount(1);
+  expect(f.counts().suggestRequests).toBe(beforeExpiry + 1);
 });
 test("UC-26 mobile touch choice, no matches, suggestion/search failures and retry stay usable", async ({
   page,
