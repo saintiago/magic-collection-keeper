@@ -9,3 +9,4 @@ vendor/CollectorVision/.git
 !LICENSE
 !source.zip
 !scripts/smoke.py
+!scripts/sagemaker_smoke.py
