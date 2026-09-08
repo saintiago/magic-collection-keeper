@@ -183,7 +183,7 @@ async function fixture(
       },
     });
   });
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#catalog-nav").click();
   return {
     counts: () => ({
@@ -501,6 +501,7 @@ test("UC-27 Discover detail edits each owned printing's tags with persistence, s
   }));
   const f = await fixture(page, owned);
   async function open() {
+    await page.locator("#collection-nav").click();
     await page.locator("#catalog-nav").click();
     await page.getByRole("combobox", { name: "Search cards" }).fill("relampa");
     await page.locator("#suggestion-panel").getByRole("option").click();

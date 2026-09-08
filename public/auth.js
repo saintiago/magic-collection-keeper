@@ -54,7 +54,7 @@ export async function signIn() {
   document.querySelector(".local-badge").textContent =
     "◉ Private cloud collection";
   document.querySelector(".sidebar-bottom").innerHTML =
-    '<span class="status-dot"></span> Saved securely in AWS<p>A little order.<br>A lot of Magic.</p><button class="secondary" id="sign-out">Sign out</button>';
+    '<button class="text-button" id="sign-out">Sign out</button>';
   document.getElementById("sign-out").onclick = () => signOut();
   if (tokens) return;
   const dialog = document.createElement("dialog");

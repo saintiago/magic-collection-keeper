@@ -30,7 +30,7 @@ test("UC-13 source printing exceptions remain visible without claiming ownership
       ],
     }),
   );
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#manage-tags").click();
   await page.locator("#deck-sources").click();
   await expect(
@@ -132,7 +132,7 @@ test("UC-10 contextual typed tags, allocation shortfall, rename, filtering and s
     return r.fulfill({ json: rows() });
   });
   await page.route("**/api/deck-imports", (r) => r.fulfill({ json: [] }));
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#manage-tags").click();
   await page.locator("#tag-label").fill("<Deck A>");
   await page.locator("#create-tag button").click();
@@ -211,7 +211,7 @@ test("UC-10 tag creation failure stays editable at phone width", async ({
     ),
   );
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#manage-tags").click();
   await page.locator("#tag-type").selectOption("category");
   await page.locator("#tag-label").fill("Keep");

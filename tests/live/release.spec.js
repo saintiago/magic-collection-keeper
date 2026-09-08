@@ -4,7 +4,7 @@ test("LIVE-05 published HTML, loaded assets and API identify the deployment", as
   page,
   request,
 }) => {
-  const response = await page.goto("/");
+  const response = await page.goto("/#collection");
   expect(response.headers()["cache-control"]).toContain("no-store");
   const id = await page
     .locator('meta[name="keeper-release"]')

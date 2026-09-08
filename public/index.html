@@ -8,49 +8,31 @@
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/scanner.css" />
     <link rel="stylesheet" href="/import-page.css" />
+    <link rel="stylesheet" href="/home.css" />
   </head>
   <body>
-    <aside class="sidebar">
-      <a class="brand" href="/"
-        >✦ <span>KEEPER<small>MAGIC COLLECTION</small></span></a
-      >
-      <div class="nav-label">YOUR WORKSPACE</div>
-      <nav>
-        <button id="collection-nav" class="active">
-          ▦ <span>My collection</span><span id="nav-count">—</span></button
-        ><button id="catalog-nav">⌕ <span>All cards</span></button>
-        <button id="import-nav">⇩ <span>Import</span></button>
-      </nav>
-      <div class="sidebar-bottom">
-        <span class="status-dot"></span> Saved on this device
-        <p>A little order.<br />A lot of Magic.</p>
-        <small>Your collection starts with you.</small>
-      </div>
-    </aside>
     <main>
-      <header>
-        <div class="breadcrumb">
-          Workspace <span>/</span> <b id="breadcrumb">My collection</b>
+      <header class="app-header">
+        <a id="home-nav" class="brand" href="#home" aria-label="Home">✦</a>
+        <h1 id="title">Home</h1>
+        <button id="collection-nav" class="text-button">
+          View collection<span id="nav-count" hidden>—</span>
+        </button>
+        <div class="sidebar-bottom">
+          <span class="local-badge">Local device</span>
         </div>
-        <span class="local-badge">◉ Local collection</span>
       </header>
-      <section class="page-heading">
-        <div>
-          <div class="eyebrow">EVERY CARD HAS A PLACE</div>
-          <h1 id="title">My collection<span>.</span></h1>
-          <p id="subtitle">
-            Your cards, thoughtfully kept. Build a collection you know by heart.
-          </p>
-        </div>
-        <div class="actions">
-          <button class="secondary" id="manage-tags">Tags & locations</button>
-          <button class="secondary" id="import-list">Import list</button
-          ><button class="primary" id="scan">▣ Scan cards</button
-          ><button class="secondary" id="refresh">↻ Update collection</button
-          ><button class="primary" id="add">+ Add cards</button>
-        </div>
-      </section>
-      <section id="import-page" hidden aria-label="Import cards"></section>
+      <div class="actions app-actions">
+        <button class="primary" id="scan">▣ Scan cards</button>
+        <button class="secondary" id="import-nav">⇩ Import</button>
+        <button class="secondary" id="manage-tags">Tags &amp; locations</button>
+        <button class="secondary" id="catalog-nav" hidden>All cards</button>
+        <button class="secondary" id="refresh" hidden>
+          ↻ Update collection
+        </button>
+        <button class="primary" id="add" hidden>+ Add cards</button>
+        <button class="secondary" id="import-list" hidden>Import list</button>
+      </div>
       <section
         id="shared-search"
         class="unified-search"
@@ -93,6 +75,8 @@
         <div id="message" role="status" aria-live="polite"></div>
         <p id="recent-search-message" class="hint" role="status"></p>
       </section>
+      <section id="home-page" aria-label="Home dashboard"></section>
+      <section id="import-page" hidden aria-label="Import cards"></section>
       <section class="stats" id="stats">
         <div>
           <span>Total cards</span><strong id="total">—</strong
@@ -164,9 +148,7 @@
         Card data and images from
         <a href="https://scryfall.com" target="_blank" rel="noreferrer"
           >Scryfall ↗</a
-        >. Magic: The Gathering © Wizards of the Coast.<span
-          >Made for your next great find.</span
-        >
+        >. Magic: The Gathering © Wizards of the Coast.
         <button id="app-version" class="text-button" type="button">
           Local development
         </button>

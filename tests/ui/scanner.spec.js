@@ -59,7 +59,7 @@ async function fixture(page, { failFirst = false, slow = false } = {}) {
       return window.testStream;
     };
   });
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#scan").click();
   await page.locator("#camera-start").click();
 }

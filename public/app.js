@@ -1,6 +1,8 @@
 import { setupAutocomplete } from "./autocomplete.js";
 import { searchOwnership } from "./search-ownership.js";
 import { createRecentSearches } from "./recent-searches.js";
+import { createHome } from "./home.js";
+import { routeMode, showScreen } from "./screen.js";
 import { createPrintingPicker } from "./printing-picker.js";
 import { collectionCard } from "./collection-view.js";
 import { setupTagNavigation, tagFromHash } from "./tag-navigation.js";
@@ -23,7 +25,7 @@ import { createImportPage } from "./import-page.js";
 const $ = (id) => document.getElementById(id);
 let owned = [],
   cards = [],
-  mode = "collection",
+  mode = routeMode(location.hash),
   page = 1,
   query = "",
   hasMore = false,
@@ -35,10 +37,6 @@ let filterTags = [],
   activeTagId = tagFromHash(location.hash),
   registryReady = false;
 const tagNavigation = setupTagNavigation(navigateTag);
-window.addEventListener("popstate", () => {
-  if (location.hash === "#import") switchMode("import");
-  else if (mode === "import") navigateTag(tagFromHash(location.hash));
-});
 let collectionState = {
   rows: null,
   status: "loading",
@@ -64,10 +62,12 @@ const collection = createCollectionLoader({
 window.addEventListener("keeper-sign-out", () => {
   collection.stop();
   recentSearches.stop();
+  home.stop();
   autocomplete.close();
 });
 const tagController = createTagController({
   api,
+  onUse: (id) => home.tag(id),
   onChanged: () => {
     collection.invalidate();
     return refresh();
@@ -77,7 +77,7 @@ const printingPicker = createPrintingPicker({
   api: request,
   onChoose: (card) => detail({ card }),
 });
-const detail = createCardDetail({
+const showDetail = createCardDetail({
   loadOwned: async () => {
     if (!(await collection.refresh()))
       throw new Error(
@@ -99,6 +99,10 @@ const detail = createCardDetail({
   },
   notify: message,
 });
+function detail(row) {
+  home.card(row.card);
+  showDetail(row);
+}
 const importPage = createImportPage({
   root: $("import-page"),
   api: request,
@@ -132,6 +136,25 @@ const recentSearches = createRecentSearches({
     $("clear-recent-searches").hidden = !state.entries.length;
     $("recent-search-message").textContent = state.error;
     autocomplete.updateRecent(state);
+    home.update({ searches: state.entries });
+  },
+});
+const home = createHome({
+  root: $("home-page"),
+  onClearSearches: () => recentSearches.clear(),
+  onRetry: () => initializeCollection(),
+  onCard: (item) => {
+    const row =
+      owned.find((row) => row.printing_id === item.printing_id) ||
+      owned.find(
+        (row) => item.oracle_id && row.card.oracle_id === item.oracle_id,
+      );
+    if (row) detail(row);
+    else {
+      $("search").value = item.name;
+      selectedIdentity = item.oracle_id || "";
+      search(false, Boolean(selectedIdentity));
+    }
   },
 });
 $("clear-recent-searches").onclick = () => recentSearches.clear();
@@ -198,6 +221,11 @@ function stats() {
 }
 function render() {
   stats();
+  home.update({
+    collection: collectionState,
+    tags: filterTags,
+    tagsReady: registryReady,
+  });
   const known = collectionState.rows !== null;
   const busy = ["loading", "updating"].includes(collectionState.status);
   $("refresh").disabled = busy;
@@ -224,6 +252,10 @@ function render() {
     "aria-busy",
     String(mode === "catalog" ? loading : busy),
   );
+  if (mode === "home" || mode === "import") {
+    $("grid").replaceChildren();
+    return;
+  }
   const selectedTag = filterTags.find((tag) => tag.id === activeTagId);
   let rows = cards.map((card) => ({ card }));
   if (mode === "collection") {
@@ -302,58 +334,31 @@ function render() {
   $("more").hidden = mode !== "catalog" || !hasMore;
   $("more").disabled = loading;
 }
-function switchMode(next, { keepIdentity = false } = {}) {
-  if (next !== "import" && location.hash === "#import")
-    history.pushState(null, "", "#");
+function switchMode(next, { keepIdentity = false, restore = false } = {}) {
+  if (!restore) {
+    const hash =
+      next === "collection" && activeTagId
+        ? "#tag=" + encodeURIComponent(activeTagId)
+        : "#" + next;
+    if (location.hash !== hash) history.pushState(null, "", hash);
+    tagNavigation.sync();
+  }
   autocomplete.setEnabled(next !== "import");
   searchController?.abort();
   if (!keepIdentity) selectedIdentity = "";
   mode = next;
-  const importing = mode === "import";
-  $("import-page").hidden = !importing;
-  $("shared-search").hidden = importing;
-  document.querySelector(".library").hidden = importing;
-  document.querySelector(".page-heading .actions").hidden = importing;
-  $("import-nav").classList.toggle("active", importing);
-  if (importing) {
-    requestId++;
-    $("title").innerHTML = "Import<span>.</span>";
-    $("subtitle").textContent =
-      "Load a deck. Review each printing. Add only when you’re ready.";
-    $("breadcrumb").textContent = "Import";
-    $("stats").hidden = true;
-    $("collection-nav").classList.remove("active");
-    $("catalog-nav").classList.remove("active");
-    importPage.show();
-    return;
-  }
-  importPage.hide();
   requestId++;
   loading = false;
-  $("search-submit").disabled = false;
-  message();
   cards = [];
   query = "";
   hasMore = false;
-  const catalog = mode === "catalog";
-  $("title").innerHTML = catalog
-    ? "All cards<span>.</span>"
-    : "My collection<span>.</span>";
-  $("subtitle").textContent = catalog
-    ? "Find the right card. Keep the exact printing."
-    : "Your cards, thoughtfully kept. Build a collection you know by heart.";
-  $("breadcrumb").textContent = catalog ? "All cards" : "My collection";
-  $("section-title").firstChild.textContent = catalog
-    ? "Card catalog "
-    : "Your library ";
-  $("stats").hidden = catalog;
-  $("filters").hidden = catalog;
-  $("catalog-nav").classList.toggle("active", catalog);
-  $("collection-nav").classList.toggle("active", !catalog);
-  $("add").hidden = catalog;
-  $("refresh").hidden = catalog;
+  $("search-submit").disabled = false;
+  message();
+  showScreen(mode);
+  if (mode === "import") importPage.show();
+  else importPage.hide();
   render();
-  $("search").focus();
+  if (mode === "catalog") $("search").focus();
 }
 async function refresh() {
   if (await collection.refresh()) await refreshTags();
@@ -381,10 +386,14 @@ async function refreshTags() {
   try {
     const tags = await tagController.refresh();
     registryReady = true;
+    home.update({ tagsError: "" });
     setFilterTags(tags);
     render();
   } catch (error) {
     registryReady = true;
+    home.update({
+      tagsError: "Tags could not be refreshed. Retry collection.",
+    });
     setFilterTags(filterTags);
     render();
     message(
@@ -467,11 +476,12 @@ async function search(more = false, openSelection = false) {
   }
 }
 function navigateTag(id, tag) {
-  if (location.hash === "#import") {
-    switchMode("import");
+  if (!id && routeMode(location.hash) !== "collection") {
+    switchMode(routeMode(location.hash), { restore: true });
     return;
   }
   activeTagId = id;
+  if (id) home.tag(id);
   document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
   if (tag?.id && !filterTags.some((current) => current.id === id))
     filterTags.push(tag);
@@ -480,18 +490,23 @@ function navigateTag(id, tag) {
   );
   $("sort").value = "name";
   setFilterTags(filterTags);
-  switchMode("collection");
+  switchMode("collection", { restore: true });
   $("section-title").focus({ preventScroll: true });
   $("section-title").scrollIntoView({ block: "nearest" });
 }
 $("tag-filter").onchange = () => tagNavigation.go($("tag-filter").value);
 $("clear-tag").onclick = () => tagNavigation.go("");
-$("collection-nav").onclick = () => switchMode("collection");
-$("catalog-nav").onclick = () => switchMode("catalog");
-$("import-nav").onclick = () => {
-  if (location.hash !== "#import") history.pushState(null, "", "#import");
-  switchMode("import");
+$("collection-nav").onclick = () => {
+  activeTagId = "";
+  setFilterTags(filterTags);
+  switchMode("collection");
 };
+$("home-nav").onclick = (event) => {
+  event.preventDefault();
+  switchMode("home");
+};
+$("catalog-nav").onclick = () => switchMode("catalog");
+$("import-nav").onclick = () => switchMode("import");
 $("add").onclick = () => switchMode("catalog");
 $("close").onclick = () => $("detail").close();
 $("refresh").onclick = initializeCollection;
@@ -511,6 +526,7 @@ $("example").onclick = () => {
   search();
 };
 setupReleaseInfo();
+showScreen(mode);
 render();
 await signIn();
 if (location.hash === "#import") switchMode("import");
@@ -528,12 +544,15 @@ setupBatch({
 async function initializeCollection() {
   try {
     const identity = await collectionIdentity();
+    home.start(snapshotKey(identity));
+    if (mode === "collection" && activeTagId) home.tag(activeTagId);
     recentSearches.start(snapshotKey(identity));
     if (collectionState.rows === null) {
       if (await collection.start(snapshotKey(identity))) await refreshTags();
     } else await refresh();
   } catch (error) {
     recentSearches.unavailable();
+    home.unavailable();
     collectionState = {
       ...collectionState,
       status: "error",

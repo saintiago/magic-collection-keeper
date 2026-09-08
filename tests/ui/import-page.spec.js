@@ -328,7 +328,7 @@ test("UC-21 mobile hundred-line draft, history and account API visibility remain
   const f = await fixture(page, { lines: 100 });
   try {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/");
+    await page.goto("/#collection");
     await page.locator("#import-nav").click();
     await page.locator("#moxfield-url").fill(url);
     await page.getByRole("button", { name: "Load deck", exact: true }).click();

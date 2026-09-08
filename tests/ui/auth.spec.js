@@ -34,7 +34,7 @@ test("UC-01 sign-in invalid credentials, initial password challenge, sign-out", 
             },
     );
   });
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.getByLabel("Username", { exact: true }).fill("test-user");
   await page.getByLabel("Password", { exact: true }).fill("incorrect");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -76,7 +76,7 @@ test("UC-01 expired session refresh succeeds and revoked session returns to sign
           },
     ),
   );
-  await page.goto("/");
+  await page.goto("/#collection");
   await expect(
     page.getByText("Collection is up to date.", { exact: false }),
   ).toBeVisible();

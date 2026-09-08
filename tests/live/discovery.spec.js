@@ -4,7 +4,7 @@ test("LIVE-07 real multilingual bulk names rank English identities and preserve 
   request,
 }) => {
   test.setTimeout(180000);
-  await page.goto("/");
+  await page.goto("/#collection");
   await page
     .getByLabel("Username", { exact: true })
     .fill(process.env.KEEPER_TEST_USER);

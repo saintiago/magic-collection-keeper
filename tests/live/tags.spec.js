@@ -10,7 +10,7 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   const config = await (
     await request.get(`${process.env.LIVE_URL}/config.json`)
   ).json();
-  await page.goto("/");
+  await page.goto("/#collection");
   await page
     .getByLabel("Username", { exact: true })
     .fill(process.env.KEEPER_TAGS_USER);

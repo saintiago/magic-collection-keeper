@@ -12,7 +12,8 @@ test("UC-07 completion waits for collection refresh before allowing close", asyn
   await page.route("**/api/search?*", (r) =>
     r.fulfill({ json: { cards: [card], total: 1, hasMore: false } }),
   );
-  await page.goto("/");
+  await page.goto("/#collection");
+  await page.locator("#import-nav").click();
   await page.locator("#import-list").click();
   await page.locator("#import-text").fill("1 Scanned Card");
   await page.locator("#preview").click();
@@ -38,7 +39,7 @@ test("UC-08 permission timeout and invalid uploaded photo give actionable errors
     navigator.mediaDevices.getUserMedia = () => new Promise(() => {});
   });
   await page.clock.install();
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#scan").click();
   await page.locator("#camera-start").click();
   await expect(page.getByText("Waiting for camera permission…")).toBeVisible();
@@ -87,7 +88,7 @@ test("UC-08 uploaded reading can be corrected, reviewed and saved as a scan batc
   await page.route("**/api/search?*", (r) =>
     r.fulfill({ json: { cards: [card], total: 1, hasMore: false } }),
   );
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#scan").click();
   const png = await page.screenshot();
   await page
@@ -123,7 +124,8 @@ test("UC-07 failed lookup remains editable; an empty result can be retried", asy
         : { json: { cards: [], total: 0, hasMore: false } },
     );
   });
-  await page.goto("/");
+  await page.goto("/#collection");
+  await page.locator("#import-nav").click();
   await page.locator("#import-list").click();
   await page.locator("#import-text").fill("1 Missing Card");
   await page.locator("#preview").click();
@@ -144,7 +146,7 @@ test("UC-04 loading search can be left without stale results replacing collectio
     await new Promise((resolve) => (release = resolve));
     await r.fulfill({ json: { cards: [card], total: 1, hasMore: false } });
   });
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#add").click();
   await page.locator("#search").fill("Scanned");
   await page.locator("#search-submit").click();

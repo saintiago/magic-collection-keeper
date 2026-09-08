@@ -107,7 +107,7 @@ test("UC-19 all six tag kinds navigate by ID; same-name tags, conflicts, back an
   page,
 }) => {
   const data = await fixture(page);
-  await page.goto("/");
+  await page.goto("/#collection");
   for (const tag of [...tags, duplicate, empty]) {
     await page.locator("#search").fill("unrelated");
     await page.locator("#color").selectOption("G");
@@ -136,7 +136,7 @@ test("UC-19 card, detail, assignment and source links close cleanly without edit
   page,
 }) => {
   const data = await fixture(page);
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator(`.card a[data-tag-id="${tags[0].id}"]`).click();
   await expect(page.locator("#detail")).not.toBeVisible();
   await expect(page.locator("#result-count")).toHaveText(
@@ -232,7 +232,7 @@ test("UC-19 closing a loading source view prevents its late response from reopen
     await new Promise((resolve) => (release = resolve));
     await route.fulfill({ json: [] });
   });
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#manage-tags").click();
   await page.locator("#deck-sources").click();
   await expect.poll(() => Boolean(release)).toBe(true);

@@ -3,7 +3,7 @@ import { esc } from "./view.js";
 export { TAG_STYLE, tagBadges, allocationWarning } from "./tag-view.js";
 import { TAG_STYLE, tagLink } from "./tag-view.js";
 
-export function createTagController({ api, onChanged }) {
+export function createTagController({ api, onChanged, onUse = () => {} }) {
   let tags = [],
     viewGeneration = 0,
     refreshGeneration = 0;
@@ -23,9 +23,15 @@ export function createTagController({ api, onChanged }) {
     return tags;
   }
   async function changeTags(path, options) {
+    const priorIds = new Set(tags.map((tag) => tag.id));
     const updated = await api(path, options);
     refreshGeneration++;
     tags = updated;
+    if (options?.method === "POST") {
+      const created = tags.find((tag) => !priorIds.has(tag.id));
+      if (created) onUse(created.id);
+    } else if (options?.method === "PATCH" || options?.method === "PUT")
+      onUse(decodeURIComponent(path.split("/").at(-1)));
     return tags;
   }
   function shell(title, content) {

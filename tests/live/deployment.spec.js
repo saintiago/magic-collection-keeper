@@ -9,7 +9,7 @@ test("LIVE-01 protected collection survives reload and isolates a second owner",
   ).json();
   const unauth = await request.get(`${config.apiUrl}/api/collection`);
   expect(unauth.status()).toBe(401);
-  await page.goto("/");
+  await page.goto("/#collection");
   await page
     .getByLabel("Username", { exact: true })
     .fill(process.env.KEEPER_TEST_USER);

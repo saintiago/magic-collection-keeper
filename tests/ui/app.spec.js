@@ -32,7 +32,7 @@ test("empty collection, catalog review, quantity edit, filtering and removal", a
     if (req.method() === "DELETE") rows = [];
     await route.fulfill({ json: rows });
   });
-  await page.goto("/");
+  await page.goto("/#collection");
   await expect(page.getByText("Your collection begins here")).toBeVisible();
   await page.getByRole("button", { name: "Find your first card" }).click();
   await page
@@ -70,7 +70,8 @@ test("import needs review and ownership confirmation; unresolved lines stay out"
     if (r.request().method() === "POST") writes++;
     return r.fulfill({ json: [] });
   });
-  await page.goto("/");
+  await page.goto("/#collection");
+  await page.locator("#import-nav").click();
   await page.getByRole("button", { name: "Import list" }).click();
   await page
     .getByLabel("Moxfield card list")
@@ -98,7 +99,7 @@ test("camera permission error offers photo fallback", async ({ page }) => {
       throw new DOMException("Denied", "NotAllowedError");
     };
   });
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.getByRole("button", { name: "Scan cards" }).click();
   await page.getByRole("button", { name: "Start camera", exact: true }).click();
   await expect(
@@ -108,7 +109,7 @@ test("camera permission error offers photo fallback", async ({ page }) => {
 });
 test("real browser OCR reads a clear card title", async ({ page }) => {
   test.setTimeout(120000);
-  await page.goto("/");
+  await page.goto("/#collection");
   const result = await page.evaluate(async () => {
     const canvas = document.createElement("canvas");
     canvas.width = 700;

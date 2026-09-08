@@ -23,7 +23,7 @@ test("UC-14 guide crop feeds real OCR without manual capture", async ({
       },
     }),
   );
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#scan").click();
   await page.locator("#camera-start").click();
   await expect(page.locator("#scan-status")).toContainText(

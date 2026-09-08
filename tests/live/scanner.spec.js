@@ -6,7 +6,7 @@ test("LIVE-04 continuous synthetic camera with real OCR, real printing resolutio
 }) => {
   test.setTimeout(120000);
   await page.addInitScript(installSyntheticCardCamera);
-  await page.goto("/");
+  await page.goto("/#collection");
   await page
     .getByLabel("Username", { exact: true })
     .fill(process.env.KEEPER_TEST_USER);

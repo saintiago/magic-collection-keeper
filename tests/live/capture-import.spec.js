@@ -3,7 +3,7 @@ test("LIVE-02 real text import and deployed OCR photo-review workflow", async ({
   page,
 }) => {
   test.setTimeout(120000);
-  await page.goto("/");
+  await page.goto("/#collection");
   await page
     .getByLabel("Username", { exact: true })
     .fill(process.env.KEEPER_TEST_USER);
@@ -12,6 +12,7 @@ test("LIVE-02 real text import and deployed OCR photo-review workflow", async ({
     .fill(process.env.KEEPER_TEST_PASSWORD);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.locator(".auth-dialog")).toHaveCount(0);
+  await page.locator("#import-nav").click();
   await page.locator("#import-list").click();
   await page.locator("#import-text").fill("1 Lightning Bolt (M11) 149");
   await page.locator("#preview").click();
@@ -24,6 +25,7 @@ test("LIVE-02 real text import and deployed OCR photo-review workflow", async ({
     page.getByText("1 reviewed entries added.", { exact: false }),
   ).toBeVisible();
   await page.locator("#batch-close").click();
+  await page.locator("#collection-nav").click();
   await page.locator("#scan").click();
   const png = await page.evaluate(() => {
     const canvas = document.createElement("canvas");

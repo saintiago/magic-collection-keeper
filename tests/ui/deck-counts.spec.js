@@ -88,7 +88,7 @@ test("UC-18 deck copies, unique entries, pooled ownership, pending source and ca
       ],
     }),
   );
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#tag-filter").selectOption(deck.id);
   await expect(page.locator("#total")).toHaveText("130");
   await expect(page.locator("#result-count")).toHaveText(

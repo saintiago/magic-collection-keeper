@@ -7,7 +7,7 @@ test("LIVE-08 Discover opens owned printings and persists tag add/remove without
 }) => {
   test.setTimeout(180000);
   expect(process.env.KEEPER_TAGS_USER).toBe("keeper-tags");
-  await page.goto("/");
+  await page.goto("/#collection");
   await page
     .getByLabel("Username", { exact: true })
     .fill(process.env.KEEPER_TAGS_USER);

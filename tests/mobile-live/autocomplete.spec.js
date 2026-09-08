@@ -5,7 +5,7 @@ test("LIVE-09 real WebKit touch opens English and translated suggestions exactly
   request,
 }) => {
   expect(process.env.KEEPER_TEST_USER).toBe("keeper-e2e");
-  await page.goto("/");
+  await page.goto("/#collection");
   await page
     .getByLabel("Username", { exact: true })
     .fill(process.env.KEEPER_TEST_USER);
@@ -53,6 +53,7 @@ test("LIVE-09 real WebKit touch opens English and translated suggestions exactly
     ["Piracy", "Piracy"],
     ["Fuego", "Fire // Ice"],
   ]) {
+    if (query === "Piracy") await page.locator("#collection-nav").click();
     await page
       .locator(query === "Piracy" ? "#catalog-nav" : "#collection-nav")
       .click();

@@ -34,7 +34,7 @@ test("UC-17 first load never claims zero and cards render before slow tags", asy
     });
     await route.fulfill({ json: [] });
   });
-  await page.goto("/");
+  await page.goto("/#collection");
   await expect.poll(() => Boolean(releaseCollection)).toBe(true);
   await expect(page.locator("#total")).toHaveText("—");
   await expect(page.getByText("Your collection begins here")).not.toBeVisible();
@@ -55,7 +55,7 @@ test("UC-17 first-load failure is unavailable, retry may confirm a truly empty c
         : { json: [] },
     ),
   );
-  await page.goto("/");
+  await page.goto("/#collection");
   await expect(
     page.getByRole("heading", { name: "Collection unavailable" }),
   ).toBeVisible();
@@ -102,7 +102,7 @@ test("UC-17 large warm snapshot remains visible through refresh failure and reco
     }
     return route.fulfill({ json: outcome === "empty" ? [] : many });
   });
-  await page.goto("/");
+  await page.goto("/#collection");
   await expect(page.locator("#total")).toHaveText("4,094");
   await cacheReady(page);
   outcome = "wait";
@@ -168,7 +168,7 @@ test("UC-17/30 verified accounts isolate snapshots and recent searches; sign-out
       );
     }
   });
-  await page.goto("/");
+  await page.goto("/#collection");
   await expect(page.locator("#total")).toHaveText("4,094");
   await cacheReady(page);
   await page.getByRole("combobox", { name: "Search cards" }).fill("Saved");
@@ -264,7 +264,7 @@ test("UC-16 local version details are usable on mobile and close with Escape", a
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.getByRole("button", { name: "Local development" }).click();
   await expect(
     page.getByRole("heading", { name: "About this app" }),

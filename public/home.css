@@ -1,0 +1,242 @@
+main {
+  margin: 0 auto;
+  padding: 0 24px;
+  max-width: 1180px;
+}
+.app-header {
+  height: 72px;
+  gap: 16px;
+  border: 0;
+}
+.app-header .brand {
+  padding: 0;
+  flex: none;
+  font-size: 28px;
+  width: 40px;
+  min-height: 44px;
+  justify-content: center;
+}
+.app-header h1 {
+  font-family: inherit;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.4px;
+  margin: 0 auto 0 0;
+}
+.app-header .sidebar-bottom {
+  display: block;
+  margin: 0;
+  padding: 0;
+  flex: none;
+}
+.app-header .text-button {
+  font-size: 12px;
+  min-height: 44px;
+}
+.app-header .local-badge {
+  border: 0;
+  padding: 0;
+}
+.unified-search {
+  margin: 8px 0 16px;
+}
+.search-box {
+  max-width: none;
+}
+.search-label-row label {
+  font-size: 11px;
+  letter-spacing: 0.4px;
+}
+.app-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  max-width: none;
+  margin-left: 0;
+  margin-bottom: 24px;
+  gap: 8px;
+}
+.app-actions button {
+  min-height: 44px;
+  font-size: 12px;
+}
+.home-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+#home-page h2 {
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0 0 12px;
+}
+.home-section-heading .text-button {
+  font-size: 11px;
+  min-height: 44px;
+  align-self: start;
+}
+.home-cards {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 0 0 12px;
+  scroll-snap-type: x proximity;
+}
+.home-card {
+  text-align: left;
+  flex: 0 0 138px;
+  border-radius: 12px;
+  background: #edf1e9;
+  padding: 10px;
+  color: inherit;
+  scroll-snap-align: start;
+}
+.home-card img,
+.home-card-placeholder {
+  display: block;
+  width: 100%;
+  height: 106px;
+  object-fit: cover;
+  object-position: center 28%;
+  border-radius: 7px;
+}
+.home-card-placeholder {
+  display: grid;
+  place-items: center;
+  background: #dce6d8;
+  font-size: 30px;
+  color: var(--green);
+}
+.home-card-name {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-top: 9px;
+}
+.home-card-name [role="img"] {
+  color: var(--green);
+  white-space: nowrap;
+}
+.home-organized {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+  margin-top: 24px;
+}
+.home-decks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.home-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.home-decks a,
+.home-tags a {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  text-decoration: none;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 12px;
+  min-height: 44px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.home-empty,
+.home-status {
+  font-size: 12px;
+  color: #65736a;
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+.home-status {
+  margin-top: 16px;
+}
+.home-status:empty {
+  display: none;
+}
+body[data-mode="home"] footer {
+  margin-top: 28px;
+}
+@media (max-width: 650px) {
+  main {
+    padding: 0 16px;
+  }
+  .app-header {
+    height: 60px;
+    gap: 9px;
+  }
+  .app-header h1 {
+    font-size: 17px;
+  }
+  .app-header .brand {
+    width: 28px;
+    font-size: 25px;
+  }
+  .app-header .text-button {
+    font-size: 11px;
+  }
+  .app-header .local-badge {
+    font-size: 9px;
+  }
+  .search-label-row {
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+  .unified-search {
+    margin: 6px 0 12px;
+  }
+  .search-box input {
+    padding: 12px 6px;
+  }
+  .search-box button {
+    padding: 12px 10px;
+  }
+  .app-actions {
+    margin-bottom: 20px;
+    gap: 6px;
+  }
+  .app-actions button {
+    padding: 10px 12px;
+    font-size: 11px;
+  }
+  .home-card {
+    flex-basis: 108px;
+    padding: 8px;
+  }
+  .home-card img,
+  .home-card-placeholder {
+    height: 76px;
+  }
+  .home-card-name {
+    font-size: 11px;
+    margin-top: 7px;
+  }
+  .home-organized {
+    grid-template-columns: 1fr;
+    gap: 20px;
+    margin-top: 18px;
+  }
+  #home-page h2 {
+    font-size: 16px;
+    margin-bottom: 10px;
+  }
+  .home-decks a,
+  .home-tags a {
+    font-size: 12px;
+    padding: 10px;
+  }
+  footer {
+    padding: 18px 0;
+    font-size: 9px;
+  }
+}

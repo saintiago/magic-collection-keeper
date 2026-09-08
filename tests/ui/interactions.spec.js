@@ -65,7 +65,7 @@ test("UC-02/03 collection filters, every sort, refresh success and failure", asy
       fail ? { status: 503, json: { error: "Offline test" } } : { json: rows },
     ),
   );
-  await page.goto("/");
+  await page.goto("/#collection");
   await expect(page.locator("#total")).toHaveText("7");
   await expect(page.locator("#foils")).toHaveText("5");
   await expect(page.locator("#unique")).toHaveText("2");
@@ -116,7 +116,7 @@ test("UC-04 catalog blank, no-result, error, pagination, example and detail fiel
           },
     ),
   );
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#catalog-nav").click();
   await page.locator("#search-submit").click();
   await expect(
@@ -175,7 +175,7 @@ test("UC-05 add failure, retry, remove cancellation and remove failure", async (
       rows = [{ ...r.request().postDataJSON(), id: 1, card: a }];
     return r.fulfill({ json: rows });
   });
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#add").click();
   await page.locator("#search").fill("Alpha");
   await page.locator("#search-submit").click();
@@ -217,7 +217,8 @@ test("UC-07 import limits, unresolved correction, choices, attributes, partial f
   await page.route("**/api/search?*", (r) =>
     r.fulfill({ json: { cards: [a, b], total: 2, hasMore: false } }),
   );
-  await page.goto("/");
+  await page.goto("/#collection");
+  await page.locator("#import-nav").click();
   await page.locator("#import-list").click();
   await page.locator("#preview").click();
   await expect(page.getByText("Paste at least one card line.")).toBeVisible();
@@ -267,7 +268,7 @@ test("UC-08 missing camera and uploaded photo recognition failure", async ({
       body: 'export async function stopRecognition(){}; export async function recognizeCard(){throw new Error("Model unavailable")};',
     }),
   );
-  await page.goto("/");
+  await page.goto("/#collection");
   await page.locator("#scan").click();
   await page.locator("#camera-start").click();
   await expect(
@@ -286,7 +287,7 @@ test("UC-09 mobile layout remains within viewport with working navigation", asyn
 }) => {
   await collection(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
+  await page.goto("/#collection");
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

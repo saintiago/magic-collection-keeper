@@ -1,5 +1,5 @@
 export function tagHref(id) {
-  return id ? `#tag=${encodeURIComponent(id)}` : "#";
+  return id ? `#tag=${encodeURIComponent(id)}` : "#collection";
 }
 export function tagFromHash(hash) {
   return new URLSearchParams(hash.replace(/^#/, "")).get("tag") || "";
@@ -40,5 +40,10 @@ export function setupTagNavigation(onNavigate) {
   };
   window.addEventListener("popstate", restore);
   window.addEventListener("hashchange", restore);
-  return { go };
+  return {
+    go,
+    sync: () => {
+      lastHash = location.hash;
+    },
+  };
 }
