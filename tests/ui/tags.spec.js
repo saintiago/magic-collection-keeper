@@ -135,7 +135,9 @@ test("UC-10 contextual typed tags, allocation shortfall, rename, filtering and s
   await page.locator("#edit-card-tags").click();
   await page.locator("#add-location").click();
   await page.getByLabel("Copies at location 1").fill("3");
-  await page.getByLabel("Card Draw (Role)").check();
+  await page
+    .getByRole("checkbox", { name: "Card Draw (Role)", exact: true })
+    .check();
   await page.locator("#save-tags").click();
   await expect(page.locator(".card .allocation-warning")).toHaveText(
     "3 assigned · 2 owned",
@@ -176,7 +178,9 @@ test("UC-10 contextual typed tags, allocation shortfall, rename, filtering and s
   await page.locator(".card").click();
   await page.locator("#edit-card-tags").click();
   await page.getByRole("button", { name: "Remove location 1" }).click();
-  await page.getByLabel("Card Draw (Role)").uncheck();
+  await page
+    .getByRole("checkbox", { name: "Card Draw (Role)", exact: true })
+    .uncheck();
   await page.locator("#save-tags").click();
   await page.locator("#tag-filter").selectOption("");
   await expect(page.locator(".card .allocation-warning")).toHaveCount(0);
