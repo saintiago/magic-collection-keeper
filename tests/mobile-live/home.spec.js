@@ -4,6 +4,7 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
   page,
   request,
 }) => {
+  page.setDefaultTimeout(15000);
   expect(process.env.KEEPER_TAGS_USER).toBe("keeper-tags");
   await page.goto("/");
   await page
@@ -62,7 +63,9 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
     ).toBeVisible();
     await page.locator("#manage-tags").click();
     await page.getByLabel("Tag name", { exact: true }).fill(label);
-    await page.getByLabel("Type", { exact: true }).selectOption("role");
+    await page
+      .getByRole("combobox", { name: "Type", exact: true })
+      .selectOption("role");
     await page.getByRole("button", { name: "Create tag", exact: true }).click();
     await expect(page.locator("#tag-message")).toContainText("Tag created");
     created = (await api("tags")).find(
