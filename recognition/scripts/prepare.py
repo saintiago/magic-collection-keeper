@@ -12,6 +12,7 @@ root = Path(__file__).resolve().parents[1]
 artifacts = root / "artifacts"
 artifacts.mkdir(exist_ok=True)
 manifest = json.loads((root / "artifact-manifest.json").read_text())
+visual_only = "--visual-only" in sys.argv
 vendor = root / "vendor" / "CollectorVision"
 if not vendor.exists():
     subprocess.run(
@@ -60,6 +61,8 @@ revisions = {
     "latin_PP-OCRv5_mobile_rec": "ab2cd5cc5fa6309be2e5acdfe66eca2c2c127d57",
 }
 for model, files in json.loads((root / "ocr-models.json").read_text()).items():
+    if visual_only:
+        continue
     for filename, digest in files.items():
         fetch(
             f"https://huggingface.co/PaddlePaddle/{model}/resolve/{revisions[model]}/{filename}",
@@ -78,6 +81,11 @@ CatalogV2Downloader.install(
 for name in ("artifact-manifest.json", "ocr-models.json"):
     shutil.copyfile(root / name, artifacts / name)
 print("Frozen public models and catalog prepared.")
+if visual_only:
+    subprocess.run(
+        [sys.executable, str(root / "scripts/browser_assets.py")], check=True
+    )
+    sys.exit(0)
 
 # A reproducible public-artwork fixture; never a customer camera photograph.
 fetch(

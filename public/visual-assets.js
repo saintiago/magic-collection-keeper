@@ -5,6 +5,72 @@ async function digest(buffer) {
     .map((n) => n.toString(16).padStart(2, "0"))
     .join("");
 }
+export async function verifiedAsset(url, spec, cache) {
+  const key = new URL(`/__keeper_visual_cache/${spec.sha256}`, url);
+  let buffer,
+    hit = false;
+  try {
+    const saved = await cache?.match(key);
+    if (saved) {
+      buffer = await saved.arrayBuffer();
+      hit =
+        buffer.byteLength === spec.bytes &&
+        (await digest(buffer)) === spec.sha256;
+    }
+  } catch {
+    /* Corrupt or evicted public cache entries are repaired. */
+  }
+  if (!hit) {
+    const result = await fetch(url);
+    if (!result.ok) throw new Error("Visual asset download failed");
+    buffer = await result.arrayBuffer();
+    if (
+      buffer.byteLength !== spec.bytes ||
+      (await digest(buffer)) !== spec.sha256
+    )
+      throw new Error("Visual asset integrity check failed");
+    try {
+      await cache?.put(key, new Response(buffer));
+    } catch {
+      /* Visit-only. */
+    }
+  }
+  return { buffer, hit };
+}
+
+export async function loadVisualRuntime() {
+  const base = new URL("./vendor/ort/", import.meta.url);
+  const response = await fetch(new URL("runtime.json", base));
+  if (!response.ok) throw new Error("Visual runtime unavailable");
+  const spec = await response.json();
+  if (
+    spec.version !== "1.29.0" ||
+    spec.file !== "ort-wasm-simd-threaded.wasm" ||
+    !/^[0-9a-f]{64}$/.test(spec.sha256) ||
+    !(spec.bytes > 0 && spec.bytes < 40000000)
+  )
+    throw new Error("Unsupported visual runtime");
+  let cache;
+  try {
+    cache = await caches.open("keeper-visual-v1");
+  } catch {
+    /* Visit-only. */
+  }
+  const started = performance.now();
+  const { buffer, hit } = await verifiedAsset(
+    new URL(spec.file, base),
+    spec,
+    cache,
+  );
+  return {
+    buffer,
+    metrics: {
+      runtimeDownloadBytes: hit ? 0 : buffer.byteLength,
+      runtimeCacheBytes: hit ? buffer.byteLength : 0,
+      runtimeLoadMs: performance.now() - started,
+    },
+  };
+}
 export async function loadVisualAssets(onProgress) {
   const response = await fetch(new URL("manifest.json", base));
   if (!response.ok) throw new Error("Visual models unavailable");
@@ -34,34 +100,7 @@ export async function loadVisualAssets(onProgress) {
     )
       throw new Error("Invalid visual asset manifest");
     const url = new URL(spec.file, base);
-    let buffer,
-      hit = false;
-    try {
-      const saved = await cache?.match(url);
-      if (saved) {
-        buffer = await saved.arrayBuffer();
-        hit =
-          buffer.byteLength === spec.bytes &&
-          (await digest(buffer)) === spec.sha256;
-      }
-    } catch {
-      /* A corrupt/evicted cache is repaired by verified download. */
-    }
-    if (!hit) {
-      const result = await fetch(url);
-      if (!result.ok) throw new Error("Visual asset download failed");
-      buffer = await result.arrayBuffer();
-      if (
-        buffer.byteLength !== spec.bytes ||
-        (await digest(buffer)) !== spec.sha256
-      )
-        throw new Error("Visual asset integrity check failed");
-      try {
-        await cache?.put(url, new Response(buffer));
-      } catch {
-        /* Visit-only. */
-      }
-    }
+    let { buffer, hit } = await verifiedAsset(url, spec, cache);
     metrics[hit ? "cacheBytes" : "downloadBytes"] += buffer.byteLength;
     onProgress?.({ stage: name, cached: hit, bytes: buffer.byteLength });
     if (spec.file.endsWith(".gz")) {

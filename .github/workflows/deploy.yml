@@ -21,6 +21,13 @@ jobs:
       - run: npm ci
       - run: node scripts/build-name-index.mjs
       - run: npm test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build verified browser recognition assets
+        run: |
+          pip install -r recognition/requirements-visual.txt
+          python recognition/scripts/prepare.py --visual-only
       - run: npm run build
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:ui

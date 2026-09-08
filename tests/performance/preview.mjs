@@ -5,6 +5,12 @@ import { resolve, sep, extname } from "node:path";
 const root = resolve("public"),
   cloud = "https://exex6mzt02.execute-api.us-east-1.amazonaws.com";
 const port = Number(process.env.PORT || 3200);
+const assetBytesPerSecond = Number(
+  process.env.PERF_ASSET_BYTES_PER_SECOND || 0,
+);
+if (!Number.isFinite(assetBytesPerSecond) || assetBytesPerSecond < 0)
+  throw Error("Invalid transfer rate");
+let nextAssetByteAt = 0;
 const config = {
   region: "us-east-1",
   clientId: "1p2inv2id7ur50opkjmuk46qnb",
@@ -15,14 +21,41 @@ const csp =
   "default-src 'self'; img-src 'self' blob: data: https://cards.scryfall.io; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self' https://cognito-idp.us-east-1.amazonaws.com; frame-ancestors 'none'";
 http
   .createServer(async (req, res) => {
-    const reply = (code, body, type = "application/json") => {
+    const reply = async (code, body, type = "application/json") => {
       res.writeHead(code, {
         "Content-Type": type,
-        "Cache-Control": "no-store",
+        "Cache-Control": req.url.startsWith("/vendor/")
+          ? "public,max-age=31536000,immutable"
+          : "no-store",
         "Content-Security-Policy": csp,
         "X-Content-Type-Options": "nosniff",
       });
-      res.end(body);
+      if (
+        assetBytesPerSecond &&
+        req.url.startsWith("/vendor/") &&
+        Buffer.isBuffer(body)
+      ) {
+        // Shared across concurrent model/runtime responses: real byte delivery
+        // at an emulated aggregate rate, without replacing model inference.
+        for (
+          let offset = 0;
+          offset < body.length && !res.destroyed;
+          offset += 32768
+        ) {
+          const chunk = body.subarray(offset, offset + 32768);
+          nextAssetByteAt =
+            Math.max(performance.now(), nextAssetByteAt) +
+            (chunk.length * 1000) / assetBytesPerSecond;
+          await new Promise((resolve) =>
+            setTimeout(
+              resolve,
+              Math.max(0, nextAssetByteAt - performance.now()),
+            ),
+          );
+          if (!res.destroyed) res.write(chunk);
+        }
+        res.end();
+      } else res.end(body);
     };
     try {
       if (

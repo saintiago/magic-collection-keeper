@@ -1,9 +1,11 @@
-import { mkdir, cp, writeFile, access } from "node:fs/promises";
+import { mkdir, cp, writeFile, access, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { build } from "esbuild";
 await mkdir("public/vendor/core", { recursive: true });
 await mkdir("public/vendor/ort", { recursive: true });
 for (const name of [
   "ort.webgpu.min.mjs",
+  "ort.wasm.min.mjs",
   "ort-wasm-simd-threaded.asyncify.mjs",
   "ort-wasm-simd-threaded.asyncify.wasm",
   "ort-wasm-simd-threaded.mjs",
@@ -15,6 +17,17 @@ for (const name of [
   );
 }
 await mkdir("public/vendor/lang", { recursive: true });
+const runtimeFile = "ort-wasm-simd-threaded.wasm";
+const runtimeBytes = await readFile(`public/vendor/ort/${runtimeFile}`);
+await writeFile(
+  "public/vendor/ort/runtime.json",
+  JSON.stringify({
+    version: "1.29.0",
+    file: runtimeFile,
+    bytes: runtimeBytes.length,
+    sha256: createHash("sha256").update(runtimeBytes).digest("hex"),
+  }),
+);
 await build({
   entryPoints: ["public/name-worker-entry.js"],
   bundle: true,

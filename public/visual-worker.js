@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Model preprocessing/dewarp follows the pinned CollectorVision browser worker.
-import * as ort from "./vendor/ort/ort.webgpu.min.mjs";
 import {
   orderCorners,
   quadArea,
   isUsableQuad,
   normalizeEmbedding,
 } from "./collectorvision-math.js";
-import { loadVisualAssets } from "./visual-assets.js";
+import { loadVisualAssets, loadVisualRuntime } from "./visual-assets.js";
 import { searchVisualCatalog } from "./visual-search.js";
 import { normalizedPixels, warpPixels } from "./visual-pixels.js";
-let detector,
+let ort,
+  detector,
   embedder,
   records,
   embeddings,
@@ -38,6 +38,11 @@ async function run(model, input) {
 }
 async function initialize(enableWebGpu) {
   const started = performance.now();
+  ort = await import(
+    enableWebGpu
+      ? "./vendor/ort/ort.webgpu.min.mjs"
+      : "./vendor/ort/ort.wasm.min.mjs"
+  );
   ort.env.wasm.numThreads = 1; // No hidden dependency on COOP/COEP or extra workers.
   ort.env.wasm.wasmPaths = new URL("./vendor/ort/", import.meta.url).href;
   const loaded = await loadVisualAssets((progress) =>
@@ -57,6 +62,12 @@ async function initialize(enableWebGpu) {
     }
   }
   const initStart = performance.now();
+  let runtimeMetrics = {};
+  if (!enableWebGpu) {
+    const runtime = await loadVisualRuntime();
+    ort.env.wasm.wasmBinary = runtime.buffer;
+    runtimeMetrics = runtime.metrics;
+  }
   // Detector always uses WASM: upstream reported numerical errors on ARM GPU.
   detector = await ort.InferenceSession.create(loaded.assets.cornelius, {
     executionProviders: ["wasm"],
@@ -79,6 +90,7 @@ async function initialize(enableWebGpu) {
     type: "ready",
     metrics: {
       ...loaded.metrics,
+      ...runtimeMetrics,
       prepareMs: performance.now() - started,
       sessionInitMs: performance.now() - initStart,
       provider,
