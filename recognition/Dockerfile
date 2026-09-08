@@ -11,7 +11,7 @@ COPY artifacts/weights ./artifacts/weights
 COPY artifacts/catalog ./artifacts/catalog
 COPY artifacts/ocr-onnx ./artifacts/ocr-onnx
 COPY artifacts/artifact-manifest.json artifacts/ocr-onnx.json ./artifacts/
-COPY artifacts/public-card-frame.jpg ./artifacts/public-card-frame.jpg
+COPY artifacts/public-*-frame.jpg ./artifacts/
 COPY notices ./notices
 COPY LICENSE source.zip ./
 COPY scripts/smoke.py ./smoke.py

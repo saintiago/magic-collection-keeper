@@ -117,8 +117,8 @@ resources = {
             "ProductionVariants": [
                 {
                     "VariantName": "AllTraffic",
-                    "ModelName": ref("Model"),
-                    "ServerlessConfig": {"MemorySizeInMB": 4096, "MaxConcurrency": 2},
+                    "ModelName": attr("Model", "ModelName"),
+                    "ServerlessConfig": {"MemorySizeInMB": 3072, "MaxConcurrency": 2},
                 }
             ],
         },
@@ -128,7 +128,7 @@ resources = {
         "DependsOn": "ModelLogs",
         "Properties": {
             "EndpointName": "magic-keeper-sagemaker",
-            "EndpointConfigName": ref("EndpointConfig"),
+            "EndpointConfigName": attr("EndpointConfig", "EndpointConfigName"),
         },
     },
     "Proxy": {
@@ -141,7 +141,9 @@ resources = {
             "MemorySize": 256,
             "Timeout": 28,
             "Role": attr("ProxyRole"),
-            "Environment": {"Variables": {"ENDPOINT_NAME": ref("Endpoint")}},
+            "Environment": {
+                "Variables": {"ENDPOINT_NAME": attr("Endpoint", "EndpointName")}
+            },
             "Code": {"ZipFile": (root / "sagemaker_proxy.py").read_text()},
         },
     },

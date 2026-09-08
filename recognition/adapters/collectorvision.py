@@ -5,6 +5,7 @@ import cv2, numpy as np
 import collector_vision as cv
 import onnxruntime as ort
 from timing import measured, stage, TimedCallable
+from adapters.visual_search import rank_identity, supported
 
 ort.disable_telemetry_events()
 
@@ -55,7 +56,22 @@ class CollectorVision:
             "models": manifest["models"],
             "catalog": manifest["catalog"],
             "calibration": "research-cosine-v1-not-approved",
+            "processing": "keeper-visual-v2-rotation-reference-margin",
         }
+        self.identities = np.array(
+            [
+                record.identifiers.get("scryfall_oracle")
+                for record in self.catalog.records
+            ],
+            dtype=object,
+        )
+
+    def search(self, embedding):
+        scores = self.catalog.embeddings @ embedding
+        indices, other = rank_identity(scores, self.identities)
+        return [
+            self.catalog.record_for_index(i, score=float(scores[i])) for i in indices
+        ], other
 
     def inspect(self, image):
         with stage("visual.preprocess"):
@@ -80,31 +96,32 @@ class CollectorVision:
             return result
         crop = measured("visual.dewarp", found.dewarp, bgr)
         embedding = measured("visual.embed", self.embedder.embed, crop)
-        matches = measured(
-            "visual.search", self.catalog.search_records, embedding, top_k=5
-        )
+        matches, other = measured("visual.search", self.search, embedding)
         if not matches:
             return result
+        orientation = "upright"
+        corners = found.corners
+        if not supported(matches[0]["score"], other):
+            opposite = measured(
+                "visual.embed", self.embedder.embed, crop.rotate(180)
+            )
+            alternative, alternative_other = measured(
+                "visual.search", self.search, opposite
+            )
+            if alternative and alternative[0]["score"] > matches[0]["score"]:
+                matches, other = alternative, alternative_other
+                corners = np.roll(corners, -2, axis=0)
+                orientation = "rotated_180"
         first = matches[0]
-        identity = first["identifiers"].get("scryfall_oracle")
-        other = next(
-            (
-                x["score"]
-                for x in matches[1:]
-                if x["identifiers"].get("scryfall_oracle") != identity
-            ),
-            1,
-        )
         # These conservative research thresholds only admit optional candidates.
-        result["identity_supported"] = (
-            first["score"] >= 0.8 and first["score"] - other >= 0.08
-        )
+        result["identity_supported"] = supported(first["score"], other)
         result["evidence"].update(
             topScore=first["score"],
             differentIdentityMargin=first["score"] - other,
             sharpness=found.sharpness,
+            orientation=orientation,
         )
-        result["corners"] = found.corners
+        result["corners"] = corners
         result["candidates"] = [
             {
                 "id": x["id"],

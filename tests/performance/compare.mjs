@@ -263,6 +263,15 @@ try {
         attempts: run.attempts.length,
         p50Ms: percentile(latency, 0.5),
         p95Ms: percentile(latency, 0.95),
+        correctCandidateP50Ms: percentile(
+          positives.filter((a) => a.oracleTop1).map((a) => a.uploadToVisibleMs),
+          0.5,
+        ),
+        correctCandidateP95Ms: percentile(
+          positives.filter((a) => a.oracleTop1).map((a) => a.uploadToVisibleMs),
+          0.95,
+        ),
+        unknown: run.attempts.filter((a) => a.outcome === "unknown").length,
         failures: run.attempts.filter((a) =>
           ["error", "timeout"].includes(a.outcome),
         ).length,

@@ -148,10 +148,10 @@
           {
             "VariantName": "AllTraffic",
             "ModelName": {
-              "Ref": "Model"
+              "Fn::GetAtt": ["Model", "ModelName"]
             },
             "ServerlessConfig": {
-              "MemorySizeInMB": 4096,
+              "MemorySizeInMB": 3072,
               "MaxConcurrency": 2
             }
           }
@@ -164,7 +164,7 @@
       "Properties": {
         "EndpointName": "magic-keeper-sagemaker",
         "EndpointConfigName": {
-          "Ref": "EndpointConfig"
+          "Fn::GetAtt": ["EndpointConfig", "EndpointConfigName"]
         }
       }
     },
@@ -183,7 +183,7 @@
         "Environment": {
           "Variables": {
             "ENDPOINT_NAME": {
-              "Ref": "Endpoint"
+              "Fn::GetAtt": ["Endpoint", "EndpointName"]
             }
           }
         },

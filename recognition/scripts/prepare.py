@@ -92,3 +92,14 @@ with Image.open(artifacts / "public-card.jpg") as card:
     frame = Image.new("RGB", (700, 980), (28, 60, 40))
     frame.paste(card, ((700 - card.width) // 2, (980 - card.height) // 2))
     frame.save(artifacts / "public-card-frame.jpg", quality=88)
+
+for source in json.loads((root.parent / "tests/performance/sources.json").read_text()):
+    if source["key"] not in ("bolt", "ring"):
+        continue
+    path = artifacts / ("public-" + source["key"] + ".jpg")
+    fetch(source["url"], path, source["sha256"])
+    with Image.open(path) as card:
+        card = ImageOps.contain(card.convert("RGB"), (480, 670))
+        frame = Image.new("RGB", (700, 980), (28, 60, 40))
+        frame.paste(card, ((700 - card.width) // 2, (980 - card.height) // 2))
+        frame.save(artifacts / ("public-" + source["key"] + "-frame.jpg"), quality=88)

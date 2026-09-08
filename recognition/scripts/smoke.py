@@ -45,6 +45,12 @@ assert positive["status"] == "possible" and positive["selected"] is None, positi
 assert positive["candidates"][0]["name"] == "Adaptive Training Post", positive
 assert positive["evidence"]["text"].get("titleRead"), positive
 assert "error" not in positive["evidence"]["text"], positive
+for key, name in (("bolt", "Lightning Bolt"), ("ring", "Sol Ring")):
+    with Image.open(Path("artifacts/public-" + key + "-frame.jpg")) as frame:
+        rotated = service.recognize(frame.convert("RGB"))
+    assert rotated["status"] == "possible" and rotated["selected"] is None, rotated
+    assert rotated["candidates"][0]["name"] == name, rotated
+    assert rotated["evidence"]["text"].get("titleRead"), rotated
 assert not network_attempts, "Runtime attempted network access"
 assert "paddle" not in sys.modules and "paddlex" not in sys.modules
 print(

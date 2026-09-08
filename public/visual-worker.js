@@ -5,32 +5,24 @@ import {
   orderCorners,
   quadArea,
   isUsableQuad,
-  computeHomography,
-  applyHomography,
-  sampleBilinear,
   normalizeEmbedding,
-  FLOAT16_LOOKUP,
 } from "./collectorvision-math.js";
 import { loadVisualAssets } from "./visual-assets.js";
+import { searchVisualCatalog } from "./visual-search.js";
+import { normalizedPixels, warpPixels } from "./visual-pixels.js";
 let detector,
   embedder,
   records,
   embeddings,
   manifest,
   busy = false;
-const mean = [0.485, 0.456, 0.406],
-  std = [0.229, 0.224, 0.225];
-function tensor(canvas, size) {
-  const scaled = new OffscreenCanvas(size, size),
-    ctx = scaled.getContext("2d", { willReadFrequently: true });
-  ctx.drawImage(canvas, 0, 0, size, size);
-  const rgba = ctx.getImageData(0, 0, size, size).data,
-    plane = size * size,
-    values = new Float32Array(plane * 3);
-  for (let i = 0; i < plane; i++)
-    for (let c = 0; c < 3; c++)
-      values[c * plane + i] = (rgba[i * 4 + c] / 255 - mean[c]) / std[c];
-  return new ort.Tensor("float32", values, [1, 3, size, size]);
+function tensor(frame, size, rotate = false) {
+  return new ort.Tensor("float32", normalizedPixels(frame, size, rotate), [
+    1,
+    3,
+    size,
+    size,
+  ]);
 }
 async function run(model, input) {
   let outputs;
@@ -44,57 +36,6 @@ async function run(model, input) {
     if (outputs) for (const output of Object.values(outputs)) output.dispose();
   }
 }
-function warp(frame, corners) {
-  const width = 448,
-    height = 448,
-    source = frame
-      .getContext("2d", { willReadFrequently: true })
-      .getImageData(0, 0, frame.width, frame.height);
-  const inverse = computeHomography(
-    [
-      [0, 0],
-      [447, 0],
-      [447, 447],
-      [0, 447],
-    ],
-    corners.map(([x, y]) => [x * frame.width, y * frame.height]),
-  );
-  const crop = new OffscreenCanvas(width, height),
-    ctx = crop.getContext("2d"),
-    target = ctx.createImageData(width, height);
-  for (let y = 0; y < height; y++)
-    for (let x = 0; x < width; x++) {
-      const [sx, sy] = applyHomography(inverse, x, y),
-        offset = (y * width + x) * 4;
-      for (let c = 0; c < 3; c++)
-        target.data[offset + c] = sampleBilinear(
-          source.data,
-          frame.width,
-          frame.height,
-          sx,
-          sy,
-          c,
-        );
-      target.data[offset + 3] = 255;
-    }
-  ctx.putImageData(target, 0, 0);
-  return crop;
-}
-function search(query) {
-  const best = [];
-  for (let row = 0; row < records.length; row++) {
-    let score = 0;
-    const offset = row * 128;
-    for (let col = 0; col < 128; col++)
-      score += FLOAT16_LOOKUP[embeddings[offset + col]] * query[col];
-    if (best.length < 5 || score > best.at(-1).score) {
-      best.push({ row, score });
-      best.sort((a, b) => b.score - a.score);
-      if (best.length > 5) best.pop();
-    }
-  }
-  return best;
-}
 async function initialize(enableWebGpu) {
   const started = performance.now();
   ort.env.wasm.numThreads = 1; // No hidden dependency on COOP/COEP or extra workers.
@@ -106,7 +47,7 @@ async function initialize(enableWebGpu) {
   records = loaded.assets.records;
   embeddings = new Uint16Array(loaded.assets.embeddings);
   let provider = "wasm",
-    gpuAvailable = false,
+    gpuAvailable = null,
     fallback = null;
   if (enableWebGpu && navigator.gpu) {
     try {
@@ -141,6 +82,8 @@ async function initialize(enableWebGpu) {
       prepareMs: performance.now() - started,
       sessionInitMs: performance.now() - initStart,
       provider,
+      gpuChecked: enableWebGpu,
+      gpuAdvertised: Boolean(navigator.gpu),
       gpuAvailable,
       fallback,
       catalogRows: records.length,
@@ -150,11 +93,8 @@ async function initialize(enableWebGpu) {
     },
   });
 }
-async function recognize(bitmap, attempt) {
-  const started = performance.now(),
-    frame = new OffscreenCanvas(bitmap.width, bitmap.height);
-  frame.getContext("2d").drawImage(bitmap, 0, 0);
-  bitmap.close();
+async function recognize(frame, attempt) {
+  const started = performance.now();
   const out = await run(detector, tensor(frame, 384)),
     t1 = performance.now();
   const points = [];
@@ -176,6 +116,7 @@ async function recognize(bitmap, attempt) {
     versions: {
       visual: {
         adapter: "collectorvision-browser",
+        processing: "keeper-visual-v3-portable-pixels",
         code: manifest.upstream.code,
         catalog: manifest.upstream.catalog,
       },
@@ -191,16 +132,33 @@ async function recognize(bitmap, attempt) {
     base.timings.totalMs = performance.now() - started;
     return base;
   }
-  const crop = warp(frame, corners),
+  const crop = warpPixels(frame, corners),
     t2 = performance.now(),
     embedded = normalizeEmbedding((await run(embedder, tensor(crop, 448)))[0]),
-    t3 = performance.now(),
-    matches = search(embedded);
-  const first = matches[0],
-    identity = records[first.row].oracle_id,
-    other =
-      matches.slice(1).find((m) => records[m.row].oracle_id !== identity)
-        ?.score ?? 1;
+    t3 = performance.now();
+  let found = searchVisualCatalog(embedded, embeddings, records),
+    orientation = "upright",
+    extraEmbedMs = 0;
+  // Shortest-edge ordering can place the physical bottom at the top. The pinned
+  // upstream scanner evaluates both orientations; skip the second only when
+  // upright already supports optional candidates under the research threshold.
+  if (
+    found.matches[0].score < 0.8 ||
+    found.matches[0].score - found.differentIdentityScore < 0.08
+  ) {
+    const rotateStart = performance.now();
+    const opposite = normalizeEmbedding(
+      (await run(embedder, tensor(crop, 448, true)))[0],
+    );
+    extraEmbedMs = performance.now() - rotateStart;
+    const alternative = searchVisualCatalog(opposite, embeddings, records);
+    if (alternative.matches[0].score > found.matches[0].score) {
+      found = alternative;
+      orientation = "rotated_180";
+    }
+  }
+  const { matches, differentIdentityScore: other } = found,
+    first = matches[0];
   const supported = first.score >= 0.8 && first.score - other >= 0.08;
   return {
     ...base,
@@ -208,6 +166,7 @@ async function recognize(bitmap, attempt) {
     candidates: supported ? matches.map((m) => records[m.row]) : [],
     evidence: {
       ...base.evidence,
+      orientation,
       topScore: first.score,
       differentIdentityMargin: first.score - other,
       isProbability: false,
@@ -216,15 +175,14 @@ async function recognize(bitmap, attempt) {
     timings: {
       ...base.timings,
       dewarpMs: t2 - t1,
-      embedMs: t3 - t2,
-      searchMs: performance.now() - t3,
+      embedMs: t3 - t2 + extraEmbedMs,
+      searchMs: performance.now() - t3 - extraEmbedMs,
       totalMs: performance.now() - started,
     },
   };
 }
 self.onmessage = async ({ data }) => {
   if (busy) {
-    data.bitmap?.close();
     self.postMessage({ type: "error", message: "Visual worker busy" });
     return;
   }
@@ -234,10 +192,9 @@ self.onmessage = async ({ data }) => {
     else if (data.type === "frame")
       self.postMessage({
         type: "result",
-        result: await recognize(data.bitmap, data.attempt),
+        result: await recognize(data.frame, data.attempt),
       });
   } catch {
-    data.bitmap?.close();
     self.postMessage({
       type: "error",
       message: "Browser visual recognition unavailable",

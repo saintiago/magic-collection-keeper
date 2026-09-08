@@ -2,6 +2,7 @@
 import { resolveRecognition } from "./recognition-candidates.js";
 export function createBackendRecognition({ request, path = "/api/recognize" }) {
   let active = false;
+  const cache = new Map();
   return {
     kind: path.endsWith("sagemaker") ? "sagemaker" : "lambda",
     async recognize(canvas, { signal, attempt }) {
@@ -16,6 +17,7 @@ export function createBackendRecognition({ request, path = "/api/recognize" }) {
         throw new Error("Unsupported image dimensions");
       active = true;
       try {
+        const started = performance.now();
         const blob = await new Promise((resolve) =>
           canvas.toBlob(resolve, "image/jpeg", 0.86),
         );
@@ -27,13 +29,29 @@ export function createBackendRecognition({ request, path = "/api/recognize" }) {
         for (let i = 0; i < bytes.length; i += 32768)
           binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
         signal?.throwIfAborted();
+        const encoded = performance.now();
         const data = await request(path, {
           method: "POST",
           body: JSON.stringify({ image: btoa(binary), attempt }),
           signal,
         });
+        const received = performance.now();
         signal?.throwIfAborted();
-        return resolveRecognition(data, { request, signal, attempt });
+        const row = await resolveRecognition(data, {
+          request,
+          signal,
+          attempt,
+          cache,
+        });
+        return {
+          ...row,
+          measurement: {
+            ...row.measurement,
+            encodeMs: encoded - started,
+            transportMs: received - encoded,
+            adapterMs: performance.now() - started,
+          },
+        };
       } finally {
         active = false;
       }

@@ -1,6 +1,6 @@
 # Isolated SageMaker Serverless comparison review
 
-Prepared September 9, 2026. No SageMaker resource has been created. The generated
+Prepared September 9, 2026. Deployment attempts and corrections are recorded below. The generated
 `sagemaker-review-template.json` passed CloudFormation ValidateTemplate and requires
 CAPABILITY_IAM. The owner's explicit instruction on September 9 authorizes this
 concrete stack and replaces separate administrator review or confirmation. The
@@ -12,7 +12,7 @@ Proposed stack: **magic-keeper-sagemaker**, account **698643713254**, **us-east-
 | Resource | Concrete scope |
 | --- | --- |
 | Model + endpoint configuration | Frozen CollectorVision/Paddle ONNX weights and full catalog, same image contents and policy as Lambda; a different HTTP entrypoint |
-| Endpoint | `magic-keeper-sagemaker`, 4096 MB, maximum concurrency 2, ProvisionedConcurrency omitted |
+| Endpoint | `magic-keeper-sagemaker`, 3072 MB, maximum concurrency 2, ProvisionedConcurrency omitted |
 | Model execution role | ECR authorization token (`*` required by that action); pull only `magic-keeper-recognition`; write only its endpoint logs |
 | Proxy execution role | Invoke only this endpoint; write only its own Lambda logs |
 | Proxy Lambda | `magic-keeper-sagemaker-proxy`, Python 3.12 ZIP, 256 MB, 28-second timeout; no ML imports |
@@ -34,10 +34,10 @@ rejected. The private container independently decodes and validates the image.
 Images, raw OCR and credentials are never logged or retained. Data capture is off.
 The authenticated AGPL source offer must match the deployed image before use.
 
-AWS Price List API checked September 9: SKU GZZDMY84RV5ASE5S,
-USE1-ServerlessInf:Mem-4GB, effective September 1: **$0.00008 per processing second**.
-For example, 1,000 calls averaging one billed processing second cost **$0.08 in
-SageMaker compute**; ten seconds average costs **$0.80**. Data processing, proxy
+AWS Price List API checked September 9: SKU PUE6HBQ8KFHBUN5T,
+USE1-ServerlessInf:Mem-3GB, effective September 1: **$0.00006 per processing second**.
+For example, 1,000 calls averaging one billed processing second cost **$0.06 in
+SageMaker compute**; ten seconds average costs **$0.60**. Data processing, proxy
 Lambda/API requests, ECR storage and logs are additional. No free tier is assumed.
 No fixed idle compute is requested; actual billed duration and overhead must be
 checked against measured results. This is an example, not a spending cap.
@@ -79,3 +79,10 @@ The concrete reviewed template and this image are authorized for deployment.
 Deployment is proceeding under the owner's explicit instruction. The initial comparison uses the
 same original orientation policy as Lambda; browser comparison evidence has since
 identified an orientation fix to evaluate before final provider selection.
+
+The first creation failed because SageMaker CloudFormation `Ref` returns ARNs;
+the endpoint configuration and proxy now use the documented name attributes.
+The second failed because this account limits serverless endpoint memory to
+3072 MB. The comparison uses that smaller available size rather than waiting for
+a quota increase. Failed creations rolled back their newly empty resources;
+their CloudFormation events are retained with the local benchmark evidence.
