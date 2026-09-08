@@ -84,21 +84,32 @@ test("UC-36 busy, unknown and unapproved confirmations add no copy; closing canc
   page,
 }) => {
   let mode = "busy";
+  let pending;
+  function holdNextResponse() {
+    let start, release, finish;
+    const started = new Promise((resolve) => (start = resolve));
+    const released = new Promise((resolve) => (release = resolve));
+    const finished = new Promise((resolve) => (finish = resolve));
+    pending = { start, released, finish };
+    return { started, release, finished };
+  }
   await page.route("**/api/recognize", async (r) => {
-    if (mode === "late")
-      await new Promise((resolve) => setTimeout(resolve, 300));
+    const responseMode = mode;
+    const gate = pending;
+    gate.start();
+    await gate.released;
     await r
       .fulfill(
-        mode === "busy"
+        responseMode === "busy"
           ? { status: 429, json: { error: "Scanner busy" } }
           : {
               json: {
                 contractVersion: 1,
                 attempt: r.request().postDataJSON().attempt,
                 status:
-                  mode === "confirmed"
+                  responseMode === "confirmed"
                     ? "confirmed"
-                    : mode === "late"
+                    : responseMode === "late"
                       ? "possible"
                       : "unknown",
                 candidates: [card],
@@ -106,11 +117,19 @@ test("UC-36 busy, unknown and unapproved confirmations add no copy; closing canc
             },
       )
       .catch(() => {});
+    gate.finish();
   });
   const photo = await setup(page);
   for (const next of ["busy", "unknown", "confirmed"]) {
     mode = next;
+    const response = holdNextResponse();
     await page.locator("#photo").setInputFiles(photo);
+    await response.started;
+    await expect(page.locator("#scan-status")).toContainText(
+      "Reading card securely",
+    );
+    response.release();
+    await response.finished;
     await expect(page.locator("#scan-status")).toContainText("No copy counted");
     await expect(page.locator("#scan-count")).toHaveText(
       "0 matched · 0 copies",
@@ -118,12 +137,15 @@ test("UC-36 busy, unknown and unapproved confirmations add no copy; closing canc
     await expect(page.locator("#scan-possible")).toBeHidden();
   }
   mode = "late";
+  const lateResponse = holdNextResponse();
   await page.locator("#photo").setInputFiles(photo);
+  await lateResponse.started;
   await expect(page.locator("#scan-status")).toContainText(
     "Reading card securely",
   );
   await page.locator("#scan-back").click();
-  await page.waitForTimeout(400);
+  lateResponse.release();
+  await lateResponse.finished;
   await page.locator("#scan").click();
   await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
   await expect(page.locator("#scan-possible")).toBeHidden();

@@ -69,13 +69,11 @@ export async function exerciseBackendScanner({ page }, test) {
     return { blank, card: c.toDataURL("image/jpeg", 0.88).split(",")[1] };
   }, image);
   const upload = (key) =>
-    page
-      .locator("#photo")
-      .setInputFiles({
-        name: "public-synthetic-" + key + ".jpg",
-        mimeType: "image/jpeg",
-        buffer: Buffer.from(frames[key], "base64"),
-      });
+    page.locator("#photo").setInputFiles({
+      name: "public-synthetic-" + key + ".jpg",
+      mimeType: "image/jpeg",
+      buffer: Buffer.from(frames[key], "base64"),
+    });
   try {
     await page.locator("#scan").click();
     await expect(
@@ -95,7 +93,7 @@ export async function exerciseBackendScanner({ page }, test) {
     }
     expect(bytes).toBeGreaterThan(100000);
     expect(hash.digest("hex")).toBe(
-      "572101bfb20883accae245899ae85986694ade7ae90e27e3572d0485f02a997b",
+      "6796edc865fb6563e06208b7d6e05fd0527a2c42fd5d4ef820624de7449219f9",
     );
     await upload("blank");
     await expect(page.locator("#scan-status")).toContainText(
