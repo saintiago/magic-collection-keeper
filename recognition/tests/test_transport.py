@@ -32,4 +32,3 @@ class Tests(unittest.TestCase):
   self.assertEqual(r['statusCode'],200);self.assertEqual(received,[(200,300)])
   self.assertNotIn('isolated-test-owner',r['body'])
 if __name__=='__main__':unittest.main()
-

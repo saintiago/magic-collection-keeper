@@ -1,6 +1,6 @@
 **
 !*.py
-!requirements.in
+!requirements-linux.txt
 !adapters/**
 !artifacts/**
 !vendor/CollectorVision/**
@@ -9,3 +9,4 @@ vendor/CollectorVision/.git
 !LICENSE
 !source.zip
 !scripts/smoke.py
+

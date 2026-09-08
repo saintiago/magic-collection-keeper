@@ -1,4 +1,4 @@
-// Candidate browser adapter, not imported by the production app yet.
+// SPDX-License-Identifier: AGPL-3.0-only
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function createBackendRecognition({ request }) {
   let active = false;
@@ -33,20 +33,52 @@ export function createBackendRecognition({ request }) {
         });
         signal?.throwIfAborted();
         if (
+          data.contractVersion !== 1 ||
           data.attempt !== attempt ||
           !["unknown", "possible"].includes(data.status)
         )
           throw new Error("Recognition response is not approved");
-        const candidates = (data.candidates || [])
+        const candidates = (
+          data.status === "possible" && Array.isArray(data.candidates)
+            ? data.candidates
+            : []
+        )
           .slice(0, 5)
           .filter(
             (c) =>
               uuid.test(c.id) &&
-              uuid.test(c.identifiers?.scryfall_oracle) &&
+              uuid.test(c.oracle_id) &&
               typeof c.name === "string" &&
               c.name.length <= 200,
           );
-        return { status: data.status, candidates, selected: null };
+        const cards = [];
+        // Resolve exact printings through the existing canonical catalog adapter.
+        // Candidate metadata never becomes an ownership write payload directly.
+        for (const candidate of candidates) {
+          signal?.throwIfAborted();
+          const data = await request(
+            `/api/card?${new URLSearchParams({ printing: candidate.id, oracle: candidate.oracle_id })}`,
+            { signal },
+          );
+          const card = data.cards?.[0];
+          signal?.throwIfAborted();
+          if (
+            card?.id === candidate.id &&
+            card.oracle_id === candidate.oracle_id &&
+            Array.isArray(card.finishes) &&
+            card.finishes.length
+          )
+            cards.push(card);
+        }
+        return {
+          status: data.status,
+          name: cards[0]?.name || "Unclear reading",
+          candidates: cards,
+          selected: null,
+          finish: "nonfoil",
+          condition: "NM",
+          quantity: 1,
+        };
       } finally {
         active = false;
       }

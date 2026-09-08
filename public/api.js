@@ -21,6 +21,12 @@ export async function api(path, options) {
   }
   if (generation !== sessionGeneration)
     throw new Error("Session changed. Please sign in again.");
+  if (response.ok && options?.responseType === "blob") {
+    const blob = await response.blob();
+    if (generation !== sessionGeneration)
+      throw new Error("Session changed. Please sign in again.");
+    return blob;
+  }
   let data;
   try {
     data = await response.json();

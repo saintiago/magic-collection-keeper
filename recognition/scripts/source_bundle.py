@@ -18,6 +18,9 @@ with zipfile.ZipFile(root/'recognition/source.zip', 'w', zipfile.ZIP_DEFLATED) a
     vendor = root/'recognition/vendor/CollectorVision'
     for path in sorted(vendor.rglob('*')):
         rel=path.relative_to(vendor)
-        if path.is_file() and not any(x in ('.git','__pycache__','build','dist') or x.endswith('.egg-info') for x in rel.parts):
+        if path.is_file() and path.suffix != '.onnx' and not any(x in ('.git','__pycache__','build','dist') or x.endswith('.egg-info') for x in rel.parts):
             archive.write(path, 'CollectorVision/'+rel.as_posix())
+    archive.write(root/'recognition/LICENSE','COPYING')
+if (root/'recognition/source.zip').stat().st_size > 4_000_000:
+    raise ValueError('Source bundle exceeds bounded API download size')
 print('Prepared source.zip; public model/catalog fetch scripts and hashes included.')

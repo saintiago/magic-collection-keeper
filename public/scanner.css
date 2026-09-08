@@ -333,3 +333,27 @@ html.scanning {
     scroll-behavior: auto;
   }
 }
+.recognition-notice {
+  position: absolute;
+  top: 90px;
+  left: 14px;
+  right: 14px;
+  z-index: 2;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #10251eed;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.recognition-notice button {
+  color: inherit;
+  padding: 2px 4px;
+  background: transparent;
+  border: 0;
+  text-decoration: underline;
+}
+.scanner-dialog[data-recognition="backend"] #scan-possible {
+  top: 180px;
+}

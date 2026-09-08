@@ -13,7 +13,7 @@
     "ImageUri": {
       "Type": "String",
       "Default": "",
-      "Description": "After license approval and bootstrap, immutable ECR image URI ending @sha256:digest",
+      "Description": "After administrator review and bootstrap, immutable ECR image URI ending @sha256:digest",
       "AllowedPattern": "^$|^[0-9]{12}\\.dkr\\.ecr\\.us-east-1\\.amazonaws\\.com/magic-keeper-recognition@sha256:[0-9a-f]{64}$"
     },
     "ProvisionedConcurrency": {
@@ -230,6 +230,45 @@
         "Principal": "apigateway.amazonaws.com",
         "SourceArn": {
           "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/POST/api/recognize"
+        }
+      }
+    },
+    "SourceRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Condition": "DeployEngine",
+      "Properties": {
+        "ApiId": {
+          "Ref": "ApiId"
+        },
+        "RouteKey": "GET /api/recognition/source",
+        "AuthorizationType": "JWT",
+        "AuthorizerId": {
+          "Ref": "AuthorizerId"
+        },
+        "Target": {
+          "Fn::Join": [
+            "/",
+            [
+              "integrations",
+              {
+                "Ref": "Integration"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "SourceInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Condition": "DeployEngine",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "Alias"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/GET/api/recognition/source"
         }
       }
     }

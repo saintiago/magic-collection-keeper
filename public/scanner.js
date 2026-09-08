@@ -6,7 +6,8 @@ import { resolveScan } from "./scan-resolution.js";
 import { createScanAudio } from "./scan-audio.js";
 import { createScanWheel } from "./scan-wheel.js";
 
-export function createScanner({ api, onReview }) {
+export function createScanner({ api, onReview, recognition = null }) {
+  let requestController = new AbortController();
   const dialog = document.createElement("dialog");
   dialog.className = "scanner-dialog";
   dialog.setAttribute("aria-label", "Continuous card scanner");
@@ -59,6 +60,8 @@ export function createScanner({ api, onReview }) {
   }
   function stop() {
     session++;
+    requestController.abort();
+    requestController = new AbortController();
     running = false;
     dialog.dataset.running = "false";
     processing = false;
@@ -94,6 +97,11 @@ export function createScanner({ api, onReview }) {
     }
   });
   window.addEventListener("pagehide", stop);
+  window.addEventListener("keeper-sign-out", () => {
+    stop();
+    dialog.close();
+    document.documentElement.classList.remove("scanning");
+  });
   function enqueue(canvas) {
     if (
       rows.length + possible.length + queue.length + Number(processing) >=
@@ -132,10 +140,24 @@ export function createScanner({ api, onReview }) {
       const { row, canvas } = queue.shift();
       let result;
       try {
-        status("Reading card locally… Keep each card still until the cue.");
-        const reading = await recognizeCard(canvas);
-        if (current !== session) return;
-        result = await resolveScan(reading, api);
+        status(
+          recognition
+            ? "Reading card securely… Keep each card still until the cue."
+            : "Reading card locally… Keep each card still until the cue.",
+        );
+        if (recognition) {
+          result = await recognition.recognize(canvas, {
+            attempt: row.scanId,
+            signal: AbortSignal.any([
+              requestController.signal,
+              AbortSignal.timeout(25000),
+            ]),
+          });
+        } else {
+          const reading = await recognizeCard(canvas);
+          if (current !== session) return;
+          result = await resolveScan(reading, api);
+        }
       } catch (error) {
         result = {
           name: "Unclear reading",
@@ -215,6 +237,39 @@ export function createScanner({ api, onReview }) {
       queue = [];
       attempt = 0;
       dialog.innerHTML = scannerShell(muted);
+      dialog.dataset.recognition = recognition ? "backend" : "local";
+      if (recognition) {
+        const notice = document.createElement("p");
+        notice.className = "recognition-notice";
+        notice.textContent =
+          "Card crops are sent securely for recognition, processed in memory and not saved. ";
+        const source = document.createElement("button");
+        source.textContent = "Recognition source (AGPL-3.0)";
+        source.onclick = async () => {
+          const current = session;
+          source.disabled = true;
+          try {
+            const blob = await api("/api/recognition/source", {
+              responseType: "blob",
+              signal: requestController.signal,
+            });
+            if (current !== session || !dialog.open) return;
+            const url = URL.createObjectURL(blob),
+              link = document.createElement("a");
+            link.href = url;
+            link.download = "keeper-recognition-source.zip";
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          } catch {
+            if (current === session)
+              status("Source download unavailable. Please retry.");
+          } finally {
+            source.disabled = false;
+          }
+        };
+        notice.append(source);
+        el("scan-status").before(notice);
+      }
       audio = createScanAudio({ onState: soundState });
       audio.setMuted(muted);
       wheel = createScanWheel({
