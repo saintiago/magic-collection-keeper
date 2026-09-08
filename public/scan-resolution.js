@@ -61,8 +61,9 @@ export async function resolveScan(reading, api) {
       if (!row.selected.finishes.includes(row.finish))
         row.finish = row.selected.finishes[0];
     } else
-      row.error =
-        "Printing needs review. Check the name, set, collector number and language before choosing.";
+      row.error = data.cards.length
+        ? "Printing needs review. Check the name, set, collector number and language before choosing."
+        : "No match. Move the card out, then try again.";
   } catch (error) {
     row.error = error.message;
   }

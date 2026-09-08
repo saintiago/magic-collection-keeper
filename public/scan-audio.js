@@ -71,6 +71,7 @@ export function createScanAudio({
       if (handled.has(attempt)) return false;
       // Expire skipped cues too: resuming must never announce an old card.
       handled.add(attempt);
+      if (handled.size > 256) handled.delete(handled.values().next().value);
       return play(kind === "success" ? [660, 880] : [230, 170]);
     },
     close() {

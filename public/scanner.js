@@ -1,11 +1,10 @@
-import { scannerShell } from "./scan-view.js";
+import { scannerShell, possibleMatches } from "./scan-view.js";
 import { startCamera, stopCamera, capture, signature } from "./camera.js";
 import { recognizeCard, stopRecognition } from "./recognition.js";
 import { createTransitionGate } from "./scan-transition.js";
 import { resolveScan } from "./scan-resolution.js";
 import { createScanAudio } from "./scan-audio.js";
 import { createScanWheel } from "./scan-wheel.js";
-import { esc } from "./view.js";
 
 export function createScanner({ api, onReview }) {
   const dialog = document.createElement("dialog");
@@ -55,20 +54,8 @@ export function createScanner({ api, onReview }) {
     panel.hidden = !possible.length;
     panel.querySelector("summary").textContent =
       `Possible matches (${possible.length})`;
-    panel.querySelector(".scan-possible-list").innerHTML = possible
-      .map(
-        (row) =>
-          `<section><p>Choose only if this matches your card:</p>${row.candidates
-            .slice(0, 8)
-            .map(
-              (card, index) =>
-                `<button data-attempt="${row.scanId}" data-candidate="${index}">${esc(card.printed_name || card.name)} · ${esc(card.set)} #${esc(card.collector_number)} · ${esc(card.lang)}</button>`,
-            )
-            .join(
-              "",
-            )}<button data-dismiss="${row.scanId}">Dismiss this reading</button></section>`,
-      )
-      .join("");
+    panel.querySelector(".scan-possible-list").innerHTML =
+      possibleMatches(possible);
   }
   function stop() {
     session++;
