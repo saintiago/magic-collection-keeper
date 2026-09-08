@@ -4,6 +4,11 @@ test("LIVE-13 failed OCR does not count copies; optional candidates and wheel re
   page,
 }) => {
   test.setTimeout(150000);
+  const config = await page.request.get("/config.json").then((r) => r.json());
+  test.skip(
+    config.backendRecognition === true,
+    "Browser OCR mode only; server recognition is covered by LIVE-14",
+  );
   await page.goto("/");
   await page
     .getByLabel("Username", { exact: true })

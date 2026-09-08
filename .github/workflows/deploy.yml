@@ -61,7 +61,8 @@ jobs:
         env:
           API_URL: ${{ vars.API_URL }}
           CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
-        run: node -e "require('fs').writeFileSync('public/config.json',JSON.stringify({region:'us-east-1',apiUrl:process.env.API_URL,clientId:process.env.CLIENT_ID}))"
+          BACKEND_RECOGNITION: ${{ vars.BACKEND_RECOGNITION }}
+        run: node -e "require('fs').writeFileSync('public/config.json',JSON.stringify({region:'us-east-1',apiUrl:process.env.API_URL,clientId:process.env.CLIENT_ID,backendRecognition:process.env.BACKEND_RECOGNITION==='true'}))"
       - name: Prepare unique deployment
         env:
           BUCKET: ${{ vars.WEBSITE_BUCKET }}

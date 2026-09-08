@@ -5,6 +5,11 @@ test("LIVE-04 continuous synthetic camera with real OCR, real printing resolutio
   page,
 }) => {
   test.setTimeout(120000);
+  const config = await page.request.get("/config.json").then((r) => r.json());
+  test.skip(
+    config.backendRecognition === true,
+    "Browser OCR mode only; server recognition is covered by LIVE-14",
+  );
   await page.addInitScript(installSyntheticCardCamera);
   await page.goto("/#collection");
   await page
