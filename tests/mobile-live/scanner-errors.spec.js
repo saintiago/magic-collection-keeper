@@ -41,13 +41,11 @@ test("LIVE-13 failed OCR does not count copies; optional candidates and wheel re
     return { blank, name, exact: canvas.toDataURL().split(",")[1] };
   });
   const upload = async (key) =>
-    page
-      .locator("#photo")
-      .setInputFiles({
-        name: key + ".png",
-        mimeType: "image/png",
-        buffer: Buffer.from(images[key], "base64"),
-      });
+    page.locator("#photo").setInputFiles({
+      name: key + ".png",
+      mimeType: "image/png",
+      buffer: Buffer.from(images[key], "base64"),
+    });
   await upload("blank");
   await expect(page.locator("#scan-status")).toContainText("No copy counted", {
     timeout: 60000,
@@ -82,6 +80,17 @@ test("LIVE-13 failed OCR does not count copies; optional candidates and wheel re
   await page.screenshot({
     path: test.info().outputPath("scanner-live-newest.png"),
   });
+  await expect
+    .poll(() =>
+      wheel.evaluate((el) =>
+        Math.abs(
+          document.querySelector(".scan-footer").getBoundingClientRect().top -
+            el.querySelector('[aria-selected="true"]').getBoundingClientRect()
+              .bottom,
+        ),
+      ),
+    )
+    .toBeLessThan(2);
   await wheel.press("ArrowUp");
   await expect
     .poll(() =>

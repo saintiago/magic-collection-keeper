@@ -164,7 +164,7 @@ main {
 .home-status:empty {
   display: none;
 }
-body[data-mode="home"] footer {
+body[data-mode="home"] main > footer {
   margin-top: 28px;
 }
 @media (max-width: 650px) {

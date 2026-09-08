@@ -28,7 +28,7 @@ test("UC-15 phone wheel puts newest beside controls and centers history with new
       },
     }),
   );
-  await page.goto("/#collection");
+  await page.goto("/#home");
   await page.locator("#scan").click();
   const buffer = await page.screenshot();
   for (let i = 0; i < 6; i++) {
@@ -51,6 +51,16 @@ test("UC-15 phone wheel puts newest beside controls and centers history with new
   await expect(
     page.locator('.scan-option[aria-selected="true"]'),
   ).toHaveAttribute("data-index", "5");
+  await expect
+    .poll(() =>
+      wheel.evaluate((el) =>
+        Math.abs(
+          document.querySelector(".scan-footer").getBoundingClientRect().top -
+            el.lastElementChild.getBoundingClientRect().bottom,
+        ),
+      ),
+    )
+    .toBeLessThan(2);
   await page.screenshot({
     path: test.info().outputPath("scanner-newest-bottom.png"),
   });
