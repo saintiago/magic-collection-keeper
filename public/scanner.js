@@ -302,6 +302,9 @@ export function createScanner({ api, onReview, recognition = null }) {
             row.finish = row.selected.finishes[0];
           rows.push(row);
           rows.sort((a, b) => a.scanId - b.scanId);
+          status(
+            `${row.name} selected for final printing and ownership review.`,
+          );
         }
         possible.splice(index, 1);
         update(true);

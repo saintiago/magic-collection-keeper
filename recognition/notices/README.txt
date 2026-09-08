@@ -1,4 +1,4 @@
-CollectorVision library and Cornelius/Milo models: HanClinto/CollectorVision; model cards identify AGPL-3.0. This packet retains the default license for evaluation; no alternative personal/commercial grant has been received.
+CollectorVision library and Cornelius/Milo models: HanClinto/CollectorVision; model cards identify AGPL-3.0. The user selected AGPL-3.0 for this integration. No alternative commercial grant is required by that choice.
 https://github.com/HanClinto/CollectorVision
 https://huggingface.co/HanClinto/cornelius
 https://huggingface.co/HanClinto/milo
@@ -13,3 +13,4 @@ https://github.com/HanClinto/CollectorVisionCatalog
 https://scryfall.com/docs/api
 
 Further Python dependency notices remain in installed package distributions and must be reviewed with the frozen Linux dependency lock before deployment.
+

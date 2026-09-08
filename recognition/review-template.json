@@ -8,7 +8,8 @@
     },
     "AuthorizerId": {
       "Type": "String",
-      "Description": "Existing Keeper HTTP API verified Cognito JWT authorizer ID"
+      "Description": "Existing Keeper HTTP API verified Cognito JWT authorizer ID",
+      "Default": "giiovd"
     },
     "ImageUri": {
       "Type": "String",
@@ -271,12 +272,72 @@
           "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/GET/api/recognition/source"
         }
       }
+    },
+    "ImagePublisher": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Effect": "Allow",
+              "Principal": {
+                "Federated": {
+                  "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+                }
+              },
+              "Condition": {
+                "StringEquals": {
+                  "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                  "token.actions.githubusercontent.com:sub": "repo:saintiago/magic-collection-keeper:ref:refs/heads/codex/collectorvision-service"
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": ["ecr:GetAuthorizationToken"],
+                  "Effect": "Allow",
+                  "Resource": "*"
+                },
+                {
+                  "Action": [
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:InitiateLayerUpload",
+                    "ecr:UploadLayerPart",
+                    "ecr:CompleteLayerUpload",
+                    "ecr:PutImage",
+                    "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::GetAtt": ["Images", "Arn"]
+                  }
+                }
+              ]
+            },
+            "PolicyName": "PublishRecognitionImageOnly"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
     }
   },
   "Outputs": {
     "RepositoryUri": {
       "Value": {
         "Fn::GetAtt": ["Images", "RepositoryUri"]
+      }
+    },
+    "ImagePublisherRoleArn": {
+      "Value": {
+        "Fn::GetAtt": ["ImagePublisher", "Arn"]
       }
     }
   }

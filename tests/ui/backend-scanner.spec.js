@@ -32,7 +32,7 @@ async function setup(page) {
     buffer: Buffer.from(image, "base64"),
   };
 }
-test("UC-30 backend candidates remain optional until printing choice and final ownership review", async ({
+test("UC-36 backend candidates remain optional until printing choice and final ownership review", async ({
   page,
 }) => {
   let writes = 0;
@@ -80,7 +80,7 @@ test("UC-30 backend candidates remain optional until printing choice and final o
   await expect(page.locator(".batch-dialog")).toBeVisible();
   expect(writes).toBe(0);
 });
-test("UC-30 busy, unknown and unapproved confirmations add no copy; closing cancels late recognition", async ({
+test("UC-36 busy, unknown and unapproved confirmations add no copy; closing cancels late recognition", async ({
   page,
 }) => {
   let mode = "busy";
