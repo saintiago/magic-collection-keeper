@@ -112,6 +112,25 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith("/api/"))
       return json({ error: "Not found" }, 404);
     if (url.pathname === "/config.json") return json({ local: true });
+    if (
+      /^\/catalog\/(current\.json|[a-f0-9]{64}\.(json|names)\.gz)$/.test(
+        url.pathname,
+      )
+    ) {
+      try {
+        const content = await readFile(
+          resolve(root, "build", url.pathname.slice(1)),
+        );
+        res.writeHead(200, {
+          "Content-Type": url.pathname.endsWith(".json")
+            ? "application/json"
+            : "application/gzip",
+        });
+        return res.end(content);
+      } catch {
+        return json({ error: "Catalog unavailable" }, 404);
+      }
+    }
     const file = url.pathname === "/" ? "index.html" : url.pathname.slice(1),
       publicRoot = resolve(root, "public"),
       absolute = resolve(publicRoot, file);

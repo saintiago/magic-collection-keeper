@@ -26,6 +26,26 @@ if (
 ) {
   console.log("A newer catalog is already published; keeping it.");
 } else {
+  if (
+    manifest.browser?.schema !== 1 ||
+    !/^[a-f0-9]{64}$/.test(manifest.browser.version)
+  )
+    throw Error("Validated browser index required");
+  execFileSync(
+    "aws",
+    [
+      "s3",
+      "cp",
+      `build/catalog/${manifest.browser.version}.names.gz`,
+      `s3://${bucket}/catalog/${manifest.browser.version}.names.gz`,
+      "--content-type",
+      "application/gzip",
+      "--cache-control",
+      "public,max-age=31536000,immutable",
+      "--no-progress",
+    ],
+    { stdio: "pipe" },
+  );
   execFileSync(
     "aws",
     [

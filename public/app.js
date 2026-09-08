@@ -1,4 +1,6 @@
 import { setupAutocomplete } from "./autocomplete.js";
+import { createNameClient } from "./name-client.js";
+import { createDetailCache } from "./detail-cache.js";
 import { searchOwnership } from "./search-ownership.js";
 import { createRecentSearches } from "./recent-searches.js";
 import { createHome } from "./home.js";
@@ -32,7 +34,9 @@ let owned = [],
   loading = false,
   requestId = 0,
   searchController,
-  selectedIdentity = "";
+  selectedIdentity = "",
+  selectedPrinting = "";
+const detailCache = createDetailCache();
 let filterTags = [],
   activeTagId = tagFromHash(location.hash),
   registryReady = false;
@@ -112,11 +116,13 @@ const importPage = createImportPage({
   },
 });
 const autocomplete = setupAutocomplete({
+  names: createNameClient({ api: request }),
   input: $("search"),
   panel: $("suggestion-panel"),
   api: request,
   onSelect: (item) => {
     selectedIdentity = item.kind === "query" ? "" : item.oracle_id;
+    selectedPrinting = item.kind === "query" ? "" : item.printing_id;
     if (item.kind !== "query") recentSearches.remember(item);
     search(false, item.kind !== "query");
   },
@@ -153,6 +159,7 @@ const home = createHome({
     else {
       $("search").value = item.name;
       selectedIdentity = item.oracle_id || "";
+      selectedPrinting = item.printing_id || "";
       search(false, Boolean(selectedIdentity));
     }
   },
@@ -428,16 +435,29 @@ async function search(more = false, openSelection = false) {
   render();
   if (openSelection) $("message").scrollIntoView({ block: "nearest" });
   try {
-    const data = await api(
-      `/api/discover?${new URLSearchParams({ q: query, page: nextPage, ...(selectedIdentity ? { oracle: selectedIdentity } : {}) })}`,
-      {
-        signal: AbortSignal.any([
-          searchController.signal,
-          AbortSignal.timeout(30000),
-        ]),
-      },
-    );
+    const signal = AbortSignal.any([
+      searchController.signal,
+      AbortSignal.timeout(30000),
+    ]);
+    const exact =
+      openSelection &&
+      /^[a-f0-9-]{36}$/i.test(selectedPrinting) &&
+      /^[a-f0-9-]{36}$/i.test(selectedIdentity);
+    const load = () =>
+      api(
+        `/api/discover?${new URLSearchParams({ q: query, page: nextPage, ...(selectedIdentity ? { oracle: selectedIdentity } : {}), ...(exact ? { printing: selectedPrinting } : {}) })}`,
+        { signal },
+      );
+    const data = exact
+      ? await detailCache.load(selectedIdentity, selectedPrinting, load, signal)
+      : await load();
     if (token !== requestId) return;
+    if (data.timing?.phase !== "browser-detail-hit")
+      detailCache.remember(data.cards);
+    if (data.timing)
+      window.dispatchEvent(
+        new CustomEvent("keeper-search-metric", { detail: data.timing }),
+      );
     cards = more ? [...cards, ...data.cards] : data.cards;
     page = nextPage;
     hasMore = data.hasMore;

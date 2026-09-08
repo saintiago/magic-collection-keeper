@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 import { randomUUID } from "node:crypto";
 test("UC-13 source printing exceptions remain visible without claiming ownership", async ({
   page,

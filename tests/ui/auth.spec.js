@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 async function cloud(page) {
   await page.route("**/config.json", (r) =>
     r.fulfill({ json: { region: "us-east-1", clientId: "test" } }),

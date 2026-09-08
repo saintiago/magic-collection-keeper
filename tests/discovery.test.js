@@ -196,8 +196,10 @@ test("UC-25 name index loads once concurrently, checks freshness/version/hash, r
   assert.equal(count, 2);
   await index.get();
   assert.equal(count, 2);
-  time += 86400001;
+  time += 7 * 86400000 + 1;
   fail = true;
+  await index.get();
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal((await index.get()).metadata.stale, true);
   assert.equal((await index.get()).search.search("Piracy")[0].name, "Piracy");
   fail = false;
@@ -209,6 +211,8 @@ test("UC-25 name index loads once concurrently, checks freshness/version/hash, r
       ),
     ),
   );
+  await index.get();
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
     (await index.get()).search.identity("piracy").name,
     "Updated Piracy",

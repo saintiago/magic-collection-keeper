@@ -2,6 +2,10 @@ import { readFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { createNameSearch } from "../domain/card-names.js";
+import {
+  createCompactSearch,
+  decodeCompactNames,
+} from "../domain/compact-names.js";
 import { ApplicationError } from "../domain/inventory.js";
 
 export function createNameIndex({
@@ -9,12 +13,44 @@ export function createNameIndex({
   directory = "build/catalog",
   fetcher = fetch,
   now = Date.now,
+  seedDirectory,
+  onMetric = () => {},
 } = {}) {
   let current,
     expires = 0,
     pending,
     refreshError = false;
-  const DAY = 86400000;
+  const WEEK = 7 * 86400000;
+  let seed;
+  async function materialize(manifest, compressed) {
+    if (
+      manifest.schema !== 1 ||
+      !/^[a-f0-9]{64}$/.test(manifest.version) ||
+      !Number.isFinite(Date.parse(manifest.updated_at)) ||
+      (manifest.browser && manifest.browser.schema !== 1)
+    )
+      throw Error("Invalid catalog manifest");
+    const hash = manifest.browser?.version || manifest.version;
+    if (createHash("sha256").update(compressed).digest("hex") !== hash)
+      throw Error("Catalog checksum mismatch");
+    const start = performance.now();
+    const raw = gunzipSync(compressed, { maxOutputLength: 60000000 });
+    const data = manifest.browser
+      ? decodeCompactNames(raw)
+      : JSON.parse(raw.toString());
+    if (
+      (manifest.browser ? data.cards.length : data.length) !==
+      manifest.identities
+    )
+      throw Error("Incomplete catalog");
+    const parsed = performance.now();
+    const search = manifest.browser
+      ? createCompactSearch(data)
+      : createNameSearch(data);
+    onMetric({ phase: "index-decode", ms: parsed - start });
+    onMetric({ phase: "index-build", ms: performance.now() - parsed });
+    return { search, metadata: manifest };
+  }
   async function bytes(path) {
     if (!origin) return readFile(`${directory}/${path}`);
     const r = await fetcher(`${origin}/catalog/${path}`, {
@@ -34,26 +70,50 @@ export function createNameIndex({
       !Number.isFinite(Date.parse(manifest.updated_at))
     )
       throw Error("Invalid catalog manifest");
-    if (current?.metadata.version !== manifest.version) {
-      const compressed = await bytes(`${manifest.version}.json.gz`);
-      if (
-        createHash("sha256").update(compressed).digest("hex") !==
-        manifest.version
-      )
-        throw Error("Catalog checksum mismatch");
-      const rows = JSON.parse(
-        gunzipSync(compressed, { maxOutputLength: 150000000 }).toString(),
+    if (
+      current &&
+      Date.parse(manifest.updated_at) < Date.parse(current.metadata.updated_at)
+    )
+      throw Error("Catalog regression");
+    if (
+      current?.metadata.version !== manifest.version ||
+      current?.metadata.browser?.version !== manifest.browser?.version
+    ) {
+      if (manifest.browser && !/^[a-f0-9]{64}$/.test(manifest.browser.version))
+        throw Error("Invalid browser version");
+      const started = performance.now();
+      const compressed = await bytes(
+        manifest.browser
+          ? `${manifest.browser.version}.names.gz`
+          : `${manifest.version}.json.gz`,
       );
-      if (!Array.isArray(rows) || rows.length !== manifest.identities)
-        throw Error("Invalid catalog index");
-      current = { search: createNameSearch(rows), metadata: manifest };
+      onMetric({ phase: "index-download", ms: performance.now() - started });
+      current = await materialize(manifest, compressed);
     }
     current.metadata = manifest;
-    expires = now() + DAY;
+    expires = now() + WEEK;
     refreshError = false;
   }
   return {
     async get() {
+      if (seedDirectory) {
+        if (!seed)
+          seed = (async () => {
+            try {
+              const manifest = JSON.parse(
+                await readFile(`${seedDirectory}/current.json`, "utf8"),
+              );
+              if (!/^[a-f0-9]{64}$/.test(manifest.browser?.version)) return;
+              current = await materialize(
+                manifest,
+                await readFile(
+                  `${seedDirectory}/${manifest.browser.version}.names.gz`,
+                ),
+              );
+            } catch {}
+          })();
+        await seed;
+      }
       if (!current || now() >= expires) {
         if (!pending)
           pending = refresh()
@@ -69,7 +129,7 @@ export function createNameIndex({
             .finally(() => {
               pending = null;
             });
-        await pending;
+        if (!current) await pending;
       }
       return {
         ...current,
@@ -77,7 +137,8 @@ export function createNameIndex({
           ...current.metadata,
           stale:
             refreshError ||
-            now() - Date.parse(current.metadata.updated_at) > 3 * DAY,
+            now() - Date.parse(current.metadata.updated_at) >
+              2 * WEEK + 86400000,
         },
       };
     },

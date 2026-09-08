@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 test("UC-07 completion waits for collection refresh before allowing close", async ({
   page,
 }) => {

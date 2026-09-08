@@ -1,5 +1,10 @@
 import { ApplicationError } from "../domain/inventory.js";
-export function createScryfallCatalog({ cache, rateLimit, fetcher = fetch }) {
+export function createScryfallCatalog({
+  cache,
+  rateLimit,
+  fetcher = fetch,
+  onMetric = () => {},
+}) {
   async function search(query, page, discovery = false) {
     const key = JSON.stringify(
       discovery ? ["discovery-en-v1", query, page] : [query, page],
@@ -48,8 +53,17 @@ export function createScryfallCatalog({ cache, rateLimit, fetcher = fetch }) {
   }
   return {
     async resolve(ids) {
-      const cards = [];
-      const unique = [...new Set(ids)].sort();
+      const started = performance.now();
+      const all = [...new Set(ids)].sort();
+      const cards = cache.getCards ? await cache.getCards(all) : [];
+      const found = new Set(cards.map((c) => c.id));
+      const unique = all.filter((id) => !found.has(id));
+      onMetric({
+        phase: "printing-cache",
+        ms: performance.now() - started,
+        hits: cards.length,
+        misses: unique.length,
+      });
       for (let start = 0; start < unique.length; start += 75) {
         const batch = unique.slice(start, start + 75);
         const key = JSON.stringify(["printing-collection", batch]);
@@ -58,6 +72,7 @@ export function createScryfallCatalog({ cache, rateLimit, fetcher = fetch }) {
           cards.push(...cached.cards);
           continue;
         }
+        const upstreamStarted = performance.now();
         await rateLimit.acquire();
         let response;
         try {
@@ -95,6 +110,11 @@ export function createScryfallCatalog({ cache, rateLimit, fetcher = fetch }) {
             response.status,
           );
         const data = await response.json();
+        onMetric({
+          phase: "printing-provider",
+          ms: performance.now() - upstreamStarted,
+          count: batch.length,
+        });
         if (!Array.isArray(data.data))
           throw new ApplicationError(
             "Printing verification returned an unreadable response.",

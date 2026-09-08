@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 import { installSyntheticCardCamera } from "../helpers/synthetic-camera.js";
 test("UC-14 guide crop feeds real OCR without manual capture", async ({
   page,

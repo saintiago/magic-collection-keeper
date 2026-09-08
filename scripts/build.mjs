@@ -3,6 +3,14 @@ import { build } from "esbuild";
 await mkdir("public/vendor/core", { recursive: true });
 await mkdir("public/vendor/lang", { recursive: true });
 await build({
+  entryPoints: ["public/name-worker-entry.js"],
+  bundle: true,
+  format: "esm",
+  platform: "browser",
+  outfile: "public/vendor/name-worker.js",
+  minify: true,
+});
+await build({
   stdin: {
     contents: "export { createWorker } from 'tesseract.js';",
     resolveDir: process.cwd(),

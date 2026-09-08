@@ -58,6 +58,17 @@ export function createSqliteAdapters(db) {
       },
     },
     cache: {
+      getCards: (ids) =>
+        ids
+          .map((id) =>
+            db
+              .prepare("SELECT data,fetched_at FROM printings WHERE id=?")
+              .get(id),
+          )
+          .filter(
+            (row) => row && Date.now() - Date.parse(row.fetched_at) < 86400000,
+          )
+          .map((row) => JSON.parse(row.data)),
       get: (key) => {
         const row = db.prepare("SELECT * FROM api_cache WHERE key=?").get(key);
         return row && Date.now() - row.timestamp < 86400000

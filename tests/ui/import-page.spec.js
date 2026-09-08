@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 import { randomUUID, createHash } from "node:crypto";
 import { openDatabase, savePrinting } from "../../db.js";
 import { createSqliteAdapters } from "../../adapters/sqlite.js";

@@ -5,6 +5,11 @@ import { createInterface } from "node:readline";
 import { createGunzip, gzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import {
+  buildCompactNames,
+  encodeCompactNames,
+  createCompactSearch,
+} from "../domain/compact-names.js";
+import {
   createNameIndexBuilder,
   createNameSearch,
 } from "../domain/card-names.js";
@@ -75,6 +80,11 @@ const rows = builder.finish();
 if (rows.length < 30000)
   throw Error("Incomplete name index; keep the published catalog");
 const compressed = gzipSync(JSON.stringify(rows), { level: 9 });
+const compact = buildCompactNames(rows);
+const browserBytes = gzipSync(encodeCompactNames(compact), {
+  level: 9,
+});
+const browserVersion = createHash("sha256").update(browserBytes).digest("hex");
 const version = createHash("sha256").update(compressed).digest("hex");
 const manifest = {
   schema: 1,
@@ -84,9 +94,35 @@ const manifest = {
   identities: rows.length,
   aliases: rows.reduce((n, row) => n + row[3].length, 0),
   bytes: compressed.length,
+  browser: { schema: 1, version: browserVersion, bytes: browserBytes.length },
   source: metadata.uri || "https://api.scryfall.com/bulk-data/all_cards",
 };
 const index = createNameSearch(rows);
+const browserSearch = createCompactSearch(compact);
+const queries = new Set([
+    "Piracy",
+    "Piarcy",
+    "relampa",
+    "Fuego",
+    "火",
+    "Lightning Blot",
+    "nephilim",
+    "zzzzzzzz",
+  ]),
+  languages = new Set();
+for (const row of rows)
+  for (const [name, language] of row[3])
+    if (!languages.has(language)) {
+      languages.add(language);
+      queries.add(name);
+    }
+for (const query of queries)
+  for (const suggest of [true, false])
+    if (
+      JSON.stringify(index.search(query, { suggest })) !==
+      JSON.stringify(browserSearch.search(query, { suggest }))
+    )
+      throw Error("Browser catalog ranking parity failed");
 if (
   index.search("Piracy")[0]?.name !== "Piracy" ||
   !index
@@ -95,6 +131,7 @@ if (
 )
   throw Error("Real catalog acceptance failed; keep the previous index");
 await writeFile(`${directory}/${version}.json.gz`, compressed);
+await writeFile(`${directory}/${browserVersion}.names.gz`, browserBytes);
 await writeFile(`${directory}/current.json`, JSON.stringify(manifest));
 console.log(
   JSON.stringify({

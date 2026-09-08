@@ -8,6 +8,7 @@ export function setupAutocomplete({
   onSelect,
   onQueryChange,
   delay = 180,
+  names,
 }) {
   let enabled = false,
     timer,
@@ -99,6 +100,7 @@ export function setupAutocomplete({
     onQueryChange();
     const query = input.value.trim(),
       turn = generation;
+    const started = performance.now();
     if (!query) {
       showRecent();
       return;
@@ -113,47 +115,67 @@ export function setupAutocomplete({
       query.includes(":")
     )
       return;
-    timer = setTimeout(async () => {
-      controller = new AbortController();
-      draw("Finding card names…");
-      try {
-        const saved = cache.get(query);
-        const result =
-          saved && Date.now() - saved.at < 300000
-            ? saved.data
-            : await api(`/api/suggest?${new URLSearchParams({ q: query })}`, {
-                signal: AbortSignal.any([
-                  controller.signal,
-                  AbortSignal.timeout(20000),
-                ]),
-              });
-        if (
-          turn !== generation ||
-          input.value.trim() !== query ||
-          document.activeElement !== input
-        )
-          return;
-        if (result.catalog?.version && version !== result.catalog.version) {
-          cache.clear();
-          version = result.catalog.version;
-        }
-        if (cache.size >= 50) cache.delete(cache.keys().next().value);
-        cache.set(query, { at: Date.now(), data: result });
-        items = result.suggestions;
-        draw(
-          items.length
-            ? result.catalog?.stale
-              ? "Names may be out of date; the last catalog is shown."
-              : ""
-            : "No matching names. Try another spelling or search.",
-        );
-      } catch (error) {
-        if (turn === generation)
+    timer = setTimeout(
+      async () => {
+        controller = new AbortController();
+        draw("Finding card names…");
+        try {
+          const key = `${names?.version || "server"}:${query}`;
+          const saved = cache.get(key);
+          const result =
+            saved && Date.now() - saved.at < 300000
+              ? saved.data
+              : names
+                ? await names.suggest(query, { signal: controller.signal })
+                : await api(
+                    `/api/suggest?${new URLSearchParams({ q: query })}`,
+                    {
+                      signal: AbortSignal.any([
+                        controller.signal,
+                        AbortSignal.timeout(20000),
+                      ]),
+                    },
+                  );
+          if (
+            turn !== generation ||
+            input.value.trim() !== query ||
+            document.activeElement !== input
+          )
+            return;
+          if (result.catalog?.version && version !== result.catalog.version) {
+            cache.clear();
+            version = result.catalog.version;
+          }
+          if (cache.size >= 50) cache.delete(cache.keys().next().value);
+          cache.set(key, { at: Date.now(), data: result });
+          items = result.suggestions;
           draw(
-            "Suggestions unavailable. Edit the name to retry, or use Search cards.",
+            items.length
+              ? result.catalog?.stale
+                ? "Names may be out of date; the last catalog is shown."
+                : result.catalog?.updated_at
+                  ? `Names updated ${new Date(result.catalog.updated_at).toLocaleDateString()}`
+                  : ""
+              : "No matching names. Try another spelling or search.",
           );
-      }
-    }, delay);
+          window.dispatchEvent(
+            new CustomEvent("keeper-search-metric", {
+              detail: {
+                phase: "autocomplete-render",
+                ms: performance.now() - started,
+                local: Boolean(names?.ready),
+              },
+            }),
+          );
+        } catch (error) {
+          if (turn === generation)
+            draw(
+              "Suggestions unavailable. Edit the name to retry, or use Search cards.",
+            );
+        }
+      },
+      names?.ready ? 0 : delay,
+    );
   }
   input.addEventListener("input", change);
   input.addEventListener("focus", () => {

@@ -16,7 +16,11 @@ const release =
     ? { version: "local", commit: "local" }
     : __KEEPER_RELEASE__;
 const adapters = createDynamoAdapters(process.env.TABLE_NAME);
-const catalog = createScryfallCatalog(adapters);
+const catalog = createScryfallCatalog({
+  ...adapters,
+  onMetric: (metric) =>
+    console.info(JSON.stringify({ event: "catalog-phase", ...metric })),
+});
 const store = createDynamoDocumentStore(process.env.TABLE_NAME);
 const baseService = createCollectionService({
   repository: adapters.repository,
@@ -32,7 +36,12 @@ const tagged = createTaggedCollection({
 const service = {
   ...tagged,
   ...createDiscoveryService({
-    names: createNameIndex({ origin: "https://d3r1grp0vvv9f.cloudfront.net" }),
+    names: createNameIndex({
+      origin: "https://d3r1grp0vvv9f.cloudfront.net",
+      seedDirectory: "catalog",
+      onMetric: (metric) =>
+        console.info(JSON.stringify({ event: "catalog-phase", ...metric })),
+    }),
     catalog,
   }),
   ...createImportDraftService({

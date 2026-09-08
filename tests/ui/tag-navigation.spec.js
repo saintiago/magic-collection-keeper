@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 const tags = ["deck", "binder", "box", "other", "role", "category"].map(
   (kind, i) => ({
     id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 
 async function fixture(page, { failFirst = false, slow = false } = {}) {
   await page.route("**/api/collection", (r) => r.fulfill({ json: [] }));

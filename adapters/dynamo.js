@@ -166,6 +166,23 @@ export function createDynamoAdapters(tableName, rateKey = "scryfall") {
       },
     },
     cache: {
+      async getCards(ids) {
+        const cards = [];
+        // Existing IAM allows GetItem; bound parallel reads instead of adding permissions.
+        for (let i = 0; i < ids.length; i += 8) {
+          const rows = await Promise.all(
+            ids.slice(i, i + 8).map((id) => get("PRINTINGS", id)),
+          );
+          for (const row of rows)
+            if (
+              row &&
+              (row.fetched_at || row.expires - 86400 * 30) >
+                Date.now() / 1000 - 86400
+            )
+              cards.push(row.card);
+        }
+        return cards;
+      },
       async get(key) {
         const cached = await get("SEARCH", digest(key));
         if (!cached || cached.expires < Date.now() / 1000) return null;
@@ -187,6 +204,7 @@ export function createDynamoAdapters(tableName, rateKey = "scryfall") {
               PK: "PRINTINGS",
               SK: card.id,
               card,
+              fetched_at: Math.floor(Date.now() / 1000),
               expires: Math.floor(Date.now() / 1000) + 86400 * 30,
             });
             if (card.oracle_id)

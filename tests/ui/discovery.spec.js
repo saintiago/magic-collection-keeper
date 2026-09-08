@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 import { createNameSearch } from "../../domain/card-names.js";
 import { createDiscoveryService } from "../../application/discovery.js";
 test.use({ hasTouch: true });

@@ -23,15 +23,48 @@ export function createDiscoveryService({ names, catalog }) {
     async suggest(query) {
       validateSearch(query, 1);
       if (query.includes(":")) return { suggestions: [], catalog: null };
+      const started = performance.now();
       const index = await names.get();
+      const loaded = performance.now();
       const suggestions = await cached(
         `${index.metadata.version}:suggest:${query}`,
         async () => index.search.search(query, { suggest: true }).slice(0, 8),
       );
-      return { suggestions, catalog: index.metadata };
+      return {
+        suggestions,
+        catalog: index.metadata,
+        timing: {
+          phase: "server-name-search",
+          indexWaitMs: loaded - started,
+          searchMs: performance.now() - loaded,
+        },
+      };
     },
-    async discover(query, page = 1, oracle = "") {
+    async discover(query, page = 1, oracle = "", printing = "") {
       validateSearch(query, page);
+      if (printing) {
+        const uuid =
+          /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+        if (!uuid.test(printing) || !uuid.test(oracle))
+          throw new ApplicationError("Invalid card identity", 400);
+        const cards = await cached(`printing:${printing}:${oracle}`, () =>
+          catalog.resolve([printing]),
+        );
+        const card = cards.find(
+          (c) =>
+            c.id === printing &&
+            c.oracle_id === oracle &&
+            c.lang === "en" &&
+            !c.digital &&
+            c.games?.includes("paper"),
+        );
+        if (!card)
+          throw new ApplicationError(
+            "This English paper printing could not be verified. Search again.",
+            503,
+          );
+        return { cards: [card], total: 1, hasMore: false, catalog: null };
+      }
       if (query.includes(":") && !oracle) return catalog.discover(query, page);
       const index = await names.get();
       const matches = await cached(

@@ -12,6 +12,7 @@ export async function routeCollection(
       (query.q || "").trim(),
       Number(query.page || 1),
       query.oracle || "",
+      query.printing || "",
     );
   if (path === "/api/suggest" && method === "GET")
     return service.suggest((query.q || "").trim());

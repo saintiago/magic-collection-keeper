@@ -68,7 +68,7 @@ export function createNameIndexBuilder() {
   };
 }
 
-function oneEdit(a, b) {
+export function oneEdit(a, b) {
   if (Math.abs(a.length - b.length) > 1) return false;
   let i = 0,
     j = 0,
