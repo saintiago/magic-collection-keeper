@@ -28,12 +28,15 @@ jobs:
       - run: test -s recognition/smoke-linux.json
       - run: docker image inspect keeper-recognition --format '{{json .}}' > recognition/image-linux.json
       - run: docker run --rm --network none --entrypoint pip keeper-recognition freeze > recognition/requirements-linux-observed.txt
+      - run: docker save keeper-recognition | gzip > recognition/image.tar.gz
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: recognition-verification
+          retention-days: 7
           path: |
             recognition/smoke-linux.json
             recognition/requirements-linux-observed.txt
             recognition/source.zip
             recognition/image-linux.json
+            recognition/image.tar.gz
