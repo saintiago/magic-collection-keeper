@@ -1,6 +1,69 @@
 import { ApplicationError } from "../domain/inventory.js";
 export function createScryfallCatalog({ cache, rateLimit, fetcher = fetch }) {
   return {
+    async resolve(ids) {
+      const cards = [];
+      const unique = [...new Set(ids)].sort();
+      for (let start = 0; start < unique.length; start += 75) {
+        const batch = unique.slice(start, start + 75);
+        const key = JSON.stringify(["printing-collection", batch]);
+        const cached = await cache.get(key);
+        if (cached) {
+          cards.push(...cached.cards);
+          continue;
+        }
+        await rateLimit.acquire();
+        let response;
+        try {
+          response = await fetcher(
+            "https://api.scryfall.com/cards/collection",
+            {
+              method: "POST",
+              headers: {
+                "User-Agent": "MagicCollectionKeeper/0.1",
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                identifiers: batch.map((id) => ({ id })),
+              }),
+              signal: AbortSignal.timeout(10000),
+            },
+          );
+        } catch {
+          throw new ApplicationError(
+            "Printing verification timed out. Retry; the saved draft is unchanged.",
+            502,
+          );
+        }
+        if (response.status === 429)
+          await rateLimit.pause(
+            Math.max(
+              60000,
+              Number(response.headers.get("retry-after") || 60) * 1000,
+            ),
+          );
+        if (!response.ok)
+          throw new ApplicationError(
+            "Printing verification is unavailable. Retry later.",
+            response.status,
+          );
+        const data = await response.json();
+        if (!Array.isArray(data.data))
+          throw new ApplicationError(
+            "Printing verification returned an unreadable response.",
+            502,
+          );
+        const result = {
+          cards: data.data,
+          total: data.data.length,
+          hasMore: false,
+        };
+        await cache.put(key, result);
+        cards.push(...result.cards);
+      }
+      return cards;
+    },
     async search(query, page) {
       const key = JSON.stringify([query, page]);
       const cached = await cache.get(key);

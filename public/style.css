@@ -739,6 +739,8 @@ dialog::backdrop {
     align-items: center;
     justify-content: space-between;
     border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+    gap: 12px;
   }
   .brand {
     font-size: 26px;
@@ -757,11 +759,13 @@ dialog::backdrop {
   }
   nav {
     display: flex;
+    width: 100%;
   }
   nav button {
     margin: 0;
     padding: 9px;
     font-size: 18px;
+    justify-content: center;
   }
   nav button span {
     font-size: 10px;

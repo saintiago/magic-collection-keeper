@@ -21,7 +21,13 @@ Sign in with your invitation. On first sign-in, choose a new password. Your coll
 1 Sol Ring
 ```
 
-Choose exact printings where the text omits them. Check quantities and attributes before confirming ownership. Unresolved/unselected rows stay out. Batches are limited to 50 card lines. A deck list is never treated as proof of ownership. Moxfield's [official feature documentation](https://github.com/moxfield/moxfield-public/wiki/Features) describes Arena/MTGO export; this app uses pasted exports. No supported public Moxfield API contract was established during this implementation, so URL scraping is not implemented.
+Choose exact printings where the text omits them. Check quantities and attributes before confirming ownership. Unresolved/unselected rows stay out. Batches are limited to 50 card lines. A deck list is never treated as proof of ownership. Moxfield's [official feature documentation](https://github.com/moxfield/moxfield-public/wiki/Features) describes Arena/MTGO export; pasted exports remain available. The separate **Import** page stages public Moxfield URLs through the backend. Moxfield may deny this application server access; this is reported without changing saved drafts or owned cards. No supported public API contract was established, and successful provider access is not guaranteed.
+
+## Saved URL imports
+
+Open **Import**, paste a public Moxfield deck URL and choose **Load deck**. One pending draft is saved per account, with up to 150 included card lines. It survives reloads and later sign-ins. Change quantities, delete lines, choose exact paper printings and finishes, and add/remove existing location or classification tags. Edits save automatically; failed saves keep your edits visible with **Retry saving edits**. Create new tag labels in **Tags & locations**.
+
+Review fetched-source and reviewed totals separately. **Add** explicitly confirms ownership and commits the entire reviewed source atomically; unresolved printings or unavailable tags must be repaired first. Retrying Add and importing the same source again cannot duplicate its existing contribution. **Clear** removes only the current pending draft. Pending cards stay out of collection totals, filters and deck-source views until Add succeeds. Original source lines remain available as provenance after edits. A source refreshed elsewhere requires a fresh draft.
 
 ## Organize your cards
 

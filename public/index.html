@@ -6,6 +6,7 @@
     <title>Collection Keeper · Magic: The Gathering</title>
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/scanner.css" />
+    <link rel="stylesheet" href="/import-page.css" />
   </head>
   <body>
     <aside class="sidebar">
@@ -17,6 +18,7 @@
         <button id="collection-nav" class="active">
           ▦ <span>My collection</span><span id="nav-count">—</span></button
         ><button id="catalog-nav">⌕ <span>Discover cards</span></button>
+        <button id="import-nav">⇩ <span>Import</span></button>
       </nav>
       <div class="sidebar-bottom">
         <span class="status-dot"></span> Saved on this device
@@ -47,6 +49,7 @@
           ><button class="primary" id="add">+ Add cards</button>
         </div>
       </section>
+      <section id="import-page" hidden aria-label="Import cards"></section>
       <section class="stats" id="stats">
         <div>
           <span>Total cards</span><strong id="total">—</strong

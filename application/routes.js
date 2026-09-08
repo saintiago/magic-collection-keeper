@@ -7,6 +7,16 @@ export async function routeCollection(
   input,
   query = {},
 ) {
+  if (path === "/api/import-draft" && method === "GET")
+    return service.getDraft(owner);
+  if (path === "/api/import-draft" && method === "PATCH")
+    return service.saveDraft(owner, input);
+  if (path === "/api/import-draft/fetch" && method === "POST")
+    return service.fetchDraft(owner, input);
+  if (path === "/api/import-draft/add" && method === "POST")
+    return service.addDraft(owner, input);
+  if (path === "/api/import-draft/clear" && method === "POST")
+    return service.clearDraft(owner, input);
   if (path === "/api/collection" && method === "GET")
     return service.list(owner);
   if (path === "/api/collection" && method === "POST")

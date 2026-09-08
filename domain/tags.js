@@ -1,4 +1,5 @@
 import { ApplicationError, validateQuantity } from "./inventory.js";
+import { IMPORT_PENDING_TAG, isSystemTag } from "./system-tags.js";
 
 export const TAG_TYPES = {
   location: ["deck", "binder", "box", "other"],
@@ -6,6 +7,10 @@ export const TAG_TYPES = {
   category: ["category"],
 };
 export function validateTagId(id) {
+  if (id === IMPORT_PENDING_TAG.id)
+    throw new ApplicationError(
+      "System tags are managed by the import lifecycle.",
+    );
   if (
     typeof id !== "string" ||
     !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
@@ -16,6 +21,14 @@ export function validateTagId(id) {
 }
 export function tagDefinition(input) {
   const label = typeof input?.label === "string" ? input.label.trim() : "";
+  if (
+    isSystemTag(input) ||
+    /^system:/i.test(label) ||
+    input?.key?.startsWith?.("system:")
+  )
+    throw new ApplicationError(
+      "The system tag family is reserved for the app.",
+    );
   if (!label || label.length > 100 || /[\u0000-\u001f\u007f]/.test(label))
     throw new ApplicationError(
       "Tag labels must contain 1–100 printable characters.",
@@ -38,6 +51,10 @@ export function validateAssignments(input, row, tags) {
     );
   const used = new Set();
   for (const allocation of locations) {
+    if (!allocation || typeof allocation !== "object")
+      throw new ApplicationError(
+        "Each location must include a tag and quantity.",
+      );
     validateTagId(allocation.tag_id);
     validateQuantity(allocation.quantity);
     const tag = tags.get(allocation.tag_id);
@@ -50,7 +67,12 @@ export function validateAssignments(input, row, tags) {
   for (const id of tagIds) {
     validateTagId(id);
     const tag = tags.get(id);
-    if (!tag || tag.type === "location" || used.has(id))
+    if (
+      !tag ||
+      !["role", "category"].includes(tag.type) ||
+      isSystemTag(tag) ||
+      used.has(id)
+    )
       throw new ApplicationError(
         "Choose distinct role or category tags belonging to you.",
       );

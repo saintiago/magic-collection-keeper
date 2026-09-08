@@ -1,0 +1,212 @@
+.import-link-form {
+  background: #fff;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.import-link-form > label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.import-link-form > div {
+  display: flex;
+  gap: 12px;
+}
+.import-link-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+}
+.import-status {
+  margin: 18px 0;
+  min-height: 24px;
+}
+.draft-heading {
+  margin: 28px 0 20px;
+}
+.draft-heading h2 {
+  margin: 12px 0;
+}
+.pending-chip {
+  display: inline-block;
+  background: #f6ebcc;
+  color: #705c1f;
+  padding: 7px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+}
+.draft-row {
+  display: flex;
+  gap: 22px;
+  border: 1px solid var(--line);
+  background: white;
+  padding: 20px;
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+.draft-row > img {
+  width: 112px;
+  height: 156px;
+  object-fit: contain;
+  border-radius: 6px;
+}
+.draft-no-image {
+  width: 112px;
+  min-width: 112px;
+  height: 156px;
+  background: #eee;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 10px;
+}
+.draft-card-body {
+  min-width: 0;
+  flex: 1;
+}
+.draft-card-body h3 {
+  margin: 8px 0;
+  font-size: 20px;
+}
+.draft-card-body p {
+  overflow-wrap: anywhere;
+}
+.draft-controls {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+.draft-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+}
+.draft-controls input {
+  width: 90px;
+}
+.draft-controls input,
+.draft-controls select,
+.draft-dialog input,
+.draft-dialog select {
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font: inherit;
+}
+.draft-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: #faf9f5;
+  border-top: 1px solid var(--line);
+  padding: 16px 0;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.draft-actions p {
+  flex: 1;
+  font-size: 13px;
+  margin: 0;
+  max-width: 650px;
+}
+.draft-dialog {
+  width: min(740px, 94vw);
+}
+.draft-dialog h2 {
+  padding-right: 32px;
+}
+.draft-tag-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+.draft-location-choice {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin: 10px 0;
+}
+.draft-location-choice label {
+  flex: 1;
+}
+.draft-location-choice input[type="number"] {
+  width: 90px;
+}
+.draft-dialog input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+.draft-printing-choice {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  text-align: left;
+  width: 100%;
+  margin: 12px 0;
+  padding: 14px;
+}
+.draft-printing-choice img {
+  width: 70px;
+  height: 98px;
+  object-fit: contain;
+}
+.draft-dialog form label {
+  display: block;
+  margin: 14px 0;
+}
+.draft-dialog form input[name="query"] {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+}
+.draft-controls .danger {
+  color: #9d3330;
+}
+@media (max-width: 600px) {
+  .import-link-form {
+    padding: 16px;
+  }
+  .import-link-form > div {
+    flex-direction: column;
+  }
+  .draft-row {
+    gap: 12px;
+    padding: 12px;
+  }
+  .draft-row > img,
+  .draft-no-image {
+    width: 70px;
+    min-width: 70px;
+    height: 98px;
+  }
+  .draft-card-body h3 {
+    font-size: 17px;
+  }
+  .draft-controls {
+    gap: 8px;
+  }
+  .draft-controls button {
+    padding: 10px;
+    font-size: 12px;
+  }
+  .draft-controls select {
+    max-width: 155px;
+  }
+  .draft-actions {
+    flex-wrap: wrap;
+  }
+  .draft-actions p {
+    flex-basis: 100%;
+  }
+  .draft-actions button {
+    flex: 1;
+  }
+}

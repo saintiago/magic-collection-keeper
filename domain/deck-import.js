@@ -126,6 +126,7 @@ export function planDeck(previous, input, lineId) {
     validateQuantity(owned);
     added += owned - (old?.owned_quantity || 0);
     lots.set(entry.line_id, {
+      ...old,
       ...entry,
       owned_quantity: owned,
       allocated_quantity: entry.quantity,
@@ -169,8 +170,12 @@ export function deckRows(deck, cards, tag) {
         section: lot.section,
         imported_at: deck.updated_at,
         folder: deck.folder,
+        ...(lot.original_lines ? { original_lines: lot.original_lines } : {}),
+        ...(deck.review
+          ? { additive_default: Boolean(deck.review.additive_default) }
+          : {}),
       },
-      tag_ids: [],
+      tag_ids: lot.tag_ids || [],
     };
     return [
       ...(lot.allocated_quantity
@@ -179,7 +184,9 @@ export function deckRows(deck, cards, tag) {
               ...base,
               id: `source:${deck.source_id}:${lot.line_id}`,
               quantity: lot.allocated_quantity,
-              locations: [{ tag_id: tag.id, quantity: lot.allocated_quantity }],
+              locations: lot.locations || [
+                { tag_id: tag.id, quantity: lot.allocated_quantity },
+              ],
             },
           ]
         : []),

@@ -11,22 +11,42 @@ import { createSqliteAdapters } from "./adapters/sqlite.js";
 import { createScryfallCatalog } from "./adapters/scryfall.js";
 import { createCollectionService } from "./application/collection.js";
 import { ApplicationError } from "./domain/inventory.js";
+import { createImportDraftService } from "./application/import-drafts.js";
+import { createMoxfieldProvider } from "./adapters/moxfield.js";
 const root = fileURLToPath(new URL(".", import.meta.url));
 const db = openDatabase(
   process.env.DB_PATH || resolve(root, "data/collection.sqlite"),
 );
 const adapters = createSqliteAdapters(db);
+const catalog = createScryfallCatalog(adapters);
+const store = createSqliteDocumentStore(db);
 const baseService = createCollectionService({
   repository: adapters.repository,
-  catalog: createScryfallCatalog(adapters),
+  catalog,
 });
-const service = createTaggedCollection({
+const tagged = createTaggedCollection({
   collection: baseService,
   repository: adapters.repository,
-  store: createSqliteDocumentStore(db),
+  store,
   newId: randomUUID,
   hash: (value) => createHash("sha256").update(value).digest("hex"),
 });
+const service = {
+  ...tagged,
+  ...createImportDraftService({
+    store,
+    catalog,
+    repository: adapters.repository,
+    collection: tagged,
+    newId: randomUUID,
+    provider: createMoxfieldProvider({
+      rateLimit: createSqliteAdapters(db).rateLimit,
+      ...(process.env.MOXFIELD_USER_AGENT
+        ? { userAgent: process.env.MOXFIELD_USER_AGENT }
+        : {}),
+    }),
+  }),
+};
 const port = Number(process.env.PORT || 3000);
 async function body(req) {
   let raw = "";

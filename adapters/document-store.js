@@ -144,21 +144,19 @@ export function createDynamoDocumentStore(tableName) {
     async saveCards(owner, cards) {
       for (let start = 0; start < cards.length; start += 8)
         await Promise.all(
-          cards
-            .slice(start, start + 8)
-            .map((card) =>
-              db.send(
-                new PutCommand({
-                  TableName: tableName,
-                  Item: {
-                    ...key(owner, "cards", card.id),
-                    id: card.id,
-                    version: 1,
-                    value: card,
-                  },
-                }),
-              ),
+          cards.slice(start, start + 8).map((card) =>
+            db.send(
+              new PutCommand({
+                TableName: tableName,
+                Item: {
+                  ...key(owner, "cards", card.id),
+                  id: card.id,
+                  version: 1,
+                  value: card,
+                },
+              }),
             ),
+          ),
         );
     },
   };
@@ -195,6 +193,8 @@ export function createSqliteDocumentStore(db) {
         .all(owner, space)
         .map((r) => ({ ...r, value: JSON.parse(r.value) })),
     commit(owner, changes) {
+      if (changes.length > 95)
+        throw new ApplicationError("Too many tags changed at once.");
       db.exec("BEGIN IMMEDIATE");
       try {
         for (const change of changes) {

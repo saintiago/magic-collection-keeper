@@ -11,7 +11,7 @@ import {
 import { createHash } from "node:crypto";
 import { ApplicationError } from "../domain/inventory.js";
 const digest = (value) => createHash("sha256").update(value).digest("hex");
-export function createDynamoAdapters(tableName) {
+export function createDynamoAdapters(tableName, rateKey = "scryfall") {
   const client = DynamoDBDocumentClient.from(new DynamoDBClient({}));
   const send = (command) => client.send(command);
   const get = async (PK, SK) =>
@@ -215,7 +215,7 @@ export function createDynamoAdapters(tableName) {
             await send(
               new UpdateCommand({
                 TableName: tableName,
-                Key: { PK: "RATE", SK: "scryfall" },
+                Key: { PK: "RATE", SK: rateKey },
                 UpdateExpression: "SET available_at=:next",
                 ConditionExpression:
                   "attribute_not_exists(available_at) OR available_at <= :now",
@@ -236,7 +236,7 @@ export function createDynamoAdapters(tableName) {
       pause: (milliseconds) =>
         put({
           PK: "RATE",
-          SK: "scryfall",
+          SK: rateKey,
           available_at: Date.now() + milliseconds,
         }),
     },

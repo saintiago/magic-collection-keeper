@@ -15,6 +15,7 @@ import { api as request } from "./api.js";
 import { esc } from "./view.js";
 import { createCardDetail } from "./card-detail.js";
 import { setupBatch } from "./batch.js";
+import { createImportPage } from "./import-page.js";
 const $ = (id) => document.getElementById(id);
 let owned = [],
   cards = [],
@@ -28,6 +29,10 @@ let filterTags = [],
   activeTagId = tagFromHash(location.hash),
   registryReady = false;
 const tagNavigation = setupTagNavigation(navigateTag);
+window.addEventListener("popstate", () => {
+  if (location.hash === "#import") switchMode("import");
+  else if (mode === "import") navigateTag(tagFromHash(location.hash));
+});
 let collectionState = {
   rows: null,
   status: "loading",
@@ -67,6 +72,14 @@ const detail = createCardDetail({
     if (collectionState.rows !== updated) collection.replace(updated);
   },
   notify: message,
+});
+const importPage = createImportPage({
+  root: $("import-page"),
+  api: request,
+  onAdded: async () => {
+    collection.invalidate();
+    await refresh();
+  },
 });
 async function api(path, options) {
   const mutation = options?.method && options.method !== "GET";
@@ -217,7 +230,27 @@ function render() {
   $("more").disabled = loading;
 }
 function switchMode(next) {
+  if (next !== "import" && location.hash === "#import")
+    history.pushState(null, "", "#");
   mode = next;
+  const importing = mode === "import";
+  $("import-page").hidden = !importing;
+  document.querySelector(".library").hidden = importing;
+  document.querySelector(".page-heading .actions").hidden = importing;
+  $("import-nav").classList.toggle("active", importing);
+  if (importing) {
+    requestId++;
+    $("title").innerHTML = "Import<span>.</span>";
+    $("subtitle").textContent =
+      "Load a deck. Review each printing. Add only when you’re ready.";
+    $("breadcrumb").textContent = "Import";
+    $("stats").hidden = true;
+    $("collection-nav").classList.remove("active");
+    $("catalog-nav").classList.remove("active");
+    importPage.show();
+    return;
+  }
+  importPage.hide();
   requestId++;
   loading = false;
   $("search-submit").disabled = false;
@@ -328,6 +361,10 @@ async function search(more = false) {
   }
 }
 function navigateTag(id, tag) {
+  if (location.hash === "#import") {
+    switchMode("import");
+    return;
+  }
   activeTagId = id;
   document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
   if (tag?.id && !filterTags.some((current) => current.id === id))
@@ -345,6 +382,10 @@ $("tag-filter").onchange = () => tagNavigation.go($("tag-filter").value);
 $("clear-tag").onclick = () => tagNavigation.go("");
 $("collection-nav").onclick = () => switchMode("collection");
 $("catalog-nav").onclick = () => switchMode("catalog");
+$("import-nav").onclick = () => {
+  if (location.hash !== "#import") history.pushState(null, "", "#import");
+  switchMode("import");
+};
 $("add").onclick = () => switchMode("catalog");
 $("close").onclick = () => $("detail").close();
 $("refresh").onclick = initializeCollection;
@@ -368,6 +409,7 @@ $("example").onclick = () => {
 setupReleaseInfo();
 render();
 await signIn();
+if (location.hash === "#import") switchMode("import");
 setupBatch({
   api,
   onSaved: async () => {

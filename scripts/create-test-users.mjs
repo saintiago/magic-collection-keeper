@@ -1,13 +1,26 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 const out = JSON.parse(readFileSync("infra/outputs.json"));
 const credentials = {};
-for (const [label, username] of [
+const profiles = [
   ["TEST", "keeper-e2e"],
   ["OTHER", "keeper-isolation"],
   ["TAGS", "keeper-tags"],
-]) {
+  ["IMPORT", "keeper-import"],
+];
+const only = process.argv.includes("--only")
+  ? process.argv[process.argv.indexOf("--only") + 1]
+  : null;
+if (
+  process.argv.includes("--only") &&
+  !profiles.some(([, name]) => name === only)
+)
+  throw new Error("Only reserved test profiles may be created or rotated.");
+mkdirSync(".local-secrets", { recursive: true });
+for (const [label, username] of profiles.filter(
+  ([, name]) => !only || name === only,
+)) {
   const password = `K!8a${randomBytes(24).toString("base64url")}`;
   const input = {
     UserPoolId: out.UserPoolId,
@@ -68,5 +81,5 @@ writeFileSync(".local-secrets/credentials.json", JSON.stringify(credentials), {
   mode: 0o600,
 });
 console.log(
-  "Three isolated test identities created with suppressed email; credentials stored in GitHub Actions secrets and ignored local test file.",
+  "Reserved test identities configured with suppressed email; credentials stored in GitHub Actions secrets and ignored local test file.",
 );

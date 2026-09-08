@@ -6,6 +6,7 @@ import {
   referencedTags,
 } from "../domain/tags.js";
 import { normalizeDeck, planDeck, deckRows } from "../domain/deck-import.js";
+import { isSystemTag } from "../domain/system-tags.js";
 
 export function createTaggedCollection({
   collection,
@@ -23,7 +24,9 @@ export function createTaggedCollection({
   });
   const tagRecords = async (owner) =>
     new Map(
-      (await store.list(owner, "tags")).map((record) => [record.id, record]),
+      (await store.list(owner, "tags"))
+        .filter((record) => !isSystemTag(record.value))
+        .map((record) => [record.id, record]),
     );
   async function list(owner) {
     const [native, decks, cards, tags, assignments, overrides] =
@@ -73,8 +76,20 @@ export function createTaggedCollection({
         tag_ids: [],
       };
       const totals = new Map();
+      const uncovered = assigned.locations_override
+        ? row.components.filter(
+            (component) =>
+              component.provenance?.additive_default &&
+              !(assigned.source_ids || []).includes(
+                component.provenance.source_id,
+              ),
+          )
+        : [];
       for (const allocation of assigned.locations_override
-        ? assigned.locations
+        ? [
+            ...assigned.locations,
+            ...uncovered.flatMap((component) => component.locations),
+          ]
         : row.locations)
         totals.set(
           allocation.tag_id,
@@ -87,11 +102,25 @@ export function createTaggedCollection({
       }));
       const allocated = locations.reduce((n, a) => n + a.quantity, 0);
       const { components, ...display } = row;
+      const classificationIds = assignmentMap.has(String(row.id))
+        ? [
+            ...new Set([
+              ...assigned.tag_ids,
+              ...uncovered.flatMap((component) => component.tag_ids || []),
+            ]),
+          ]
+        : [
+            ...new Set(
+              components.flatMap((component) => component.tag_ids || []),
+            ),
+          ];
       return {
         ...display,
         locations,
-        tag_ids: assigned.tag_ids,
-        tags: assigned.tag_ids.map((id) => tags.get(id)?.value).filter(Boolean),
+        tag_ids: classificationIds,
+        tags: classificationIds
+          .map((id) => tags.get(id)?.value)
+          .filter(Boolean),
         unallocated_quantity: Math.max(0, row.quantity - allocated),
         allocation_shortfall: Math.max(0, allocated - row.quantity),
         allocated_quantity: allocated,
@@ -159,6 +188,11 @@ export function createTaggedCollection({
         { ...row, provenance: row.source_managed },
         new Map([...registry].map(([id, r]) => [id, r.value])),
       );
+      assignment.source_ids = [
+        ...new Set(
+          (row.provenance_list || []).map((source) => source.source_id),
+        ),
+      ];
       const before = referencedTags(current?.value),
         after = referencedTags(assignment),
         changes = [change("assignments", String(id), current, assignment)];
@@ -219,98 +253,193 @@ export function createTaggedCollection({
       existing_loose_untouched: true,
     };
   }
-  async function importDeck(owner, raw) {
-    return store.withInventoryLock(owner, async () => {
-      const { input, current, plan, fingerprint } = await deckPlan(owner, raw);
-      if (raw.expected_version !== (current?.version ?? 0))
+  async function prepareDeckImport(owner, raw, review = null) {
+    const {
+      input,
+      current,
+      plan,
+      fingerprint: sourceFingerprint,
+    } = await deckPlan(owner, raw);
+    const fingerprint = review
+      ? hash(JSON.stringify({ sourceFingerprint, review }))
+      : sourceFingerprint;
+    if (raw.expected_version !== (current?.version ?? 0))
+      throw new ApplicationError(
+        "The deck changed since preview. Preview it again.",
+        409,
+      );
+    if (current?.value.fingerprint === fingerprint)
+      return {
+        changes: [],
+        result: { unchanged: true, ...(await previewDeck(owner, raw)) },
+      };
+    const existing = await list(owner);
+    const previousLots = new Map(
+      (current?.value.lots ?? []).map((l) => [l.line_id, l]),
+    );
+    for (const lot of plan.lots) {
+      const row = existing.find(
+        (r) =>
+          r.printing_id === lot.printing_id &&
+          r.finish === lot.finish &&
+          r.condition === "UNK",
+      );
+      validateQuantity(
+        (row?.quantity ?? 0) +
+          lot.owned_quantity -
+          (previousLots.get(lot.line_id)?.owned_quantity ?? 0),
+      );
+    }
+    const unique = [...new Set(plan.lots.map((l) => l.printing_id))],
+      cards = [];
+    for (let start = 0; start < unique.length; start += 8)
+      cards.push(
+        ...(await Promise.all(
+          unique
+            .slice(start, start + 8)
+            .map(
+              async (id) =>
+                (await repository.getPrinting(id)) ??
+                (await store.get(owner, "cards", id))?.value,
+            ),
+        )),
+      );
+    if (cards.some((c) => !c))
+      throw new ApplicationError(
+        "Some printings are not in the catalog cache. Resolve them before importing.",
+      );
+    const cardMap = new Map(cards.map((c) => [c.id, c]));
+    for (const lot of plan.lots)
+      if (!cardMap.get(lot.printing_id).finishes.includes(lot.finish))
         throw new ApplicationError(
-          "The deck changed since preview. Preview it again.",
-          409,
+          "An imported finish is not supported by its printing.",
         );
-      if (current?.value.fingerprint === fingerprint)
-        return { unchanged: true, ...(await previewDeck(owner, raw)) };
-      const existing = await list(owner);
-      const previousLots = new Map(
-        (current?.value.lots ?? []).map((l) => [l.line_id, l]),
+    if (
+      review &&
+      cards.some(
+        (card) => card.digital || card.games?.includes("paper") === false,
+      )
+    )
+      throw new ApplicationError(
+        "Choose paper printings before adding this draft.",
+      );
+    const tagId = current?.value.tag_id ?? newId(),
+      tag = await store.get(owner, "tags", tagId);
+    const changes = [];
+    if (review) {
+      const registry = await tagRecords(owner);
+      const beforeIds = new Set(
+        (current?.value.lots || [])
+          .flatMap((lot) => [
+            ...(lot.tag_ids || []),
+            ...(lot.locations || []).map((a) => a.tag_id),
+          ])
+          .filter((id) => id !== tagId),
       );
       for (const lot of plan.lots) {
-        const row = existing.find(
-          (r) =>
-            r.printing_id === lot.printing_id &&
-            r.finish === lot.finish &&
-            r.condition === "UNK",
+        const rows = review.rows.filter(
+          (row) =>
+            row.printing_id === lot.printing_id && row.finish === lot.finish,
         );
-        validateQuantity(
-          (row?.quantity ?? 0) +
-            lot.owned_quantity -
-            (previousLots.get(lot.line_id)?.owned_quantity ?? 0),
-        );
-      }
-      const unique = [...new Set(plan.lots.map((l) => l.printing_id))],
-        cards = [];
-      for (let start = 0; start < unique.length; start += 8)
-        cards.push(
-          ...(await Promise.all(
-            unique
-              .slice(start, start + 8)
-              .map(
-                async (id) =>
-                  (await repository.getPrinting(id)) ??
-                  (await store.get(owner, "cards", id))?.value,
-              ),
-          )),
-        );
-      if (cards.some((c) => !c))
-        throw new ApplicationError(
-          "Some printings are not in the catalog cache. Resolve them before importing.",
-        );
-      const cardMap = new Map(cards.map((c) => [c.id, c]));
-      for (const lot of plan.lots)
-        if (!cardMap.get(lot.printing_id).finishes.includes(lot.finish))
-          throw new ApplicationError(
-            "An imported finish is not supported by its printing.",
+        const allocations = new Map();
+        const ids = new Set();
+        for (const row of rows) {
+          validateAssignments(
+            row,
+            {},
+            new Map([...registry].map(([id, r]) => [id, r.value])),
           );
-      await store.saveCards(owner, cards);
-      const tagId = current?.value.tag_id ?? newId(),
-        tag = await store.get(owner, "tags", tagId);
-      const changes = [];
-      if (!current)
+          for (const allocation of [
+            ...row.locations,
+            ...(row.in_deck ? [{ tag_id: tagId, quantity: row.quantity }] : []),
+          ])
+            allocations.set(
+              allocation.tag_id,
+              (allocations.get(allocation.tag_id) || 0) + allocation.quantity,
+            );
+          row.tag_ids.forEach((id) => ids.add(id));
+        }
+        lot.locations = [...allocations].map(([tag_id, quantity]) => ({
+          tag_id,
+          quantity,
+        }));
+        lot.locations.forEach((a) => validateQuantity(a.quantity));
+        lot.tag_ids = [...ids];
+        lot.original_lines = rows.map((row) => ({
+          row_id: row.id,
+          ...row.original,
+        }));
+      }
+      const afterIds = new Set(
+        plan.lots
+          .flatMap((lot) => [
+            ...(lot.tag_ids || []),
+            ...(lot.locations || []).map((a) => a.tag_id),
+          ])
+          .filter((id) => id !== tagId),
+      );
+      for (const id of new Set([...beforeIds, ...afterIds])) {
+        const record = registry.get(id);
+        if (!record)
+          throw new ApplicationError(
+            "A selected tag was removed. Edit the draft tags and retry.",
+            409,
+          );
+        const delta = Number(afterIds.has(id)) - Number(beforeIds.has(id));
         changes.push(
-          change("tags", tagId, null, {
-            id: tagId,
-            type: "location",
-            kind: "deck",
-            label: input.name,
-            references: 1,
-            source: { provider: input.provider, id: input.source_id },
-            created_at: now(),
+          change("tags", id, record, {
+            ...record.value,
+            references: record.value.references + delta,
           }),
         );
-      else if (!tag)
-        throw new ApplicationError("The deck location tag is missing.", 500);
-      const value = {
-        ...input,
-        entries: undefined,
-        lots: plan.lots,
-        tag_id: tagId,
-        fingerprint,
-        created_at: current?.value.created_at ?? now(),
-        updated_at: now(),
-        history: [
-          ...(current?.value.history ?? []).slice(-19),
-          {
-            at: now(),
-            added: plan.added,
-            allocated: plan.allocated,
-            retained: plan.retained,
-            fingerprint,
-          },
-        ],
+      }
+    }
+    if (!current)
+      changes.push(
+        change("tags", tagId, null, {
+          id: tagId,
+          type: "location",
+          kind: "deck",
+          label: input.name,
+          references: 1,
+          source: { provider: input.provider, id: input.source_id },
+          created_at: now(),
+        }),
+      );
+    else if (!tag)
+      throw new ApplicationError("The deck location tag is missing.", 500);
+    const value = {
+      ...input,
+      entries: undefined,
+      lots: plan.lots,
+      tag_id: tagId,
+      fingerprint,
+      created_at: current?.value.created_at ?? now(),
+      updated_at: now(),
+      history: [
+        ...(current?.value.history ?? []).slice(-19),
+        {
+          at: now(),
+          added: plan.added,
+          allocated: plan.allocated,
+          retained: plan.retained,
+          fingerprint,
+        },
+      ],
+    };
+    if (review)
+      value.review = {
+        original: review.original,
+        reviewed_count: input.entries.reduce((n, e) => n + e.quantity, 0),
+        additive_default: current?.value.review?.additive_default ?? !current,
       };
-      delete value.entries;
-      changes.push(change("decks", input.source_id, current, value));
-      await store.commit(owner, changes);
-      return {
+    else if (current?.value.review) value.review = current.value.review;
+    delete value.entries;
+    await store.saveCards(owner, cards);
+    changes.push(change("decks", input.source_id, current, value));
+    return {
+      changes,
+      result: {
         unchanged: false,
         source_id: input.source_id,
         tag_id: tagId,
@@ -318,7 +447,14 @@ export function createTaggedCollection({
         allocated: plan.allocated,
         retained_loose: plan.retained,
         owned_from_source: plan.owned,
-      };
+      },
+    };
+  }
+  async function importDeck(owner, raw) {
+    return store.withInventoryLock(owner, async () => {
+      const prepared = await prepareDeckImport(owner, raw);
+      if (prepared.changes.length) await store.commit(owner, prepared.changes);
+      return prepared.result;
     });
   }
   return {
@@ -330,6 +466,7 @@ export function createTaggedCollection({
     assign,
     previewDeck,
     importDeck,
+    prepareDeckImport,
     decks: async (owner) =>
       (await store.list(owner, "decks")).map((d) => ({
         ...d.value,

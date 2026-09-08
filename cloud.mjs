@@ -7,22 +7,43 @@ import { createCollectionService } from "./application/collection.js";
 import { createDynamoAdapters } from "./adapters/dynamo.js";
 import { createScryfallCatalog } from "./adapters/scryfall.js";
 import { ApplicationError } from "./domain/inventory.js";
+import { createImportDraftService } from "./application/import-drafts.js";
+import { createMoxfieldProvider } from "./adapters/moxfield.js";
 const release =
   typeof __KEEPER_RELEASE__ === "undefined"
     ? { version: "local", commit: "local" }
     : __KEEPER_RELEASE__;
 const adapters = createDynamoAdapters(process.env.TABLE_NAME);
+const catalog = createScryfallCatalog(adapters);
+const store = createDynamoDocumentStore(process.env.TABLE_NAME);
 const baseService = createCollectionService({
   repository: adapters.repository,
-  catalog: createScryfallCatalog(adapters),
+  catalog,
 });
-const service = createTaggedCollection({
+const tagged = createTaggedCollection({
   collection: baseService,
   repository: adapters.repository,
-  store: createDynamoDocumentStore(process.env.TABLE_NAME),
+  store,
   newId: randomUUID,
   hash: (value) => createHash("sha256").update(value).digest("hex"),
 });
+const service = {
+  ...tagged,
+  ...createImportDraftService({
+    store,
+    catalog,
+    repository: adapters.repository,
+    collection: tagged,
+    newId: randomUUID,
+    provider: createMoxfieldProvider({
+      rateLimit: createDynamoAdapters(process.env.TABLE_NAME, "moxfield")
+        .rateLimit,
+      ...(process.env.MOXFIELD_USER_AGENT
+        ? { userAgent: process.env.MOXFIELD_USER_AGENT }
+        : {}),
+    }),
+  }),
+};
 export async function handler(event) {
   const result = (data, statusCode = 200) => {
     const response = jsonResponse(
