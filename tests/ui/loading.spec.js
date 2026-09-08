@@ -174,7 +174,7 @@ test("UC-17/30 verified accounts isolate snapshots and recent searches; sign-out
   await page.getByRole("combobox", { name: "Search cards" }).fill("Saved");
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
-  ).toContainText("4094 owned");
+  ).toHaveAccessibleName(/Owned/);
   await page.locator("#search-submit").click();
   await page.locator("#search").fill("");
   await expect(
@@ -199,12 +199,12 @@ test("UC-17/30 verified accounts isolate snapshots and recent searches; sign-out
   await page.getByRole("combobox", { name: "Search cards" }).fill("Saved");
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
-  ).toContainText("Checking ownership");
+  ).toHaveAccessibleName(/Checking ownership/);
   release();
   await expect(page.locator("#total")).toHaveText("0");
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
-  ).toContainText("Not owned");
+  ).toHaveAccessibleName(/Not owned/);
   await page.locator("#search").fill("Second account query");
   await page.locator("#search-submit").click();
   await page.locator("#search").fill("");

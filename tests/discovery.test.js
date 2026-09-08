@@ -47,6 +47,38 @@ const cards = rows.map(([oracle_id, name, id]) => ({
   finishes: ["nonfoil"],
   oracle_text: "English rules.",
 }));
+
+test("UC-31 alias explanation hides overlapping English and face matches without changing rank", () => {
+  const search = createNameSearch([
+    ...rows,
+    ["neph", "Glint-Eye Nephilim", "neph-en", [["Nephilim brilleœil", "fr"]]],
+    ["accent", "Éowyn, Shieldmaiden", "eowyn-en", [["Éowyn", "fr"]]],
+    [
+      "faces",
+      "A Combined Title",
+      "face-en",
+      [
+        ["English Face", "en"],
+        ["English", "fr"],
+      ],
+    ],
+  ]);
+  for (const query of ["nephilim", "NÉPHILIM", "eowyn", "ÉOWYN", "English"]) {
+    const result = search.search(query)[0];
+    assert.equal(result.matched_name, null, query);
+    assert.equal(result.matched_language, null, query);
+  }
+  const neph = search.search("nephilim")[0];
+  assert.equal(neph.rank, 1); // French prefix remains the rank even though English also matches.
+  assert.equal(
+    neph.completion_length,
+    normalizeName("Nephilim brilleœil").length,
+  );
+  assert.equal(search.search("brilleœil")[0].matched_language, "fr");
+  assert.equal(search.search("relampa")[0].matched_name, "Relámpago");
+  assert.equal(search.search("fuego")[0].matched_language, "es");
+  assert.equal(search.search("Ice")[0].matched_name, null);
+});
 test("UC-24 exact English first, translated accentless prefixes, face aliases, ambiguous identities and deterministic fuzzy ranking", () => {
   const search = createNameSearch(rows);
   assert.deepEqual(

@@ -154,11 +154,13 @@ export function createNameSearch(rows) {
         return [];
       const words = query.split(" ");
       const matches = new Map();
+      const englishMatches = new Set();
       function inspect(entry) {
         let best = null;
         for (const term of entry.terms) {
           const rank = lexicalRank(term.normalized, query, words);
           if (rank === null) continue;
+          if (term.language === "en") englishMatches.add(entry.oracle_id);
           if (
             !best ||
             rank < best.rank ||
@@ -192,16 +194,25 @@ export function createNameSearch(rows) {
           if (match) matches.set(entry.oracle_id, dto(entry, match, 4));
         }
       }
-      return [...matches.values()].sort(
-        (a, b) =>
-          a.rank - b.rank ||
-          (a.rank === 0
-            ? Number(Boolean(a.matched_name)) - Number(Boolean(b.matched_name))
-            : 0) ||
-          a.completion_length - b.completion_length ||
-          a.name.localeCompare(b.name, "en") ||
-          a.oracle_id.localeCompare(b.oracle_id),
-      );
+      return [...matches.values()]
+        .sort(
+          (a, b) =>
+            a.rank - b.rank ||
+            (a.rank === 0
+              ? Number(Boolean(a.matched_name)) -
+                Number(Boolean(b.matched_name))
+              : 0) ||
+            a.completion_length - b.completion_length ||
+            a.name.localeCompare(b.name, "en") ||
+            a.oracle_id.localeCompare(b.oracle_id),
+        )
+        .map((match) =>
+          // Explain only a foreign-only match, after sorting so display metadata
+          // cannot change the established multilingual ranking.
+          englishMatches.has(match.oracle_id) || match.matched_language === "en"
+            ? { ...match, matched_name: null, matched_language: null }
+            : match,
+        );
     },
   };
 }

@@ -28,6 +28,16 @@ test("LIVE-09 real WebKit touch opens English and translated suggestions exactly
     return response.json();
   }
   const before = await collection();
+  const searchInput = page.getByRole("combobox", { name: "Search cards" });
+  for (const query of ["nephilim", "NÉPHILIM"]) {
+    await searchInput.fill(query);
+    const nephilim = page
+      .locator("#suggestion-panel")
+      .getByRole("option")
+      .filter({ hasText: "Glint-Eye Nephilim" });
+    await expect(nephilim).toBeVisible({ timeout: 30000 });
+    await expect(nephilim.locator(".suggestion-alias")).toHaveCount(0);
+  }
   let resolutions = 0;
   page.on("request", (request) => {
     if (request.url().includes("/api/discover?")) resolutions++;
@@ -53,7 +63,12 @@ test("LIVE-09 real WebKit touch opens English and translated suggestions exactly
       .filter({ hasText: name })
       .first();
     await expect(option).toBeVisible({ timeout: 30000 });
-    await expect(option).toContainText("Not owned");
+    await expect(option).toHaveAccessibleName(/Not owned/);
+    await expect(option).not.toContainText(/owned|\d/);
+    if (query === "relampa")
+      await expect(option.locator(".suggestion-alias")).toHaveText(
+        "Relámpago · ES",
+      );
     const count = resolutions;
     await option.tap();
     await expect(page.locator("#message")).toHaveText(`Opening ${name}…`);
@@ -73,6 +88,9 @@ test("LIVE-09 real WebKit touch opens English and translated suggestions exactly
   await input.fill("");
   await expect(options()).toHaveCount(3);
   await expect(options().first()).toContainText("Fire // Ice");
+  await expect(page.locator("#suggestion-panel .suggestion-alias")).toHaveCount(
+    0,
+  );
   await page.reload();
   await input.click();
   await expect(options()).toHaveCount(3);

@@ -23,10 +23,11 @@ export function searchOwnership(state) {
 export function suggestionOwnership(item, ownership) {
   if (!ownership?.known)
     return {
-      text:
+      label:
         ownership?.status === "error"
           ? "Ownership unavailable"
           : "Checking ownership…",
+      icon: ownership?.status === "error" ? "?" : "…",
       owned: false,
     };
   const count =
@@ -35,11 +36,12 @@ export function suggestionOwnership(item, ownership) {
     0;
   const saved = ownership.status !== "ready";
   return {
-    text: saved
-      ? `Saved: ${count} owned · ${ownership.status === "error" ? "update failed" : "updating"}`
+    label: saved
+      ? `Saved: ${count ? "owned" : "not owned"} · ${ownership.status === "error" ? "update failed" : "updating"}`
       : count
-        ? `${count} owned`
+        ? "Owned"
         : "Not owned",
-    owned: count > 0,
+    icon: saved ? "◷" : count ? "✓" : "○",
+    owned: !saved && count > 0,
   };
 }

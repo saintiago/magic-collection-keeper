@@ -16,6 +16,8 @@ const data = [
       ["Ice", "en"],
     ],
   ],
+  ["n", "Glint-Eye Nephilim", "n-en", [["Nephilim brilleœil", "fr"]]],
+  ["e", "Éowyn, Shieldmaiden", "e-en", [["Éowyn", "fr"]]],
 ];
 const cards = data.map(([oracle_id, name, id]) => ({
   oracle_id,
@@ -570,7 +572,7 @@ test("UC-27 ownership refresh failure never claims unowned and retry recovers; g
   expect(f.writes).toHaveLength(0);
 });
 
-test("UC-29 one shared search shows owned totals across languages without extra inventory reads and updates after quantity edits", async ({
+test("UC-29 one shared search marks ownership across languages without extra inventory reads and stays coherent after quantity edits", async ({
   page,
 }) => {
   const f = await fixture(page, boltOwnership());
@@ -580,7 +582,7 @@ test("UC-29 one shared search shows owned totals across languages without extra 
   await input.fill("relampa");
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
-  ).toContainText("5 owned");
+  ).toHaveAccessibleName(/Owned/);
   const reads = f.counts().collectionRequests;
   await input.fill("Piracy");
   await expect(
@@ -588,7 +590,7 @@ test("UC-29 one shared search shows owned totals across languages without extra 
   ).toHaveCount(3);
   await expect(
     page.locator("#suggestion-panel").getByRole("option").first(),
-  ).toContainText("Not owned");
+  ).toHaveAccessibleName(/Not owned/);
   await page.locator("#catalog-nav").click();
   await expect(input).toHaveValue("Piracy");
   await page.locator("#collection-nav").click();
@@ -598,7 +600,7 @@ test("UC-29 one shared search shows owned totals across languages without extra 
   await input.fill("relampa");
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
-  ).toContainText("5 owned");
+  ).toHaveAccessibleName(/Owned/);
   await page.locator("#suggestion-panel").getByRole("option").tap();
   await expect(page.locator("#detail")).toBeVisible();
   await expect(page.locator(".owned-printing")).toHaveCount(2);
@@ -613,7 +615,7 @@ test("UC-29 one shared search shows owned totals across languages without extra 
   await input.fill("relampa");
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
-  ).toContainText("7 owned");
+  ).toHaveAccessibleName(/Owned/);
   await input.fill("Piracy");
   await input.press("Escape");
   await page.locator("#search-submit").click();
@@ -632,15 +634,15 @@ test("UC-29 unknown ownership stays honest, retry updates visible suggestions in
   await input.fill("relampa");
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
-  ).toContainText("Checking ownership");
+  ).toHaveAccessibleName(/Checking ownership/);
   f.failCollection(true);
   f.releaseCollection();
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
-  ).toContainText("Ownership unavailable");
+  ).toHaveAccessibleName(/Ownership unavailable/);
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
-  ).not.toContainText("Not owned");
+  ).not.toHaveAccessibleName(/Not owned/);
   f.failCollection(false);
   await page.locator("#collection-nav").click();
   await page.locator("#refresh").click();
@@ -648,7 +650,7 @@ test("UC-29 unknown ownership stays honest, retry updates visible suggestions in
   await input.fill("relampa");
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
-  ).toContainText("5 owned");
+  ).toHaveAccessibleName(/Owned/);
   f.failCollection(true);
   await page.locator("#refresh").click();
   await expect(page.locator("#collection-status-text")).toContainText(
@@ -657,7 +659,11 @@ test("UC-29 unknown ownership stays honest, retry updates visible suggestions in
   await input.fill("relampa");
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
-  ).toContainText("Saved: 5 owned · update failed");
+  ).toHaveAccessibleName(/Saved: owned · update failed/);
+  await expect(
+    page.locator("#suggestion-panel .suggestion-ownership"),
+  ).toHaveText("◷");
+  await expect(page.locator("#suggestion-panel .is-owned")).toHaveCount(0);
 });
 
 test("UC-30 empty focus shows recent committed cards and queries, supports touch/keyboard, dedupes, persists and clears", async ({
@@ -684,7 +690,7 @@ test("UC-30 empty focus shows recent committed cards and queries, supports touch
     page.getByRole("listbox", { name: "Recent searches" }),
   ).toBeVisible();
   await expect(options()).toContainText("Lightning Bolt");
-  await expect(options()).toContainText("5 owned");
+  await expect(options()).toHaveAccessibleName(/Owned/);
   await input.press("ArrowDown");
   await input.press("Enter");
   await expect(page.locator("#detail")).toBeVisible();
@@ -733,7 +739,7 @@ test("UC-30 result choices enter history and committed queries stay bounded in r
   await page.locator("#close").click();
   await input.fill("");
   await expect(options()).toHaveCount(2);
-  await expect(options().first()).toContainText("Not owned");
+  await expect(options().first()).toHaveAccessibleName(/Not owned/);
   await expect(options().nth(1)).toContainText("Run this search again");
   for (let i = 0; i < 12; i++) {
     await input.fill(`Missing ${i}`);
@@ -790,4 +796,70 @@ test("UC-30 storage failure keeps recent selection usable for the visit and repo
   await expect(page.locator("#suggestion-panel")).toContainText(
     "No recent searches yet",
   );
+});
+
+test("UC-31 inline accessible ownership and relevant-only translations stay compact and touch-selectable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const f = await fixture(page, [
+    ...boltOwnership(),
+    {
+      ...boltOwnership()[0],
+      id: "owned-nephilim",
+      printing_id: "n-en",
+      card: cards[5],
+      quantity: 9,
+    },
+  ]);
+  const input = page.getByRole("combobox", { name: "Search cards" });
+  const options = () => page.locator("#suggestion-panel").getByRole("option");
+  for (const query of ["nephilim", "NÉPHILIM"]) {
+    await input.fill(query);
+    await expect(options()).toHaveCount(1);
+    await expect(
+      options().getByRole("img", { name: "Owned", exact: true }),
+    ).toHaveText("✓");
+    await expect(options().locator(".suggestion-alias")).toHaveCount(0);
+    await expect(options()).not.toContainText(/owned|9/);
+    const name = await options().locator("b").boundingBox();
+    const icon = await options().locator(".suggestion-ownership").boundingBox();
+    expect(icon.x).toBeGreaterThan(name.x + name.width);
+    expect(icon.y).toBeLessThan(name.y + name.height);
+  }
+  await input.fill("brilleœil");
+  await expect(options().locator(".suggestion-alias")).toHaveText(
+    "Nephilim brilleœil · FR",
+  );
+  await options().tap();
+  await expect(page.locator("#detail h2")).toHaveText("Glint-Eye Nephilim");
+  await page.locator("#close").click();
+  await input.fill("");
+  await expect(
+    page.getByRole("listbox", { name: "Recent searches" }),
+  ).toBeVisible();
+  await expect(options().locator(".suggestion-alias")).toHaveCount(0);
+  await expect(
+    options().getByRole("img", { name: "Owned", exact: true }),
+  ).toBeVisible();
+  await input.fill("relampa");
+  await expect(options().locator(".suggestion-alias")).toHaveText(
+    "Relámpago · ES",
+  );
+  await options().tap();
+  await expect(page.locator("#detail h2")).toHaveText("Lightning Bolt");
+  await page.locator("#close").click();
+  for (const query of ["eowyn", "ÉOWYN", "Ice"]) {
+    await input.fill(query);
+    await expect(options()).toHaveCount(1);
+    await expect(options().locator(".suggestion-alias")).toHaveCount(0);
+  }
+  await input.fill("Fuego");
+  await expect(options().locator(".suggestion-alias")).toHaveText("Fuego · ES");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  expect(f.writes).toHaveLength(0);
 });

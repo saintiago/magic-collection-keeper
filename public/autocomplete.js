@@ -1,4 +1,4 @@
-import { esc } from "./view.js";
+import { suggestionPanel } from "./suggestion-view.js";
 import { suggestionOwnership } from "./search-ownership.js";
 
 export function setupAutocomplete({
@@ -37,7 +37,10 @@ export function setupAutocomplete({
   function draw(message = "") {
     panel.hidden = false;
     input.setAttribute("aria-expanded", "true");
-    panel.innerHTML = `${showingRecent ? '<p class="recent-heading">Recent searches</p>' : ""}<div id="card-suggestions" role="listbox" aria-label="${showingRecent ? "Recent searches" : "Card name suggestions"}">${items.map((item, i) => `<div id="card-suggestion-${i}" role="option" aria-selected="${selected === i}" data-suggestion="${i}"><b>${esc(item.name)}</b>${item.matched_name ? `<small>${esc(item.matched_name)} · ${esc(item.matched_language.toUpperCase())}</small>` : ""}<small class="suggestion-ownership"></small></div>`).join("")}</div><p role="status" aria-live="polite">${esc(message || `${items.length} suggestions. Use arrow keys to choose.`)}</p>`;
+    panel.innerHTML = suggestionPanel(items, selected, {
+      recent: showingRecent,
+      message,
+    });
     updateOwnership(ownership);
     if (selected >= 0)
       input.setAttribute(
@@ -51,13 +54,12 @@ export function setupAutocomplete({
     // Update text in place: a collection response must not replace the option under a finger.
     panel.querySelectorAll("[data-suggestion]").forEach((option) => {
       const item = items[Number(option.dataset.suggestion)];
-      if (!item) return;
-      const badge =
-        item.kind === "query"
-          ? { text: "Run this search again", owned: false }
-          : suggestionOwnership(item, ownership);
+      if (!item || item.kind === "query") return;
+      const badge = suggestionOwnership(item, ownership);
       const label = option.querySelector(".suggestion-ownership");
-      label.textContent = `${badge.owned ? "✓ " : ""}${badge.text}`;
+      label.textContent = badge.icon;
+      label.setAttribute("aria-label", badge.label);
+      label.title = badge.label;
       label.classList.toggle("is-owned", badge.owned);
     });
   }

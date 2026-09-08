@@ -69,7 +69,11 @@ test("LIVE-08 Discover opens owned printings and persists tag add/remove without
     await expect(suggestion).toContainText("Lightning Bolt", {
       timeout: 30000,
     });
-    await expect(suggestion).toContainText(`${ownedCount} owned`);
+    expect(ownedCount).toBeGreaterThan(0);
+    await expect(
+      suggestion.getByRole("img", { name: "Owned", exact: true }),
+    ).toHaveText("✓");
+    await expect(suggestion).not.toContainText(/\d+ owned/);
     if (keyboard) {
       await input.press("ArrowDown");
       await input.press("Enter");

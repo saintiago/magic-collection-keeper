@@ -25,8 +25,19 @@
   font-weight: 700;
 }
 .suggestion-panel .suggestion-ownership {
-  font-size: 11px;
+  display: inline-block;
+  flex: none;
+  font-size: 14px;
   color: #687563;
+}
+.suggestion-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.suggestion-name b {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .suggestion-panel .suggestion-ownership.is-owned {
   color: #28522a;

@@ -105,6 +105,8 @@ A September 8 local server probe received Moxfield HTTP 403 with the application
 
 ## Public name catalog refresh
 
+The compact inline ownership/alias presentation requires matching frontend and API application code, but no new bulk schema or provider behavior. The API retains original multilingual ranks and only suppresses unnecessary alias explanation after sorting. Deploy through main; do not regenerate owner data. LIVE-08 checks a real owned icon in keeper-tags and LIVE-09 checks English/foreign overlap and native WebKit taps in keeper-e2e. Screen readers and icon titles distinguish saved/loading/unavailable ownership without displaying counts.
+
 The main workflow installs Chromium and WebKit. After standard browser checks it runs the discovery suite in WebKit; after the eight protected cloud checks it runs LIVE-09 with `playwright.mobile-live.config.js` using keeper-e2e. This mobile test is read-only and uses genuine upstream responses with a short delivery delay. A September8 production20.1 probe reproduced zero detail requests after WebKit touch (pointerdown canceled and no click delivered); desktop clicks worked. Physical Chrome on iPhone remains separate acceptance evidence and must not be claimed from desktop emulation.
 
 LIVE-08 uses only keeper-tags and its existing synthetic source inventory. It creates a uniquely named temporary role, exercises Discover detail tag add/remove and reload, and restores the original assignments and removes that role in cleanup. It does not add/delete owned entries or modify the owner account. An ownership refresh failure in Discover detail has its own **Retry owned printings** control; a catalog hit alone must never be interpreted as an owned entry.
