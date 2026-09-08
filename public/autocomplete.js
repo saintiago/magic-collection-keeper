@@ -18,6 +18,8 @@ export function setupAutocomplete({
     composing = false,
     touch = null,
     ownership = null,
+    recent = { entries: [], status: "loading", error: "" },
+    showingRecent = false,
     version = null;
   const cache = new Map();
   function close() {
@@ -35,7 +37,7 @@ export function setupAutocomplete({
   function draw(message = "") {
     panel.hidden = false;
     input.setAttribute("aria-expanded", "true");
-    panel.innerHTML = `<div id="card-suggestions" role="listbox" aria-label="Card name suggestions">${items.map((item, i) => `<div id="card-suggestion-${i}" role="option" aria-selected="${selected === i}" data-suggestion="${i}"><b>${esc(item.name)}</b>${item.matched_name ? `<small>${esc(item.matched_name)} · ${esc(item.matched_language.toUpperCase())}</small>` : ""}<small class="suggestion-ownership"></small></div>`).join("")}</div><p role="status" aria-live="polite">${esc(message || `${items.length} suggestions. Use arrow keys to choose.`)}</p>`;
+    panel.innerHTML = `${showingRecent ? '<p class="recent-heading">Recent searches</p>' : ""}<div id="card-suggestions" role="listbox" aria-label="${showingRecent ? "Recent searches" : "Card name suggestions"}">${items.map((item, i) => `<div id="card-suggestion-${i}" role="option" aria-selected="${selected === i}" data-suggestion="${i}"><b>${esc(item.name)}</b>${item.matched_name ? `<small>${esc(item.matched_name)} · ${esc(item.matched_language.toUpperCase())}</small>` : ""}<small class="suggestion-ownership"></small></div>`).join("")}</div><p role="status" aria-live="polite">${esc(message || `${items.length} suggestions. Use arrow keys to choose.`)}</p>`;
     updateOwnership(ownership);
     if (selected >= 0)
       input.setAttribute(
@@ -50,11 +52,37 @@ export function setupAutocomplete({
     panel.querySelectorAll("[data-suggestion]").forEach((option) => {
       const item = items[Number(option.dataset.suggestion)];
       if (!item) return;
-      const badge = suggestionOwnership(item, ownership);
+      const badge =
+        item.kind === "query"
+          ? { text: "Run this search again", owned: false }
+          : suggestionOwnership(item, ownership);
       const label = option.querySelector(".suggestion-ownership");
       label.textContent = `${badge.owned ? "✓ " : ""}${badge.text}`;
       label.classList.toggle("is-owned", badge.owned);
     });
+  }
+  function showRecent() {
+    if (!enabled || input.value.trim() || recent.status === "locked") return;
+    close();
+    showingRecent = true;
+    items = recent.entries;
+    draw(
+      recent.error ||
+        (recent.status === "loading"
+          ? "Loading recent searches…"
+          : items.length
+            ? "Choose a recent card or search."
+            : "No recent searches yet. Search or choose a card to start."),
+    );
+  }
+  function updateRecent(next) {
+    recent = next;
+    if (recent.status === "locked") {
+      close();
+      return;
+    }
+    if (!touch && document.activeElement === input && !input.value.trim())
+      showRecent();
   }
   function choose(i) {
     const item = items[i];
@@ -69,6 +97,11 @@ export function setupAutocomplete({
     onQueryChange();
     const query = input.value.trim(),
       turn = generation;
+    if (!query) {
+      showRecent();
+      return;
+    }
+    showingRecent = false;
     if (
       !query ||
       (query.length < 2 &&
@@ -121,6 +154,9 @@ export function setupAutocomplete({
     }, delay);
   }
   input.addEventListener("input", change);
+  input.addEventListener("focus", () => {
+    if (!input.value.trim()) showRecent();
+  });
   input.addEventListener("compositionstart", () => {
     composing = true;
     close();
@@ -236,6 +272,7 @@ export function setupAutocomplete({
   return {
     close,
     updateOwnership,
+    updateRecent,
     setEnabled(value) {
       close();
       enabled = value;

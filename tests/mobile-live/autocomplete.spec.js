@@ -67,9 +67,48 @@ test("LIVE-09 real WebKit touch opens English and translated suggestions exactly
     expect(resolutions).toBe(count + 1);
     await page.locator("#close").click();
   }
+  const input = page.getByRole("combobox", { name: "Search cards" });
+  const options = () =>
+    page.getByRole("listbox", { name: "Recent searches" }).getByRole("option");
+  await input.fill("");
+  await expect(options()).toHaveCount(3);
+  await expect(options().first()).toContainText("Fire // Ice");
+  await page.reload();
+  await input.click();
+  await expect(options()).toHaveCount(3);
+  const beforeRecent = resolutions;
+  await options().filter({ hasText: "Lightning Bolt" }).tap();
+  await expect(page.locator("#detail h2")).toHaveText("Lightning Bolt", {
+    timeout: 30000,
+  });
+  expect(resolutions).toBe(beforeRecent + 1);
+  await page.locator("#close").click();
+  await input.fill("Piracy");
+  await page.locator("#search-submit").tap();
+  await expect(page.locator(".card-title").first()).toHaveText("Piracy", {
+    timeout: 30000,
+  });
+  await input.fill("");
+  await expect(options()).toHaveCount(4);
+  await expect(options().first()).toContainText("Run this search again");
+  await options().first().tap();
+  await expect(page.locator(".card-title").first()).toHaveText("Piracy", {
+    timeout: 30000,
+  });
+  await expect(page.locator("#detail")).not.toBeVisible();
+  await input.fill("");
+  await expect(options()).toHaveCount(4);
+  await page
+    .getByRole("button", { name: "Clear recent searches", exact: true })
+    .tap();
+  await page.reload();
+  await input.click();
+  await expect(page.locator("#suggestion-panel")).toContainText(
+    "No recent searches yet",
+  );
   expect(await collection()).toEqual(before);
   console.log(
-    "Real deployed WebKit touch: relampa, Piracy, Fuego; one resolution per tap; delayed upstream response; ownership unchanged. Physical iPhone not verified.",
+    "Real deployed WebKit touch: relampa, Piracy, Fuego; one resolution per tap; delayed upstream response; recent card/query selection, reload persistence and clearing; ownership unchanged. Physical iPhone not verified.",
   );
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.locator("#sign-out").click();

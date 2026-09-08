@@ -659,3 +659,135 @@ test("UC-29 unknown ownership stays honest, retry updates visible suggestions in
     page.locator("#suggestion-panel").getByRole("option"),
   ).toContainText("Saved: 5 owned · update failed");
 });
+
+test("UC-30 empty focus shows recent committed cards and queries, supports touch/keyboard, dedupes, persists and clears", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const f = await fixture(page, boltOwnership());
+  const input = page.getByRole("combobox", { name: "Search cards" });
+  const options = () => page.locator("#suggestion-panel").getByRole("option");
+  await input.fill("");
+  await expect(page.locator("#suggestion-panel")).toContainText(
+    "No recent searches yet",
+  );
+  await input.fill("uncommitted");
+  await input.fill("");
+  await expect(options()).toHaveCount(0);
+  await input.fill("relampa");
+  await expect(options()).toHaveCount(1);
+  await options().tap();
+  await expect(page.locator("#detail")).toBeVisible();
+  await page.locator("#close").click();
+  await input.fill("");
+  await expect(
+    page.getByRole("listbox", { name: "Recent searches" }),
+  ).toBeVisible();
+  await expect(options()).toContainText("Lightning Bolt");
+  await expect(options()).toContainText("5 owned");
+  await input.press("ArrowDown");
+  await input.press("Enter");
+  await expect(page.locator("#detail")).toBeVisible();
+  await page.locator("#close").click();
+  await input.fill("Piracy");
+  await page.locator("#search-submit").click();
+  await expect(page.locator(".card-title")).toHaveCount(3);
+  await input.fill("");
+  await expect(options()).toHaveCount(2);
+  await expect(options().first()).toContainText("Piracy");
+  await expect(options().first()).toContainText("Run this search again");
+  const lookups = f.counts().suggestRequests;
+  await page.reload();
+  await input.click();
+  await expect(options()).toHaveCount(2);
+  expect(f.counts().suggestRequests).toBe(lookups);
+  await options().first().tap();
+  await expect(page.locator(".card-title")).toHaveCount(3);
+  await expect(page.locator("#detail")).not.toBeVisible();
+  await input.fill("");
+  await expect(options()).toHaveCount(2);
+  await page
+    .getByRole("button", { name: "Clear recent searches", exact: true })
+    .tap();
+  await input.click();
+  await expect(page.locator("#suggestion-panel")).toContainText(
+    "No recent searches yet",
+  );
+  await page.reload();
+  await input.click();
+  await expect(options()).toHaveCount(0);
+  expect(f.writes).toHaveLength(0);
+});
+
+test("UC-30 result choices enter history and committed queries stay bounded in recency order", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  const input = page.getByRole("combobox", { name: "Search cards" });
+  const options = () =>
+    page.getByRole("listbox", { name: "Recent searches" }).getByRole("option");
+  await input.fill("Piracy");
+  await page.locator("#search-submit").click();
+  await page.locator(".card-open").first().click();
+  await expect(page.locator("#detail h2")).toHaveText("Piracy");
+  await page.locator("#close").click();
+  await input.fill("");
+  await expect(options()).toHaveCount(2);
+  await expect(options().first()).toContainText("Not owned");
+  await expect(options().nth(1)).toContainText("Run this search again");
+  for (let i = 0; i < 12; i++) {
+    await input.fill(`Missing ${i}`);
+    await page.locator("#search-submit").click();
+    await expect(page.locator("#message")).toContainText("0 matching cards");
+  }
+  await input.fill("Missing 5");
+  await page.locator("#search-submit").click();
+  await expect(page.locator("#message")).toContainText("0 matching cards");
+  await input.fill("");
+  await expect(options()).toHaveCount(10);
+  await expect(options().first()).toContainText("Missing 5");
+  await expect(options().nth(1)).toContainText("Missing 11");
+  await expect(options().last()).toContainText("Missing 2");
+  await page.reload();
+  await input.click();
+  await expect(options()).toHaveCount(10);
+  await expect(options().first()).toContainText("Missing 5");
+  expect(f.writes).toHaveLength(0);
+});
+
+test("UC-30 storage failure keeps recent selection usable for the visit and reports failed clearing", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Storage.prototype.setItem = () => {
+      throw new Error("Storage disabled");
+    };
+    Storage.prototype.removeItem = () => {
+      throw new Error("Storage disabled");
+    };
+  });
+  await fixture(page);
+  const input = page.getByRole("combobox", { name: "Search cards" });
+  await input.fill("relampa");
+  await page.locator("#suggestion-panel").getByRole("option").tap();
+  await expect(page.locator("#detail")).toBeVisible();
+  await page.locator("#close").click();
+  await input.fill("");
+  await expect(
+    page.getByRole("listbox", { name: "Recent searches" }),
+  ).toContainText("Lightning Bolt");
+  await expect(page.locator("#recent-search-message")).toContainText(
+    "this visit only",
+  );
+  await page
+    .getByRole("button", { name: "Clear recent searches", exact: true })
+    .click();
+  await expect(page.locator("#recent-search-message")).toContainText(
+    "Could not clear",
+  );
+  await page.reload();
+  await input.click();
+  await expect(page.locator("#suggestion-panel")).toContainText(
+    "No recent searches yet",
+  );
+});

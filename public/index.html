@@ -56,7 +56,17 @@
         class="unified-search"
         aria-label="Search all cards"
       >
-        <label for="search" class="eyebrow">Search all Magic cards</label>
+        <div class="search-label-row">
+          <label for="search" class="eyebrow">Search all Magic cards</label>
+          <button
+            id="clear-recent-searches"
+            type="button"
+            class="text-button"
+            hidden
+          >
+            Clear recent searches
+          </button>
+        </div>
         <form id="search-form">
           <div class="search-autocomplete">
             <div class="search-box">
@@ -81,6 +91,7 @@
           >.
         </p>
         <div id="message" role="status" aria-live="polite"></div>
+        <p id="recent-search-message" class="hint" role="status"></p>
       </section>
       <section class="stats" id="stats">
         <div>

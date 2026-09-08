@@ -6,15 +6,23 @@
 .unified-search {
   margin-bottom: 24px;
 }
-.unified-search > label {
-  display: block;
+.search-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 8px;
 }
 .unified-search .search-box input {
   font-size: 16px;
 }
-.unified-search #message:empty {
+.unified-search #message:empty,
+#recent-search-message:empty {
   display: none;
+}
+.suggestion-panel .recent-heading {
+  font-weight: 700;
 }
 .suggestion-panel .suggestion-ownership {
   font-size: 11px;

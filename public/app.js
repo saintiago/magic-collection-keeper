@@ -1,5 +1,6 @@
 import { setupAutocomplete } from "./autocomplete.js";
 import { searchOwnership } from "./search-ownership.js";
+import { createRecentSearches } from "./recent-searches.js";
 import { createPrintingPicker } from "./printing-picker.js";
 import { collectionCard } from "./collection-view.js";
 import { setupTagNavigation, tagFromHash } from "./tag-navigation.js";
@@ -60,7 +61,11 @@ const collection = createCollectionLoader({
     render();
   },
 });
-window.addEventListener("keeper-sign-out", () => collection.stop());
+window.addEventListener("keeper-sign-out", () => {
+  collection.stop();
+  recentSearches.stop();
+  autocomplete.close();
+});
 const tagController = createTagController({
   api,
   onChanged: () => {
@@ -107,8 +112,9 @@ const autocomplete = setupAutocomplete({
   panel: $("suggestion-panel"),
   api: request,
   onSelect: (item) => {
-    selectedIdentity = item.oracle_id;
-    search(false, true);
+    selectedIdentity = item.kind === "query" ? "" : item.oracle_id;
+    if (item.kind !== "query") recentSearches.remember(item);
+    search(false, item.kind !== "query");
   },
   onQueryChange: () => {
     selectedIdentity = "";
@@ -121,6 +127,14 @@ const autocomplete = setupAutocomplete({
     render();
   },
 });
+const recentSearches = createRecentSearches({
+  onChange: (state) => {
+    $("clear-recent-searches").hidden = !state.entries.length;
+    $("recent-search-message").textContent = state.error;
+    autocomplete.updateRecent(state);
+  },
+});
+$("clear-recent-searches").onclick = () => recentSearches.clear();
 autocomplete.setEnabled(true);
 async function api(path, options) {
   const mutation = options?.method && options.method !== "GET";
@@ -258,7 +272,12 @@ function render() {
     .querySelectorAll(".card-open")
     .forEach(
       (button) =>
-        (button.onclick = () => detail(rows[Number(button.dataset.index)])),
+        (button.onclick = () => {
+          const row = rows[Number(button.dataset.index)];
+          if (mode === "catalog")
+            recentSearches.remember({ ...row.card, printing_id: row.card.id });
+          detail(row);
+        }),
     );
   $("empty").hidden =
     rows.length > 0 || loading || (mode === "collection" && !known && busy);
@@ -390,6 +409,7 @@ async function search(more = false, openSelection = false) {
     query = nextQuery;
     cards = [];
     hasMore = false;
+    if (!openSelection) recentSearches.remember({ kind: "query", name: query });
   }
   loading = true;
   message(
@@ -508,10 +528,12 @@ setupBatch({
 async function initializeCollection() {
   try {
     const identity = await collectionIdentity();
+    recentSearches.start(snapshotKey(identity));
     if (collectionState.rows === null) {
       if (await collection.start(snapshotKey(identity))) await refreshTags();
     } else await refresh();
   } catch (error) {
+    recentSearches.unavailable();
     collectionState = {
       ...collectionState,
       status: "error",

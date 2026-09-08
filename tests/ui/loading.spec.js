@@ -126,12 +126,15 @@ test("UC-17 large warm snapshot remains visible through refresh failure and reco
   await expect(page.locator("#total")).toHaveText("0");
   await expect(page.getByText("Your collection begins here")).toBeVisible();
 });
-test("UC-17 verified accounts isolate snapshots and sign-out clears them", async ({
+test("UC-17/30 verified accounts isolate snapshots and recent searches; sign-out clears visible private state", async ({
   page,
 }) => {
   let owner = "one",
     delay = false,
     release;
+  await page.route("**/api/discover?*", (route) =>
+    route.fulfill({ json: { cards: [], total: 0, hasMore: false } }),
+  );
   await page.route("**/api/suggest?*", (route) =>
     route.fulfill({
       json: {
@@ -172,6 +175,11 @@ test("UC-17 verified accounts isolate snapshots and sign-out clears them", async
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
   ).toContainText("4094 owned");
+  await page.locator("#search-submit").click();
+  await page.locator("#search").fill("");
+  await expect(
+    page.getByRole("listbox", { name: "Recent searches" }),
+  ).toContainText("Saved");
   owner = "two";
   delay = true;
   await page.evaluate(() =>
@@ -184,6 +192,10 @@ test("UC-17 verified accounts isolate snapshots and sign-out clears them", async
   await expect.poll(() => Boolean(release)).toBe(true);
   await expect(page.locator("#total")).toHaveText("—");
   await expect(page.locator(".card")).toHaveCount(0);
+  await page.locator("#search").click();
+  await expect(page.locator("#suggestion-panel")).toContainText(
+    "No recent searches yet",
+  );
   await page.getByRole("combobox", { name: "Search cards" }).fill("Saved");
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
@@ -193,11 +205,42 @@ test("UC-17 verified accounts isolate snapshots and sign-out clears them", async
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
   ).toContainText("Not owned");
+  await page.locator("#search").fill("Second account query");
+  await page.locator("#search-submit").click();
+  await page.locator("#search").fill("");
+  await expect(
+    page.getByRole("listbox", { name: "Recent searches" }),
+  ).toContainText("Second account query");
+  await expect(
+    page.getByRole("listbox", { name: "Recent searches" }),
+  ).not.toContainText("Saved");
+  await page
+    .getByRole("button", { name: "Clear recent searches", exact: true })
+    .click();
+  owner = "one";
+  delay = false;
+  await page.evaluate(() =>
+    sessionStorage.setItem(
+      "keeper-session",
+      JSON.stringify({ IdToken: "fixture-one", expires: Date.now() + 3600000 }),
+    ),
+  );
+  await page.reload();
+  await expect(page.locator("#total")).toHaveText("4,094");
+  await page.locator("#search").click();
+  await expect(
+    page.getByRole("listbox", { name: "Recent searches" }),
+  ).toContainText("Saved");
+  await expect(
+    page.getByRole("listbox", { name: "Recent searches" }),
+  ).not.toContainText("Second account query");
   await page.locator("#sign-out").click();
   await expect(
     page.getByRole("button", { name: "Sign in", exact: true }),
   ).toBeVisible();
   await expect(page.locator(".suggestion-ownership")).toHaveCount(0);
+  await expect(page.locator("#clear-recent-searches")).not.toBeVisible();
+  await expect(page.locator("#suggestion-panel")).toBeEmpty();
   const count = await page.evaluate(
     () =>
       new Promise((resolve) => {
