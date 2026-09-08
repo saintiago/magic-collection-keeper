@@ -64,6 +64,8 @@ const server = http.createServer(async (req, res) => {
       return json({ error: "Cross-origin request rejected" }, 403);
     const url = new URL(req.url, `http://localhost:${port}`),
       owner = "local";
+    if (url.pathname === "/api/session" && req.method === "GET")
+      return json({ owner });
     if (url.pathname.startsWith("/api/")) {
       const input = ["POST", "PUT", "PATCH"].includes(req.method)
         ? await body(req)

@@ -45,11 +45,22 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
       - name: Write public configuration
         env:
           API_URL: ${{ vars.API_URL }}
           CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
         run: node -e "require('fs').writeFileSync('public/config.json',JSON.stringify({region:'us-east-1',apiUrl:process.env.API_URL,clientId:process.env.CLIENT_ID}))"
+      - name: Prepare unique deployment
+        env:
+          BUCKET: ${{ vars.WEBSITE_BUCKET }}
+        run: |
+          aws s3 cp "s3://$BUCKET/index.html" build/previous-index.html --no-progress
+          node scripts/prepare-release.mjs
       - name: Deploy API
         run: |
           cd build
@@ -61,14 +72,12 @@ jobs:
           BUCKET: ${{ vars.WEBSITE_BUCKET }}
           DISTRIBUTION: ${{ vars.DISTRIBUTION_ID }}
         run: |
-          aws s3 sync public/ "s3://$BUCKET/" --delete --cache-control 'public,max-age=300' --no-progress
+          RELEASE_ID=$(node -p "JSON.parse(require('fs').readFileSync('build/release.json')).id")
+          aws s3 sync "build/site/releases/$RELEASE_ID/" "s3://$BUCKET/releases/$RELEASE_ID/" --cache-control 'public,max-age=31536000,immutable' --no-progress
+          aws s3 cp public/config.json "s3://$BUCKET/config.json" --cache-control 'no-cache,no-store,must-revalidate' --content-type application/json --no-progress
+          aws s3 cp build/site/index.html "s3://$BUCKET/index.html" --cache-control 'no-cache,no-store,must-revalidate' --content-type text/html --no-progress
           INVALIDATION=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths '/*' --query Invalidation.Id --output text)
           aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION" --id "$INVALIDATION"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci
       - run: npx playwright install --with-deps chromium
       - name: Verify protected deployed app
         env:

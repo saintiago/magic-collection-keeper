@@ -1,4 +1,7 @@
-export const config = await fetch("/config.json").then((r) => r.json());
+import { clearSnapshotCaches } from "./collection-cache.js";
+export const config = await fetch(
+  new URL("./config.json", import.meta.url),
+).then((r) => r.json());
 let tokens;
 try {
   tokens = JSON.parse(sessionStorage.getItem("keeper-session") || "null");
@@ -37,10 +40,10 @@ export async function authorization() {
       store({
         ...data.AuthenticationResult,
         RefreshToken: tokens.RefreshToken,
+        account: tokens.account,
       });
     } catch {
-      sessionStorage.removeItem("keeper-session");
-      location.reload();
+      await signOut();
       throw new Error("Session expired. Please sign in again.");
     }
   }
@@ -52,10 +55,7 @@ export async function signIn() {
     "◉ Private cloud collection";
   document.querySelector(".sidebar-bottom").innerHTML =
     '<span class="status-dot"></span> Saved securely in AWS<p>A little order.<br>A lot of Magic.</p><button class="secondary" id="sign-out">Sign out</button>';
-  document.getElementById("sign-out").onclick = () => {
-    sessionStorage.removeItem("keeper-session");
-    location.reload();
-  };
+  document.getElementById("sign-out").onclick = () => signOut();
   if (tokens) return;
   const dialog = document.createElement("dialog");
   dialog.className = "auth-dialog";
@@ -103,6 +103,7 @@ export async function signIn() {
           button.textContent = "Set password & continue";
           form.password.focus();
         } else if (data.AuthenticationResult) {
+          await clearSnapshotCaches();
           store(data.AuthenticationResult);
           dialog.close();
           dialog.remove();
@@ -119,4 +120,53 @@ export async function signIn() {
       }
     };
   });
+}
+
+let accountGeneration = 0;
+export async function signOut(broadcast = true) {
+  accountGeneration++;
+  tokens = null;
+  sessionStorage.removeItem("keeper-session");
+  window.dispatchEvent(new Event("keeper-sign-out"));
+  if (broadcast) {
+    try {
+      localStorage.setItem("keeper-sign-out", crypto.randomUUID());
+    } catch {}
+  }
+  await clearSnapshotCaches();
+  location.reload();
+}
+window.addEventListener("storage", (event) => {
+  if (event.key === "keeper-sign-out") signOut(false);
+});
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) location.reload();
+});
+export async function collectionIdentity() {
+  const environment = JSON.stringify([
+    location.origin,
+    config.apiUrl || "local",
+    config.clientId || "local",
+  ]);
+  if (config.local) return { environment, owner: "local" };
+  const generation = accountGeneration;
+  const headers = await authorization();
+  if (tokens?.account?.environment === environment) return tokens.account;
+  const response = await fetch((config.apiUrl || "") + "/api/session", {
+    headers,
+    signal: AbortSignal.timeout(35000),
+  });
+  if (!response.ok)
+    throw new Error(
+      "Could not verify your account. Retry to load your collection.",
+    );
+  const identity = await response.json();
+  if (generation !== accountGeneration || !tokens)
+    throw new Error("Session changed. Please sign in again.");
+  if (typeof identity.owner !== "string" || !identity.owner)
+    throw new Error("Account identity unavailable.");
+  // Only the JWT-protected server supplies the owner; never decode an unverified JWT for cache selection.
+  tokens.account = { environment, owner: identity.owner };
+  sessionStorage.setItem("keeper-session", JSON.stringify(tokens));
+  return tokens.account;
 }

@@ -1,6 +1,9 @@
 import { createTagController, tagBadges, allocationWarning } from "./tags.js";
-import { signIn } from "./auth.js";
-import { api } from "./api.js";
+import { createCollectionLoader } from "./collection-loader.js";
+import { snapshotKey, snapshotStore } from "./collection-cache.js";
+import { setupReleaseInfo } from "./release-info.js";
+import { signIn, collectionIdentity } from "./auth.js";
+import { api as request } from "./api.js";
 import { esc, finishName, picture } from "./view.js";
 import { createCardDetail } from "./card-detail.js";
 import { setupBatch } from "./batch.js";
@@ -13,7 +16,29 @@ let owned = [],
   hasMore = false,
   loading = false,
   requestId = 0;
-const tagController = createTagController({ api, onChanged: refresh });
+let collectionState = {
+  rows: null,
+  status: "loading",
+  savedAt: null,
+  error: "",
+};
+const collection = createCollectionLoader({
+  load: () => api("/api/collection"),
+  cache: snapshotStore,
+  onChange: (state) => {
+    collectionState = state;
+    owned = state.rows || [];
+    render();
+  },
+});
+window.addEventListener("keeper-sign-out", () => collection.stop());
+const tagController = createTagController({
+  api,
+  onChanged: () => {
+    collection.invalidate();
+    return refresh();
+  },
+});
 const detail = createCardDetail({
   onTags: (row) => {
     document.getElementById("detail").close();
@@ -21,16 +46,32 @@ const detail = createCardDetail({
   },
   api,
   onSaved: (updated) => {
-    owned = updated;
-    render();
+    if (collectionState.rows !== updated) collection.replace(updated);
   },
   notify: message,
 });
+async function api(path, options) {
+  const mutation = options?.method && options.method !== "GET";
+  if (mutation) collection.invalidate();
+  const result = await request(path, options);
+  if (mutation) {
+    collection.invalidate();
+    if (path.startsWith("/api/collection") && Array.isArray(result))
+      collection.replace(result);
+  }
+  return result;
+}
 function message(text = "", error = false) {
   $("message").textContent = text;
   $("message").className = error ? "error" : "";
 }
 function stats() {
+  if (collectionState.rows === null) {
+    ["total", "nav-count", "unique", "sets", "foils"].forEach(
+      (id) => ($(id).textContent = "—"),
+    );
+    return;
+  }
   $("total").textContent = owned
     .reduce((n, r) => n + r.quantity, 0)
     .toLocaleString();
@@ -57,6 +98,29 @@ function stats() {
 }
 function render() {
   stats();
+  const known = collectionState.rows !== null;
+  const busy = ["loading", "updating"].includes(collectionState.status);
+  $("refresh").disabled = busy;
+  $("collection-status").hidden = mode !== "collection";
+  const freshness = collectionState.savedAt
+    ? new Date(collectionState.savedAt).toLocaleString()
+    : "";
+  $("collection-status-text").textContent = busy
+    ? known
+      ? "Showing saved snapshot from " +
+        freshness +
+        ". Updating your collection…"
+      : "Loading your collection…"
+    : collectionState.status === "error"
+      ? known
+        ? "Showing saved snapshot from " +
+          freshness +
+          ". Update failed; your last saved cards remain visible."
+        : "Your collection could not be loaded."
+      : "Collection is up to date. Last loaded " + freshness + ".";
+  $("collection-error").textContent = collectionState.error;
+  $("retry-collection").hidden = collectionState.status !== "error";
+  $("grid").setAttribute("aria-busy", String(busy));
   let rows = cards.map((card) => ({ card }));
   if (mode === "collection") {
     const q = $("search").value.toLowerCase().trim(),
@@ -82,7 +146,11 @@ function render() {
       rows.sort((a, b) => b.quantity - a.quantity);
   }
   $("result-count").textContent =
-    `${rows.length} ${mode === "collection" ? "entries" : "printings shown"}`;
+    mode === "collection" && !known
+      ? busy
+        ? "Loading…"
+        : "Unavailable"
+      : `${rows.length} ${mode === "collection" ? "entries" : "printings shown"}`;
   $("grid").innerHTML = rows
     .map(
       (r, i) =>
@@ -95,12 +163,15 @@ function render() {
       (button) =>
         (button.onclick = () => detail(rows[Number(button.dataset.index)])),
     );
-  $("empty").hidden = rows.length > 0 || loading;
+  $("empty").hidden =
+    rows.length > 0 || loading || (mode === "collection" && !known && busy);
   $("empty").innerHTML =
     mode === "collection"
-      ? owned.length
-        ? '<div class="empty-icon">⌕</div><h3>No cards match these filters</h3><p>Try another name, color, set, or finish.</p><button class="secondary" id="clear-filters">Clear filters</button>'
-        : '<div class="empty-icon">✦</div><div class="eyebrow">A FRESH PAGE</div><h3>Your collection begins here</h3><p>From your first common to your favorite rare.<br>Find a card, choose its printing, and make it yours.</p><button class="primary" id="first-card">+ Find your first card</button><small>No sample cards. Just the cards you own.</small>'
+      ? !known
+        ? "<h3>Collection unavailable</h3><p>Retry to load your saved cards.</p>"
+        : owned.length
+          ? '<div class="empty-icon">⌕</div><h3>No cards match these filters</h3><p>Try another name, color, set, or finish.</p><button class="secondary" id="clear-filters">Clear filters</button>'
+          : '<div class="empty-icon">✦</div><div class="eyebrow">A FRESH PAGE</div><h3>Your collection begins here</h3><p>From your first common to your favorite rare.<br>Find a card, choose its printing, and make it yours.</p><button class="primary" id="first-card">+ Find your first card</button><small>No sample cards. Just the cards you own.</small>'
       : `<div class="empty-icon">⌕</div><h3>${query ? "No printings found" : "Find your next addition"}</h3><p>${query ? "Try a different spelling or set code." : "Search Magic’s card catalog by name, set, or collector number."}</p>`;
   if ($("first-card")) $("first-card").onclick = () => switchMode("catalog");
   if ($("clear-filters"))
@@ -149,36 +220,26 @@ function switchMode(next) {
   $("search").focus();
 }
 async function refresh() {
-  $("refresh").disabled = true;
-  message("Updating your collection…");
+  if (await collection.refresh()) await refreshTags();
+}
+async function refreshTags() {
   try {
-    owned = await api("/api/collection");
-    let tagError;
-    try {
-      const tags = await tagController.refresh();
-      const selected = $("tag-filter").value;
-      $("tag-filter").innerHTML =
-        '<option value="">All tags & locations</option>' +
-        tags
-          .map(
-            (t) => '<option value="' + t.id + '">' + esc(t.label) + "</option>",
-          )
-          .join("");
-      $("tag-filter").value = selected;
-    } catch (error) {
-      tagError = error.message;
-    }
-    render();
+    const tags = await tagController.refresh();
+    const selected = $("tag-filter").value;
+    $("tag-filter").innerHTML =
+      '<option value="">All tags & locations</option>' +
+      tags
+        .map(
+          (t) =>
+            '<option value="' + esc(t.id) + '">' + esc(t.label) + "</option>",
+        )
+        .join("");
+    $("tag-filter").value = selected;
+  } catch (error) {
     message(
-      tagError
-        ? "Collection loaded; tags could not be refreshed: " + tagError
-        : "Collection is up to date. All saved changes loaded.",
-      Boolean(tagError),
+      "Collection loaded; tags could not be refreshed: " + error.message,
+      true,
     );
-  } catch (e) {
-    message(e.message, true);
-  } finally {
-    $("refresh").disabled = false;
   }
 }
 async function search(more = false) {
@@ -223,7 +284,8 @@ $("collection-nav").onclick = () => switchMode("collection");
 $("catalog-nav").onclick = () => switchMode("catalog");
 $("add").onclick = () => switchMode("catalog");
 $("close").onclick = () => $("detail").close();
-$("refresh").onclick = refresh;
+$("refresh").onclick = initializeCollection;
+$("retry-collection").onclick = initializeCollection;
 $("manage-tags").onclick = () => tagController.manager();
 $("search-form").onsubmit = (e) => {
   e.preventDefault();
@@ -240,13 +302,33 @@ $("example").onclick = () => {
   $("search").value = "set:blb cn:1";
   search();
 };
+setupReleaseInfo();
 render();
 await signIn();
 setupBatch({
   api,
   onSaved: async () => {
-    owned = await api("/api/collection");
-    render();
+    if (!(await collection.refresh()))
+      throw new Error(
+        collectionState.error ||
+          "Collection refresh was interrupted. Update collection to confirm your saved cards.",
+      );
+    await refreshTags();
   },
 });
-refresh();
+async function initializeCollection() {
+  try {
+    const identity = await collectionIdentity();
+    if (collectionState.rows === null) {
+      if (await collection.start(snapshotKey(identity))) await refreshTags();
+    } else await refresh();
+  } catch (error) {
+    collectionState = {
+      ...collectionState,
+      status: "error",
+      error: error.message,
+    };
+    render();
+  }
+}
+initializeCollection();

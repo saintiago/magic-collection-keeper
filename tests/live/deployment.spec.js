@@ -23,6 +23,11 @@ test("LIVE-01 protected collection survives reload and isolates a second owner",
     () => JSON.parse(sessionStorage.getItem("keeper-session")).IdToken,
   );
   const headers = { Authorization: `Bearer ${auth}` };
+  const verified = await request.get(`${config.apiUrl}/api/session`, {
+    headers,
+  });
+  expect(verified.ok()).toBe(true);
+  expect((await verified.json()).owner).toBeTruthy();
   const initial = await (
     await request.get(`${config.apiUrl}/api/collection`, { headers })
   ).json();
@@ -49,8 +54,41 @@ test("LIVE-01 protected collection survives reload and isolates a second owner",
     .click();
   await page.locator("#collection-nav").click();
   await expect(page.locator("#total")).toHaveText("3");
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const prefix = document
+          .querySelector('script[type="module"]')
+          .src.replace(/app.js$/, "");
+        const { snapshotStore, snapshotKey } = await import(
+          prefix + "collection-cache.js"
+        );
+        const { collectionIdentity } = await import(prefix + "auth.js");
+        return (
+          await snapshotStore.read(snapshotKey(await collectionIdentity()))
+        )?.rows?.reduce((sum, row) => sum + row.quantity, 0);
+      }),
+    )
+    .toBe(3);
+  let releaseRefresh;
+  await page.route("**/api/collection", async (route) => {
+    await new Promise((resolve) => (releaseRefresh = resolve));
+    await route.continue();
+  });
   await page.reload();
   await expect(page.locator("#total")).toHaveText("3");
+  await expect(page.locator("#collection-status-text")).toContainText(
+    "Showing saved snapshot from",
+  );
+  await expect(page.locator("#collection-status-text")).toContainText(
+    "Updating",
+  );
+  await expect.poll(() => Boolean(releaseRefresh)).toBe(true);
+  releaseRefresh();
+  await expect(page.locator("#collection-status-text")).toContainText(
+    "Collection is up to date",
+  );
+  await page.unroute("**/api/collection");
   const stored = await (
     await request.get(`${config.apiUrl}/api/collection`, { headers })
   ).json();

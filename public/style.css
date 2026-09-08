@@ -507,6 +507,28 @@ footer span {
 footer a {
   text-decoration: none;
 }
+#app-version {
+  display: block;
+  font-size: 11px;
+  margin-top: 8px;
+}
+#collection-status {
+  color: #53634c;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 16px 0;
+}
+#collection-status p {
+  margin: 4px 0;
+}
+.release-dialog {
+  max-width: 560px;
+  overflow-wrap: anywhere;
+}
+.release-dialog button {
+  display: block;
+  margin-top: 20px;
+}
 dialog {
   border: 1px solid #dce3d4;
   border-radius: 14px;

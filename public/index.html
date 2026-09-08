@@ -15,7 +15,7 @@
       <div class="nav-label">YOUR WORKSPACE</div>
       <nav>
         <button id="collection-nav" class="active">
-          ▦ <span>My collection</span><span id="nav-count">0</span></button
+          ▦ <span>My collection</span><span id="nav-count">—</span></button
         ><button id="catalog-nav">⌕ <span>Discover cards</span></button>
       </nav>
       <div class="sidebar-bottom">
@@ -49,26 +49,26 @@
       </section>
       <section class="stats" id="stats">
         <div>
-          <span>Total cards</span><strong id="total">0</strong
+          <span>Total cards</span><strong id="total">—</strong
           ><small>Copies in your collection</small>
         </div>
         <div>
-          <span>Unique printings</span><strong id="unique">0</strong
+          <span>Unique printings</span><strong id="unique">—</strong
           ><small>Every edition accounted for</small>
         </div>
         <div>
-          <span>Sets collected</span><strong id="sets">0</strong
+          <span>Sets collected</span><strong id="sets">—</strong
           ><small>Worlds worth exploring</small>
         </div>
         <div>
-          <span>Foil & etched</span><strong id="foils">0</strong
+          <span>Foil & etched</span><strong id="foils">—</strong
           ><small>A little extra shine</small>
         </div>
       </section>
       <section class="library">
         <div class="section-top">
           <h2 id="section-title">
-            Your library <span id="result-count">0 entries</span>
+            Your library <span id="result-count">Loading…</span>
           </h2>
           <span id="view-caption">▦ Card view</span>
         </div>
@@ -117,6 +117,13 @@
           >. Add <code>lang:es</code> for Spanish. Results are catalog cards,
           not owned cards.
         </p>
+        <div id="collection-status" role="status" aria-live="polite">
+          <p id="collection-status-text">Loading your collection…</p>
+          <p id="collection-error" class="error"></p>
+          <button id="retry-collection" class="secondary" hidden>
+            Retry collection
+          </button>
+        </div>
         <div id="message" role="status" aria-live="polite"></div>
         <div id="grid" class="card-grid"></div>
         <div id="empty" class="empty"></div>
@@ -131,6 +138,9 @@
         >. Magic: The Gathering © Wizards of the Coast.<span
           >Made for your next great find.</span
         >
+        <button id="app-version" class="text-button" type="button">
+          Local development
+        </button>
       </footer>
     </main>
     <dialog id="detail">

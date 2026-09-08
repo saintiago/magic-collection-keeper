@@ -1,5 +1,15 @@
 # Use cases and E2E coverage
 
+## Loading, device cache and release identity
+
+| ID | Observable outcome | Evidence |
+| --- | --- | --- |
+| UC-16 | Local fallback; visible deployment version; About commit/time/checks link; mobile close/Escape; distinct retries; old HTML retains immutable metadata; refuse regressing deployments | tests/release.test.js, tests/ui/loading.spec.js, LIVE-05 |
+| UC-17 | Cold placeholders; failure/retry without false empty; cards before slow tags; 2,870-entry warm snapshot with timestamp/updating; failure retains cards; successful empty reconciliation; verified account isolation/logout clearing; corrupt/quota cache fallback; stale read/mutation/account response rejection | tests/collection-loader.test.js, tests/ui/loading.spec.js, tests/ui/auth.spec.js, LIVE-01 |
+| LIVE-05 | Published HTML and immutable metadata match the GitHub deployment; loaded footer and commit agree with protected API version headers; no owner mutations | tests/live/release.spec.js |
+
+LIVE-01 waits for a real test-account snapshot, reloads while the next real collection request is delayed, verifies cached totals/updating, then releases and reconciles the cloud response. Mocked large fixtures prove UI behavior, not a particular cause for a user's network delay. Totals compute synchronously; loading/updating are the asynchronous labels.
+
 All currently visible interactive controls are grouped below. The names identify executable tests in `tests/ui`; production behavior is additionally covered by `tests/live/deployment.spec.js`. UI tests use controlled API fixtures for deterministic error/edge states. They are not substituted for the live AWS/Scryfall test.
 
 | ID      | User interaction / observable outcome                                                                                                                                                                                           | E2E evidence                                                                                               |

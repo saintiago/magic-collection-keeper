@@ -1,5 +1,21 @@
 # Architecture
 
+## Collection loading and device snapshots
+
+`public/collection-loader.js` owns unknown/loading, updating, ready and failed states independently of catalog searching. Its plain-object load/cache ports let tests control response order and storage failures. Only a successful validated response establishes authoritative rows, including a genuinely empty array. Cards render immediately; loading tag options cannot delay them. Totals calculate synchronously from displayed rows, so there is no separate or simulated calculating phase.
+
+`public/collection-cache.js` stores complete display snapshots in IndexedDB (schema 1), accommodating the large printing DTO without localStorage's small string quota. Keys include schema, frontend origin, API environment, Cognito client and verified account UUID. The protected `GET /api/session` transport endpoint returns only the JWT-authorizer subject. The browser remembers that server-verified identity with the signed-in session, preserving it on Cognito refresh. It never selects a cache account by decoding an unverified JWT. Local mode uses a separate origin/environment and fixed local identity.
+
+Snapshots contain rows and last successful load time, never tokens or passwords. They are display hints, not authorization or replacement inventory. First use in an existing session obtains server identity; subsequent reloads can display the snapshot before collection loading. Corrupt/wrong-schema snapshots, blocked storage and quota failures fall back to normal loading. Cached cards carry their age and refresh/failure status. Images still need a network; browsers may evict snapshots.
+
+Request generations reject out-of-order reads, reads started before mutations and previous-account results. Successful inventory mutation responses replace the snapshot; other writes invalidate it and their controller refreshes inventory. Batch partial successes update the snapshot per successful write. Logout invalidates pending work, clears session and snapshots, and broadcasts logout to other tabs; restored back/forward pages reload. Storage operations are serialized with invalidations so pending saves do not resurrect removed data.
+
+## Deployment identity and coherent assets
+
+`scripts/release.mjs` creates `baseVersion+deploy.runNumber.attempt` metadata, rejects older/equal published counters, and packages frontend assets under immutable `/releases/rN-aA/` paths. Only the deploy job, after test success, prepares deployment metadata. Each retry has a distinct attempt. Local `public/release.js` says local development. Production metadata is compiled into that release's module: the footer never fetches a latest-version pointer to relabel old JavaScript. About includes exact commit, UTC deployment start and Actions checks link, without claiming checks have passed.
+
+Deployment uploads immutable assets first and publishes root HTML last. Imports, configuration and OCR paths resolve within their release prefix. Prior prefixes and legacy root assets remain available to older tabs. Root HTML/config use no-store and CloudFront invalidation; the existing managed cache policy has a one-second edge minimum. Backend builds receive the same metadata and return version/commit headers. Domain/application code has no dependency on deployment tooling.
+
 The composition roots are `server.js` (local HTTP + SQLite) and `cloud.mjs` (API Gateway + Lambda). Both create the same application service. Dependency direction is **transport → application → domain**. Adapters implement plain object ports supplied by the composition root. Domain and application code import no browser, AWS, or Scryfall SDK.
 
 ## Modules and contracts

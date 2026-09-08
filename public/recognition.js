@@ -35,13 +35,14 @@ export async function recognizeCard(canvas, onProgress = () => {}) {
   progress = onProgress;
   const current = generation;
   if (!worker) {
-    worker = import("/vendor/ocr.js").then(({ createWorker }) =>
-      createWorker("eng", 1, {
-        workerPath: "/vendor/worker.min.js",
-        corePath: "/vendor/core",
-        langPath: "/vendor/lang",
-        logger: (m) => progress(m.status),
-      }),
+    worker = import(new URL("./vendor/ocr.js", import.meta.url).href).then(
+      ({ createWorker }) =>
+        createWorker("eng", 1, {
+          workerPath: new URL("./vendor/worker.min.js", import.meta.url).href,
+          corePath: new URL("./vendor/core", import.meta.url).href,
+          langPath: new URL("./vendor/lang", import.meta.url).href,
+          logger: (m) => progress(m.status),
+        }),
     );
   }
   let engine;

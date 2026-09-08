@@ -1,5 +1,15 @@
 # Development and operations
 
+## Automatic deployment versions
+
+Every main deployment gets `0.1.0+deploy.<run number>.<attempt>` using the package.json base and [GitHub workflow counters](https://docs.github.com/en/actions/reference/workflows-and-actions/variables). No version commit or bot loop is needed. Test/PR builds remain local development; failed pre-publish runs do not change served HTML. A rerun gets a new attempt. A failed check after HTML publication may still have deployed the visible version: the footer's Actions link shows actual check status.
+
+The deploy job reads the published S3 HTML release marker before preparing its bundle and refuses an equal/older counter. Use a new main revert commit or new workflow_dispatch run on main for rollback/redeployment. The existing CI role has the needed S3 rights; no role or unrelated infrastructure changes are needed.
+
+Assets and metadata live under `releases/rN-aA/` with a one-year immutable header. Upload the complete prefix before replacing root index.html. Root config.json remains for legacy clients and operational tests. Root HTML/config are no-store and invalidated; [CloudFront's existing CachingOptimized policy](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-cache-policies.html) still has a one-second minimum edge TTL. Prior prefixes are retained deliberately. Never delete them as part of a bucket-wide site sync while older tabs may reference them. Retention adds an OCR bundle per release; later cleanup needs an explicit retention decision. S3 object replacement is atomic, but Lambda/site updates are not one transaction. Keep APIs compatible with older frontends.
+
+For loading failures, read the timestamp/status and retry. Sign-out clears snapshots and invalidates other open tabs; clearing site data also removes snapshots. Storage-disabled browsers use placeholders and fetch normally. A 35-second collection request bound turns stalled requests into a retry state. This addresses demonstrated zero-before-load and tag-blocked rendering, not an unverified claim about every network delay or physical device.
+
 ## Local setup and checks
 
 Use Node 24, run `npm ci`, `npm run build`, then `npm start` (loopback port 3000). `PORT` and `DB_PATH` override the local listener/database. The app has no local account system and cannot be used as a LAN/public server. Use the protected AWS deployment for phones. Local collection data is in ignored `data/collection.sqlite`; stop the server before making a simple file backup so the WAL is checkpointed.
@@ -65,7 +75,7 @@ For the saved browser-export workflow, `scripts/resolve-moxfield-exports.mjs` re
 | Catalog returns busy             | Respect Scryfall 429 cooldown; cache prevents repeated searches. Do not raise upstream request rate.                                                                  |
 | Camera unavailable or waits      | Use HTTPS, browser permission, another regular browser, or upload a photo. A permission request times out after 15 seconds; closing/pausing invalidates late streams. |
 | Poor OCR                         | One upright card, steady frame, even light, reduce glare; correct search manually and choose the printing.                                                            |
-| Stale website after deploy       | Check Actions invalidation step and browser reload; generated assets use a five-minute cache policy.                                                                  |
+| Stale website after deploy       | Check Actions invalidation step and browser reload; check the footer version, immutable release paths, and root HTML invalidation.                                                                  |
 | Batch partly saved               | Saved rows are marked; retry remaining rows. Do not repaste/reconfirm the entire list without checking existing quantities.                                           |
 | A test left data behind          | Sign in as the dedicated test profile or rerun LIVE-01, which clears only that profile before verifying. Never clear the owner's partition.                           |
 

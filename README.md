@@ -31,6 +31,10 @@ Owned quantity and location quantities are independently editable. If three copi
 
 Verified deck-source imports contribute copies per source while preserving existing loose inventory. Reimporting the same source does not add copies again. Source reductions release copies to loose inventory; they do not delete ownership. Source metadata and exclusions are available under **View deck sources**. Printing, language and finish remain distinct, and source condition is **Unknown (imported)** until physical condition is established. The source import API is an administrator-assisted workflow; the normal **Import list** button remains a reviewed one-off text import and does not create a synchronized deck source.
 
+On a first visit, loading totals show dashes. Later visits in the same signed-in session show the device snapshot with its last-loaded time and an **Updating** status. A failed update keeps those cards visible with **Retry collection**. Zero and the empty-collection prompt require a successful empty response, or an explicitly labeled saved empty snapshot. Signing out clears snapshots. If browser storage is unavailable or evicted, the app still loads from the service.
+
+The footer shows the version of the app files you actually loaded. Select it for the full commit and deployment checks. Reload to move an older open tab to the newest deployment.
+
 ## Run locally
 
 Source cards with unresolved or digital-only printing references remain listed under **Printing review needed** in their deck source. They do not increase the physical owned total until their paper printing is resolved. Imports preserve exported variants; they cannot independently verify the edition, condition or finish of a physical card.
