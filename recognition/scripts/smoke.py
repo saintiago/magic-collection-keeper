@@ -20,6 +20,7 @@ def denied(*args, **kwargs):
 
 socket.socket.connect = denied
 started = time.perf_counter()
+import lambda_entry
 from composition import create_service
 
 service = create_service()

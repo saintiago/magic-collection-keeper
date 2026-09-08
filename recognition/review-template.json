@@ -191,7 +191,7 @@
           "Ref": "Alias"
         },
         "PayloadFormatVersion": "2.0",
-        "TimeoutInMillis": 22000
+        "TimeoutInMillis": 29000
       }
     },
     "Route": {

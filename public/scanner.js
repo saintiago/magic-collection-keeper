@@ -150,7 +150,7 @@ export function createScanner({ api, onReview, recognition = null }) {
             attempt: row.scanId,
             signal: AbortSignal.any([
               requestController.signal,
-              AbortSignal.timeout(25000),
+              AbortSignal.timeout(35000),
             ]),
           });
         } else {
