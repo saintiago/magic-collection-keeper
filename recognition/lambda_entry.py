@@ -4,9 +4,11 @@ import json
 from time import perf_counter
 
 from composition import preload_adapters
+from timing import stage, request
 
 started = perf_counter()
-preload_adapters()
+with stage("imports.total"):
+    preload_adapters()
 print(
     json.dumps(
         {
@@ -19,4 +21,11 @@ print(
     flush=True,
 )
 
-from handler import handler
+import handler as transport
+
+
+def handler(event, context):
+    with request(
+        getattr(context, "aws_request_id", None), transport._engine is not None
+    ):
+        return transport.handler(event, context)

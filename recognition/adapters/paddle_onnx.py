@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+from timing import measured, stage, TimedCallable
 
 import cv2
 import numpy as np
@@ -18,9 +19,13 @@ class PaddleOnnxText:
     def __init__(self, root):
         manifest = json.loads((root / "ocr-onnx.json").read_text())
         folder = root / "ocr-onnx"
-        for filename, digest in manifest["files"].items():
-            if hashlib.sha256((folder / filename).read_bytes()).hexdigest() != digest:
-                raise ValueError("Text model digest mismatch")
+        with stage("ocr.files"):
+            for filename, digest in manifest["files"].items():
+                if (
+                    hashlib.sha256((folder / filename).read_bytes()).hexdigest()
+                    != digest
+                ):
+                    raise ValueError("Text model digest mismatch")
         logger.setLevel("ERROR")
         cfg = ParseParams.load(Path(rapidocr.__file__).with_name("config.yaml"))
         engine = cfg.EngineConfig.onnxruntime
@@ -41,8 +46,23 @@ class PaddleOnnxText:
         cfg.Rec.lang_type = "latin"
         cfg.Rec.font_path = None
         cfg.Rec.rec_batch_num = 2
-        self.detector = TextDetector(cfg.Det)
-        self.recognizer = TextRecognizer(cfg.Rec)
+        self.detector = measured("ocr.detector_session", TextDetector, cfg.Det)
+        self.recognizer = measured("ocr.recognizer_session", TextRecognizer, cfg.Rec)
+        self.detector.session = TimedCallable(
+            self.detector.session, "ocr.detect_inference"
+        )
+        self.detector.postprocess_op = TimedCallable(
+            self.detector.postprocess_op, "ocr.detect_postprocess"
+        )
+        self.recognizer.session = TimedCallable(
+            self.recognizer.session, "ocr.recognize_inference"
+        )
+        self.recognizer.resize_norm_img = TimedCallable(
+            self.recognizer.resize_norm_img, "ocr.recognize_preprocess"
+        )
+        self.recognizer.postprocess_op = TimedCallable(
+            self.recognizer.postprocess_op, "ocr.recognize_postprocess"
+        )
         self.version = {
             "adapter": "paddle-onnx",
             "runtime": "onnxruntime-1.29.0",
@@ -51,7 +71,7 @@ class PaddleOnnxText:
             "calibration": "research-onnx-text-v1-not-approved",
         }
 
-    def read(self, image, corners):
+    def flatten(self, image, corners):
         bgr = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
         h, w = bgr.shape[:2]
         points = np.asarray(corners, dtype=np.float32) * np.array(
@@ -61,16 +81,23 @@ class PaddleOnnxText:
         flat = cv2.warpPerspective(
             bgr, cv2.getPerspectiveTransform(points, target), (800, 1120)
         )
+        return flat
+
+    def read(self, image, corners):
+        flat = measured("ocr.preprocess", self.flatten, image, corners)
         regions = []
         for start, end in ((0.02, 0.12), (0.92, 1)):
             region = flat[int(1120 * start) : int(1120 * end), :]
-            boxes = self.detector(region).boxes
+            boxes = measured("ocr.detect", self.detector, region).boxes
             if boxes is None or len(boxes) == 0:
                 regions.append([])
                 continue
             # Only bounded title/footer regions and at most 16 detected lines.
-            crops = [get_rotate_crop_image(region, box.copy()) for box in boxes[:16]]
-            result = self.recognizer(TextRecInput(img=crops))
+            with stage("ocr.crops"):
+                crops = [
+                    get_rotate_crop_image(region, box.copy()) for box in boxes[:16]
+                ]
+            result = measured("ocr.recognize", self.recognizer, TextRecInput(img=crops))
             regions.append(
                 [
                     text

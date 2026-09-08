@@ -3,6 +3,7 @@
 import base64, binascii, io, json, threading
 from pathlib import Path
 from PIL import Image, UnidentifiedImageError
+from timing import measured
 
 MAX_BYTES = 524288
 MAX_PIXELS = 4000000
@@ -35,8 +36,15 @@ def handle(event, engine, create_engine=None):
         or len(event["body"]) > 710000
     ):
         return response(413, {"error": "Image request too large"})
+    return process_body(event["body"], engine, create_engine)
+
+
+def process_body(body, engine, create_engine=None):
+    """Image contract shared by authenticated HTTP API and private SageMaker."""
+    if not isinstance(body, str) or len(body) > 710000:
+        return response(413, {"error": "Image request too large"})
     try:
-        payload = json.loads(event["body"])
+        payload = json.loads(body)
         if (
             not isinstance(payload, dict)
             or set(payload) - {"image", "attempt"}
@@ -61,8 +69,8 @@ def handle(event, engine, create_engine=None):
                 return response(
                     400, {"error": "Unsupported image dimensions or format"}
                 )
-            image.load()
-            rgb = image.convert("RGB")
+            measured("image.decode", image.load)
+            rgb = measured("image.decode", image.convert, "RGB")
     except (
         ValueError,
         TypeError,
@@ -79,7 +87,7 @@ def handle(event, engine, create_engine=None):
     try:
         if engine is None and create_engine is not None:
             engine = create_engine()
-        result = engine.recognize(rgb)
+        result = measured("recognize.total", engine.recognize, rgb)
         return response(200, {"attempt": payload["attempt"], **result})
     except Exception:
         # No pixels, raw OCR, tokens or provider exceptions in logs/responses.

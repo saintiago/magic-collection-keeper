@@ -4,6 +4,7 @@ import hashlib, json
 import cv2, numpy as np
 import collector_vision as cv
 import onnxruntime as ort
+from timing import measured, stage, TimedCallable
 
 ort.disable_telemetry_events()
 
@@ -12,20 +13,41 @@ class CollectorVision:
     def __init__(self, root):
         manifest = json.loads((root / "artifact-manifest.json").read_text())
         weights = root / "weights"
-        for name, sha in manifest["models"].items():
-            if hashlib.sha256((weights / name).read_bytes()).hexdigest() != sha:
-                raise ValueError("Visual model digest mismatch")
-        self.catalog = cv.Catalog.load("mtg", cache_dir=root / "catalog", offline=True)
+        with stage("visual.files"):
+            for name, sha in manifest["models"].items():
+                if hashlib.sha256((weights / name).read_bytes()).hexdigest() != sha:
+                    raise ValueError("Visual model digest mismatch")
+        self.catalog = measured(
+            "visual.catalog",
+            cv.Catalog.load,
+            "mtg",
+            cache_dir=root / "catalog",
+            offline=True,
+        )
         if (
             self.catalog.version != manifest["catalog"]["version"]
             or self.catalog.embedding_model != manifest["catalog"]["embedding"]
         ):
             raise ValueError("Incompatible model/catalog version")
-        self.detector = cv.NeuralCornerDetector(
-            checkpoint=weights / "cornelius.onnx", provider="cpu", num_threads=2
+        self.detector = measured(
+            "visual.detector_session",
+            cv.NeuralCornerDetector,
+            checkpoint=weights / "cornelius.onnx",
+            provider="cpu",
+            num_threads=2,
         )
-        self.embedder = cv.NeuralEmbedder(
-            checkpoint=weights / "milo.onnx", provider="cpu", num_threads=2
+        self.embedder = measured(
+            "visual.embedder_session",
+            cv.NeuralEmbedder,
+            checkpoint=weights / "milo.onnx",
+            provider="cpu",
+            num_threads=2,
+        )
+        self.detector._sess = TimedCallable(
+            self.detector._sess, "visual.detect_inference"
+        )
+        self.embedder._sess = TimedCallable(
+            self.embedder._sess, "visual.embed_inference"
         )
         self.version = {
             "adapter": "collectorvision",
@@ -36,8 +58,9 @@ class CollectorVision:
         }
 
     def inspect(self, image):
-        bgr = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
-        found = self.detector.detect(bgr)
+        with stage("visual.preprocess"):
+            bgr = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+        found = measured("visual.detect", self.detector.detect, bgr)
         result = {
             "identity_supported": False,
             "candidates": [],
@@ -55,8 +78,10 @@ class CollectorVision:
         area = abs(cv2.contourArea(pts)) / (w * h)
         if not 0.12 < area < 0.98 or not cv2.isContourConvex(pts):
             return result
-        matches = self.catalog.search_records(
-            self.embedder.embed(found.dewarp(bgr)), top_k=5
+        crop = measured("visual.dewarp", found.dewarp, bgr)
+        embedding = measured("visual.embed", self.embedder.embed, crop)
+        matches = measured(
+            "visual.search", self.catalog.search_records, embedding, top_k=5
         )
         if not matches:
             return result
