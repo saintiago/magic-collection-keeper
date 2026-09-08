@@ -111,6 +111,8 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
     if (created) await api(`tags/${created.id}`, "DELETE");
     if (await page.locator("#detail").isVisible())
       await page.locator("#close").click();
+    if (await page.locator("#tags-close").isVisible())
+      await page.locator("#tags-close").click();
     await page.locator("#home-nav").click();
     if (await page.locator("#clear-home-history").isVisible())
       await page.locator("#clear-home-history").click();
