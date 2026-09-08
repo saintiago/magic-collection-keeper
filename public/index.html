@@ -67,10 +67,16 @@
       </section>
       <section class="library">
         <div class="section-top">
-          <h2 id="section-title">
+          <h2 id="section-title" tabindex="-1">
             Your library <span id="result-count">Loading…</span>
           </h2>
           <span id="view-caption">▦ Card view</span>
+        </div>
+        <div id="active-tag" hidden>
+          <span>Filtered by </span><span id="active-tag-name"></span
+          ><button type="button" class="text-button" id="clear-tag">
+            Clear tag filter
+          </button>
         </div>
         <form id="search-form">
           <div class="search-box">

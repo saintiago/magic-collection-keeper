@@ -1,15 +1,18 @@
+import { collectionCard } from "./collection-view.js";
+import { setupTagNavigation, tagFromHash } from "./tag-navigation.js";
+import { tagLink } from "./tag-view.js";
 import {
   collectionTags,
   collectionCountText,
   displayedQuantity,
 } from "./collection-counts.js";
-import { createTagController, tagBadges, allocationWarning } from "./tags.js";
+import { createTagController } from "./tags.js";
 import { createCollectionLoader } from "./collection-loader.js";
 import { snapshotKey, snapshotStore } from "./collection-cache.js";
 import { setupReleaseInfo } from "./release-info.js";
 import { signIn, collectionIdentity } from "./auth.js";
 import { api as request } from "./api.js";
-import { esc, finishName, picture } from "./view.js";
+import { esc } from "./view.js";
 import { createCardDetail } from "./card-detail.js";
 import { setupBatch } from "./batch.js";
 const $ = (id) => document.getElementById(id);
@@ -21,7 +24,10 @@ let owned = [],
   hasMore = false,
   loading = false,
   requestId = 0;
-let filterTags = [];
+let filterTags = [],
+  activeTagId = tagFromHash(location.hash),
+  registryReady = false;
+const tagNavigation = setupTagNavigation(navigateTag);
 let collectionState = {
   rows: null,
   status: "loading",
@@ -133,9 +139,7 @@ function render() {
   $("collection-error").textContent = collectionState.error;
   $("retry-collection").hidden = collectionState.status !== "error";
   $("grid").setAttribute("aria-busy", String(busy));
-  const selectedTag = filterTags.find(
-    (tag) => tag.id === $("tag-filter").value,
-  );
+  const selectedTag = filterTags.find((tag) => tag.id === activeTagId);
   let rows = cards.map((card) => ({ card }));
   if (mode === "collection") {
     const q = $("search").value.toLowerCase().trim(),
@@ -145,9 +149,9 @@ function render() {
         `${r.card.name} ${r.card.set_name} ${r.card.set} ${r.card.collector_number} ${r.card.type_line} ${r.language} ${r.condition}`
           .toLowerCase()
           .includes(q) &&
-        (!$("tag-filter").value ||
-          (r.locations ?? []).some((a) => a.tag_id === $("tag-filter").value) ||
-          (r.tag_ids ?? []).includes($("tag-filter").value)) &&
+        (!activeTagId ||
+          (r.locations ?? []).some((a) => a.tag_id === activeTagId) ||
+          (r.tag_ids ?? []).includes(activeTagId)) &&
         (!$("set-filter").value || r.card.set === $("set-filter").value) &&
         (!$("finish-filter").value || r.finish === $("finish-filter").value) &&
         (!color ||
@@ -171,14 +175,20 @@ function render() {
       : mode === "collection"
         ? collectionCountText(owned, rows, selectedTag)
         : `${rows.length} printings shown`;
+  $("active-tag").hidden = mode !== "collection" || !activeTagId;
+  $("active-tag-name").innerHTML = activeTagId
+    ? tagLink(
+        selectedTag || {
+          id: activeTagId,
+          label: registryReady ? "Tag unavailable" : "Loading tag…",
+        },
+      )
+    : "";
   $("grid").innerHTML = rows
-    .map(
-      (r, i) =>
-        `<button class="card" data-index="${i}"><div class="card-image">${picture(r.card)}</div><div class="card-info"><div class="card-title">${esc(r.card.name)}</div><div class="card-meta">${esc(r.card.set.toUpperCase())} · #${esc(r.card.collector_number)} <span>${esc(r.card.lang.toUpperCase())}</span></div><div class="card-bottom"><span>${r.id ? esc(`${finishName[r.finish]} · ${r.condition}`) : esc(r.card.rarity)}</span><b>${r.id ? (selectedTag?.type === "location" ? `${displayedQuantity(r, selectedTag)} assigned here` : `${r.quantity} owned`) : "+ Add to collection"}</b></div>${r.id && selectedTag?.type === "location" ? `<small class="owned-caption">${r.quantity} owned across collection</small>` : ""}${r.id ? `<div class="card-tags">${tagBadges(r)}</div>${allocationWarning(r)}` : ""}</div></button>`,
-    )
+    .map((row, index) => collectionCard(row, index, selectedTag))
     .join("");
   $("grid")
-    .querySelectorAll(".card")
+    .querySelectorAll(".card-open")
     .forEach(
       (button) =>
         (button.onclick = () => detail(rows[Number(button.dataset.index)])),
@@ -189,9 +199,11 @@ function render() {
     mode === "collection"
       ? !known
         ? "<h3>Collection unavailable</h3><p>Retry to load your saved cards.</p>"
-        : owned.length
-          ? '<div class="empty-icon">⌕</div><h3>No cards match these filters</h3><p>Try another name, color, set, or finish.</p><button class="secondary" id="clear-filters">Clear filters</button>'
-          : '<div class="empty-icon">✦</div><div class="eyebrow">A FRESH PAGE</div><h3>Your collection begins here</h3><p>From your first common to your favorite rare.<br>Find a card, choose its printing, and make it yours.</p><button class="primary" id="first-card">+ Find your first card</button><small>No sample cards. Just the cards you own.</small>'
+        : activeTagId && !rows.length
+          ? `<h3>${!selectedTag && registryReady ? "Tag unavailable" : "No cards match this tag"}</h3><p>${!selectedTag && registryReady ? "This tag may have been deleted. Choose another tag or clear the filter." : "No saved cards match this tag and the current filters."}</p><button class="secondary" id="clear-filters">Clear filters</button>`
+          : owned.length
+            ? '<div class="empty-icon">⌕</div><h3>No cards match these filters</h3><p>Try another name, color, set, or finish.</p><button class="secondary" id="clear-filters">Clear filters</button>'
+            : '<div class="empty-icon">✦</div><div class="eyebrow">A FRESH PAGE</div><h3>Your collection begins here</h3><p>From your first common to your favorite rare.<br>Find a card, choose its printing, and make it yours.</p><button class="primary" id="first-card">+ Find your first card</button><small>No sample cards. Just the cards you own.</small>'
       : `<div class="empty-icon">⌕</div><h3>${query ? "No printings found" : "Find your next addition"}</h3><p>${query ? "Try a different spelling or set code." : "Search Magic’s card catalog by name, set, or collector number."}</p>`;
   if ($("first-card")) $("first-card").onclick = () => switchMode("catalog");
   if ($("clear-filters"))
@@ -199,7 +211,7 @@ function render() {
       ["search", "color", "set-filter", "finish-filter", "tag-filter"].forEach(
         (id) => ($(id).value = ""),
       );
-      render();
+      tagNavigation.go("");
     };
   $("more").hidden = mode !== "catalog" || !hasMore;
   $("more").disabled = loading;
@@ -244,7 +256,7 @@ async function refresh() {
 }
 function setFilterTags(tags) {
   filterTags = tags;
-  const selected = $("tag-filter").value;
+  const selected = activeTagId;
   $("tag-filter").innerHTML =
     '<option value="">All tags & locations</option>' +
     tags
@@ -253,14 +265,24 @@ function setFilterTags(tags) {
           '<option value="' + esc(t.id) + '">' + esc(t.label) + "</option>",
       )
       .join("");
+  if (selected && !tags.some((tag) => tag.id === selected)) {
+    const missing = document.createElement("option");
+    missing.value = selected;
+    missing.textContent = registryReady ? "Tag unavailable" : "Loading tag…";
+    $("tag-filter").append(missing);
+  }
   $("tag-filter").value = selected;
 }
 async function refreshTags() {
   try {
     const tags = await tagController.refresh();
+    registryReady = true;
     setFilterTags(tags);
     render();
   } catch (error) {
+    registryReady = true;
+    setFilterTags(filterTags);
+    render();
     message(
       "Collection loaded; tags could not be refreshed: " + error.message,
       true,
@@ -305,6 +327,22 @@ async function search(more = false) {
     }
   }
 }
+function navigateTag(id, tag) {
+  activeTagId = id;
+  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
+  if (tag?.id && !filterTags.some((current) => current.id === id))
+    filterTags.push(tag);
+  ["search", "color", "set-filter", "finish-filter"].forEach(
+    (id) => ($(id).value = ""),
+  );
+  $("sort").value = "name";
+  setFilterTags(filterTags);
+  switchMode("collection");
+  $("section-title").focus({ preventScroll: true });
+  $("section-title").scrollIntoView({ block: "nearest" });
+}
+$("tag-filter").onchange = () => tagNavigation.go($("tag-filter").value);
+$("clear-tag").onclick = () => tagNavigation.go("");
 $("collection-nav").onclick = () => switchMode("collection");
 $("catalog-nav").onclick = () => switchMode("catalog");
 $("add").onclick = () => switchMode("catalog");
@@ -319,7 +357,7 @@ $("search-form").onsubmit = (e) => {
 $("search").oninput = () => {
   if (mode === "collection") render();
 };
-["color", "set-filter", "finish-filter", "sort", "tag-filter"].forEach(
+["color", "set-filter", "finish-filter", "sort"].forEach(
   (id) => ($(id).onchange = render),
 );
 $("more").onclick = () => search(true);

@@ -1,38 +1,31 @@
 import { deckSourceCard } from "./deck-source-view.js";
 import { esc } from "./view.js";
-export const TAG_STYLE = {
-  deck: { icon: "▣", label: "Deck" },
-  binder: { icon: "▤", label: "Binder" },
-  box: { icon: "▧", label: "Box" },
-  other: { icon: "⌖", label: "Other location" },
-  role: { icon: "✧", label: "Role" },
-  category: { icon: "◇", label: "Category" },
-};
-export function tagBadges(row) {
-  const locations = (row.locations ?? []).map(
-    (a) =>
-      `<span class="tag-badge tag-${esc(a.tag?.kind || "other")}">${TAG_STYLE[a.tag?.kind]?.icon || "⌖"} ${esc(a.tag?.label || "Unknown location")} <b>×${a.quantity}</b></span>`,
-  );
-  const classifications = (row.tags ?? []).map(
-    (t) =>
-      `<span class="tag-badge tag-${esc(t.kind)}">${TAG_STYLE[t.kind]?.icon || "◇"} ${esc(t.label)}</span>`,
-  );
-  return [...locations, ...classifications].join("");
-}
-export function allocationWarning(row) {
-  return row.allocation_shortfall
-    ? `<span class="allocation-warning" role="note" title="Location assignments exceed the owned total by ${row.allocation_shortfall}. Edit tags or the owned total to resolve this; no allocations were removed.">${row.allocated_quantity} assigned · ${row.quantity} owned</span>`
-    : "";
-}
+export { TAG_STYLE, tagBadges, allocationWarning } from "./tag-view.js";
+import { TAG_STYLE, tagLink } from "./tag-view.js";
 
 export function createTagController({ api, onChanged }) {
-  let tags = [];
+  let tags = [],
+    viewGeneration = 0,
+    refreshGeneration = 0;
   const dialog = document.createElement("dialog");
   dialog.className = "tag-dialog";
   document.body.append(dialog);
+  dialog.addEventListener("close", () => viewGeneration++);
   const find = (id) => dialog.querySelector(`#${id}`);
   async function refresh() {
-    tags = await api("/api/tags");
+    const generation = ++refreshGeneration;
+    try {
+      const updated = await api("/api/tags");
+      if (generation === refreshGeneration) tags = updated;
+    } catch (error) {
+      if (generation === refreshGeneration) throw error;
+    }
+    return tags;
+  }
+  async function changeTags(path, options) {
+    const updated = await api(path, options);
+    refreshGeneration++;
+    tags = updated;
     return tags;
   }
   function shell(title, content) {
@@ -44,9 +37,11 @@ export function createTagController({ api, onChanged }) {
     find("tag-message").textContent = error.message || error;
   }
   async function manager() {
+    const generation = ++viewGeneration;
     shell("Tags & locations", '<p class="hint">Loading your tags…</p>');
     try {
       await refresh();
+      if (generation !== viewGeneration) return;
       renderManager();
     } catch (error) {
       say(error);
@@ -67,8 +62,9 @@ export function createTagController({ api, onChanged }) {
     find("create-tag").onsubmit = async (e) => {
       e.preventDefault();
       e.submitter.disabled = true;
+      const generation = viewGeneration;
       try {
-        tags = await api("/api/tags", {
+        tags = await changeTags("/api/tags", {
           method: "POST",
           body: JSON.stringify({
             label: find("tag-label").value,
@@ -76,6 +72,10 @@ export function createTagController({ api, onChanged }) {
             kind: find("tag-kind").value,
           }),
         });
+        if (generation !== viewGeneration) {
+          await onChanged();
+          return;
+        }
         await after();
       } catch (error) {
         say(error);
@@ -86,7 +86,7 @@ export function createTagController({ api, onChanged }) {
   function renderManager() {
     shell(
       "Tags & locations",
-      `<p class="hint">Names can change; tag identities stay stable. Locations carry copy quantities. Roles and categories do not consume copies.</p>${tagForm()}<div class="tag-registry">${tags.map((t) => `<form class="tag-record" data-id="${t.id}"><span class="tag-badge tag-${t.kind}">${TAG_STYLE[t.kind].icon} ${TAG_STYLE[t.kind].label}</span><input aria-label="Rename ${esc(t.label)}" value="${esc(t.label)}" maxlength="100" required><button class="secondary">Rename</button><button type="button" class="danger delete-tag">Delete</button><small>${t.references} references${t.source ? " · imported source" : ""}</small></form>`).join("") || '<p class="hint">No tags yet. Create a location or classification above.</p>'}</div><button class="secondary" id="deck-sources">View deck sources</button>`,
+      `<p class="hint">Names can change; tag identities stay stable. Locations carry copy quantities. Roles and categories do not consume copies.</p>${tagForm()}<div class="tag-registry">${tags.map((t) => `<form class="tag-record" data-id="${t.id}">${tagLink(t)}<input aria-label="Rename ${esc(t.label)}" value="${esc(t.label)}" maxlength="100" required><button class="secondary">Rename</button><button type="button" class="danger delete-tag">Delete</button><small>${t.references} references${t.source ? " · imported source" : ""}</small></form>`).join("") || '<p class="hint">No tags yet. Create a location or classification above.</p>'}</div><button class="secondary" id="deck-sources">View deck sources</button>`,
     );
     bindCreate(async () => {
       renderManager();
@@ -96,11 +96,16 @@ export function createTagController({ api, onChanged }) {
     dialog.querySelectorAll(".tag-record").forEach((form) => {
       form.onsubmit = async (e) => {
         e.preventDefault();
+        const generation = viewGeneration;
         try {
-          tags = await api(`/api/tags/${form.dataset.id}`, {
+          tags = await changeTags(`/api/tags/${form.dataset.id}`, {
             method: "PATCH",
             body: JSON.stringify({ label: form.querySelector("input").value }),
           });
+          if (generation !== viewGeneration) {
+            await onChanged();
+            return;
+          }
           renderManager();
           await onChanged();
           say("Tag renamed. Existing assignments use the new name.");
@@ -109,10 +114,15 @@ export function createTagController({ api, onChanged }) {
         }
       };
       form.querySelector(".delete-tag").onclick = async () => {
+        const generation = viewGeneration;
         try {
-          tags = await api(`/api/tags/${form.dataset.id}`, {
+          tags = await changeTags(`/api/tags/${form.dataset.id}`, {
             method: "DELETE",
           });
+          if (generation !== viewGeneration) {
+            await onChanged();
+            return;
+          }
           renderManager();
           await onChanged();
           say("Unused tag deleted.");
@@ -124,12 +134,23 @@ export function createTagController({ api, onChanged }) {
     find("deck-sources").onclick = sources;
   }
   async function sources() {
+    const generation = ++viewGeneration;
     shell("Deck sources", '<p class="hint">Loading imported decks…</p>');
     try {
       const decks = await api("/api/deck-imports");
+      if (generation !== viewGeneration) return;
       shell(
         "Deck sources",
-        `<p class="hint">Each source contributes its own copies. Existing loose inventory is preserved. Removed source cards remain owned as loose copies. Manual total and tag edits are retained.</p>${decks.map(deckSourceCard).join("") || '<p class="hint">No deck sources imported yet.</p>'}<button class="secondary" id="back-tags">Back to tags</button>`,
+        `<p class="hint">Each source contributes its own copies. Existing loose inventory is preserved. Removed source cards remain owned as loose copies. Manual total and tag edits are retained.</p>${
+          decks
+            .map((d) =>
+              deckSourceCard(
+                d,
+                tags.find((t) => t.id === d.tag_id),
+              ),
+            )
+            .join("") || '<p class="hint">No deck sources imported yet.</p>'
+        }<button class="secondary" id="back-tags">Back to tags</button>`,
       );
       find("back-tags").onclick = renderManager;
     } catch (error) {
@@ -137,9 +158,11 @@ export function createTagController({ api, onChanged }) {
     }
   }
   async function edit(row) {
+    const generation = ++viewGeneration;
     shell("Card tags", '<p class="hint">Loading tags…</p>');
     try {
       await refresh();
+      if (generation !== viewGeneration) return;
       renderAssignments(row);
     } catch (error) {
       say(error);
@@ -154,10 +177,10 @@ export function createTagController({ api, onChanged }) {
     const render = () => {
       shell(
         `Tags · ${row.card.name}`,
-        `<p>${row.quantity} owned · <span id="assigned-count"></span></p><p class="hint">Assign quantities to distinct locations. A shortfall is a reminder only; your owned total and other assignments are preserved.</p><div id="location-rows">${locations
+        `<p>${row.quantity} owned · <span id="assigned-count"></span></p><p class="hint">Click a tag to view its cards and close this editor without saving unsaved edits. Assign quantities to distinct locations. A shortfall is a reminder only; your owned total and other assignments are preserved.</p><div id="location-rows">${locations
           .map(
             (a, i) =>
-              `<div class="location-row" data-index="${i}"><select aria-label="Location ${i + 1}">${tags
+              `<div class="location-row" data-index="${i}"><div class="assignment-tag">${tagLink(tags.find((t) => t.id === a.tag_id))}</div><select aria-label="Location ${i + 1}">${tags
                 .filter((t) => t.type === "location")
                 .map(
                   (t) =>
@@ -174,7 +197,7 @@ export function createTagController({ api, onChanged }) {
             .filter((t) => t.type !== "location")
             .map(
               (t) =>
-                `<label><input type="checkbox" value="${t.id}" ${selected.has(t.id) ? "checked" : ""}> ${esc(t.label)} <small>(${TAG_STYLE[t.kind].label})</small></label>`,
+                `<div class="classification-choice"><input type="checkbox" aria-label="${esc(t.label)} (${TAG_STYLE[t.kind].label})" value="${t.id}" ${selected.has(t.id) ? "checked" : ""}> ${tagLink(t)} <small>(${TAG_STYLE[t.kind].label})</small></div>`,
             )
             .join("") || '<p class="hint">Create a role or category below.</p>'
         }</div><button class="primary full" id="save-tags">Save card tags</button><details><summary>Create a tag here</summary>${tagForm()}</details>`,
@@ -189,6 +212,9 @@ export function createTagController({ api, onChanged }) {
         const index = Number(element.dataset.index);
         element.querySelector("select").onchange = (e) => {
           locations[index].tag_id = e.target.value;
+          element.querySelector(".assignment-tag").innerHTML = tagLink(
+            tags.find((t) => t.id === e.target.value),
+          );
         };
         element.querySelector("input").oninput = (e) => {
           locations[index].quantity = Number(e.target.value);

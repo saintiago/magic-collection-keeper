@@ -2,6 +2,8 @@
 
 ## Loading, device cache and release identity
 
+UC-19: every displayed tag kind links to its exact-ID collection filter from cards, details, management, assignment labels and source headings. Navigation clears conflicting search/color/set/finish filters, keeps location-copy counting, closes dialogs without saving unsaved edits, and focuses the library heading. Active tag/clear, keyboard Enter, browser Back, reload/cache, same-label different IDs, rename and deletion are covered. Rename/remove/checkbox controls remain separate. Evidence: `tests/tag-navigation.test.js`, `tests/ui/tag-navigation.spec.js`, existing assignment-control tests and deployed LIVE-03.
+
 UC-18: location-filtered totals count assigned physical copies, with distinct entries separately; quantity sorting and per-card labels use the selected location while top statistics retain whole-collection ownership. Search narrows the displayed copies out of the full location total. Source cards include commander/main quantities and explicit pending printing references, excluding retained loose copies from current source size. Cached locations remain filterable during refresh. Regression evidence: `tests/collection-counts.test.js`, `tests/ui/deck-counts.spec.js`, `tests/live/tags.spec.js` (LIVE-03). The 88-entry fixture contains 99 assigned copies plus one pending source copy, repeated lands shared with another deck, and separate finish rows.
 
 | ID | Observable outcome | Evidence |

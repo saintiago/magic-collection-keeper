@@ -422,6 +422,54 @@ select {
   color: inherit;
   min-width: 0;
 }
+.card-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+}
+a.tag-badge {
+  text-decoration: none;
+  min-height: 28px;
+  min-width: 28px;
+  padding: 6px 8px;
+  font-size: 10px;
+}
+a.tag-badge:hover {
+  text-decoration: underline;
+}
+a.tag-badge:focus-visible,
+.card-open:focus-visible {
+  outline: 2px solid #285c49;
+  outline-offset: 3px;
+}
+#active-tag {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  margin: 12px 0;
+}
+#active-tag[hidden] {
+  display: none;
+}
+.location-row {
+  flex-wrap: wrap;
+}
+.assignment-tag {
+  width: 100%;
+}
+.classification-choice {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.source-card h3 .tag-badge {
+  font-size: inherit;
+}
 .card-image {
   background: #e9ede3;
   padding: 11px;

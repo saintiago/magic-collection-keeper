@@ -210,6 +210,12 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   expect((await api("tags")).find((t) => t.id === role.id).label).toBe(
     "Card Draw",
   );
+  await page
+    .locator(`.tag-record[data-id="${role.id}"] a[data-tag-id]`)
+    .click();
+  await expect(page.locator("#tag-filter")).toHaveValue(role.id);
+  await expect(page.locator("dialog[open]")).toHaveCount(0);
+  await expect(page.locator(".card")).toHaveCount(1);
   const inUse = await request.delete(`${config.apiUrl}/api/tags/${role.id}`, {
     headers,
   });
@@ -224,14 +230,14 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
     quantity: 3,
   });
   await api(`collection/${native.id}`, "DELETE");
-  await page.locator("#tags-close").click();
   await page.reload();
+  await page.locator("#clear-tag").click();
   await expect(page.locator("#total")).toHaveText("3");
   await expect(page.locator(".card .allocation-warning")).toHaveCount(0);
   const alpha = sources.find(
     (source) => source.source_id === "keeper_test_deck_alpha",
   );
-  await page.locator("#tag-filter").selectOption(alpha.tag_id);
+  await page.locator(`.card a[data-tag-id="${alpha.tag_id}"]`).click();
   await expect(page.locator("#result-count")).toHaveText(
     "2 assigned copies · 1 distinct entry",
   );
@@ -239,8 +245,18 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   await expect(page.locator(".owned-caption")).toHaveText(
     "3 owned across collection",
   );
+  await expect(page.locator("#detail")).not.toBeVisible();
+  await page.locator(".card-open").click();
+  const beta = sources.find(
+    (source) => source.source_id === "keeper_test_deck_beta_",
+  );
+  await page.locator(`#detail a[data-tag-id="${beta.tag_id}"]`).click();
+  await expect(page.locator("#tag-filter")).toHaveValue(beta.tag_id);
+  await expect(page.locator("#detail")).not.toBeVisible();
+  await page.goBack();
+  await expect(page.locator("#tag-filter")).toHaveValue(alpha.tag_id);
   await page.reload();
-  await page.locator("#tag-filter").selectOption(alpha.tag_id);
+  await expect(page.locator("#tag-filter")).toHaveValue(alpha.tag_id);
   await expect(page.locator("#result-count")).toHaveText(
     "2 assigned copies · 1 distinct entry",
   );
@@ -261,6 +277,11 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   ).toHaveText(
     "3 cards in source · 2 imported copies · 1 awaiting printing review",
   );
-  await page.locator("#tags-close").click();
+  await page.locator(`.source-card a[data-tag-id="${alpha.tag_id}"]`).click();
+  await expect(page.locator("dialog[open]")).toHaveCount(0);
+  await expect(page.locator("#tag-filter")).toHaveValue(alpha.tag_id);
+  await expect(page.locator("#result-count")).toHaveText(
+    "2 assigned copies · 1 distinct entry",
+  );
   await page.locator("#sign-out").click();
 });
