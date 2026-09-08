@@ -2,6 +2,8 @@
 
 ## Collection loading and device snapshots
 
+`public/collection-counts.js` calculates display quantities from per-location assignments, not pooled ownership or array length. It preserves distinct printing/finish/condition entries and sums all matching allocations. `public/deck-source-view.js` renders source totals as current source lot allocations plus explicit pending quantities, independently of historical contributed/loose copies and manual location edits. No inventory mutation or import change is involved. Cached row tag metadata seeds the filter choices immediately; the existing tag refresh reconciles the full registry. The cache DTO/schema remains compatible.
+
 `public/collection-loader.js` owns unknown/loading, updating, ready and failed states independently of catalog searching. Its plain-object load/cache ports let tests control response order and storage failures. Only a successful validated response establishes authoritative rows, including a genuinely empty array. Cards render immediately; loading tag options cannot delay them. Totals calculate synchronously from displayed rows, so there is no separate or simulated calculating phase.
 
 `public/collection-cache.js` stores complete display snapshots in IndexedDB (schema 1), accommodating the large printing DTO without localStorage's small string quota. Keys include schema, frontend origin, API environment, Cognito client and verified account UUID. The protected `GET /api/session` transport endpoint returns only the JWT-authorizer subject. The browser remembers that server-verified identity with the signed-in session, preserving it on Cognito refresh. It never selects a cache account by decoding an unverified JWT. Local mode uses a separate origin/environment and fixed local identity.

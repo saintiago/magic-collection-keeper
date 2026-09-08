@@ -2,6 +2,8 @@
 
 ## Loading, device cache and release identity
 
+UC-18: location-filtered totals count assigned physical copies, with distinct entries separately; quantity sorting and per-card labels use the selected location while top statistics retain whole-collection ownership. Search narrows the displayed copies out of the full location total. Source cards include commander/main quantities and explicit pending printing references, excluding retained loose copies from current source size. Cached locations remain filterable during refresh. Regression evidence: `tests/collection-counts.test.js`, `tests/ui/deck-counts.spec.js`, `tests/live/tags.spec.js` (LIVE-03). The 88-entry fixture contains 99 assigned copies plus one pending source copy, repeated lands shared with another deck, and separate finish rows.
+
 | ID | Observable outcome | Evidence |
 | --- | --- | --- |
 | UC-16 | Local fallback; visible deployment version; About commit/time/checks link; mobile close/Escape; distinct retries; old HTML retains immutable metadata; refuse regressing deployments | tests/release.test.js, tests/ui/loading.spec.js, LIVE-05 |

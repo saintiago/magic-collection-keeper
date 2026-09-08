@@ -228,10 +228,39 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   await page.reload();
   await expect(page.locator("#total")).toHaveText("3");
   await expect(page.locator(".card .allocation-warning")).toHaveCount(0);
+  const alpha = sources.find(
+    (source) => source.source_id === "keeper_test_deck_alpha",
+  );
+  await page.locator("#tag-filter").selectOption(alpha.tag_id);
+  await expect(page.locator("#result-count")).toHaveText(
+    "2 assigned copies · 1 distinct entry",
+  );
+  await expect(page.locator(".card-bottom b")).toHaveText("2 assigned here");
+  await expect(page.locator(".owned-caption")).toHaveText(
+    "3 owned across collection",
+  );
+  await page.reload();
+  await page.locator("#tag-filter").selectOption(alpha.tag_id);
+  await expect(page.locator("#result-count")).toHaveText(
+    "2 assigned copies · 1 distinct entry",
+  );
   await page.locator("#manage-tags").click();
   await page.locator("#deck-sources").click();
   await expect(page.locator(".source-card")).toHaveCount(2);
   await expect(page.locator(".pending-source")).toHaveCount(2);
+  await expect(
+    page
+      .locator(".source-card")
+      .filter({
+        has: page.getByRole("heading", {
+          name: "Test source Alpha",
+          exact: true,
+        }),
+      })
+      .locator(".source-total"),
+  ).toHaveText(
+    "3 cards in source · 2 imported copies · 1 awaiting printing review",
+  );
   await page.locator("#tags-close").click();
   await page.locator("#sign-out").click();
 });

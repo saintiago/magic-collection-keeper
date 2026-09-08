@@ -478,6 +478,26 @@ select {
 .card-bottom > span {
   text-transform: capitalize;
 }
+.owned-caption {
+  display: block;
+  color: #74806f;
+  font-size: 9px;
+  margin-top: 6px;
+}
+#section-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+#section-title #result-count {
+  margin-left: 0;
+  max-width: 100%;
+  font-size: 11px;
+  color: #53634c;
+  line-height: 1.6;
+}
 .more {
   display: block;
   margin: 25px auto;

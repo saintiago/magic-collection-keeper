@@ -1,3 +1,8 @@
+import {
+  collectionTags,
+  collectionCountText,
+  displayedQuantity,
+} from "./collection-counts.js";
 import { createTagController, tagBadges, allocationWarning } from "./tags.js";
 import { createCollectionLoader } from "./collection-loader.js";
 import { snapshotKey, snapshotStore } from "./collection-cache.js";
@@ -16,6 +21,7 @@ let owned = [],
   hasMore = false,
   loading = false,
   requestId = 0;
+let filterTags = [];
 let collectionState = {
   rows: null,
   status: "loading",
@@ -26,6 +32,12 @@ const collection = createCollectionLoader({
   load: () => api("/api/collection"),
   cache: snapshotStore,
   onChange: (state) => {
+    if (state.rows !== collectionState.rows) {
+      const tags = state.rows
+        ? [...filterTags, ...collectionTags(state.rows)]
+        : [];
+      setFilterTags([...new Map(tags.map((tag) => [tag.id, tag])).values()]);
+    }
     collectionState = state;
     owned = state.rows || [];
     render();
@@ -121,6 +133,9 @@ function render() {
   $("collection-error").textContent = collectionState.error;
   $("retry-collection").hidden = collectionState.status !== "error";
   $("grid").setAttribute("aria-busy", String(busy));
+  const selectedTag = filterTags.find(
+    (tag) => tag.id === $("tag-filter").value,
+  );
   let rows = cards.map((card) => ({ card }));
   if (mode === "collection") {
     const q = $("search").value.toLowerCase().trim(),
@@ -143,18 +158,23 @@ function render() {
     if ($("sort").value === "name")
       rows.sort((a, b) => a.card.name.localeCompare(b.card.name));
     if ($("sort").value === "quantity")
-      rows.sort((a, b) => b.quantity - a.quantity);
+      rows.sort(
+        (a, b) =>
+          displayedQuantity(b, selectedTag) - displayedQuantity(a, selectedTag),
+      );
   }
   $("result-count").textContent =
     mode === "collection" && !known
       ? busy
         ? "Loading…"
         : "Unavailable"
-      : `${rows.length} ${mode === "collection" ? "entries" : "printings shown"}`;
+      : mode === "collection"
+        ? collectionCountText(owned, rows, selectedTag)
+        : `${rows.length} printings shown`;
   $("grid").innerHTML = rows
     .map(
       (r, i) =>
-        `<button class="card" data-index="${i}"><div class="card-image">${picture(r.card)}</div><div class="card-info"><div class="card-title">${esc(r.card.name)}</div><div class="card-meta">${esc(r.card.set.toUpperCase())} · #${esc(r.card.collector_number)} <span>${esc(r.card.lang.toUpperCase())}</span></div><div class="card-bottom"><span>${r.id ? esc(`${finishName[r.finish]} · ${r.condition}`) : esc(r.card.rarity)}</span><b>${r.id ? `${r.quantity} owned` : "+ Add to collection"}</b></div>${r.id ? `<div class="card-tags">${tagBadges(r)}</div>${allocationWarning(r)}` : ""}</div></button>`,
+        `<button class="card" data-index="${i}"><div class="card-image">${picture(r.card)}</div><div class="card-info"><div class="card-title">${esc(r.card.name)}</div><div class="card-meta">${esc(r.card.set.toUpperCase())} · #${esc(r.card.collector_number)} <span>${esc(r.card.lang.toUpperCase())}</span></div><div class="card-bottom"><span>${r.id ? esc(`${finishName[r.finish]} · ${r.condition}`) : esc(r.card.rarity)}</span><b>${r.id ? (selectedTag?.type === "location" ? `${displayedQuantity(r, selectedTag)} assigned here` : `${r.quantity} owned`) : "+ Add to collection"}</b></div>${r.id && selectedTag?.type === "location" ? `<small class="owned-caption">${r.quantity} owned across collection</small>` : ""}${r.id ? `<div class="card-tags">${tagBadges(r)}</div>${allocationWarning(r)}` : ""}</div></button>`,
     )
     .join("");
   $("grid")
@@ -222,19 +242,24 @@ function switchMode(next) {
 async function refresh() {
   if (await collection.refresh()) await refreshTags();
 }
+function setFilterTags(tags) {
+  filterTags = tags;
+  const selected = $("tag-filter").value;
+  $("tag-filter").innerHTML =
+    '<option value="">All tags & locations</option>' +
+    tags
+      .map(
+        (t) =>
+          '<option value="' + esc(t.id) + '">' + esc(t.label) + "</option>",
+      )
+      .join("");
+  $("tag-filter").value = selected;
+}
 async function refreshTags() {
   try {
     const tags = await tagController.refresh();
-    const selected = $("tag-filter").value;
-    $("tag-filter").innerHTML =
-      '<option value="">All tags & locations</option>' +
-      tags
-        .map(
-          (t) =>
-            '<option value="' + esc(t.id) + '">' + esc(t.label) + "</option>",
-        )
-        .join("");
-    $("tag-filter").value = selected;
+    setFilterTags(tags);
+    render();
   } catch (error) {
     message(
       "Collection loaded; tags could not be refreshed: " + error.message,

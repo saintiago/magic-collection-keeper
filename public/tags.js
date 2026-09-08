@@ -1,3 +1,4 @@
+import { deckSourceCard } from "./deck-source-view.js";
 import { esc } from "./view.js";
 export const TAG_STYLE = {
   deck: { icon: "▣", label: "Deck" },
@@ -128,7 +129,7 @@ export function createTagController({ api, onChanged }) {
       const decks = await api("/api/deck-imports");
       shell(
         "Deck sources",
-        `<p class="hint">Each source contributes its own copies. Existing loose inventory is preserved. Removed source cards remain owned as loose copies. Manual total and tag edits are retained.</p>${decks.map((d) => `<article class="source-card"><h3>${esc(d.name)}</h3><a href="${esc(d.url)}" target="_blank" rel="noreferrer">Open on Moxfield ↗</a><p>${d.lots.reduce((n, l) => n + l.allocated_quantity, 0)} assigned from source · ${d.lots.reduce((n, l) => n + l.owned_quantity, 0)} contributed copies</p><small>${esc(d.folder)} · ${esc(new Date(d.updated_at).toLocaleString())}</small><p class="hint">Excluded: ${d.excluded.map((s) => `${esc(s.section)} (${s.quantity})`).join(", ") || "none"}</p>${(d.pending ?? []).length ? `<div class="pending-source"><b>Printing review needed</b><ul>${d.pending.map((p) => `<li>${p.quantity} × ${esc(p.name)} · ${esc(p.set.toUpperCase())} #${esc(p.collector_number)} ${esc(p.finish)}<br><small>${esc(p.reason)}</small></li>`).join("")}</ul></div>` : ""}</article>`).join("") || '<p class="hint">No deck sources imported yet.</p>'}<button class="secondary" id="back-tags">Back to tags</button>`,
+        `<p class="hint">Each source contributes its own copies. Existing loose inventory is preserved. Removed source cards remain owned as loose copies. Manual total and tag edits are retained.</p>${decks.map(deckSourceCard).join("") || '<p class="hint">No deck sources imported yet.</p>'}<button class="secondary" id="back-tags">Back to tags</button>`,
       );
       find("back-tags").onclick = renderManager;
     } catch (error) {

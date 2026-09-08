@@ -1,0 +1,6 @@
+import { esc } from "./view.js";
+import { sourceCounts } from "./collection-counts.js";
+export function deckSourceCard(deck) {
+  const counts = sourceCounts(deck);
+  return `<article class="source-card"><h3>${esc(deck.name)}</h3><a href="${esc(deck.url)}" target="_blank" rel="noreferrer">Open on Moxfield ↗</a><p class="source-total"><b>${counts.total} cards in source</b> · ${counts.imported} imported copies · ${counts.pending} awaiting printing review</p><p>${counts.imported} assigned from source · ${deck.lots.reduce((n, lot) => n + lot.owned_quantity, 0)} contributed copies</p><small>${esc(deck.folder)} · ${esc(new Date(deck.updated_at).toLocaleString())}</small><p class="hint">Source totals include every included section, including commanders. Copies awaiting printing review are not included in owned inventory. Current location assignments can differ after manual edits.</p><p class="hint">Excluded: ${deck.excluded.map((section) => `${esc(section.section)} (${section.quantity})`).join(", ") || "none"}</p>${counts.pending ? `<div class="pending-source"><b>Printing review needed</b><ul>${deck.pending.map((row) => `<li>${row.quantity} × ${esc(row.name)} · ${esc(row.set.toUpperCase())} #${esc(row.collector_number)} ${esc(row.finish)}<br><small>${esc(row.reason)}</small></li>`).join("")}</ul></div>` : ""}</article>`;
+}
