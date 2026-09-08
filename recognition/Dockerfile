@@ -15,5 +15,5 @@ COPY artifacts/public-card-frame.jpg ./artifacts/public-card-frame.jpg
 COPY notices ./notices
 COPY LICENSE source.zip ./
 COPY scripts/smoke.py ./smoke.py
-ENV RECOGNITION_ARTIFACTS=/var/task/artifacts KEEPER_OCR_ADAPTER=paddle-onnx XDG_CACHE_HOME=/tmp/cache HF_HUB_OFFLINE=1 OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
+ENV RECOGNITION_ARTIFACTS=/var/task/artifacts KEEPER_OCR_ADAPTER=paddle-onnx ORT_DISABLE_TELEMETRY=1 XDG_CACHE_HOME=/tmp/cache HF_HUB_OFFLINE=1 OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
 CMD ["handler.handler"]

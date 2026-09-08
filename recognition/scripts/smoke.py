@@ -5,6 +5,7 @@ import resource
 import socket
 import time
 import sys
+import os
 from pathlib import Path
 from PIL import Image
 import numpy as np
@@ -22,6 +23,7 @@ started = time.perf_counter()
 from composition import create_service
 
 service = create_service()
+assert os.environ.get("ORT_DISABLE_TELEMETRY") == "1"
 initialized = time.perf_counter()
 results = []
 for _ in range(3):
@@ -35,6 +37,7 @@ text = service.ocr.read(
     np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32),
 )
 assert isinstance(text["title"], list) and isinstance(text["footer"], list)
+text_elapsed = (time.perf_counter() - text_started) * 1000
 with Image.open(Path("artifacts/public-card-frame.jpg")) as frame:
     positive = service.recognize(frame.convert("RGB"))
 assert positive["status"] == "possible" and positive["selected"] is None, positive
@@ -54,7 +57,7 @@ print(
         }
     )
 )
-print(json.dumps({"ocrBlankRegionsMs": (time.perf_counter() - text_started) * 1000}))
+print(json.dumps({"ocrBlankRegionsMs": text_elapsed}))
 print(
     json.dumps(
         {

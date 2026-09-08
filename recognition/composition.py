@@ -1,6 +1,11 @@
 """Concrete composition, selected only by service configuration. SPDX-License-Identifier: AGPL-3.0-only"""
 
 import os
+
+# ONNX 1.29 initializes POSIX telemetry before its runtime API can disable it.
+# Opt out before importing either concrete adapter, including outside Docker.
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+
 from pathlib import Path
 from service import RecognitionService
 

@@ -138,7 +138,7 @@
         "Environment": {
           "Variables": {
             "RECOGNITION_ARTIFACTS": "/var/task/artifacts",
-            "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True"
+            "ORT_DISABLE_TELEMETRY": "1"
           }
         }
       }
