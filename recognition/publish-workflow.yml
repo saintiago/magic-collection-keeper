@@ -1,0 +1,50 @@
+# Install as an independent workflow only after administrator review.
+name: Publish reviewed recognition image
+on:
+  workflow_dispatch:
+defaults:
+  run:
+    shell: bash
+permissions:
+  contents: read
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/codex/collectorvision-service'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: pip install -r recognition/requirements-linux.txt
+      - run: PYTHONPATH=recognition python -m unittest discover -s recognition/tests -v
+      - run: node --test tests/backend-recognition.test.js
+      - run: python recognition/scripts/prepare.py
+      - run: python recognition/scripts/source_bundle.py
+      - run: docker build -t keeper-recognition recognition
+      - run: docker run --rm --network none --read-only --tmpfs /tmp:rw,size=512m --entrypoint python keeper-recognition smoke.py
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.RECOGNITION_PUBLISH_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Publish to isolated repository
+        env:
+          IMAGE: 698643713254.dkr.ecr.us-east-1.amazonaws.com/magic-keeper-recognition
+        run: |
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 698643713254.dkr.ecr.us-east-1.amazonaws.com
+          docker tag keeper-recognition "$IMAGE:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker push "$IMAGE:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" > recognition/published-image.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reviewed-recognition-image
+          path: |
+            recognition/source.zip
+            recognition/published-image.txt

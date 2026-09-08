@@ -1,12 +1,37 @@
 import unittest, json, base64, io, sys
 from pathlib import Path
 from PIL import Image
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 import handler
 
 
 class Tests(unittest.TestCase):
+    def test_source_offer_requires_auth_and_does_not_initialize_models(self):
+        event = self.event()
+        event["routeKey"] = "GET /api/recognition/source"
+        with patch.object(handler.Path, "read_bytes", return_value=b"PK-test-source"):
+            result = handler.handler(event, None)
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(base64.b64decode(result["body"]), b"PK-test-source")
+        self.assertEqual(result["headers"]["content-type"], "application/zip")
+        event["requestContext"] = {}
+        self.assertEqual(handler.handler(event, None)["statusCode"], 401)
+
+    def test_dimensions_and_boolean_attempt_rejected(self):
+        event = self.event()
+        payload = json.loads(event["body"])
+        payload["attempt"] = True
+        event["body"] = json.dumps(payload)
+        self.assertEqual(handler.handle(event, None)["statusCode"], 400)
+        buf = io.BytesIO()
+        Image.new("RGB", (3000, 2000)).save(buf, format="PNG")
+        payload["attempt"] = 1
+        payload["image"] = base64.b64encode(buf.getvalue()).decode()
+        event["body"] = json.dumps(payload)
+        self.assertEqual(handler.handle(event, None)["statusCode"], 400)
+
     def event(self):
         buf = io.BytesIO()
         Image.new("RGB", (200, 300)).save(buf, format="JPEG")

@@ -1,13 +1,21 @@
 """Assemble reviewable source without git history, credentials or collection data."""
 
 import subprocess
+import json
 import zipfile
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
-paths = (
-    subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0")
-)
+if (root / ".git").exists():
+    paths = (
+        subprocess.check_output(
+            ["git", "ls-files", "-z"], cwd=root, stderr=subprocess.DEVNULL
+        )
+        .decode()
+        .split("\0")
+    )
+else:
+    paths = json.loads((root / "SOURCE_FILES.json").read_text())
 # Application source is included conservatively alongside the covered service.
 # This does not change repository visibility or assert HTTP separation decides licensing.
 excluded = ("data/", ".local-secrets/", "test-results/", "public/vendor/")
@@ -37,6 +45,10 @@ with zipfile.ZipFile(
         ):
             archive.write(path, "CollectorVision/" + rel.as_posix())
     archive.write(root / "recognition/LICENSE", "COPYING")
+    archive.writestr(
+        "keeper/SOURCE_FILES.json",
+        json.dumps([name for name in paths if name and not name.startswith(excluded)]),
+    )
 if (root / "recognition/source.zip").stat().st_size > 4_000_000:
     raise ValueError("Source bundle exceeds bounded API download size")
 print("Prepared source.zip; public model/catalog fetch scripts and hashes included.")

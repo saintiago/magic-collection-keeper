@@ -3,6 +3,9 @@
 import hashlib, json
 import cv2, numpy as np
 import collector_vision as cv
+import onnxruntime as ort
+
+ort.disable_telemetry_events()
 
 
 class CollectorVision:
