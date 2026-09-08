@@ -133,7 +133,7 @@
         "Role": {
           "Fn::GetAtt": ["Role", "Arn"]
         },
-        "MemorySize": 3072,
+        "MemorySize": 3008,
         "Timeout": 20,
         "ReservedConcurrentExecutions": 2,
         "Environment": {
