@@ -29,6 +29,8 @@ Local UI tests run their own isolated in-memory SQLite server on port 3100. Cont
 
 ## AWS resources
 
+An explicit owner instruction authorizing a concrete infrastructure action satisfies and replaces separate administrator review or confirmation for that action within its requested scope. Do not ask redundantly. Keep resources isolated and permissions minimal; this authorization does not extend to unrelated or destructive actions, pantry resources, CI role expansion, or provisioned/periodic warm compute unless separately requested. Application deployments still use the existing main workflow.
+
 Region: `us-east-1`. Stack: `magic-collection-keeper`. Website: https://d3r1grp0vvv9f.cloudfront.net. CloudFront distribution `E28KIVWY6CUO4Q`, private site bucket `magic-collection-keeper-website-rpk3neiywwgb`, Lambda/table `magic-collection-keeper`, API `exex6mzt02`, Cognito pool `us-east-1_uqmXAk4AF`. The separate bootstrap code bucket is `magic-collection-keeper-build-698643713254`. No custom domain or Route 53 resources are used. Pantry resources are not part of this stack.
 
 `infra/template.mjs` generates the checked-in CloudFormation template. Run `node infra/template.mjs` after infrastructure edits. Package `build/cloud.mjs` as `cloud.mjs` at the root of a zip, upload to a new key in the code bucket, and deploy with:
