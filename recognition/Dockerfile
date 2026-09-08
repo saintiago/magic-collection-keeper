@@ -7,9 +7,13 @@ COPY vendor/CollectorVision /tmp/collectorvision
 RUN pip install --no-cache-dir --no-deps /tmp/collectorvision && pip check
 COPY *.py ./
 COPY adapters ./adapters
-COPY artifacts ./artifacts
+COPY artifacts/weights ./artifacts/weights
+COPY artifacts/catalog ./artifacts/catalog
+COPY artifacts/ocr-onnx ./artifacts/ocr-onnx
+COPY artifacts/artifact-manifest.json artifacts/ocr-onnx.json ./artifacts/
+COPY artifacts/public-card-frame.jpg ./artifacts/public-card-frame.jpg
 COPY notices ./notices
 COPY LICENSE source.zip ./
 COPY scripts/smoke.py ./smoke.py
-ENV RECOGNITION_ARTIFACTS=/var/task/artifacts PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True PADDLE_PDX_CACHE_HOME=/tmp/paddlex XDG_CACHE_HOME=/tmp/cache HF_HUB_OFFLINE=1
+ENV RECOGNITION_ARTIFACTS=/var/task/artifacts KEEPER_OCR_ADAPTER=paddle-onnx XDG_CACHE_HOME=/tmp/cache HF_HUB_OFFLINE=1 OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
 CMD ["handler.handler"]

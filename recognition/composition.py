@@ -7,11 +7,15 @@ from service import RecognitionService
 
 def create_service():
     visual_name = os.environ.get("KEEPER_VISUAL_ADAPTER", "collectorvision")
-    ocr_name = os.environ.get("KEEPER_OCR_ADAPTER", "paddle")
-    if visual_name != "collectorvision" or ocr_name != "paddle":
+    ocr_name = os.environ.get("KEEPER_OCR_ADAPTER", "paddle-onnx")
+    if visual_name != "collectorvision" or ocr_name not in ("paddle", "paddle-onnx"):
         raise ValueError("Unsupported recognition adapter configuration")
     from adapters.collectorvision import CollectorVision
-    from adapters.paddle import PaddleText
+
+    if ocr_name == "paddle":
+        from adapters.paddle import PaddleText
+    else:
+        from adapters.paddle_onnx import PaddleOnnxText as PaddleText
 
     root = Path(os.environ.get("RECOGNITION_ARTIFACTS", "recognition/artifacts"))
     # Confirmations deliberately unavailable in the deployment composition.

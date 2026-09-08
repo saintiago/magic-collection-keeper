@@ -1,6 +1,9 @@
 name: Verify isolated recognition container
 on:
   workflow_dispatch:
+  push:
+    branches: [codex/collectorvision-service]
+    paths: ["recognition/**", ".github/workflows/recognition.yml"]
 defaults:
   run:
     shell: bash
@@ -22,6 +25,11 @@ jobs:
       - run: PYTHONPATH=recognition python -m unittest discover -s recognition/tests -v
       - run: node --test tests/backend-recognition.test.js
       - run: python recognition/scripts/prepare.py
+      - name: Convert frozen OCR weights in a separate build environment
+        run: |
+          python -m venv /tmp/keeper-converter
+          /tmp/keeper-converter/bin/pip install -r recognition/requirements-converter.txt
+          /tmp/keeper-converter/bin/python recognition/scripts/convert_ocr.py
       - run: python recognition/scripts/source_bundle.py
       - run: docker build -t keeper-recognition recognition
       - run: docker run --rm --network none --read-only --tmpfs /tmp:rw,size=512m --entrypoint python keeper-recognition smoke.py | tee recognition/smoke-linux.json
@@ -40,3 +48,5 @@ jobs:
             recognition/source.zip
             recognition/image-linux.json
             recognition/image.tar.gz
+            recognition/artifacts/ocr-onnx.json
+            recognition/artifacts/ocr-onnx/

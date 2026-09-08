@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 root = Path(__file__).resolve().parents[1]
 artifacts = root / "artifacts"
@@ -35,7 +35,13 @@ def fetch(url, path, digest):
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() == digest:
         return
-    with urlopen(url, timeout=90) as response:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "MagicCollectionKeeper/0.1 (+https://github.com/saintiago/magic-collection-keeper)"
+        },
+    )
+    with urlopen(request, timeout=90) as response:
         data = response.read()
     if hashlib.sha256(data).hexdigest() != digest:
         raise ValueError("Public artifact digest mismatch: " + path.name)
@@ -72,3 +78,17 @@ CatalogV2Downloader.install(
 for name in ("artifact-manifest.json", "ocr-models.json"):
     shutil.copyfile(root / name, artifacts / name)
 print("Frozen public models and catalog prepared.")
+
+# A reproducible public-artwork fixture; never a customer camera photograph.
+fetch(
+    "https://cards.scryfall.io/normal/front/4/7/4796e5e4-515c-4d89-92da-b2d5b5b39557.jpg?1783907159",
+    artifacts / "public-card.jpg",
+    "03a53910a88381e2e1e3320d8039b7cc25527c9b4caa1a9f16743b44421c04c4",
+)
+from PIL import Image, ImageOps
+
+with Image.open(artifacts / "public-card.jpg") as card:
+    card = ImageOps.contain(card.convert("RGB"), (480, 670))
+    frame = Image.new("RGB", (700, 980), (28, 60, 40))
+    frame.paste(card, ((700 - card.width) // 2, (980 - card.height) // 2))
+    frame.save(artifacts / "public-card-frame.jpg", quality=88)

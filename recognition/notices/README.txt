@@ -14,3 +14,7 @@ https://scryfall.com/docs/api
 
 Further Python dependency notices remain in installed package distributions and must be reviewed with the frozen Linux dependency lock before deployment.
 
+Paddle2ONNX (Apache-2.0) converts the original frozen Paddle weights at build time. RapidOCR 3.9.2 (Apache-2.0) supplies detection preprocessing, box extraction, line crops and CTC decoding for the independently replaceable paddle-onnx adapter. The runtime loads only the explicitly supplied converted models and Latin dictionary; it does not use RapidOCR's default models, orientation classifier, font downloads or visualizer.
+https://github.com/PaddlePaddle/Paddle2ONNX
+https://github.com/RapidAI/RapidOCR
+

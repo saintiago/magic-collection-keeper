@@ -8,6 +8,24 @@ import handler
 
 
 class Tests(unittest.TestCase):
+    def test_invalid_request_never_initializes_models(self):
+        event = self.event()
+        event["body"] = "{}"
+        with patch.object(handler, "get_engine") as create:
+            self.assertEqual(handler.handler(event, None)["statusCode"], 400)
+            event["body"] = "x" * 710001
+            self.assertEqual(handler.handler(event, None)["statusCode"], 413)
+            create.assert_not_called()
+
+    def test_initialization_failure_is_sanitized_and_retryable(self):
+        with patch.object(
+            handler, "get_engine", side_effect=RuntimeError("private detail")
+        ):
+            result = handler.handler(self.event(), None)
+        self.assertEqual(result["statusCode"], 503)
+        self.assertNotIn("private detail", result["body"])
+        self.assertFalse(handler._lock.locked())
+
     def test_source_offer_requires_auth_and_does_not_initialize_models(self):
         event = self.event()
         event["routeKey"] = "GET /api/recognition/source"

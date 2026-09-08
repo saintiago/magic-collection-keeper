@@ -45,6 +45,10 @@ with zipfile.ZipFile(
         ):
             archive.write(path, "CollectorVision/" + rel.as_posix())
     archive.write(root / "recognition/LICENSE", "COPYING")
+    archive.write(
+        root / "recognition/artifacts/ocr-onnx.json",
+        "keeper/recognition/verified-ocr-onnx.json",
+    )
     archive.writestr(
         "keeper/SOURCE_FILES.json",
         json.dumps([name for name in paths if name and not name.startswith(excluded)]),

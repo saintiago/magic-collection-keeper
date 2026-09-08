@@ -4,11 +4,16 @@ import json
 import resource
 import socket
 import time
+import sys
+from pathlib import Path
 from PIL import Image
 import numpy as np
 
+network_attempts = []
+
 
 def denied(*args, **kwargs):
+    network_attempts.append(True)
     raise RuntimeError("Runtime network access forbidden in smoke test")
 
 
@@ -30,6 +35,25 @@ text = service.ocr.read(
     np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32),
 )
 assert isinstance(text["title"], list) and isinstance(text["footer"], list)
+with Image.open(Path("artifacts/public-card-frame.jpg")) as frame:
+    positive = service.recognize(frame.convert("RGB"))
+assert positive["status"] == "possible" and positive["selected"] is None, positive
+assert positive["candidates"][0]["name"] == "Adaptive Training Post", positive
+assert positive["evidence"]["text"].get("titleRead"), positive
+assert "error" not in positive["evidence"]["text"], positive
+assert not network_attempts, "Runtime attempted network access"
+assert "paddle" not in sys.modules and "paddlex" not in sys.modules
+print(
+    json.dumps(
+        {
+            "publicCard": {
+                "status": positive["status"],
+                "reason": positive["reason"],
+                "timings": positive["timings"],
+            }
+        }
+    )
+)
 print(json.dumps({"ocrBlankRegionsMs": (time.perf_counter() - text_started) * 1000}))
 print(
     json.dumps(

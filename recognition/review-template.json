@@ -135,7 +135,6 @@
         },
         "MemorySize": 3008,
         "Timeout": 20,
-        "ReservedConcurrentExecutions": 2,
         "Environment": {
           "Variables": {
             "RECOGNITION_ARTIFACTS": "/var/task/artifacts",

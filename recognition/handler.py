@@ -18,7 +18,7 @@ def response(code, data):
     }
 
 
-def handle(event, engine):
+def handle(event, engine, create_engine=None):
     # Only trusted API Gateway authorizer context is accepted, never a body owner.
     owner = (
         event.get("requestContext", {})
@@ -77,6 +77,8 @@ def handle(event, engine):
         rgb.close()
         return response(429, {"error": "Scanner busy. Retry this card"})
     try:
+        if engine is None and create_engine is not None:
+            engine = create_engine()
         result = engine.recognize(rgb)
         return response(200, {"attempt": payload["attempt"], **result})
     except Exception:
@@ -87,8 +89,16 @@ def handle(event, engine):
         _lock.release()
 
 
-def handler(event, context):
+def get_engine():
     global _engine
+    if _engine is None:
+        from composition import create_service
+
+        _engine = create_service()
+    return _engine
+
+
+def handler(event, context):
     if (
         not event.get("requestContext", {})
         .get("authorizer", {})
@@ -112,11 +122,4 @@ def handler(event, context):
             }
         except OSError:
             return response(503, {"error": "Recognition source download unavailable"})
-    if _engine is None:
-        try:
-            from composition import create_service
-
-            _engine = create_service()
-        except Exception:
-            return response(503, {"error": "Recognition unavailable"})
-    return handle(event, _engine)
+    return handle(event, None, get_engine)
