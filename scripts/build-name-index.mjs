@@ -8,6 +8,7 @@ import {
   buildCompactNames,
   encodeCompactNames,
   createCompactSearch,
+  prepareCompactNames,
 } from "../domain/compact-names.js";
 import {
   createNameIndexBuilder,
@@ -85,6 +86,9 @@ const browserBytes = gzipSync(encodeCompactNames(compact), {
   level: 9,
 });
 const browserVersion = createHash("sha256").update(browserBytes).digest("hex");
+const serverCompact = { ...compact, prepared: prepareCompactNames(compact) };
+const serverBytes = gzipSync(encodeCompactNames(serverCompact), { level: 9 });
+const serverVersion = createHash("sha256").update(serverBytes).digest("hex");
 const version = createHash("sha256").update(compressed).digest("hex");
 const manifest = {
   schema: 1,
@@ -95,10 +99,12 @@ const manifest = {
   aliases: rows.reduce((n, row) => n + row[3].length, 0),
   bytes: compressed.length,
   browser: { schema: 1, version: browserVersion, bytes: browserBytes.length },
+  server: { schema: 1, version: serverVersion, bytes: serverBytes.length },
   source: metadata.uri || "https://api.scryfall.com/bulk-data/all_cards",
 };
 const index = createNameSearch(rows);
 const browserSearch = createCompactSearch(compact);
+const serverSearch = createCompactSearch(serverCompact);
 const queries = new Set([
     "Piracy",
     "Piarcy",
@@ -120,7 +126,9 @@ for (const query of queries)
   for (const suggest of [true, false])
     if (
       JSON.stringify(index.search(query, { suggest })) !==
-      JSON.stringify(browserSearch.search(query, { suggest }))
+        JSON.stringify(browserSearch.search(query, { suggest })) ||
+      JSON.stringify(serverSearch.search(query, { suggest })) !==
+        JSON.stringify(browserSearch.search(query, { suggest }))
     )
       throw Error("Browser catalog ranking parity failed");
 if (
@@ -132,6 +140,7 @@ if (
   throw Error("Real catalog acceptance failed; keep the previous index");
 await writeFile(`${directory}/${version}.json.gz`, compressed);
 await writeFile(`${directory}/${browserVersion}.names.gz`, browserBytes);
+await writeFile(`${directory}/${serverVersion}.server.gz`, serverBytes);
 await writeFile(`${directory}/current.json`, JSON.stringify(manifest));
 console.log(
   JSON.stringify({

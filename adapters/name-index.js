@@ -22,29 +22,36 @@ export function createNameIndex({
     refreshError = false;
   const WEEK = 7 * 86400000;
   let seed;
+  const descriptor = (m) => m.server || m.browser;
+  const asset = (m) =>
+    m.server
+      ? `${m.server.version}.server.gz`
+      : m.browser
+        ? `${m.browser.version}.names.gz`
+        : `${m.version}.json.gz`;
   async function materialize(manifest, compressed) {
     if (
       manifest.schema !== 1 ||
       !/^[a-f0-9]{64}$/.test(manifest.version) ||
       !Number.isFinite(Date.parse(manifest.updated_at)) ||
-      (manifest.browser && manifest.browser.schema !== 1)
+      (descriptor(manifest) && descriptor(manifest).schema !== 1)
     )
       throw Error("Invalid catalog manifest");
-    const hash = manifest.browser?.version || manifest.version;
+    const hash = descriptor(manifest)?.version || manifest.version;
     if (createHash("sha256").update(compressed).digest("hex") !== hash)
       throw Error("Catalog checksum mismatch");
     const start = performance.now();
     const raw = gunzipSync(compressed, { maxOutputLength: 60000000 });
-    const data = manifest.browser
+    const data = descriptor(manifest)
       ? decodeCompactNames(raw)
       : JSON.parse(raw.toString());
     if (
-      (manifest.browser ? data.cards.length : data.length) !==
+      (descriptor(manifest) ? data.cards.length : data.length) !==
       manifest.identities
     )
       throw Error("Incomplete catalog");
     const parsed = performance.now();
-    const search = manifest.browser
+    const search = descriptor(manifest)
       ? createCompactSearch(data)
       : createNameSearch(data);
     onMetric({ phase: "index-decode", ms: parsed - start });
@@ -77,16 +84,16 @@ export function createNameIndex({
       throw Error("Catalog regression");
     if (
       current?.metadata.version !== manifest.version ||
-      current?.metadata.browser?.version !== manifest.browser?.version
+      current?.metadata.browser?.version !== manifest.browser?.version ||
+      current?.metadata.server?.version !== manifest.server?.version
     ) {
-      if (manifest.browser && !/^[a-f0-9]{64}$/.test(manifest.browser.version))
+      if (
+        descriptor(manifest) &&
+        !/^[a-f0-9]{64}$/.test(descriptor(manifest).version)
+      )
         throw Error("Invalid browser version");
       const started = performance.now();
-      const compressed = await bytes(
-        manifest.browser
-          ? `${manifest.browser.version}.names.gz`
-          : `${manifest.version}.json.gz`,
-      );
+      const compressed = await bytes(asset(manifest));
       onMetric({ phase: "index-download", ms: performance.now() - started });
       current = await materialize(manifest, compressed);
     }
@@ -103,12 +110,10 @@ export function createNameIndex({
               const manifest = JSON.parse(
                 await readFile(`${seedDirectory}/current.json`, "utf8"),
               );
-              if (!/^[a-f0-9]{64}$/.test(manifest.browser?.version)) return;
+              if (!/^[a-f0-9]{64}$/.test(descriptor(manifest)?.version)) return;
               current = await materialize(
                 manifest,
-                await readFile(
-                  `${seedDirectory}/${manifest.browser.version}.names.gz`,
-                ),
+                await readFile(`${seedDirectory}/${asset(manifest)}`),
               );
             } catch {}
           })();

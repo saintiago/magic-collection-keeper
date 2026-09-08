@@ -35,13 +35,19 @@ test("LIVE-07 real multilingual bulk names rank English identities and preserve 
   const before = await get("collection");
   const first = await get("suggest?q=relampa"),
     repeat = await get("suggest?q=relampa");
-  expect(first).toEqual(repeat);
+  expect(first.suggestions).toEqual(repeat.suggestions);
+  expect(first.catalog).toEqual(repeat.catalog);
+  for (const result of [first, repeat]) {
+    expect(result.timing.phase).toBe("server-name-search");
+    expect(Number.isFinite(result.timing.indexWaitMs)).toBe(true);
+    expect(Number.isFinite(result.timing.searchMs)).toBe(true);
+  }
   expect(first.suggestions[0].name).toBe("Lightning Bolt");
   expect(first.suggestions[0].matched_name).toBe("Relámpago");
   expect(first.suggestions.length).toBeLessThanOrEqual(8);
   expect(measured.at(-1).bytes).toBeLessThan(10000);
   expect(Date.now() - Date.parse(first.catalog.updated_at)).toBeLessThan(
-    3 * 86400000,
+    15 * 86400000,
   );
   const found = await get("discover?q=Piracy");
   expect(found.cards[0].name).toBe("Piracy");

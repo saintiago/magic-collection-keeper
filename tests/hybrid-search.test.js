@@ -7,6 +7,7 @@ import {
   encodeCompactNames,
   decodeCompactNames,
   createCompactSearch,
+  prepareCompactNames,
 } from "../domain/compact-names.js";
 import { createNameSearch } from "../domain/card-names.js";
 import { createWorkerCatalog } from "../public/name-worker-runtime.js";
@@ -239,9 +240,17 @@ test("UC-34 printing cache reuses prior batches, validates selected identity wit
 test("UC-33 packaged verified seed serves during an unfinished manifest check and rejects regression", async () => {
   const data = snapshot(),
     dir = await mkdtemp(join(tmpdir(), "keeper-index-test-"));
-  const file = join(dir, `${data.manifest.browser.version}.names.gz`),
+  const compact = buildCompactNames(rows);
+  compact.prepared = prepareCompactNames(compact);
+  const bytes = gzipSync(encodeCompactNames(compact));
+  data.manifest.server = {
+    schema: 1,
+    version: createHash("sha256").update(bytes).digest("hex"),
+    bytes: bytes.length,
+  };
+  const file = join(dir, `${data.manifest.server.version}.server.gz`),
     manifest = join(dir, "current.json");
-  await writeFile(file, new Uint8Array(data.bytes));
+  await writeFile(file, bytes);
   await writeFile(manifest, JSON.stringify(data.manifest));
   let release,
     requests = 0;

@@ -113,7 +113,7 @@ const server = http.createServer(async (req, res) => {
       return json({ error: "Not found" }, 404);
     if (url.pathname === "/config.json") return json({ local: true });
     if (
-      /^\/catalog\/(current\.json|[a-f0-9]{64}\.(json|names)\.gz)$/.test(
+      /^\/catalog\/(current\.json|[a-f0-9]{64}\.(json|names|server)\.gz)$/.test(
         url.pathname,
       )
     ) {

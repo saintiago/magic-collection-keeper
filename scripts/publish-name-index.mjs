@@ -27,6 +27,26 @@ if (
   console.log("A newer catalog is already published; keeping it.");
 } else {
   if (
+    manifest.server?.schema !== 1 ||
+    !/^[a-f0-9]{64}$/.test(manifest.server.version)
+  )
+    throw Error("Validated server index required");
+  execFileSync(
+    "aws",
+    [
+      "s3",
+      "cp",
+      `build/catalog/${manifest.server.version}.server.gz`,
+      `s3://${bucket}/catalog/${manifest.server.version}.server.gz`,
+      "--content-type",
+      "application/gzip",
+      "--cache-control",
+      "public,max-age=31536000,immutable",
+      "--no-progress",
+    ],
+    { stdio: "pipe" },
+  );
+  if (
     manifest.browser?.schema !== 1 ||
     !/^[a-f0-9]{64}$/.test(manifest.browser.version)
   )

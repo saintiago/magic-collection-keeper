@@ -87,15 +87,19 @@ export function createCompactSearch(data) {
     end = card[4];
   }
   if (end !== terms.length) throw Error("Invalid catalog terms");
-  const normalized = strings.map(normalizeName),
-    prefixes = Object.create(null);
-  for (let i = 0; i < cards.length; i++) {
-    const keys = new Set();
-    for (let t = cards[i][3]; t < cards[i][4]; t += 2)
-      for (const word of normalized[terms[t]].split(" "))
-        keys.add(word.slice(0, 2));
-    for (const key of keys) (prefixes[key] ||= []).push(i);
-  }
+  const { normalized, prefixes } = data.prepared || prepareCompactNames(data);
+  if (
+    !Array.isArray(normalized) ||
+    normalized.length !== strings.length ||
+    normalized.some((n) => typeof n !== "string") ||
+    !prefixes ||
+    Object.values(prefixes).some(
+      (list) =>
+        !Array.isArray(list) ||
+        list.some((i) => !Number.isInteger(i) || i < 0 || i >= cards.length),
+    )
+  )
+    throw Error("Invalid prepared catalog");
   const byId = new Map(cards.map((c, i) => [c[0], i]));
   function dto(i, term = cards[i][3], rank = 0) {
     const c = cards[i],
@@ -195,6 +199,7 @@ export function encodeCompactNames(data) {
       schema: data.schema,
       strings: data.strings,
       cards: data.cards,
+      prepared: data.prepared,
     }),
   );
   const bytes = new Uint8Array(12 + meta.length + data.terms.length * 4),
@@ -223,4 +228,17 @@ export function decodeCompactNames(bytes) {
   for (let i = 0; i < count; i++)
     data.terms[i] = view.getUint32(12 + size + i * 4, true);
   return data;
+}
+
+export function prepareCompactNames({ strings, cards, terms }) {
+  const normalized = strings.map(normalizeName),
+    prefixes = Object.create(null);
+  for (let i = 0; i < cards.length; i++) {
+    const keys = new Set();
+    for (let t = cards[i][3]; t < cards[i][4]; t += 2)
+      for (const word of normalized[terms[t]].split(" "))
+        keys.add(word.slice(0, 2));
+    for (const key of keys) (prefixes[key] ||= []).push(i);
+  }
+  return { normalized, prefixes };
 }

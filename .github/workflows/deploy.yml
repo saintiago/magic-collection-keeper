@@ -71,7 +71,7 @@ jobs:
       - name: Deploy API
         run: |
           cd build
-          zip ../cloud.zip cloud.mjs catalog/current.json catalog/*.names.gz
+          zip ../cloud.zip cloud.mjs catalog/current.json catalog/*.server.gz
           aws lambda update-function-code --function-name magic-collection-keeper --zip-file fileb://../cloud.zip > /dev/null
           aws lambda wait function-updated --function-name magic-collection-keeper
       - name: Publish multilingual card names
