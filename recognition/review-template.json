@@ -1,0 +1,244 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Isolated Keeper CPU recognition candidate. Administrator review required; bootstrap creates only ECR/logs/role until an immutable image is supplied. No CI-role or pantry modifications.",
+  "Parameters": {
+    "ApiId": {
+      "Type": "String",
+      "Default": "exex6mzt02"
+    },
+    "AuthorizerId": {
+      "Type": "String",
+      "Description": "Existing Keeper HTTP API verified Cognito JWT authorizer ID"
+    },
+    "ImageUri": {
+      "Type": "String",
+      "Default": "",
+      "Description": "After license approval and bootstrap, immutable ECR image URI ending @sha256:digest",
+      "AllowedPattern": "^$|^[0-9]{12}\\.dkr\\.ecr\\.us-east-1\\.amazonaws\\.com/magic-keeper-recognition@sha256:[0-9a-f]{64}$"
+    },
+    "ProvisionedConcurrency": {
+      "Type": "Number",
+      "Default": 0,
+      "AllowedValues": [0, 1],
+      "Description": "0 has no idle provisioning charge and can cold-start; 1 requires explicit cost approval"
+    }
+  },
+  "Conditions": {
+    "DeployEngine": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "ImageUri"
+            },
+            ""
+          ]
+        }
+      ]
+    },
+    "KeepWarm": {
+      "Fn::Equals": [
+        {
+          "Ref": "ProvisionedConcurrency"
+        },
+        1
+      ]
+    }
+  },
+  "Resources": {
+    "Images": {
+      "Type": "AWS::ECR::Repository",
+      "Properties": {
+        "RepositoryName": "magic-keeper-recognition",
+        "ImageTagMutability": "IMMUTABLE",
+        "ImageScanningConfiguration": {
+          "ScanOnPush": true
+        },
+        "RepositoryPolicyText": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "LambdaReadThisImageOnly",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+              "Condition": {
+                "ArnLike": {
+                  "aws:sourceArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:magic-keeper-recognition"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "Logs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/magic-keeper-recognition",
+        "RetentionInDays": 7
+      }
+    },
+    "Role": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "IsolatedRecognitionLogs",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+                  "Resource": {
+                    "Fn::GetAtt": ["Logs", "Arn"]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "Function": {
+      "Type": "AWS::Lambda::Function",
+      "Condition": "DeployEngine",
+      "Properties": {
+        "FunctionName": "magic-keeper-recognition",
+        "PackageType": "Image",
+        "Architectures": ["x86_64"],
+        "Code": {
+          "ImageUri": {
+            "Ref": "ImageUri"
+          }
+        },
+        "Role": {
+          "Fn::GetAtt": ["Role", "Arn"]
+        },
+        "MemorySize": 3072,
+        "Timeout": 20,
+        "ReservedConcurrentExecutions": 2,
+        "Environment": {
+          "Variables": {
+            "RECOGNITION_ARTIFACTS": "/var/task/artifacts",
+            "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True"
+          }
+        }
+      }
+    },
+    "Version": {
+      "Type": "AWS::Lambda::Version",
+      "Condition": "DeployEngine",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "Function"
+        },
+        "Description": {
+          "Ref": "ImageUri"
+        }
+      }
+    },
+    "Alias": {
+      "Type": "AWS::Lambda::Alias",
+      "Condition": "DeployEngine",
+      "Properties": {
+        "Name": "review",
+        "FunctionName": {
+          "Ref": "Function"
+        },
+        "FunctionVersion": {
+          "Fn::GetAtt": ["Version", "Version"]
+        },
+        "ProvisionedConcurrencyConfig": {
+          "Fn::If": [
+            "KeepWarm",
+            {
+              "ProvisionedConcurrentExecutions": 1
+            },
+            {
+              "Ref": "AWS::NoValue"
+            }
+          ]
+        }
+      }
+    },
+    "Integration": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Condition": "DeployEngine",
+      "Properties": {
+        "ApiId": {
+          "Ref": "ApiId"
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": {
+          "Ref": "Alias"
+        },
+        "PayloadFormatVersion": "2.0",
+        "TimeoutInMillis": 22000
+      }
+    },
+    "Route": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Condition": "DeployEngine",
+      "Properties": {
+        "ApiId": {
+          "Ref": "ApiId"
+        },
+        "RouteKey": "POST /api/recognize",
+        "AuthorizationType": "JWT",
+        "AuthorizerId": {
+          "Ref": "AuthorizerId"
+        },
+        "Target": {
+          "Fn::Join": [
+            "/",
+            [
+              "integrations",
+              {
+                "Ref": "Integration"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "Invoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Condition": "DeployEngine",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "Alias"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/POST/api/recognize"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "RepositoryUri": {
+      "Value": {
+        "Fn::GetAtt": ["Images", "RepositoryUri"]
+      }
+    }
+  }
+}

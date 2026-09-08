@@ -1,0 +1,27 @@
+# Recognition service (integration candidate)
+
+This directory is licensed under AGPL-3.0-only; upstream notices retain their original licenses. CollectorVision code is pinned to the commit in artifact-manifest.json, its Cornelius/Milo ONNX weights to SHA-256, and catalog version 27 to the frozen feed's verified asset hashes. PaddleOCR and its two text models are independently pinned. Catalog software's MIT license does not relicense Magic card artwork or Scryfall data. No customer photographs or collection records are included.
+
+## Replace a model
+
+RecognitionService accepts plain visual.inspect(image) and ocr.read(image,corners) ports with version metadata. Only composition.py imports concrete adapters. A replacement adapter translates its evidence into the common policy; it does not modify browser behavior. Visual and text adapters can be replaced independently. Configuration chooses KEEPER_VISUAL_ADAPTER and KEEPER_OCR_ADAPTER; unsupported names fail initialization. There is no user-facing model selector or dynamic plugin loader.
+
+Results contain contractVersion, confirmed/possible/unknown status, candidates, selected, reason, evidence, versions and timings. Cosine similarities and distances are not probabilities. Each adapter owns its calibrated interpretation; swapping weights, catalog, preprocessing or OCR requires new version-specific calibration. Models and catalog must be replaced atomically. Runtime never refreshes or downloads artifacts. There is no image/result cache. A visual failure becomes unknown; a strong visual identity with unavailable OCR remains an optional candidate only. Service unavailability is shown as retry; there is no silent fallback that changes confidence meaning.
+
+Production composition hard-disables confirmed results. The research thresholds only filter optional candidates. The browser also rejects automatic confirmations until real-frame calibration and a reviewed activation change. Final explicit ownership confirmation remains mandatory.
+
+## Build and verify
+
+Use Python 3.12 on Linux, pip install -r recognition/requirements.in, then python recognition/scripts/prepare.py. This fetches only public frozen files and verifies their hashes. Run PYTHONPATH=recognition python -m unittest discover -s recognition/tests -v and node --test tests/backend-recognition.test.js. Stage/commit source before python recognition/scripts/source_bundle.py, then docker build -t keeper-recognition recognition. Run the image with --network none --read-only --tmpfs /tmp:rw,size=512m --entrypoint python and smoke.py. The branch's read-only CI workflow performs these checks without AWS credentials or owner images. Container checks and synthetic frames do not establish physical camera accuracy.
+
+The initial requirements.in pins model runtimes but allows supporting-library ranges. A Linux resolved lock and immutable base image must replace those ranges before a deployment candidate is approved. Runtime memory, initialization and per-frame timings are reported separately. No GPU or real AWS latency result is implied.
+
+## Source access and license evidence
+
+The authenticated GET /api/recognition/source route serves a no-charge source ZIP. Before activation, the scanner must visibly offer **Recognition source (AGPL-3.0)** and accurately disclose temporary server processing. The bundle includes the service, upstream CollectorVision source and weights, notices, pinned artifact download instructions, build/install material and application source conservatively. It excludes repository history, credentials, private data and photos. Making a source bundle available to authorized network users does not require making the private GitHub repository public. We do not assume a process or HTTP boundary alone settles combined-work licensing.
+
+Primary sources: https://github.com/HanClinto/CollectorVision/blob/main/LICENSE ; https://huggingface.co/HanClinto/cornelius ; https://huggingface.co/HanClinto/milo ; https://github.com/HanClinto/CollectorVisionCatalog/blob/main/LICENSE ; https://github.com/PaddlePaddle/PaddleOCR/blob/main/LICENSE . AGPL sections 1, 6 and 13 govern corresponding source and network offers. The upstream ONNX files are provided under AGPL; training checkpoints/scripts were not found in these public model repositories. This is an availability finding, not an assertion that we must recreate training data, a conclusion that ONNX is necessarily object code, or a requirement to buy a commercial license. Preserve the upstream published preferred forms and document any subsequently identified corresponding-source material. Our modifications and build/install scripts are included in full.
+
+## Deployment review
+
+review-template.json is a proposed isolated CloudFormation stack, not deployed infrastructure. It creates a dedicated ECR repository, logs and least-privilege execution role; with an immutable image it adds a bounded CPU Lambda and existing verified-JWT API routes. It does not change the app's inventory permissions, existing CI role or pantry resources. AGENTS.md requires administrator review before infrastructure changes. Provisioned concurrency defaults to zero. Review the final image digest, source ZIP, Linux verification and costs before creating resources. Main application changes still deploy through the normal main workflow; do not merge this branch's build-only deploy.yml over that workflow.

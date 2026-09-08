@@ -1,0 +1,11 @@
+**
+!*.py
+!requirements.in
+!adapters/**
+!artifacts/**
+!vendor/CollectorVision/**
+vendor/CollectorVision/.git
+!notices/**
+!LICENSE
+!source.zip
+!scripts/smoke.py
