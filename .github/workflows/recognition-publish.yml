@@ -1,0 +1,58 @@
+# Install as an independent workflow only after administrator review.
+name: Publish reviewed recognition image
+on:
+  workflow_dispatch:
+    inputs:
+      verified_run_id:
+        description: Successful isolated verification run containing the reviewed image
+        required: true
+      expected_image_id:
+        description: Exact sha256 image ID from the reviewed image-linux.json
+        required: true
+defaults:
+  run:
+    shell: bash
+permissions:
+  contents: read
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/codex/collectorvision-service'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: recognition-verification
+          run-id: ${{ inputs.verified_run_id }}
+          github-token: ${{ github.token }}
+          path: recognition
+      - name: Load and verify reviewed image
+        env:
+          EXPECTED_IMAGE_ID: ${{ inputs.expected_image_id }}
+        run: |
+          [[ "$EXPECTED_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker load -i recognition/image.tar.gz
+          test "$(docker image inspect keeper-recognition --format '{{.Id}}')" = "$EXPECTED_IMAGE_ID"
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,size=512m --entrypoint python keeper-recognition smoke.py
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.RECOGNITION_PUBLISH_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Publish to isolated repository
+        env:
+          IMAGE: 698643713254.dkr.ecr.us-east-1.amazonaws.com/magic-keeper-recognition
+        run: |
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 698643713254.dkr.ecr.us-east-1.amazonaws.com
+          docker tag keeper-recognition "$IMAGE:$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker push "$IMAGE:$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" > recognition/published-image.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reviewed-recognition-image
+          path: |
+            recognition/source.zip
+            recognition/published-image.txt
