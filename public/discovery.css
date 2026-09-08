@@ -3,6 +3,27 @@
   flex: 1;
   min-width: 0;
 }
+.unified-search {
+  margin-bottom: 24px;
+}
+.unified-search > label {
+  display: block;
+  margin-bottom: 8px;
+}
+.unified-search .search-box input {
+  font-size: 16px;
+}
+.unified-search #message:empty {
+  display: none;
+}
+.suggestion-panel .suggestion-ownership {
+  font-size: 11px;
+  color: #687563;
+}
+.suggestion-panel .suggestion-ownership.is-owned {
+  color: #28522a;
+  font-weight: 700;
+}
 .suggestion-panel {
   position: absolute;
   z-index: 6;

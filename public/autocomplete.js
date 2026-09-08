@@ -1,4 +1,5 @@
 import { esc } from "./view.js";
+import { suggestionOwnership } from "./search-ownership.js";
 
 export function setupAutocomplete({
   input,
@@ -15,28 +16,45 @@ export function setupAutocomplete({
     items = [],
     selected = -1,
     composing = false,
+    touch = null,
+    ownership = null,
     version = null;
   const cache = new Map();
   function close() {
+    touch = null;
     generation++;
     clearTimeout(timer);
     controller?.abort();
     items = [];
     selected = -1;
     panel.hidden = true;
+    panel.replaceChildren();
     input.setAttribute("aria-expanded", "false");
     input.removeAttribute("aria-activedescendant");
   }
   function draw(message = "") {
     panel.hidden = false;
     input.setAttribute("aria-expanded", "true");
-    panel.innerHTML = `<div id="card-suggestions" role="listbox" aria-label="Card name suggestions">${items.map((item, i) => `<div id="card-suggestion-${i}" role="option" aria-selected="${selected === i}" data-suggestion="${i}"><b>${esc(item.name)}</b>${item.matched_name ? `<small>${esc(item.matched_name)} · ${esc(item.matched_language.toUpperCase())}</small>` : ""}</div>`).join("")}</div><p role="status" aria-live="polite">${esc(message || `${items.length} suggestions. Use arrow keys to choose.`)}</p>`;
+    panel.innerHTML = `<div id="card-suggestions" role="listbox" aria-label="Card name suggestions">${items.map((item, i) => `<div id="card-suggestion-${i}" role="option" aria-selected="${selected === i}" data-suggestion="${i}"><b>${esc(item.name)}</b>${item.matched_name ? `<small>${esc(item.matched_name)} · ${esc(item.matched_language.toUpperCase())}</small>` : ""}<small class="suggestion-ownership"></small></div>`).join("")}</div><p role="status" aria-live="polite">${esc(message || `${items.length} suggestions. Use arrow keys to choose.`)}</p>`;
+    updateOwnership(ownership);
     if (selected >= 0)
       input.setAttribute(
         "aria-activedescendant",
         `card-suggestion-${selected}`,
       );
     else input.removeAttribute("aria-activedescendant");
+  }
+  function updateOwnership(next) {
+    ownership = next;
+    // Update text in place: a collection response must not replace the option under a finger.
+    panel.querySelectorAll("[data-suggestion]").forEach((option) => {
+      const item = items[Number(option.dataset.suggestion)];
+      if (!item) return;
+      const badge = suggestionOwnership(item, ownership);
+      const label = option.querySelector(".suggestion-ownership");
+      label.textContent = `${badge.owned ? "✓ " : ""}${badge.text}`;
+      label.classList.toggle("is-owned", badge.owned);
+    });
   }
   function choose(i) {
     const item = items[i];
@@ -127,9 +145,89 @@ export function setupAutocomplete({
       choose(selected);
     } else if (["Escape", "Tab", "Enter"].includes(event.key)) close();
   });
-  input.addEventListener("blur", close);
+  input.addEventListener("blur", () => {
+    // A phone can dismiss its keyboard before the finger is released.
+    if (!touch) close();
+  });
   panel.addEventListener("pointerdown", (event) => {
-    if (event.target.closest("[data-suggestion]")) event.preventDefault();
+    const option = event.target.closest("[data-suggestion]");
+    if (!option) return;
+    if (event.pointerType === "touch") touch = { option };
+    else event.preventDefault();
+  });
+  panel.addEventListener(
+    "touchstart",
+    (event) => {
+      const option = event.target.closest("[data-suggestion]");
+      const point = event.touches[0];
+      touch =
+        option && event.touches.length === 1
+          ? {
+              option,
+              id: point.identifier,
+              x: point.clientX,
+              y: point.clientY,
+              moved: false,
+            }
+          : null;
+    },
+    { passive: true },
+  );
+  panel.addEventListener(
+    "touchmove",
+    (event) => {
+      if (!touch) return;
+      const point = [...event.touches].find(
+        (point) => point.identifier === touch.id,
+      );
+      if (
+        !point ||
+        Math.hypot(point.clientX - touch.x, point.clientY - touch.y) > 10
+      )
+        touch.moved = true;
+    },
+    { passive: true },
+  );
+  panel.addEventListener(
+    "scroll",
+    () => {
+      if (touch) touch.moved = true;
+    },
+    true,
+  );
+  panel.addEventListener("touchcancel", () => {
+    touch = null;
+  });
+  panel.addEventListener(
+    "touchend",
+    (event) => {
+      const pending = touch;
+      touch = null;
+      const point = [...event.changedTouches].find(
+        (point) => point.identifier === pending?.id,
+      );
+      if (
+        !pending ||
+        pending.moved ||
+        !point ||
+        Math.hypot(point.clientX - pending.x, point.clientY - pending.y) > 10
+      )
+        return;
+      // WebKit can omit a compatibility click. Commit a completed tap directly,
+      // suppressing that optional click so it cannot activate content underneath.
+      event.preventDefault();
+      choose(Number(pending.option.dataset.suggestion));
+    },
+    { passive: false },
+  );
+  document.addEventListener("pointerdown", (event) => {
+    if (
+      enabled &&
+      !panel.hidden &&
+      event.target !== input &&
+      !panel.contains(event.target)
+    )
+      close();
   });
   panel.addEventListener("click", (event) => {
     const option = event.target.closest("[data-suggestion]");
@@ -137,6 +235,7 @@ export function setupAutocomplete({
   });
   return {
     close,
+    updateOwnership,
     setEnabled(value) {
       close();
       enabled = value;

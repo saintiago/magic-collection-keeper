@@ -1,4 +1,5 @@
 import { setupAutocomplete } from "./autocomplete.js";
+import { searchOwnership } from "./search-ownership.js";
 import { createPrintingPicker } from "./printing-picker.js";
 import { collectionCard } from "./collection-view.js";
 import { setupTagNavigation, tagFromHash } from "./tag-navigation.js";
@@ -55,6 +56,7 @@ const collection = createCollectionLoader({
     }
     collectionState = state;
     owned = state.rows || [];
+    autocomplete.updateOwnership(searchOwnership(state));
     render();
   },
 });
@@ -119,10 +121,25 @@ const autocomplete = setupAutocomplete({
     render();
   },
 });
+autocomplete.setEnabled(true);
 async function api(path, options) {
   const mutation = options?.method && options.method !== "GET";
   if (mutation) collection.invalidate();
-  const result = await request(path, options);
+  const inventoryMutation = mutation && path.startsWith("/api/collection");
+  if (inventoryMutation)
+    autocomplete.updateOwnership(
+      searchOwnership({ ...collectionState, status: "updating" }),
+    );
+  let result;
+  try {
+    result = await request(path, options);
+  } catch (error) {
+    if (inventoryMutation)
+      autocomplete.updateOwnership(
+        searchOwnership({ ...collectionState, status: "error" }),
+      );
+    throw error;
+  }
   if (mutation) {
     collection.invalidate();
     if (path.startsWith("/api/collection") && Array.isArray(result))
@@ -196,13 +213,9 @@ function render() {
   const selectedTag = filterTags.find((tag) => tag.id === activeTagId);
   let rows = cards.map((card) => ({ card }));
   if (mode === "collection") {
-    const q = $("search").value.toLowerCase().trim(),
-      color = $("color").value;
+    const color = $("color").value;
     rows = owned.filter(
       (r) =>
-        `${r.card.name} ${r.card.set_name} ${r.card.set} ${r.card.collector_number} ${r.card.type_line} ${r.language} ${r.condition}`
-          .toLowerCase()
-          .includes(q) &&
         (!activeTagId ||
           (r.locations ?? []).some((a) => a.tag_id === activeTagId) ||
           (r.tag_ids ?? []).includes(activeTagId)) &&
@@ -270,15 +283,16 @@ function render() {
   $("more").hidden = mode !== "catalog" || !hasMore;
   $("more").disabled = loading;
 }
-function switchMode(next) {
+function switchMode(next, { keepIdentity = false } = {}) {
   if (next !== "import" && location.hash === "#import")
     history.pushState(null, "", "#");
-  autocomplete.setEnabled(next === "catalog");
+  autocomplete.setEnabled(next !== "import");
   searchController?.abort();
-  selectedIdentity = "";
+  if (!keepIdentity) selectedIdentity = "";
   mode = next;
   const importing = mode === "import";
   $("import-page").hidden = !importing;
+  $("shared-search").hidden = importing;
   document.querySelector(".library").hidden = importing;
   document.querySelector(".page-heading .actions").hidden = importing;
   $("import-nav").classList.toggle("active", importing);
@@ -299,28 +313,22 @@ function switchMode(next) {
   loading = false;
   $("search-submit").disabled = false;
   message();
-  $("search").value = "";
   cards = [];
   query = "";
   hasMore = false;
   const catalog = mode === "catalog";
   $("title").innerHTML = catalog
-    ? "Discover cards<span>.</span>"
+    ? "All cards<span>.</span>"
     : "My collection<span>.</span>";
   $("subtitle").textContent = catalog
     ? "Find the right card. Keep the exact printing."
     : "Your cards, thoughtfully kept. Build a collection you know by heart.";
-  $("breadcrumb").textContent = catalog ? "Discover cards" : "My collection";
+  $("breadcrumb").textContent = catalog ? "All cards" : "My collection";
   $("section-title").firstChild.textContent = catalog
     ? "Card catalog "
     : "Your library ";
   $("stats").hidden = catalog;
   $("filters").hidden = catalog;
-  $("search-submit").hidden = !catalog;
-  $("search-help").hidden = !catalog;
-  $("search").placeholder = catalog
-    ? "Card name in any language, e.g. Piracy or relampa…"
-    : "Search your collection…";
   $("catalog-nav").classList.toggle("active", catalog);
   $("collection-nav").classList.toggle("active", !catalog);
   $("add").hidden = catalog;
@@ -372,6 +380,7 @@ async function search(more = false, openSelection = false) {
     message("Enter a card name or a set and collector number.", true);
     return;
   }
+  if (mode !== "catalog") switchMode("catalog", { keepIdentity: true });
   autocomplete.close();
   searchController?.abort();
   searchController = new AbortController();
@@ -383,9 +392,12 @@ async function search(more = false, openSelection = false) {
     hasMore = false;
   }
   loading = true;
-  message("Searching for matching cards…");
+  message(
+    openSelection ? `Opening ${query}…` : "Searching for matching cards…",
+  );
   $("search-submit").disabled = true;
   render();
+  if (openSelection) $("message").scrollIntoView({ block: "nearest" });
   try {
     const data = await api(
       `/api/discover?${new URLSearchParams({ q: query, page: nextPage, ...(selectedIdentity ? { oracle: selectedIdentity } : {}) })}`,
@@ -414,7 +426,18 @@ async function search(more = false, openSelection = false) {
       `${data.total.toLocaleString()} matching cards. English results; choose a card to review its printing.${data.catalog ? ` Names updated ${new Date(data.catalog.updated_at).toLocaleDateString()}.${data.catalog.stale ? " Catalog refresh delayed; showing the last saved names." : ""}` : ""}`,
     );
   } catch (e) {
-    if (token === requestId) message(e.message, true);
+    if (token === requestId) {
+      message(e.message, true);
+      if (openSelection) {
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "secondary";
+        retry.textContent = "Retry opening card";
+        retry.onclick = () => search(false, true);
+        $("message").append(" ", retry);
+        $("message").scrollIntoView({ block: "nearest" });
+      }
+    }
   } finally {
     if (token === requestId) {
       loading = false;
@@ -456,10 +479,7 @@ $("retry-collection").onclick = initializeCollection;
 $("manage-tags").onclick = () => tagController.manager();
 $("search-form").onsubmit = (e) => {
   e.preventDefault();
-  if (mode === "catalog") search();
-};
-$("search").oninput = () => {
-  if (mode === "collection") render();
+  search();
 };
 ["color", "set-filter", "finish-filter", "sort"].forEach(
   (id) => ($(id).onchange = render),

@@ -70,7 +70,8 @@ test("UC-02/03 collection filters, every sort, refresh success and failure", asy
   await expect(page.locator("#foils")).toHaveText("5");
   await expect(page.locator("#unique")).toHaveText("2");
   await page.locator("#search").fill("Alpha");
-  await expect(page.locator(".card")).toHaveCount(1);
+  // Shared card search does not silently filter the owned library by a different rule.
+  await expect(page.locator(".card")).toHaveCount(2);
   await page.locator("#search").fill("");
   await page.locator("#set-filter").selectOption("two");
   await expect(page.locator(".card-title")).toHaveText("Beta");

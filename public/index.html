@@ -18,7 +18,7 @@
       <nav>
         <button id="collection-nav" class="active">
           ▦ <span>My collection</span><span id="nav-count">—</span></button
-        ><button id="catalog-nav">⌕ <span>Discover cards</span></button>
+        ><button id="catalog-nav">⌕ <span>All cards</span></button>
         <button id="import-nav">⇩ <span>Import</span></button>
       </nav>
       <div class="sidebar-bottom">
@@ -51,6 +51,37 @@
         </div>
       </section>
       <section id="import-page" hidden aria-label="Import cards"></section>
+      <section
+        id="shared-search"
+        class="unified-search"
+        aria-label="Search all cards"
+      >
+        <label for="search" class="eyebrow">Search all Magic cards</label>
+        <form id="search-form">
+          <div class="search-autocomplete">
+            <div class="search-box">
+              <span>⌕</span
+              ><input
+                id="search"
+                aria-label="Search cards"
+                placeholder="Any card, any language — e.g. Piracy or relampa…"
+                autocomplete="off"
+              />
+              <button id="search-submit" class="primary">Search cards</button>
+            </div>
+            <div id="suggestion-panel" class="suggestion-panel" hidden></div>
+          </div>
+        </form>
+        <p id="search-help" class="hint">
+          Search the same card catalog from any view. Suggestions show your
+          owned copies when available. Results and rules are in English; choose
+          an exact printing after opening a card. Advanced filters:
+          <button type="button" class="text-button" id="example">
+            set:blb cn:1</button
+          >.
+        </p>
+        <div id="message" role="status" aria-live="polite"></div>
+      </section>
       <section class="stats" id="stats">
         <div>
           <span>Total cards</span><strong id="total">—</strong
@@ -82,54 +113,31 @@
             Clear tag filter
           </button>
         </div>
-        <form id="search-form">
-          <div class="search-autocomplete">
-            <div class="search-box">
-              <span>⌕</span
-              ><input
-                id="search"
-                aria-label="Search cards"
-                placeholder="Search your collection…"
-                autocomplete="off"
-              /><button id="search-submit" class="primary" hidden>
-                Search cards
-              </button>
-            </div>
-            <div id="suggestion-panel" class="suggestion-panel" hidden></div>
-          </div>
-          <div class="filters" id="filters">
-            <select id="tag-filter" aria-label="Filter by tag or location">
-              <option value="">All tags & locations</option>
-            </select>
-            <select id="color" aria-label="Filter by color">
-              <option value="">All colors</option>
-              <option value="W">White</option>
-              <option value="U">Blue</option>
-              <option value="B">Black</option>
-              <option value="R">Red</option>
-              <option value="G">Green</option>
-              <option value="C">Colorless</option></select
-            ><select id="set-filter" aria-label="Filter by set">
-              <option value="">All sets</option></select
-            ><select id="finish-filter" aria-label="Filter by finish">
-              <option value="">All finishes</option>
-              <option value="nonfoil">Nonfoil</option>
-              <option value="foil">Foil</option>
-              <option value="etched">Etched</option></select
-            ><select id="sort" aria-label="Sort collection">
-              <option value="name">Name: A–Z</option>
-              <option value="recent">Recently added</option>
-              <option value="quantity">Quantity: high to low</option>
-            </select>
-          </div>
-        </form>
-        <p id="search-help" class="hint" hidden>
-          Names in any language; results and rules in English. One result per
-          card. Choose its exact printing after opening it. Advanced filters:
-          <button type="button" class="text-button" id="example">
-            set:blb cn:1</button
-          >.
-        </p>
+        <div class="filters" id="filters">
+          <select id="tag-filter" aria-label="Filter by tag or location">
+            <option value="">All tags & locations</option>
+          </select>
+          <select id="color" aria-label="Filter by color">
+            <option value="">All colors</option>
+            <option value="W">White</option>
+            <option value="U">Blue</option>
+            <option value="B">Black</option>
+            <option value="R">Red</option>
+            <option value="G">Green</option>
+            <option value="C">Colorless</option></select
+          ><select id="set-filter" aria-label="Filter by set">
+            <option value="">All sets</option></select
+          ><select id="finish-filter" aria-label="Filter by finish">
+            <option value="">All finishes</option>
+            <option value="nonfoil">Nonfoil</option>
+            <option value="foil">Foil</option>
+            <option value="etched">Etched</option></select
+          ><select id="sort" aria-label="Sort collection">
+            <option value="name">Name: A–Z</option>
+            <option value="recent">Recently added</option>
+            <option value="quantity">Quantity: high to low</option>
+          </select>
+        </div>
         <div id="collection-status" role="status" aria-live="polite">
           <p id="collection-status-text">Loading your collection…</p>
           <p id="collection-error" class="error"></p>
@@ -137,7 +145,6 @@
             Retry collection
           </button>
         </div>
-        <div id="message" role="status" aria-live="polite"></div>
         <div id="grid" class="card-grid"></div>
         <div id="empty" class="empty"></div>
         <button id="more" class="secondary more" hidden>Load more cards</button>

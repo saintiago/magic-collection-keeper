@@ -55,18 +55,25 @@ test("LIVE-08 Discover opens owned printings and persists tag add/remove without
   });
   const tag = registry.find((t) => t.label === label);
   expect(tag).toBeTruthy();
+  const ownedCount = before
+    .filter((row) => row.card.oracle_id === target.card.oracle_id)
+    .reduce((sum, row) => sum + row.quantity, 0);
   async function open(keyboard = false) {
-    await page.locator("#catalog-nav").click();
+    await page.locator("#collection-nav").click();
     const input = page.getByRole("combobox", { name: "Search cards" });
     await input.fill("relampa");
-    await expect(page.getByRole("option").first()).toContainText(
-      "Lightning Bolt",
-      { timeout: 30000 },
-    );
+    const suggestion = page
+      .locator("#suggestion-panel")
+      .getByRole("option")
+      .first();
+    await expect(suggestion).toContainText("Lightning Bolt", {
+      timeout: 30000,
+    });
+    await expect(suggestion).toContainText(`${ownedCount} owned`);
     if (keyboard) {
       await input.press("ArrowDown");
       await input.press("Enter");
-    } else await page.getByRole("option").first().click();
+    } else await suggestion.click();
     await expect(page.locator("#detail")).toBeVisible({ timeout: 30000 });
     await expect(
       page.locator(".owned-printing").filter({ hasText: "Nonfoil" }),

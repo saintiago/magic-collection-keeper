@@ -132,6 +132,15 @@ test("UC-17 verified accounts isolate snapshots and sign-out clears them", async
   let owner = "one",
     delay = false,
     release;
+  await page.route("**/api/suggest?*", (route) =>
+    route.fulfill({
+      json: {
+        suggestions: [
+          { name: "Saved collection", printing_id: "p", oracle_id: "saved" },
+        ],
+      },
+    }),
+  );
   await page.route("**/config.json", (route) =>
     route.fulfill({
       json: { region: "us-east-1", clientId: "test", apiUrl: "" },
@@ -159,6 +168,10 @@ test("UC-17 verified accounts isolate snapshots and sign-out clears them", async
   await page.goto("/");
   await expect(page.locator("#total")).toHaveText("4,094");
   await cacheReady(page);
+  await page.getByRole("combobox", { name: "Search cards" }).fill("Saved");
+  await expect(
+    page.locator("#suggestion-panel").getByRole("option"),
+  ).toContainText("4094 owned");
   owner = "two";
   delay = true;
   await page.evaluate(() =>
@@ -171,12 +184,20 @@ test("UC-17 verified accounts isolate snapshots and sign-out clears them", async
   await expect.poll(() => Boolean(release)).toBe(true);
   await expect(page.locator("#total")).toHaveText("—");
   await expect(page.locator(".card")).toHaveCount(0);
+  await page.getByRole("combobox", { name: "Search cards" }).fill("Saved");
+  await expect(
+    page.locator("#suggestion-panel").getByRole("option"),
+  ).toContainText("Checking ownership");
   release();
   await expect(page.locator("#total")).toHaveText("0");
+  await expect(
+    page.locator("#suggestion-panel").getByRole("option"),
+  ).toContainText("Not owned");
   await page.locator("#sign-out").click();
   await expect(
     page.getByRole("button", { name: "Sign in", exact: true }),
   ).toBeVisible();
+  await expect(page.locator(".suggestion-ownership")).toHaveCount(0);
   const count = await page.evaluate(
     () =>
       new Promise((resolve) => {

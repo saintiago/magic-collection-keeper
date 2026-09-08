@@ -103,6 +103,8 @@ A September 8 local server probe received Moxfield HTTP 403 with the application
 
 ## Public name catalog refresh
 
+The main workflow installs Chromium and WebKit. After standard browser checks it runs the discovery suite in WebKit; after the eight protected cloud checks it runs LIVE-09 with `playwright.mobile-live.config.js` using keeper-e2e. This mobile test is read-only and uses genuine upstream responses with a short delivery delay. A September8 production20.1 probe reproduced zero detail requests after WebKit touch (pointerdown canceled and no click delivered); desktop clicks worked. Physical Chrome on iPhone remains separate acceptance evidence and must not be claimed from desktop emulation.
+
 LIVE-08 uses only keeper-tags and its existing synthetic source inventory. It creates a uniquely named temporary role, exercises Discover detail tag add/remove and reload, and restores the original assignments and removes that role in cleanup. It does not add/delete owned entries or modify the owner account. An ownership refresh failure in Discover detail has its own **Retry owned printings** control; a catalog hit alone must never be interpreted as an owned entry.
 
 Run `node scripts/build-name-index.mjs` before local discovery testing. It fetches the official all_cards metadata once, downloads its gzip JSONL bulk file and streams it into `build/catalog`; complete downloads are cached under ignored `data/catalog`. For a previously verified recent snapshot, set `SCRYFALL_BULK_FILE` and `SCRYFALL_BULK_METADATA` explicitly. Never commit the bulk file, generated index or private data. A snapshot older than 7 days or missing the real Piracy/Relámpago acceptance cases is rejected before publication.
