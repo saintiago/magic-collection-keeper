@@ -7,6 +7,8 @@ export async function routeCollection(
   input,
   query = {},
 ) {
+  if (path === "/api/card" && method === "GET")
+    return service.card(query.oracle || "", query.printing || "");
   if (path === "/api/discover" && method === "GET")
     return service.discover(
       (query.q || "").trim(),

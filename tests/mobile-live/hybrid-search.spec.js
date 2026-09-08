@@ -71,6 +71,7 @@ test("LIVE-11 public worker index, multilingual local search, cached reload and 
   await expect(page.locator("#detail h2")).toHaveText("Lightning Bolt", {
     timeout: 30000,
   });
+  await expect(page.locator("#inventory-form")).toBeVisible({ timeout: 30000 });
   await page.locator("#close").click();
   const opened = calls.details;
   await input.fill("Lightning Bolt");
@@ -78,6 +79,7 @@ test("LIVE-11 public worker index, multilingual local search, cached reload and 
   await options().first().tap();
   await expect(page.locator("#detail")).toBeVisible();
   expect(calls.details).toBe(opened);
+  await expect(page.locator("#inventory-form")).toBeVisible({ timeout: 30000 });
   await page.locator("#close").click();
   expect(calls.names).toBe(counts.names);
   const warmMetrics = await page.evaluate(() => window.searchMetrics);

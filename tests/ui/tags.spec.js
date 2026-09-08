@@ -149,6 +149,10 @@ test("UC-10 contextual typed tags, allocation shortfall, rename, filtering and s
     .getByRole("checkbox", { name: "Card Draw (Role)", exact: true })
     .check();
   await page.locator("#save-tags").click();
+  await expect(page.locator("#detail .allocation-warning")).toHaveText(
+    "3 assigned · 2 owned",
+  );
+  await page.locator("#close").click();
   await expect(page.locator(".card .allocation-warning")).toHaveText(
     "3 assigned · 2 owned",
   );
@@ -192,6 +196,7 @@ test("UC-10 contextual typed tags, allocation shortfall, rename, filtering and s
     .getByRole("checkbox", { name: "Card Draw (Role)", exact: true })
     .uncheck();
   await page.locator("#save-tags").click();
+  await page.locator("#close").click();
   await page.locator("#tag-filter").selectOption("");
   await expect(page.locator(".card .allocation-warning")).toHaveCount(0);
   await page.locator("#manage-tags").click();

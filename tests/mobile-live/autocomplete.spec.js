@@ -72,8 +72,8 @@ test("LIVE-09 real WebKit touch opens English and translated suggestions exactly
       );
     const count = resolutions;
     await option.tap();
-    await expect(page.locator("#message")).toHaveText(`Opening ${name}…`);
-    await expect(page.locator("#message")).toBeInViewport();
+    await expect(page.locator("#card-status")).toHaveText(`Opening ${name}…`);
+    await expect(page.locator("#card-status")).toBeInViewport();
     await expect(page.locator("#detail")).toBeVisible({ timeout: 30000 });
     await expect(page.locator("#detail h2")).toHaveText(name);
     await expect(page.locator(".detail-ownership")).toContainText(
@@ -81,6 +81,9 @@ test("LIVE-09 real WebKit touch opens English and translated suggestions exactly
       { timeout: 30000 },
     );
     expect(resolutions).toBe(count + 1);
+    await expect(page.locator("#inventory-form")).toBeVisible({
+      timeout: 30000,
+    });
     await page.locator("#close").click();
   }
   const input = page.getByRole("combobox", { name: "Search cards" });
@@ -100,7 +103,9 @@ test("LIVE-09 real WebKit touch opens English and translated suggestions exactly
   await expect(page.locator("#detail h2")).toHaveText("Lightning Bolt", {
     timeout: 30000,
   });
+  await expect(page.locator("#inventory-form")).toBeVisible();
   expect(resolutions).toBe(beforeRecent + 1);
+  await expect(page.locator("#inventory-form")).toBeVisible({ timeout: 30000 });
   await page.locator("#close").click();
   await input.fill("Piracy");
   await page.locator("#search-submit").tap();

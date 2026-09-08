@@ -48,6 +48,9 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
     await expect(page.locator(".card")).toHaveCount(before.length);
     await page.locator(".card-open").first().tap();
     await expect(page.locator("#detail")).toBeVisible();
+    await expect(page.locator("#inventory-form")).toBeVisible({
+      timeout: 30000,
+    });
     await page.locator("#close").click();
     await page.locator("#home-nav").click();
     await expect(page.locator(".home-card")).toHaveCount(1);
@@ -92,6 +95,9 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
     ).toContainText(label);
     await page.locator(".home-card").tap();
     await expect(page.locator("#detail")).toBeVisible();
+    await expect(page.locator("#inventory-form")).toBeVisible({
+      timeout: 30000,
+    });
     await page.locator("#close").click();
     expect(await api("collection")).toEqual(before);
     expect(

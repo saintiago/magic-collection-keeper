@@ -240,7 +240,8 @@ test("UC-24/26 exact ranking, Spanish autocomplete keyboard selection and explic
     "card-suggestion-0",
   );
   await input.press("Enter");
-  await expect(page.locator(".card-title")).toHaveText(["Lightning Bolt"]);
+  await expect(page.locator("#card-heading")).toHaveText("Lightning Bolt");
+  await expect(page.locator("#grid .card")).toHaveCount(0);
   await expect(input).toHaveValue("Lightning Bolt");
   await expect(page.locator("#detail")).toBeVisible();
   await expect(page.locator(".detail-ownership")).toContainText(
@@ -331,7 +332,8 @@ test("UC-26 mobile touch choice, no matches, suggestion/search failures and retr
     page.locator("#suggestion-panel").getByRole("option"),
   ).toHaveCount(1);
   await page.locator("#suggestion-panel").getByRole("option").tap();
-  await expect(page.locator(".card-title")).toHaveText(["Lightning Bolt"]);
+  await expect(page.locator("#card-heading")).toHaveText("Lightning Bolt");
+  await expect(page.locator("#grid .card")).toHaveCount(0);
   await expect(page.locator("#detail")).toBeVisible();
   expect(
     await page.evaluate(
@@ -365,8 +367,10 @@ test("UC-27 failed selected-card resolution can retry and late selection cannot 
   f.failSearch(true);
   await input.fill("Piracy");
   await page.locator("#suggestion-panel").getByRole("option").first().click();
-  await expect(page.locator("#message")).toContainText("Catalog unavailable");
-  await expect(page.locator("#detail")).not.toBeVisible();
+  await expect(page.locator("#card-status")).toContainText(
+    "Catalog unavailable",
+  );
+  await expect(page.locator("#inventory-form")).toHaveCount(0);
   f.failSearch(false);
   await page.getByRole("button", { name: "Retry opening card" }).click();
   await expect(page.locator("#detail")).toBeVisible();
@@ -410,10 +414,13 @@ test("UC-28 native touch selection survives keyboard blur, shows slow opening, a
     ),
   );
   await page.locator("#suggestion-panel").getByRole("option").tap();
-  await expect(page.locator("#message")).toHaveText("Opening Lightning Bolt…");
-  await expect(page.locator("#message")).toBeInViewport();
+  await expect(page.locator("#card-status")).toHaveText(
+    "Opening Lightning Bolt…",
+  );
+  await expect(page.locator("#card-status")).toBeInViewport();
   await expect(page.locator("#suggestion-panel")).toBeHidden();
-  await expect(page.locator("#detail")).not.toBeVisible();
+  await expect(page.locator("#detail")).toBeVisible();
+  await expect(page.locator("#inventory-form")).toHaveCount(0);
   await expect.poll(() => f.counts().searchRequests).toBe(1);
   f.releaseSearch();
   await expect(page.locator("#detail")).toBeVisible();
@@ -566,7 +573,8 @@ test("UC-27 ownership refresh failure never claims unowned and retry recovers; g
     "No owned copies",
   );
   await page.locator("#close").click();
-  await page.locator(".card-open").click();
+  await page.locator("#search-submit").click();
+  await page.locator(".card-open").first().click();
   await expect(page.locator(".detail-ownership")).toContainText(
     "No owned copies",
   );

@@ -20,6 +20,28 @@ export function createDiscoveryService({ names, catalog }) {
     return pending.get(key);
   }
   return {
+    async card(oracle, printing) {
+      const uuid =
+        /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+      if (!uuid.test(printing) || !uuid.test(oracle))
+        throw new ApplicationError("Invalid card identity", 400);
+      const cards = await cached(`printing:${printing}:${oracle}`, () =>
+        catalog.resolve([printing]),
+      );
+      const card = cards.find(
+        (c) =>
+          c.id === printing &&
+          c.oracle_id === oracle &&
+          !c.digital &&
+          c.games?.includes("paper"),
+      );
+      if (!card)
+        throw new ApplicationError(
+          "This paper printing could not be verified. Choose another printing.",
+          404,
+        );
+      return { cards: [card], total: 1, hasMore: false };
+    },
     async suggest(query) {
       validateSearch(query, 1);
       if (query.includes(":")) return { suggestions: [], catalog: null };

@@ -74,7 +74,7 @@ test("LIVE-07 real multilingual bulk names rank English identities and preserve 
   );
   await input.press("ArrowDown");
   await input.press("Enter");
-  await expect(page.locator(".card-title")).toHaveText(["Lightning Bolt"], {
+  await expect(page.locator("#card-heading")).toHaveText("Lightning Bolt", {
     timeout: 30000,
   });
   await expect(page.locator("#detail")).toBeVisible();
@@ -98,7 +98,12 @@ test("LIVE-07 real multilingual bulk names rank English identities and preserve 
   });
   await page.locator(".printing-choice").first().click();
   await expect(page.locator("#detail .printing")).toContainText("ES");
+  await page.reload();
+  await expect(page.locator("#detail .printing")).toContainText("ES", {
+    timeout: 30000,
+  });
   await expect(page.locator(".oracle")).toContainText("3 damage");
+  await expect(page.locator("#inventory-form")).toBeVisible({ timeout: 30000 });
   await page.locator("#close").click();
   expect(await get("collection")).toEqual(before);
   console.log(

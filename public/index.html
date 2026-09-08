@@ -144,6 +144,17 @@
         <div id="empty" class="empty"></div>
         <button id="more" class="secondary more" hidden>Load more cards</button>
       </section>
+      <section
+        id="detail"
+        class="card-page"
+        aria-labelledby="card-heading"
+        hidden
+      >
+        <button type="button" class="secondary" id="close">← Back</button>
+        <h2 id="card-heading" tabindex="-1">Card details</h2>
+        <p id="card-status" role="status" aria-live="polite"></p>
+        <div id="detail-content"></div>
+      </section>
       <footer>
         Card data and images from
         <a href="https://scryfall.com" target="_blank" rel="noreferrer"
@@ -154,12 +165,6 @@
         </button>
       </footer>
     </main>
-    <dialog id="detail">
-      <button class="close" id="close" aria-label="Close card details">
-        ×
-      </button>
-      <div id="detail-content"></div>
-    </dialog>
     <script src="/app.js" type="module"></script>
   </body>
 </html>

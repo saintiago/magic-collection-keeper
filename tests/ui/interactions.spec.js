@@ -153,7 +153,7 @@ test("UC-04 catalog blank, no-result, error, pagination, example and detail fiel
   await expect(page.locator("#detail")).not.toBeVisible();
   await page.locator(".card").last().click();
   await expect(page.locator("#detail .image-missing")).toBeVisible();
-  await page.keyboard.press("Escape");
+  await page.locator("#close").click();
   await expect(page.locator("#detail")).not.toBeVisible();
 });
 test("UC-05 add failure, retry, remove cancellation and remove failure", async ({

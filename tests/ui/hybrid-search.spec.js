@@ -320,7 +320,7 @@ test("UC-34 fresh detail failure stays retryable and cannot create ownership", a
   await expect(
     page.getByRole("button", { name: "Retry opening card" }),
   ).toBeVisible();
-  await expect(page.locator("#detail")).not.toBeVisible();
+  await expect(page.locator("#inventory-form")).toHaveCount(0);
   flags.detailsFail = false;
   await page.getByRole("button", { name: "Retry opening card" }).click();
   await expect(page.locator("#detail")).toBeVisible();

@@ -115,6 +115,7 @@ test("LIVE-08 Discover opens owned printings and persists tag add/remove without
     await api(`tags/${tag.id}`, "DELETE");
   }
   expect(await api("collection")).toEqual(before);
+  await expect(page.locator("#inventory-form")).toBeVisible({ timeout: 30000 });
   await page.locator("#close").click();
   await page.locator("#sign-out").click();
 });

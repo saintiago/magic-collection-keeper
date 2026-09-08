@@ -25,7 +25,7 @@ jobs:
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:ui
       - name: Verify WebKit autocomplete touch
-        run: npx playwright test tests/ui/discovery.spec.js tests/ui/home.spec.js tests/ui/hybrid-search.spec.js --browser=webkit --workers=1
+        run: npx playwright test tests/ui/discovery.spec.js tests/ui/home.spec.js tests/ui/hybrid-search.spec.js tests/ui/card-page.spec.js --browser=webkit --workers=1
       - uses: actions/upload-artifact@v4
         with:
           name: keeper-build

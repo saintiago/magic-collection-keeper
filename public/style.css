@@ -1157,3 +1157,39 @@ dialog::backdrop {
     grid-column: 1 / -1;
   }
 }
+
+.card-page {
+  max-width: 960px;
+  margin: 24px auto 0;
+  scroll-margin-top: 12px;
+}
+.card-page > h2 {
+  font-size: clamp(26px, 5vw, 36px);
+  margin: 20px 0;
+}
+.card-page #detail-content {
+  grid-template-columns: minmax(220px, 330px) minmax(0, 1fr);
+  align-items: start;
+}
+.card-page .oracle {
+  max-height: none;
+  overflow: visible;
+  font-size: 15px;
+}
+.card-page .type,
+.card-page .printing {
+  font-size: 14px;
+}
+.card-page #card-status:empty {
+  display: none;
+}
+@media (max-width: 650px) {
+  .card-page #detail-content {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .card-page .detail-image {
+    width: min(100%, 280px);
+    max-width: 280px;
+  }
+}

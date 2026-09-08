@@ -1,5 +1,8 @@
 import { setupAutocomplete } from "./autocomplete.js";
 import { createNameClient } from "./name-client.js";
+import { createCardPage } from "./card-page.js";
+import { createCardNavigation } from "./card-navigation.js";
+import { cardFromHash, validCardId } from "./card-route.js";
 import { createDetailCache } from "./detail-cache.js";
 import { searchOwnership } from "./search-ownership.js";
 import { createRecentSearches } from "./recent-searches.js";
@@ -33,10 +36,9 @@ let owned = [],
   hasMore = false,
   loading = false,
   requestId = 0,
-  searchController,
-  selectedIdentity = "",
-  selectedPrinting = "";
+  searchController;
 const detailCache = createDetailCache();
+let collectionReady = Promise.resolve();
 let filterTags = [],
   activeTagId = tagFromHash(location.hash),
   registryReady = false;
@@ -74,15 +76,16 @@ const tagController = createTagController({
   onUse: (id) => home.tag(id),
   onChanged: () => {
     collection.invalidate();
-    return refresh();
+    return refresh().then(() => cardPage.refreshOwned(owned));
   },
 });
 const printingPicker = createPrintingPicker({
   api: request,
-  onChoose: (card) => detail({ card }),
+  onChoose: (card) => detail({ card }, { replace: true }),
 });
 const showDetail = createCardDetail({
   loadOwned: async () => {
+    await collectionReady;
     if (!(await collection.refresh()))
       throw new Error(
         "Your collection could not be refreshed. Retry to see your owned printings and tags.",
@@ -90,11 +93,9 @@ const showDetail = createCardDetail({
     return collectionState.rows;
   },
   onPrinting: (card) => {
-    $("detail").close();
     printingPicker(card);
   },
   onTags: (row) => {
-    document.getElementById("detail").close();
     tagController.edit(row);
   },
   api,
@@ -102,10 +103,121 @@ const showDetail = createCardDetail({
     if (collectionState.rows !== updated) collection.replace(updated);
   },
   notify: message,
+  onDone: () => cardNavigation.back(),
 });
-function detail(row) {
-  home.card(row.card);
-  showDetail(row);
+const viewControls = ["search", "color", "set-filter", "finish-filter", "sort"];
+const cardNavigation = createCardNavigation({
+  sync: () => tagNavigation.sync(),
+  onRestored: () => autocomplete.close(),
+  beforeBack: () => {
+    $("search").disabled = true;
+    $("close").disabled = true;
+  },
+  home: () => switchMode("home"),
+  capture: () => ({
+    mode,
+    cards,
+    query,
+    page,
+    hasMore,
+    activeTagId,
+    controls: Object.fromEntries(viewControls.map((id) => [id, $(id).value])),
+    message: $("message").textContent,
+  }),
+  restore: (view) => {
+    $("search").disabled = false;
+    $("close").disabled = false;
+    cardPage.hide();
+    ({ mode, cards, query, page, hasMore, activeTagId } = view);
+    for (const [id, value] of Object.entries(view.controls))
+      $(id).value = value;
+    autocomplete.setEnabled(mode !== "import");
+    setFilterTags(filterTags);
+    showScreen(mode);
+    if (mode === "import") importPage.show();
+    message(view.message);
+    render();
+  },
+});
+const cardPage = createCardPage({
+  root: $("detail"),
+  back: () => cardNavigation.back(),
+  enter: (ref, options) => {
+    $("search").disabled = false;
+    $("close").disabled = false;
+    closeCardEditors();
+    cardNavigation.enter(ref, options);
+    message();
+    searchController?.abort();
+    requestId++;
+    loading = false;
+    $("search-submit").disabled = false;
+    autocomplete.close();
+    mode = "card";
+    importPage.hide();
+    showScreen(mode);
+    render();
+  },
+  renderDetail: showDetail,
+  onOpened: (card) => home.card(card),
+  load: async (ref, signal) => {
+    if (ref.entry) {
+      await collectionReady;
+      if (!(await collection.refresh()))
+        throw Error(
+          "Your collection could not be refreshed. Retry opening this entry.",
+        );
+      if (signal.aborted) throw signal.reason;
+      const row = owned.find(
+        (row) =>
+          String(row.id) === ref.entry &&
+          row.card.id === ref.printing_id &&
+          row.card.oracle_id === ref.oracle_id,
+      );
+      if (!row)
+        throw Error(
+          "This entry is no longer in your collection. Go back to choose a card.",
+        );
+      return { ...row, source: "owned-entry" };
+    }
+    const exact = validCardId(ref.printing_id) && validCardId(ref.oracle_id);
+    const params = new URLSearchParams({
+      q: ref.name || "Card",
+      page: "1",
+      oracle: ref.oracle_id || "",
+      ...(exact ? { printing: ref.printing_id } : {}),
+    });
+    const fetcher = () =>
+      api(
+        `${ref.lang && ref.lang !== "en" ? "/api/card" : "/api/discover"}?${params}`,
+        { signal },
+      );
+    const data = exact
+      ? await detailCache.load(ref.oracle_id, ref.printing_id, fetcher, signal)
+      : await fetcher();
+    const card = data.cards.find(
+      (c) =>
+        c.oracle_id === ref.oracle_id && (!exact || c.id === ref.printing_id),
+    );
+    if (!card)
+      throw Error(
+        "This card could not be verified. Go back and choose it again.",
+      );
+    if (data.timing)
+      window.dispatchEvent(
+        new CustomEvent("keeper-search-metric", { detail: data.timing }),
+      );
+    return {
+      card,
+      source:
+        data.timing?.phase === "browser-detail-hit"
+          ? "browser-cache"
+          : "network",
+    };
+  },
+});
+function detail(row, options) {
+  cardPage.open(row, options);
 }
 const importPage = createImportPage({
   root: $("import-page"),
@@ -121,13 +233,13 @@ const autocomplete = setupAutocomplete({
   panel: $("suggestion-panel"),
   api: request,
   onSelect: (item) => {
-    selectedIdentity = item.kind === "query" ? "" : item.oracle_id;
-    selectedPrinting = item.kind === "query" ? "" : item.printing_id;
-    if (item.kind !== "query") recentSearches.remember(item);
-    search(false, item.kind !== "query");
+    if (item.kind === "query") search();
+    else {
+      recentSearches.remember(item);
+      cardPage.open(item);
+    }
   },
   onQueryChange: () => {
-    selectedIdentity = "";
     requestId++;
     searchController?.abort();
     loading = false;
@@ -156,12 +268,7 @@ const home = createHome({
         (row) => item.oracle_id && row.card.oracle_id === item.oracle_id,
       );
     if (row) detail(row);
-    else {
-      $("search").value = item.name;
-      selectedIdentity = item.oracle_id || "";
-      selectedPrinting = item.printing_id || "";
-      search(false, Boolean(selectedIdentity));
-    }
+    else cardPage.open(item);
   },
 });
 $("clear-recent-searches").onclick = () => recentSearches.clear();
@@ -259,7 +366,7 @@ function render() {
     "aria-busy",
     String(mode === "catalog" ? loading : busy),
   );
-  if (mode === "home" || mode === "import") {
+  if (mode === "home" || mode === "import" || mode === "card") {
     $("grid").replaceChildren();
     return;
   }
@@ -315,7 +422,7 @@ function render() {
           const row = rows[Number(button.dataset.index)];
           if (mode === "catalog")
             recentSearches.remember({ ...row.card, printing_id: row.card.id });
-          detail(row);
+          detail(row, { focus: button });
         }),
     );
   $("empty").hidden =
@@ -341,7 +448,16 @@ function render() {
   $("more").hidden = mode !== "catalog" || !hasMore;
   $("more").disabled = loading;
 }
-function switchMode(next, { keepIdentity = false, restore = false } = {}) {
+function closeCardEditors() {
+  document
+    .querySelectorAll(".printing-picker[open], .tag-dialog[open]")
+    .forEach((dialog) => dialog.close());
+}
+function switchMode(next, { restore = false } = {}) {
+  $("search").disabled = false;
+  $("close").disabled = false;
+  closeCardEditors();
+  cardPage.hide();
   if (!restore) {
     const hash =
       next === "collection" && activeTagId
@@ -352,7 +468,6 @@ function switchMode(next, { keepIdentity = false, restore = false } = {}) {
   }
   autocomplete.setEnabled(next !== "import");
   searchController?.abort();
-  if (!keepIdentity) selectedIdentity = "";
   mode = next;
   requestId++;
   loading = false;
@@ -409,13 +524,13 @@ async function refreshTags() {
     );
   }
 }
-async function search(more = false, openSelection = false) {
+async function search(more = false) {
   const nextQuery = $("search").value.trim();
   if (!nextQuery) {
     message("Enter a card name or a set and collector number.", true);
     return;
   }
-  if (mode !== "catalog") switchMode("catalog", { keepIdentity: true });
+  if (mode !== "catalog") switchMode("catalog");
   autocomplete.close();
   searchController?.abort();
   searchController = new AbortController();
@@ -425,32 +540,21 @@ async function search(more = false, openSelection = false) {
     query = nextQuery;
     cards = [];
     hasMore = false;
-    if (!openSelection) recentSearches.remember({ kind: "query", name: query });
+    recentSearches.remember({ kind: "query", name: query });
   }
   loading = true;
-  message(
-    openSelection ? `Opening ${query}…` : "Searching for matching cards…",
-  );
+  message("Searching for matching cards…");
   $("search-submit").disabled = true;
   render();
-  if (openSelection) $("message").scrollIntoView({ block: "nearest" });
   try {
     const signal = AbortSignal.any([
       searchController.signal,
       AbortSignal.timeout(30000),
     ]);
-    const exact =
-      openSelection &&
-      /^[a-f0-9-]{36}$/i.test(selectedPrinting) &&
-      /^[a-f0-9-]{36}$/i.test(selectedIdentity);
-    const load = () =>
-      api(
-        `/api/discover?${new URLSearchParams({ q: query, page: nextPage, ...(selectedIdentity ? { oracle: selectedIdentity } : {}), ...(exact ? { printing: selectedPrinting } : {}) })}`,
-        { signal },
-      );
-    const data = exact
-      ? await detailCache.load(selectedIdentity, selectedPrinting, load, signal)
-      : await load();
+    const data = await api(
+      `/api/discover?${new URLSearchParams({ q: query, page: nextPage })}`,
+      { signal },
+    );
     if (token !== requestId) return;
     if (data.timing?.phase !== "browser-detail-hit")
       detailCache.remember(data.cards);
@@ -461,31 +565,12 @@ async function search(more = false, openSelection = false) {
     cards = more ? [...cards, ...data.cards] : data.cards;
     page = nextPage;
     hasMore = data.hasMore;
-    if (openSelection) {
-      const card = data.cards.find(
-        (card) => card.oracle_id === selectedIdentity,
-      );
-      if (!card)
-        throw new Error(
-          "This card could not be opened. Search again to retry.",
-        );
-      detail({ card });
-    }
     message(
       `${data.total.toLocaleString()} matching cards. English results; choose a card to review its printing.${data.catalog ? ` Names updated ${new Date(data.catalog.updated_at).toLocaleDateString()}.${data.catalog.stale ? " Catalog refresh delayed; showing the last saved names." : ""}` : ""}`,
     );
   } catch (e) {
     if (token === requestId) {
       message(e.message, true);
-      if (openSelection) {
-        const retry = document.createElement("button");
-        retry.type = "button";
-        retry.className = "secondary";
-        retry.textContent = "Retry opening card";
-        retry.onclick = () => search(false, true);
-        $("message").append(" ", retry);
-        $("message").scrollIntoView({ block: "nearest" });
-      }
     }
   } finally {
     if (token === requestId) {
@@ -496,6 +581,17 @@ async function search(more = false, openSelection = false) {
   }
 }
 function navigateTag(id, tag) {
+  closeCardEditors();
+  const ref = cardFromHash(location.hash);
+  if (ref) {
+    cardPage.open(ref, { restore: true });
+    return;
+  }
+  cardPage.hide();
+  searchController?.abort();
+  requestId++;
+  loading = false;
+  if (!tag && cardNavigation.restoreView()) return;
   if (!id && routeMode(location.hash) !== "collection") {
     switchMode(routeMode(location.hash), { restore: true });
     return;
@@ -528,7 +624,6 @@ $("home-nav").onclick = (event) => {
 $("catalog-nav").onclick = () => switchMode("catalog");
 $("import-nav").onclick = () => switchMode("import");
 $("add").onclick = () => switchMode("catalog");
-$("close").onclick = () => $("detail").close();
 $("refresh").onclick = initializeCollection;
 $("retry-collection").onclick = initializeCollection;
 $("manage-tags").onclick = () => tagController.manager();
@@ -541,7 +636,6 @@ $("search-form").onsubmit = (e) => {
 );
 $("more").onclick = () => search(true);
 $("example").onclick = () => {
-  selectedIdentity = "";
   $("search").value = "set:blb cn:1";
   search();
 };
@@ -581,4 +675,6 @@ async function initializeCollection() {
     render();
   }
 }
-initializeCollection();
+collectionReady = initializeCollection();
+if (cardFromHash(location.hash))
+  cardPage.open(cardFromHash(location.hash), { restore: true });

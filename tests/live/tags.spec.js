@@ -197,6 +197,8 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   await page.getByRole("button", { name: "Remove location 1" }).click();
   await page.getByLabel("Copies at location 1").fill("1");
   await page.locator("#save-tags").click();
+  await expect(page.locator("#detail .allocation-warning")).toHaveCount(0);
+  await page.locator("#close").click();
   await expect(page.locator(".card .allocation-warning")).toHaveCount(0);
   const label = `Draw ${randomUUID().slice(0, 8)}`;
   await page.locator("#manage-tags").click();

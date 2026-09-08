@@ -6,6 +6,7 @@ export function createCardDetail({
   api,
   onSaved,
   notify,
+  onDone,
   onTags,
   onPrinting,
   loadOwned,
@@ -14,7 +15,7 @@ export function createCardDetail({
     const c = row.card;
     const operationId = crypto.randomUUID();
     $("detail-content").innerHTML =
-      `<div class="detail-image">${picture(c)}${c.card_faces?.[1]?.image_uris ? '<button class="secondary" id="flip">↻ Flip card</button>' : ""}</div><div class="detail-info"><div class="eyebrow">${row.id ? "IN YOUR COLLECTION" : "REVIEW PRINTING"}</div><h2>${esc(c.name)}</h2><p class="type">${esc(c.type_line)}</p><div class="printing">${esc(c.set_name)}<br><b>${esc(c.set.toUpperCase())} · #${esc(c.collector_number)} · ${esc(c.lang.toUpperCase())}</b></div>${!row.id && c.oracle_id ? '<button type="button" class="secondary" id="choose-printing">Change printing or language</button>' : ""}<p class="oracle">${esc(c.oracle_text || c.card_faces?.map((f) => `${f.name}\n${f.oracle_text || ""}`).join("\n\n") || "No rules text.")}</p><form id="inventory-form"><div class="form-row"><label>Quantity<input id="quantity" type="number" min="1" max="100000" step="1" required value="${row.quantity || 1}"></label><label>Finish<select id="finish" ${row.id ? "disabled" : ""}>${c.finishes.map((f) => `<option value="${f}" ${row.finish === f ? "selected" : ""}>${finishName[f] || esc(f)}</option>`).join("")}</select></label></div><div class="form-row"><label>Condition<select id="condition" ${row.id ? "disabled" : ""}>${Object.entries(
+      `<div class="detail-image">${picture(c)}${c.card_faces?.[1]?.image_uris ? '<button class="secondary" id="flip">↻ Flip card</button>' : ""}</div><div class="detail-info"><div class="eyebrow">${row.id ? "IN YOUR COLLECTION" : "REVIEW PRINTING"}</div><p class="type">${esc(c.type_line)}</p><div class="printing">${esc(c.set_name)}<br><b>${esc(c.set.toUpperCase())} · #${esc(c.collector_number)} · ${esc(c.lang.toUpperCase())}</b></div>${!row.id && c.oracle_id ? '<button type="button" class="secondary" id="choose-printing">Change printing or language</button>' : ""}<p class="oracle">${esc(c.oracle_text || c.card_faces?.map((f) => `${f.name}\n${f.oracle_text || ""}`).join("\n\n") || "No rules text.")}</p><form id="inventory-form"><div class="form-row"><label>Quantity<input id="quantity" type="number" min="1" max="100000" step="1" required value="${row.quantity || 1}"></label><label>Finish<select id="finish" ${row.id ? "disabled" : ""}>${c.finishes.map((f) => `<option value="${f}" ${row.finish === f ? "selected" : ""}>${finishName[f] || esc(f)}</option>`).join("")}</select></label></div><div class="form-row"><label>Condition<select id="condition" ${row.id ? "disabled" : ""}>${Object.entries(
         row.condition === "UNK"
           ? { UNK: "Unknown (imported)", ...conditions }
           : conditions,
@@ -37,16 +38,33 @@ export function createCardDetail({
       async function refreshOwnership() {
         section.innerHTML =
           '<h3>Your printings & tags</h3><p role="status">Checking your owned printings…</p>';
+        const started = performance.now();
         try {
           const matching = ownedPrintings(c, await loadOwned());
-          if (!section.isConnected || !$("detail").open) return;
+          if (!section.isConnected || $("detail").hidden) return;
+          window.dispatchEvent(
+            new CustomEvent("keeper-card-metric", {
+              detail: {
+                phase: "ownership-ready",
+                ms: performance.now() - started,
+              },
+            }),
+          );
           section.innerHTML = `<h3>Your printings & tags</h3>${ownershipContent(matching)}`;
           section.querySelectorAll("[data-owned-tags]").forEach((button) => {
             button.onclick = () =>
               onTags(matching[Number(button.dataset.ownedTags)]);
           });
         } catch (error) {
-          if (!section.isConnected || !$("detail").open) return;
+          if (!section.isConnected || $("detail").hidden) return;
+          window.dispatchEvent(
+            new CustomEvent("keeper-card-metric", {
+              detail: {
+                phase: "ownership-error",
+                ms: performance.now() - started,
+              },
+            }),
+          );
           section.innerHTML = `<h3>Your printings & tags</h3><p role="status" class="error">${esc(error.message)}</p><button type="button" class="secondary">Retry owned printings</button>`;
           section.querySelector("button").onclick = refreshOwnership;
         }
@@ -65,12 +83,15 @@ export function createCardDetail({
         $("detail-content").querySelector(".detail-image img").alt =
           c.card_faces[face].name;
       };
+    const form = $("inventory-form"),
+      detailMessage = $("detail-message");
+    const read = (id) => form.querySelector("#" + id);
     $("inventory-form").onsubmit = async (e) => {
       e.preventDefault();
       const submit = e.submitter;
       submit.disabled = true;
       try {
-        const quantity = Number($("quantity").value);
+        const quantity = Number(read("quantity").value);
         const updated = await api(
           row.id
             ? `/api/collection/${encodeURIComponent(row.id)}`
@@ -80,21 +101,22 @@ export function createCardDetail({
             body: JSON.stringify({
               printing_id: c.id,
               quantity,
-              finish: $("finish").value,
-              condition: $("condition").value,
+              finish: read("finish").value,
+              condition: read("condition").value,
               operation_id: operationId,
             }),
           },
         );
-        $("detail").close();
+
         onSaved(updated);
+        if (form.isConnected) onDone();
         notify(
           row.id
             ? "Quantity saved."
             : `${quantity} × ${c.name} added to your collection.`,
         );
       } catch (e) {
-        $("detail-message").textContent = e.message;
+        detailMessage.textContent = e.message;
         submit.disabled = false;
       }
     };
@@ -106,19 +128,19 @@ export function createCardDetail({
           )
         )
           return;
-        $("remove").disabled = true;
+        read("remove").disabled = true;
         try {
           const updated = await api(`/api/collection/${row.id}`, {
             method: "DELETE",
           });
-          $("detail").close();
+
           onSaved(updated);
+          if (form.isConnected) onDone();
           notify("Entry removed from your collection.");
         } catch (e) {
-          $("detail-message").textContent = e.message;
-          $("remove").disabled = false;
+          detailMessage.textContent = e.message;
+          read("remove").disabled = false;
         }
       };
-    $("detail").showModal();
   };
 }
