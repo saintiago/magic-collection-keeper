@@ -102,7 +102,7 @@ test("UC-04 catalog blank, no-result, error, pagination, example and detail fiel
 }) => {
   await collection(page);
   let outcome = "empty";
-  await page.route("**/api/search?*", (r) =>
+  await page.route("**/api/discover?*", (r) =>
     r.fulfill(
       outcome === "error"
         ? { status: 429, json: { error: "Scryfall is busy" } }
@@ -123,7 +123,7 @@ test("UC-04 catalog blank, no-result, error, pagination, example and detail fiel
   ).toBeVisible();
   await page.locator("#search").fill("nonsense");
   await page.locator("#search-submit").click();
-  await expect(page.getByText("No printings found")).toBeVisible();
+  await expect(page.getByText("No cards found")).toBeVisible();
   outcome = "error";
   await page.locator("#search-submit").click();
   await expect(page.getByText("Scryfall is busy")).toBeVisible();
@@ -160,7 +160,7 @@ test("UC-05 add failure, retry, remove cancellation and remove failure", async (
 }) => {
   let rows = [],
     fail = true;
-  await page.route("**/api/search?*", (r) =>
+  await page.route("**/api/discover?*", (r) =>
     r.fulfill({ json: { cards: [a], total: 1, hasMore: false } }),
   );
   await page.route(/\/api\/collection(?:\/1)?$/, (r) => {

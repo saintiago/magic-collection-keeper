@@ -18,7 +18,7 @@ test("empty collection, catalog review, quantity edit, filtering and removal", a
   page,
 }) => {
   let rows = [];
-  await page.route("**/api/search?*", (r) =>
+  await page.route("**/api/discover?*", (r) =>
     r.fulfill({ json: { cards: [card], total: 1, hasMore: false } }),
   );
   await page.route(/\/api\/collection(?:\/\d+)?$/, async (route) => {
@@ -36,7 +36,7 @@ test("empty collection, catalog review, quantity edit, filtering and removal", a
   await expect(page.getByText("Your collection begins here")).toBeVisible();
   await page.getByRole("button", { name: "Find your first card" }).click();
   await page
-    .getByRole("textbox", { name: "Search cards" })
+    .getByRole("combobox", { name: "Search cards" })
     .fill("Lightning Bolt");
   await page.getByRole("button", { name: "Search cards", exact: true }).click();
   await page.locator(".card").click();

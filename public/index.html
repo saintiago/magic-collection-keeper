@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <link rel="stylesheet" href="/discovery.css" />
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Collection Keeper · Magic: The Gathering</title>
@@ -82,16 +83,19 @@
           </button>
         </div>
         <form id="search-form">
-          <div class="search-box">
-            <span>⌕</span
-            ><input
-              id="search"
-              aria-label="Search cards"
-              placeholder="Search your collection…"
-              autocomplete="off"
-            /><button id="search-submit" class="primary" hidden>
-              Search cards
-            </button>
+          <div class="search-autocomplete">
+            <div class="search-box">
+              <span>⌕</span
+              ><input
+                id="search"
+                aria-label="Search cards"
+                placeholder="Search your collection…"
+                autocomplete="off"
+              /><button id="search-submit" class="primary" hidden>
+                Search cards
+              </button>
+            </div>
+            <div id="suggestion-panel" class="suggestion-panel" hidden></div>
           </div>
           <div class="filters" id="filters">
             <select id="tag-filter" aria-label="Filter by tag or location">
@@ -120,11 +124,11 @@
           </div>
         </form>
         <p id="search-help" class="hint" hidden>
-          Search by name or exact printing:
+          Names in any language; results and rules in English. One result per
+          card. Choose its exact printing after opening it. Advanced filters:
           <button type="button" class="text-button" id="example">
             set:blb cn:1</button
-          >. Add <code>lang:es</code> for Spanish. Results are catalog cards,
-          not owned cards.
+          >.
         </p>
         <div id="collection-status" role="status" aria-live="polite">
           <p id="collection-status-text">Loading your collection…</p>
@@ -136,9 +140,7 @@
         <div id="message" role="status" aria-live="polite"></div>
         <div id="grid" class="card-grid"></div>
         <div id="empty" class="empty"></div>
-        <button id="more" class="secondary more" hidden>
-          Load more printings
-        </button>
+        <button id="more" class="secondary more" hidden>Load more cards</button>
       </section>
       <footer>
         Card data and images from

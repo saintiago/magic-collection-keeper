@@ -1,3 +1,5 @@
+import { createNameIndex } from "./adapters/name-index.js";
+import { createDiscoveryService } from "./application/discovery.js";
 import { randomUUID, createHash } from "node:crypto";
 import { createTaggedCollection } from "./application/tagged-collection.js";
 import { createSqliteDocumentStore } from "./adapters/document-store.js";
@@ -33,6 +35,7 @@ const tagged = createTaggedCollection({
 });
 const service = {
   ...tagged,
+  ...createDiscoveryService({ names: createNameIndex(), catalog }),
   ...createImportDraftService({
     store,
     catalog,

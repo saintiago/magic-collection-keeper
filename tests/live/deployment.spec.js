@@ -41,7 +41,7 @@ test("LIVE-01 protected collection survives reload and isolates a second owner",
     .click();
   await page.getByRole("button", { name: "Add cards", exact: false }).click();
   await page
-    .getByRole("textbox", { name: "Search cards" })
+    .getByRole("combobox", { name: "Search cards" })
     .fill('!"Lightning Bolt" set:m11 lang:en');
   await page.getByRole("button", { name: "Search cards", exact: true }).click();
   await expect(page.locator(".card")).toHaveCount(1);

@@ -1,0 +1,52 @@
+name: Refresh public card names
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: keeper-catalog-refresh
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: node scripts/build-name-index.mjs
+      - run: node --test tests/discovery.test.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: card-name-index
+          path: build/catalog/
+          retention-days: 2
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: keeper-catalog-publication
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: card-name-index
+          path: build/catalog/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      - run: node scripts/publish-name-index.mjs
+        env:
+          WEBSITE_BUCKET: ${{ vars.WEBSITE_BUCKET }}

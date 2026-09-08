@@ -1,3 +1,5 @@
+import { setupAutocomplete } from "./autocomplete.js";
+import { createPrintingPicker } from "./printing-picker.js";
 import { collectionCard } from "./collection-view.js";
 import { setupTagNavigation, tagFromHash } from "./tag-navigation.js";
 import { tagLink } from "./tag-view.js";
@@ -24,7 +26,9 @@ let owned = [],
   query = "",
   hasMore = false,
   loading = false,
-  requestId = 0;
+  requestId = 0,
+  searchController,
+  selectedIdentity = "";
 let filterTags = [],
   activeTagId = tagFromHash(location.hash),
   registryReady = false;
@@ -62,7 +66,15 @@ const tagController = createTagController({
     return refresh();
   },
 });
+const printingPicker = createPrintingPicker({
+  api: request,
+  onChoose: (card) => detail({ card }),
+});
 const detail = createCardDetail({
+  onPrinting: (card) => {
+    $("detail").close();
+    printingPicker(card);
+  },
   onTags: (row) => {
     document.getElementById("detail").close();
     tagController.edit(row);
@@ -79,6 +91,25 @@ const importPage = createImportPage({
   onAdded: async () => {
     collection.invalidate();
     await refresh();
+  },
+});
+const autocomplete = setupAutocomplete({
+  input: $("search"),
+  panel: $("suggestion-panel"),
+  api: request,
+  onSelect: (item) => {
+    selectedIdentity = item.oracle_id;
+    search();
+  },
+  onQueryChange: () => {
+    selectedIdentity = "";
+    requestId++;
+    searchController?.abort();
+    loading = false;
+    $("search-submit").disabled = false;
+    hasMore = false;
+    message("Choose a suggestion or search when ready.");
+    render();
   },
 });
 async function api(path, options) {
@@ -151,7 +182,10 @@ function render() {
       : "Collection is up to date. Last loaded " + freshness + ".";
   $("collection-error").textContent = collectionState.error;
   $("retry-collection").hidden = collectionState.status !== "error";
-  $("grid").setAttribute("aria-busy", String(busy));
+  $("grid").setAttribute(
+    "aria-busy",
+    String(mode === "catalog" ? loading : busy),
+  );
   const selectedTag = filterTags.find((tag) => tag.id === activeTagId);
   let rows = cards.map((card) => ({ card }));
   if (mode === "collection") {
@@ -187,7 +221,7 @@ function render() {
         : "Unavailable"
       : mode === "collection"
         ? collectionCountText(owned, rows, selectedTag)
-        : `${rows.length} printings shown`;
+        : `${rows.length} cards shown`;
   $("active-tag").hidden = mode !== "collection" || !activeTagId;
   $("active-tag-name").innerHTML = activeTagId
     ? tagLink(
@@ -217,7 +251,7 @@ function render() {
           : owned.length
             ? '<div class="empty-icon">⌕</div><h3>No cards match these filters</h3><p>Try another name, color, set, or finish.</p><button class="secondary" id="clear-filters">Clear filters</button>'
             : '<div class="empty-icon">✦</div><div class="eyebrow">A FRESH PAGE</div><h3>Your collection begins here</h3><p>From your first common to your favorite rare.<br>Find a card, choose its printing, and make it yours.</p><button class="primary" id="first-card">+ Find your first card</button><small>No sample cards. Just the cards you own.</small>'
-      : `<div class="empty-icon">⌕</div><h3>${query ? "No printings found" : "Find your next addition"}</h3><p>${query ? "Try a different spelling or set code." : "Search Magic’s card catalog by name, set, or collector number."}</p>`;
+      : `<div class="empty-icon">⌕</div><h3>${query ? "No cards found" : "Find your next addition"}</h3><p>${query ? "Try a different spelling or set code." : "Search Magic’s card catalog by name, set, or collector number."}</p>`;
   if ($("first-card")) $("first-card").onclick = () => switchMode("catalog");
   if ($("clear-filters"))
     $("clear-filters").onclick = () => {
@@ -232,6 +266,9 @@ function render() {
 function switchMode(next) {
   if (next !== "import" && location.hash === "#import")
     history.pushState(null, "", "#");
+  autocomplete.setEnabled(next === "catalog");
+  searchController?.abort();
+  selectedIdentity = "";
   mode = next;
   const importing = mode === "import";
   $("import-page").hidden = !importing;
@@ -275,7 +312,7 @@ function switchMode(next) {
   $("search-submit").hidden = !catalog;
   $("search-help").hidden = !catalog;
   $("search").placeholder = catalog
-    ? "Card name, set:blb cn:1, or another Scryfall query…"
+    ? "Card name in any language, e.g. Piracy or relampa…"
     : "Search your collection…";
   $("catalog-nav").classList.toggle("active", catalog);
   $("collection-nav").classList.toggle("active", !catalog);
@@ -328,6 +365,9 @@ async function search(more = false) {
     message("Enter a card name or a set and collector number.", true);
     return;
   }
+  autocomplete.close();
+  searchController?.abort();
+  searchController = new AbortController();
   const token = ++requestId;
   const nextPage = more ? page + 1 : 1;
   if (!more) {
@@ -336,19 +376,25 @@ async function search(more = false) {
     hasMore = false;
   }
   loading = true;
-  message("Searching Scryfall for matching printings…");
+  message("Searching for matching cards…");
   $("search-submit").disabled = true;
   render();
   try {
     const data = await api(
-      `/api/search?${new URLSearchParams({ q: query, page: nextPage })}`,
+      `/api/discover?${new URLSearchParams({ q: query, page: nextPage, ...(selectedIdentity ? { oracle: selectedIdentity } : {}) })}`,
+      {
+        signal: AbortSignal.any([
+          searchController.signal,
+          AbortSignal.timeout(30000),
+        ]),
+      },
     );
     if (token !== requestId) return;
     cards = more ? [...cards, ...data.cards] : data.cards;
     page = nextPage;
     hasMore = data.hasMore;
     message(
-      `${data.total.toLocaleString()} matching printings in the catalog. Select a card to review and add it.`,
+      `${data.total.toLocaleString()} matching cards. English results; choose a card to review its printing.${data.catalog ? ` Names updated ${new Date(data.catalog.updated_at).toLocaleDateString()}.${data.catalog.stale ? " Catalog refresh delayed; showing the last saved names." : ""}` : ""}`,
     );
   } catch (e) {
     if (token === requestId) message(e.message, true);
@@ -403,6 +449,7 @@ $("search").oninput = () => {
 );
 $("more").onclick = () => search(true);
 $("example").onclick = () => {
+  selectedIdentity = "";
   $("search").value = "set:blb cn:1";
   search();
 };

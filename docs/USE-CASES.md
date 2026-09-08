@@ -76,3 +76,14 @@ The camera fixtures draw synthetic targets into a real browser MediaStream. Touc
 | LIVE-06 | Actual JWT/Dynamo draft edits and reload persistence in keeper-import; ordinary views unchanged, reserved-tag and cross-account rejection; actual AWS-to-Moxfield request with honest access-result reporting                                      | `tests/live/import-page.spec.js`                              |
 
 The persistent live fixture is explicitly synthetic, seeded only by an administrator script into the reserved test account. It proves cloud staging and review independently of Moxfield access. Provider denial is an expected reported limitation, never a successful URL-import claim. Local fixture success and synthetic camera tests do not prove upstream access or physical hardware accuracy.
+
+## Discovery coverage
+
+| ID      | Observable outcome                                                                                                                                                                                                                     | Evidence                                                         |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| UC-24   | Exact Piracy first; one English result per Oracle identity; accentless Spanish and face-name aliases; ambiguous matches remain distinct; deterministic bounded fuzzy fallback; exact printing/language picker independent of discovery | `tests/discovery.test.js`, `tests/ui/discovery.spec.js`, LIVE-07 |
+| UC-25   | Debounce, bounded cache and shared in-flight work; old input cannot overwrite new suggestions; version/checksum/24h refresh, stale fallback and cold failure; full database never sent to browser                                      | `tests/discovery.test.js`, `tests/ui/discovery.spec.js`, LIVE-07 |
+| UC-26   | Accessible combobox keyboard/IME/touch lifecycle, loading/no-result/error/retry, mobile width, Escape/Tab and mode changes; English rules while reviewing a Spanish printing                                                           | `tests/ui/discovery.spec.js`, LIVE-07                            |
+| LIVE-07 | Actual deployed bulk index and Scryfall canonical cards: Piracy ranking, relampa autocomplete, Fire/Ice face alias, repeated queries/payload timing, English dedupe and Spanish printing review without ownership writes               | `tests/live/discovery.spec.js`                                   |
+
+The bulk builder also validates real Piracy and Relámpago before publishing a snapshot. Language coverage depends on Scryfall’s available printed names, not machine translation; unavailable translations cannot be guessed.

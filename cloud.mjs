@@ -1,3 +1,5 @@
+import { createNameIndex } from "./adapters/name-index.js";
+import { createDiscoveryService } from "./application/discovery.js";
 import { randomUUID, createHash } from "node:crypto";
 import { jsonResponse } from "./transports/response.js";
 import { createTaggedCollection } from "./application/tagged-collection.js";
@@ -29,6 +31,10 @@ const tagged = createTaggedCollection({
 });
 const service = {
   ...tagged,
+  ...createDiscoveryService({
+    names: createNameIndex({ origin: "https://d3r1grp0vvv9f.cloudfront.net" }),
+    catalog,
+  }),
   ...createImportDraftService({
     store,
     catalog,

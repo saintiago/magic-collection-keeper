@@ -19,6 +19,7 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
+      - run: node scripts/build-name-index.mjs
       - run: npm test
       - run: npm run build
       - run: npx playwright install --with-deps chromium
@@ -29,7 +30,11 @@ jobs:
           path: |
             public/
             build/cloud.mjs
+            build/catalog/
   deploy:
+    concurrency:
+      group: keeper-catalog-publication
+      cancel-in-progress: false
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: test
     runs-on: ubuntu-latest
@@ -67,6 +72,10 @@ jobs:
           zip ../cloud.zip cloud.mjs
           aws lambda update-function-code --function-name magic-collection-keeper --zip-file fileb://../cloud.zip > /dev/null
           aws lambda wait function-updated --function-name magic-collection-keeper
+      - name: Publish multilingual card names
+        run: node scripts/publish-name-index.mjs
+        env:
+          WEBSITE_BUCKET: ${{ vars.WEBSITE_BUCKET }}
       - name: Deploy website
         env:
           BUCKET: ${{ vars.WEBSITE_BUCKET }}

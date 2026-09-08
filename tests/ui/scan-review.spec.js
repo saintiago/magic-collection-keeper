@@ -140,7 +140,7 @@ test("UC-04 loading search can be left without stale results replacing collectio
 }) => {
   await page.route("**/api/collection", (r) => r.fulfill({ json: [] }));
   let release;
-  await page.route("**/api/search?*", async (r) => {
+  await page.route("**/api/discover?*", async (r) => {
     await new Promise((resolve) => (release = resolve));
     await r.fulfill({ json: { cards: [card], total: 1, hasMore: false } });
   });
@@ -148,9 +148,7 @@ test("UC-04 loading search can be left without stale results replacing collectio
   await page.locator("#add").click();
   await page.locator("#search").fill("Scanned");
   await page.locator("#search-submit").click();
-  await expect(
-    page.getByText("Searching Scryfall for matching printings…"),
-  ).toBeVisible();
+  await expect(page.getByText("Searching for matching cards…")).toBeVisible();
   await page.locator("#collection-nav").click();
   release();
   await expect(page.getByText("Your collection begins here")).toBeVisible();

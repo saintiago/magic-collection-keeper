@@ -7,6 +7,14 @@ export async function routeCollection(
   input,
   query = {},
 ) {
+  if (path === "/api/discover" && method === "GET")
+    return service.discover(
+      (query.q || "").trim(),
+      Number(query.page || 1),
+      query.oracle || "",
+    );
+  if (path === "/api/suggest" && method === "GET")
+    return service.suggest((query.q || "").trim());
   if (path === "/api/import-draft" && method === "GET")
     return service.getDraft(owner);
   if (path === "/api/import-draft" && method === "PATCH")

@@ -10,7 +10,7 @@ A private Magic collection app with Scryfall printing lookup, persistent invento
 
 ## Use it
 
-Sign in with your invitation. On first sign-in, choose a new password. Your collection starts empty. Search **Discover cards**, review the exact set, collector number and language, choose condition/finish/quantity, and add it. **Update collection** reloads saved inventory; it does not scrape prices or overwrite owned quantities with catalog data.
+Sign in with your invitation. On first sign-in, choose a new password. Your collection starts empty. In **Discover cards**, type an English or translated name: **Piracy** ranks ahead of **Coastal Piracy** and **Conspiracy**; **relampa** suggests **Lightning Bolt — Relámpago**. Results show one English card per identity, with English rules text. Use arrow keys and Enter or tap a suggestion; Escape dismisses it. Open a result and use **Change printing or language** to match your physical card, then review condition/finish/quantity before adding it. Translated aliases can match more than one card; the suggestions preserve each identity and show the matching language. **Update collection** reloads saved inventory; it does not scrape prices or overwrite owned quantities with catalog data.
 
 **Scan cards** opens a full-screen rear-camera view. Tap **Start camera** once for browser camera permission and audio activation. Hold a card inside the guide until the cue, then slide the next card in. There is no per-card shutter or Next button. A rising two-note cue means a confident exact printing was matched into the review batch; a lower cue means the reading needs review. Sound can be muted. The lower quarter contains a chronological wheel: newest readings arrive at the bottom and become selected; swipe to previous readings, or use arrow keys. Only the selected reading has quantity and remove controls. **Back** or **Review** stops the camera and opens final printing/finish/condition review and ownership confirmation. Unresolved readings never save automatically. Photo upload remains available before starting the camera. Images stay in the browser.
 
@@ -55,6 +55,7 @@ Node 24 and npm are required.
 
 ```sh
 npm ci
+node scripts/build-name-index.mjs
 npm run build
 npm start
 ```
@@ -74,3 +75,9 @@ OCR is an assisted capture tool, not guaranteed recognition. English names work 
 Images require a network connection; there is no offline image cache. The whole owned collection is loaded in the initial foundation, so very large inventories will need server pagination. Direct finish/condition editing uses remove-and-add; quantity is editable in place. Price tracking, Cardmarket listing/repricing and deck building are not implemented.
 
 Scryfall [API rules](https://scryfall.com/docs/api) and [current rate limits](https://scryfall.com/docs/api/rate-limits) were checked September 7, 2026: search is limited to two requests/second. This app uses a shared 600 ms request lease, 24-hour search caching, and a cooldown after 429 responses. Large catalog ingestion should use bulk data, not repeated searches. Full card images preserve artist/copyright credit. Magic: The Gathering and card artwork © Wizards of the Coast; this app is not endorsed by Wizards or Scryfall.
+
+## Discovery catalog freshness
+
+Name suggestions come from a compact public catalog index on the server, built from Scryfall’s all-language bulk data. The browser receives at most eight suggestions and 24 cards per name-search page. Autocomplete waits 180 ms after typing, caches repeat queries, and cancels stale requests. It does not request Scryfall on each keystroke or load the full card database into your browser.
+
+A daily catalog-only workflow checks the latest bulk snapshot without changing application code or owned data. Servers check the published index at most once per day; results show its source date, and delayed refreshes are labeled. Newly released or translated names can take up to two days to appear. Advanced Scryfall filters remain supported, restricted to English identities; use the printing picker for another language or edition. Collection, Import and scanner printing selection remain separate.
