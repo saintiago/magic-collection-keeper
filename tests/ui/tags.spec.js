@@ -10,7 +10,8 @@ test("UC-13 source printing exceptions remain visible without claiming ownership
       json: [
         {
           name: "Test source",
-          url: "https://moxfield.com/decks/fixture",
+          provider: "wizards-precon",
+          url: "https://magic.wizards.com/en/news/announcements/warhammer-40000-commander-decklists",
           folder: "Test",
           updated_at: "2026-09-08T00:00:00Z",
           lots: [{ allocated_quantity: 99, owned_quantity: 99 }],
@@ -32,6 +33,15 @@ test("UC-13 source printing exceptions remain visible without claiming ownership
   await page.goto("/");
   await page.locator("#manage-tags").click();
   await page.locator("#deck-sources").click();
+  await expect(
+    page.getByRole("link", { name: "Official Wizards decklist" }),
+  ).toHaveAttribute(
+    "href",
+    "https://magic.wizards.com/en/news/announcements/warhammer-40000-commander-decklists",
+  );
+  await expect(
+    page.getByRole("link", { name: "Open on Moxfield" }),
+  ).toHaveCount(0);
   await expect(page.locator(".source-card")).toContainText(
     "99 assigned from source",
   );

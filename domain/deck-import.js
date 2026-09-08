@@ -1,11 +1,49 @@
 import { ApplicationError, validateQuantity } from "./inventory.js";
 
-export function normalizeDeck(input) {
+function deckSource(input) {
   if (
-    input?.provider !== "moxfield" ||
-    !/^[A-Za-z0-9_-]{16,80}$/.test(input.source_id || "")
+    input?.provider === "moxfield" &&
+    /^[A-Za-z0-9_-]{16,80}$/.test(input.source_id || "")
   )
-    throw new ApplicationError("A verified Moxfield deck ID is required.");
+    return {
+      provider: input.provider,
+      source_id: input.source_id,
+      url: `https://moxfield.com/decks/${input.source_id}`,
+    };
+  if (
+    input?.provider === "wizards-precon" &&
+    /^wizards:[a-z0-9-]{2,16}:[a-z0-9-]{1,60}:[a-z0-9-]{1,24}:[a-z]{2}$/.test(
+      input.source_id || "",
+    )
+  ) {
+    let url;
+    try {
+      url = new URL(input.url);
+    } catch {
+      /* Invalid URLs use the validation error below. */
+    }
+    if (
+      url?.protocol === "https:" &&
+      url.hostname === "magic.wizards.com" &&
+      !url.username &&
+      !url.password &&
+      !url.port &&
+      !url.search &&
+      /^\/[a-z]{2}\/news\/[a-z0-9/-]+$/.test(url.pathname)
+    )
+      return {
+        provider: input.provider,
+        source_id: input.source_id,
+        url: url.href,
+      };
+  }
+  throw new ApplicationError(
+    "A verified Moxfield deck or namespaced Wizards precon with an official decklist URL is required.",
+  );
+}
+
+export function normalizeDeck(input) {
+  const source = deckSource(input);
   const name = typeof input.name === "string" ? input.name.trim() : "";
   if (!name || name.length > 100 || /[\u0000-\u001f]/.test(name))
     throw new ApplicationError(
@@ -43,10 +81,8 @@ export function normalizeDeck(input) {
       }))
     : [];
   const provenance = {
-    provider: "moxfield",
-    source_id: input.source_id,
+    ...source,
     name,
-    url: `https://moxfield.com/decks/${input.source_id}`,
     folder: String(input.folder || "").slice(0, 100),
     retrieved_at: input.retrieved_at || null,
     excluded,

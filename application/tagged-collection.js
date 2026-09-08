@@ -193,6 +193,9 @@ export function createTaggedCollection({
     };
     const fingerprint = hash(
       JSON.stringify({
+        ...(input.provider === "wizards-precon"
+          ? { provider: input.provider, url: input.url }
+          : {}),
         source_id: input.source_id,
         name: input.name,
         folder: input.folder,
@@ -279,7 +282,7 @@ export function createTaggedCollection({
             kind: "deck",
             label: input.name,
             references: 1,
-            source: { provider: "moxfield", id: input.source_id },
+            source: { provider: input.provider, id: input.source_id },
             created_at: now(),
           }),
         );

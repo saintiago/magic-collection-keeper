@@ -41,6 +41,8 @@ Automated camera tests use a synthetic browser MediaStream to verify stability, 
 
 ## Tag and deck-source use cases
 
+UC-20: official precon imports retain a distinct Wizards source ID/URL and stable deck-location tag. Repeating imports adds zero copies; a source URL correction or tag rename does not add ownership. Copies shared with a Moxfield source aggregate without removing either allocation or loose inventory. Invalid provider/URL/namespace and unsupported finish fail before creating the source. Evidence: `tests/tags.test.js`, official provenance link in `tests/ui/tags.spec.js`, and LIVE-03's isolated Wizards fixture with cloud repeat-import, finish, source/tag provenance and reload checks. Official product contents are separately verified against the publisher's decklist and printing catalog before an authorized owner import.
+
 | ID    | User interaction / observable outcome                                                                                                                                                | Evidence                                                                                               |
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
 | UC-10 | Create typed locations, roles and categories; rename without changing identity; reject deletion while referenced; safely delete unused tags; close dialog and retain editable errors | `tests/ui/tags.spec.js`, `tests/tags.test.js`, LIVE-03                                                 |
@@ -48,7 +50,7 @@ Automated camera tests use a synthetic browser MediaStream to verify stability, 
 | UC-12 | Assign 3 with 2 owned, lower to 1, keep assignments, reload, clear shortfall by allocation removal or higher owned quantity; no blocking modal                                       | `tests/tags.test.js`, `tests/ui/tags.spec.js`, LIVE-03                                                 |
 | UC-13 | Import two sources sharing a printing, retain loose inventory, repeat with zero additions, revise without deleting ownership; browse source provenance and excluded sections         | `tests/tags.test.js`, LIVE-03; actual Commander folder import is a separate owner-authorized operation |
 
-LIVE-03 uses only `keeper-tags`, a third isolated profile that retains two clearly named synthetic source fixtures to prove idempotency between deployments. The original two profiles remain separate and empty after their tests. Synthetic source URLs are test identifiers, not evidence that a real Moxfield deck was inspected. Actual imports must use observed source IDs and exports. Tests and hands-on browser checks never use the owner's credentials.
+LIVE-03 uses only `keeper-tags`, a third isolated profile that retains two clearly named synthetic Moxfield fixtures and one clearly named synthetic Wizards fixture to prove idempotency between deployments. The original two profiles remain separate and empty after their tests. The synthetic fixture contents are not evidence of an actual inspected deck, even when the provenance URL points to an official page. Actual imports must use verified product definitions or observed source IDs and exports. Tests and hands-on browser checks never use the owner's credentials.
 
 ## Coverage boundaries
 

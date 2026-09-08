@@ -6,6 +6,7 @@ import { createSqliteAdapters } from "../adapters/sqlite.js";
 import { createSqliteDocumentStore } from "../adapters/document-store.js";
 import { createCollectionService } from "../application/collection.js";
 import { createTaggedCollection } from "../application/tagged-collection.js";
+import { normalizeDeck } from "../domain/deck-import.js";
 const card = {
   id: "11111111-1111-4111-8111-111111111111",
   oracle_id: "22222222-2222-4222-8222-222222222222",
@@ -37,6 +38,124 @@ function setup() {
     }),
   };
 }
+test("official precon sources preserve provenance, printing finishes, namespace and permanent idempotency", async () => {
+  const { db, service: s } = setup();
+  const official = {
+    provider: "wizards-precon",
+    source_id: "wizards:40k:synthetic-fixture:standard:en",
+    name: "Synthetic official-source fixture",
+    url: "https://magic.wizards.com/en/news/announcements/warhammer-40000-commander-decklists#tyranid_swarm",
+    entries: [
+      {
+        printing_id: card.id,
+        quantity: 1,
+        finish: "foil",
+        section: "commanders",
+      },
+    ],
+  };
+  try {
+    for (const url of [
+      "javascript:alert(1)",
+      "https://magic.wizards.com.evil.test/en/news/test",
+      "https://user@magic.wizards.com/en/news/test",
+      "http://magic.wizards.com/en/news/test",
+      "https://magic.wizards.com:8443/en/news/test",
+    ])
+      assert.throws(() => normalizeDeck({ ...official, url }));
+    assert.throws(() =>
+      normalizeDeck({ ...official, source_id: "aaaaaaaaaaaaaaaaaaaaaa" }),
+    );
+    assert.throws(() => normalizeDeck({ ...official, provider: "moxfield" }));
+    await s.add("a", {
+      printing_id: card.id,
+      quantity: 5,
+      finish: "nonfoil",
+      condition: "NM",
+    });
+    const moxfield = {
+      ...official,
+      provider: "moxfield",
+      source_id: "aaaaaaaaaaaaaaaaaaaaaa",
+      name: official.name,
+      entries: [{ ...official.entries[0], quantity: 2 }],
+    };
+    await s.importDeck("a", { ...moxfield, expected_version: 0 });
+    const result = await s.importDeck("a", {
+      ...official,
+      expected_version: 0,
+    });
+    assert.equal(result.additions, 1);
+    let preview = await s.previewDeck("a", official);
+    assert.equal(preview.additions, 0);
+    assert.equal(preview.unchanged, true);
+    assert.equal(
+      (
+        await s.importDeck("a", {
+          ...official,
+          expected_version: preview.existing_version,
+        })
+      ).unchanged,
+      true,
+    );
+    const tag = (await s.tags("a")).find((t) => t.id === result.tag_id);
+    assert.deepEqual(tag.source, {
+      provider: "wizards-precon",
+      id: official.source_id,
+    });
+    await s.renameTag("a", tag.id, { label: "Renamed display label" });
+    const revised = {
+      ...official,
+      url: official.url.replace("#tyranid_swarm", "#verified"),
+    };
+    preview = await s.previewDeck("a", revised);
+    assert.equal(preview.unchanged, false);
+    assert.equal(preview.additions, 0);
+    await s.importDeck("a", {
+      ...revised,
+      expected_version: preview.existing_version,
+    });
+    const stored = (await s.decks("a")).find(
+      (d) => d.provider === "wizards-precon",
+    );
+    assert.equal(stored.url, revised.url);
+    assert.equal(stored.tag_id, tag.id);
+    assert.equal(
+      (await s.tags("a")).find((t) => t.id === tag.id).label,
+      "Renamed display label",
+    );
+    const rows = await s.list("a");
+    assert.equal(rows.find((r) => r.finish === "foil").quantity, 3);
+    assert.equal(rows.find((r) => r.finish === "nonfoil").quantity, 5);
+    assert.equal(rows.find((r) => r.finish === "foil").locations.length, 2);
+    assert.deepEqual(await s.decks("b"), []);
+    const foilOnly = {
+      ...card,
+      id: "33333333-3333-4333-8333-333333333333",
+      finishes: ["foil"],
+    };
+    savePrinting(db, foilOnly);
+    await assert.rejects(
+      () =>
+        s.importDeck("a", {
+          ...official,
+          source_id: "wizards:40k:invalid-finish:standard:en",
+          entries: [
+            {
+              ...official.entries[0],
+              printing_id: foilOnly.id,
+              finish: "nonfoil",
+            },
+          ],
+          expected_version: 0,
+        }),
+      /finish is not supported/,
+    );
+    assert.equal((await s.decks("a")).length, 2);
+  } finally {
+    db.close();
+  }
+});
 test("typed tags preserve IDs through rename; owner isolation and deletion references", async () => {
   const { db, service: s } = setup();
   try {

@@ -59,6 +59,39 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
     operation_id: randomUUID(),
   });
   const native = rows.find((r) => !r.source_managed);
+  // Clearly synthetic contents in the reserved test profile exercise the provider
+  // path; this is not verification of a physical or official deck's contents.
+  const official = {
+    provider: "wizards-precon",
+    source_id: "wizards:40k:keeper-test-fixture:standard:en",
+    name: "Synthetic Wizards source fixture",
+    url: "https://magic.wizards.com/en/news/announcements/warhammer-40000-commander-decklists",
+    folder: "Isolated test fixtures",
+    entries: [
+      {
+        printing_id: printing.id,
+        quantity: 1,
+        finish: "foil",
+        section: "commanders",
+      },
+    ],
+  };
+  const officialPreview = await api("deck-imports/preview", "POST", official);
+  await api("deck-imports", "POST", {
+    ...official,
+    expected_version: officialPreview.existing_version,
+  });
+  const officialRepeat = await api("deck-imports/preview", "POST", official);
+  expect(officialRepeat.additions).toBe(0);
+  expect(officialRepeat.unchanged).toBe(true);
+  expect(
+    (
+      await api("deck-imports", "POST", {
+        ...official,
+        expected_version: officialRepeat.existing_version,
+      })
+    ).unchanged,
+  ).toBe(true);
   for (const [source_id, name, quantity] of [
     ["keeper_test_deck_alpha", "Test source Alpha", 2],
     ["keeper_test_deck_beta_", "Test source Beta", 1],
@@ -111,9 +144,22 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   });
   expect(compressed.headers()["content-encoding"]).toBe("gzip");
   expect(await compressed.json()).toEqual(rows);
-  let imported = rows.find((r) => r.source_managed);
+  let imported = rows.find((r) => r.source_managed && r.finish === "nonfoil");
   expect(rows.find((r) => r.id === native.id).quantity).toBe(5);
-  const sources = await api("deck-imports");
+  const allSources = await api("deck-imports");
+  const sources = allSources.filter((d) => d.provider === "moxfield");
+  const officialStored = allSources.find(
+    (d) => d.source_id === official.source_id,
+  );
+  expect(officialStored.provider).toBe("wizards-precon");
+  expect(officialStored.url).toBe(official.url);
+  expect(
+    rows.find((r) => r.source_managed && r.finish === "foil").quantity,
+  ).toBe(1);
+  expect(
+    (await api("tags")).find((t) => t.id === officialStored.tag_id).source
+      .provider,
+  ).toBe("wizards-precon");
   const locations = sources.map((d) => ({
     tag_id: d.tag_id,
     quantity: d.lots.reduce((n, l) => n + l.allocated_quantity, 0),
@@ -232,7 +278,7 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   await api(`collection/${native.id}`, "DELETE");
   await page.reload();
   await page.locator("#clear-tag").click();
-  await expect(page.locator("#total")).toHaveText("3");
+  await expect(page.locator("#total")).toHaveText("4");
   await expect(page.locator(".card .allocation-warning")).toHaveCount(0);
   const alpha = sources.find(
     (source) => source.source_id === "keeper_test_deck_alpha",
@@ -262,7 +308,10 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   );
   await page.locator("#manage-tags").click();
   await page.locator("#deck-sources").click();
-  await expect(page.locator(".source-card")).toHaveCount(2);
+  await expect(page.locator(".source-card")).toHaveCount(3);
+  await expect(
+    page.getByRole("link", { name: "Official Wizards decklist" }),
+  ).toHaveAttribute("href", official.url);
   await expect(page.locator(".pending-source")).toHaveCount(2);
   await expect(
     page
