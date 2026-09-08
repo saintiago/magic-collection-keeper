@@ -67,7 +67,7 @@ const card = {
   finishes: ["foil"],
   scryfall_uri: "https://scryfall.com",
 };
-test("UC-08 uploaded reading can be corrected, reviewed and saved as a scan batch", async ({
+test("UC-08 optional candidate choice is separate from failed reads and requires ownership", async ({
   page,
 }) => {
   let writes = 0;
@@ -82,7 +82,7 @@ test("UC-08 uploaded reading can be corrected, reviewed and saved as a scan batc
   await page.route("**/recognition.js", (r) =>
     r.fulfill({
       contentType: "text/javascript",
-      body: 'export async function stopRecognition(){}; export async function recognizeCard(){return {name:"",text:"",confidence:0};}',
+      body: 'export async function stopRecognition(){}; export async function recognizeCard(){return {name:"Scanned Card",text:"Scanned Card",confidence:40};}',
     }),
   );
   await page.route("**/api/search?*", (r) =>
@@ -94,14 +94,16 @@ test("UC-08 uploaded reading can be corrected, reviewed and saved as a scan batc
   await page
     .locator("#photo")
     .setInputFiles({ name: "card.png", mimeType: "image/png", buffer: png });
-  await expect(
-    page.getByText("Could not read a name or collector number.", {
-      exact: false,
-    }),
-  ).toBeVisible();
+  await expect(page.locator("#scan-status")).toContainText(
+    "Printing uncertain",
+  );
+  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  await expect(page.locator(".scan-option")).toHaveCount(0);
+  await expect(page.locator("#scan-review")).toBeDisabled();
+  await page.locator("#scan-possible summary").click();
+  await page.locator("[data-candidate='0']").click();
+  await expect(page.locator(".scan-option")).toHaveCount(1);
   await page.locator("#scan-review").click();
-  await page.locator(".review-search input").fill("set:tst cn:2");
-  await page.locator(".resolve").click();
   await expect(page.locator(".candidate")).toHaveValue("scan-print");
   await page.locator(".review-qty").fill("2");
   await page.locator("#ownership").check();

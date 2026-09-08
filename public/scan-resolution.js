@@ -1,8 +1,9 @@
-import { recognitionQuery } from "./catalog-query.js";
+import { recognitionQuery, recognitionNameQuery } from "./catalog-query.js";
 const normal = (s = "") => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 export function confidentPrinting(reading, data) {
   if (
     !reading.exact ||
+    !Number.isFinite(reading.confidence) ||
     reading.confidence < 70 ||
     data.hasMore ||
     data.cards.length !== 1
@@ -42,7 +43,7 @@ export async function resolveScan(reading, api) {
   };
   if (!row.query) {
     row.error =
-      "Could not read a name or collector number. Review this reading later.";
+      "Could not read a name or collector number. Move the card out, then try again.";
     return row;
   }
   try {
@@ -51,7 +52,7 @@ export async function resolveScan(reading, api) {
     );
     row.selected = confidentPrinting(reading, data);
     if (!data.cards.length && reading.exact && reading.name) {
-      row.query = reading.name;
+      row.query = recognitionNameQuery(reading.name);
       data = await api(`/api/search?${new URLSearchParams({ q: row.query })}`);
     }
     row.candidates = data.cards;

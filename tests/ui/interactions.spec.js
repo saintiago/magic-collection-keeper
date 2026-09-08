@@ -279,8 +279,12 @@ test("UC-08 missing camera and uploaded photo recognition failure", async ({
     .locator("#photo")
     .setInputFiles({ name: "card.png", mimeType: "image/png", buffer: png });
   await expect(
-    page.getByText("Recognition failed:", { exact: false }),
+    page.getByText("Recognition failed.", { exact: false }),
   ).toBeVisible();
+  await expect(page.locator(".scan-option")).toHaveCount(0);
+  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  await page.locator("#scan-back").click();
+  await expect(page.locator(".batch-dialog")).not.toBeVisible();
 });
 test("UC-09 mobile layout remains within viewport with working navigation", async ({
   page,

@@ -55,6 +55,41 @@ html.scanning {
   font-size: 12px;
   letter-spacing: 0;
 }
+#scan-sound-state {
+  position: absolute;
+  top: max(64px, calc(env(safe-area-inset-top) + 48px));
+  right: 20px;
+  margin: 0;
+  font-size: 10px;
+  background: #10251edb;
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+#scan-possible {
+  position: absolute;
+  top: max(96px, calc(env(safe-area-inset-top) + 80px));
+  right: 20px;
+  left: 20px;
+  z-index: 4;
+  max-height: 55%;
+  overflow-y: auto;
+  background: #10251ef5;
+  border-radius: 12px;
+  padding: 10px;
+  font-size: 12px;
+}
+#scan-possible[hidden] {
+  display: none;
+}
+#scan-possible summary {
+  cursor: pointer;
+}
+#scan-possible button {
+  display: block;
+  width: 100%;
+  margin: 5px 0;
+  white-space: normal;
+}
 #scan-guide {
   position: absolute;
   width: min(78vw, 45dvh);
@@ -150,7 +185,7 @@ html.scanning {
   scrollbar-width: none;
   padding: var(--wheel-pad, 45px) 16px;
   -webkit-overflow-scrolling: touch;
-  mask-image: linear-gradient(transparent, #000 18%, #000 82%, transparent);
+  mask-image: linear-gradient(transparent, #000 18%, #000);
 }
 #scan-wheel::-webkit-scrollbar {
   display: none;
@@ -202,6 +237,10 @@ html.scanning {
   right: 12px;
   border-block: 1px solid #476e4420;
   pointer-events: none;
+}
+.scan-wheel-shell[data-pinned="true"] .scan-selection-line {
+  top: auto;
+  bottom: 0;
 }
 #scan-empty {
   position: absolute;

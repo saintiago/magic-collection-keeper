@@ -72,35 +72,37 @@ test("UC-14 hands-free identical copies, stationary suppression, error cue recov
   page,
 }) => {
   await fixture(page, { failFirst: true });
-  await expect(page.locator(".scan-option")).toHaveCount(1);
   await expect(page.locator("#scan-status")).toContainText(
     "Recognition failed",
   );
+  await expect(page.locator(".scan-option")).toHaveCount(0);
+  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
   await page.waitForTimeout(1700);
-  await expect(page.locator(".scan-option")).toHaveCount(1);
-  expect(await page.evaluate(() => window.cueNotes)).toEqual([230, 170]);
+  await expect(page.locator(".scan-option")).toHaveCount(0);
+  expect(await page.evaluate(() => window.cueNotes)).toEqual([440, 230, 170]);
   await nextIdentical(page);
-  await expect(page.locator(".scan-option")).toHaveCount(2);
+  await expect(page.locator(".scan-option")).toHaveCount(1);
   await expect(page.locator("#scan-status")).toContainText("matched");
   expect(await page.evaluate(() => window.cueNotes)).toEqual([
-    230, 170, 660, 880,
+    440, 230, 170, 660, 880,
   ]);
   await nextIdentical(page);
-  await expect(page.locator(".scan-option")).toHaveCount(3);
+  await expect(page.locator(".scan-option")).toHaveCount(2);
   await expect(
     page.locator('.scan-option[aria-selected="true"]'),
-  ).toHaveAttribute("data-index", "2");
+  ).toHaveAttribute("data-index", "1");
   await page.locator("#scan-back").click();
   expect(
     await page.evaluate(() => window.testStream.getTracks()[0].readyState),
   ).toBe("ended");
   await expect(page.locator(".scanner-dialog")).not.toBeVisible();
-  await expect(page.locator(".review-row")).toHaveCount(3);
-  await expect(page.locator(".candidate").first()).toHaveValue("");
+  await expect(page.locator(".review-row")).toHaveCount(2);
+  await expect(page.locator(".candidate").first()).toHaveValue("scan-test");
   await expect(page.locator("#save-batch")).toBeDisabled();
 });
 test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove controls and mute", async ({
   page,
+  browserName,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await fixture(page);
@@ -113,6 +115,15 @@ test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove co
   await expect(
     page.locator('.scan-option[aria-selected="true"]'),
   ).toHaveAttribute("data-index", "4");
+  await expect
+    .poll(() =>
+      page.locator("#scan-wheel").evaluate((el) => {
+        const last = el.lastElementChild.getBoundingClientRect();
+        return Math.abs(el.getBoundingClientRect().bottom - last.bottom);
+      }),
+    )
+    .toBeLessThan(2);
+  await page.screenshot({ path: "test-results/scanner-newest-bottom.png" });
   expect(
     await page
       .locator(".scan-option")
@@ -148,11 +159,14 @@ test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove co
           row.offsetTop +
             row.offsetHeight / 2 -
             el.scrollTop -
-            el.clientHeight / 2,
+            (el.parentElement.dataset.pinned === "true"
+              ? el.clientHeight - row.offsetHeight / 2
+              : el.clientHeight / 2),
         );
       }),
     )
     .toBeLessThan(2);
+  await page.screenshot({ path: "test-results/scanner-older-centered.png" });
   await page.locator(".scan-remove").click();
   await expect(page.locator(".scan-option")).toHaveCount(4);
   await page.locator("#scan-wheel").focus();
@@ -166,25 +180,31 @@ test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove co
   await expect
     .poll(() => page.locator("#scan-wheel").evaluate((el) => el.scrollTop))
     .toBeLessThan(2);
-  const touch = await page.context().newCDPSession(page);
-  const box = await page.locator("#scan-wheel").boundingBox();
-  const x = box.x + box.width / 2,
-    y = box.y + box.height * 0.75;
-  await touch.send("Input.dispatchTouchEvent", {
-    type: "touchStart",
-    touchPoints: [{ x, y }],
-  });
-  for (let step = 1; step <= 6; step++) {
+  if (browserName === "chromium") {
+    const touch = await page.context().newCDPSession(page);
+    const box = await page.locator("#scan-wheel").boundingBox();
+    const x = box.x + box.width / 2,
+      y = box.y + box.height * 0.75;
     await touch.send("Input.dispatchTouchEvent", {
-      type: "touchMove",
-      touchPoints: [{ x, y: y - step * 12 }],
+      type: "touchStart",
+      touchPoints: [{ x, y }],
     });
-    await page.waitForTimeout(25);
+    for (let step = 1; step <= 6; step++) {
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x, y: y - step * 12 }],
+      });
+      await page.waitForTimeout(25);
+    }
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+  } else {
+    await page
+      .locator("#scan-wheel")
+      .evaluate((el) => el.scrollBy({ top: 77, behavior: "smooth" }));
   }
-  await touch.send("Input.dispatchTouchEvent", {
-    type: "touchEnd",
-    touchPoints: [],
-  });
   await expect
     .poll(async () =>
       Number(
@@ -202,7 +222,9 @@ test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove co
           row.offsetTop +
             row.offsetHeight / 2 -
             el.scrollTop -
-            el.clientHeight / 2,
+            (el.parentElement.dataset.pinned === "true"
+              ? el.clientHeight - row.offsetHeight / 2
+              : el.clientHeight / 2),
         );
       }),
     )
@@ -232,21 +254,15 @@ test("UC-14 back cancels in-flight recognition and background shuts down capture
   page,
 }) => {
   await fixture(page, { slow: true });
-  await expect(page.locator(".scan-option")).toHaveCount(1);
+  await expect(page.locator("#scan-status")).toContainText("Reading card");
+  await expect(page.locator(".scan-option")).toHaveCount(0);
   await page.locator("#scan-back").click();
-  await expect(page.locator(".review-row")).toHaveCount(1);
-  expect(
-    await page.evaluate(() =>
-      document.documentElement.classList.contains("scanning"),
-    ),
-  ).toBe(false);
+  await expect(page.locator(".batch-dialog")).not.toBeVisible();
   await page.waitForTimeout(3200);
-  await expect(page.locator(".candidate")).toHaveValue("");
+  await expect(page.locator(".review-row")).toHaveCount(0);
   expect(
     await page.evaluate(() => window.testStream.getTracks()[0].readyState),
   ).toBe("ended");
-  page.once("dialog", (d) => d.accept());
-  await page.locator("#batch-close").click();
   await page.locator("#scan").click();
   await page.locator("#camera-start").click();
   await page.evaluate(() => {
@@ -267,20 +283,12 @@ test("UC-14 sampling continues during slow OCR and removing the last queued read
   page,
 }) => {
   await fixture(page, { slow: true });
-  await expect(page.locator(".scan-option")).toHaveCount(1);
+  await expect(page.locator("#scan-status")).toContainText("Reading card");
+  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
   await nextIdentical(page);
-  await expect(page.locator(".scan-option")).toHaveCount(2);
-  await expect(page.locator(".scan-option small").first()).toHaveText(
-    "Reading…",
-  );
-  await expect(
-    page.locator('.scan-option[aria-selected="true"]'),
-  ).toHaveAttribute("data-index", "1");
+  await expect(page.locator(".scan-option")).toHaveCount(2, { timeout: 12000 });
   await page.locator(".scan-remove").click();
-  await expect(
-    page.locator('.scan-option[aria-selected="true"]'),
-  ).toHaveAttribute("data-index", "0");
-  await expect(page.locator("#scan-status")).toContainText("matched");
+  await expect(page.locator(".scan-option")).toHaveCount(1);
   await page.locator(".scan-remove").click();
   await expect(page.locator(".scan-option")).toHaveCount(0);
   await expect(page.locator("#scan-controls")).not.toBeVisible();
@@ -302,4 +310,29 @@ test("UC-14 suspended audio cannot block hands-free capture", async ({
   expect(
     await page.evaluate(() => window.testStream.getTracks()[0].readyState),
   ).toBe("ended");
+});
+
+test("UC-14 audio interruption remains visible and explicit testing resumes without replay", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const Native = window.AudioContext;
+    window.AudioContext = class extends Native {
+      constructor() {
+        super();
+        window.scanAudioContext = this;
+      }
+    };
+  });
+  await fixture(page);
+  await expect(page.locator("#scan-status")).toContainText("matched");
+  await expect(page.locator("#scan-sound-state")).toContainText("Audio ready");
+  await page.evaluate(() => window.scanAudioContext.suspend());
+  await expect(page.locator("#scan-sound-state")).toContainText("Sound paused");
+  await nextIdentical(page);
+  await expect(page.locator(".scan-option")).toHaveCount(2);
+  const before = await page.evaluate(() => [...window.cueNotes]);
+  await page.locator("#scan-test-sound").click();
+  await expect(page.locator("#scan-sound-state")).toContainText("Audio ready");
+  expect(await page.evaluate(() => window.cueNotes)).toEqual([...before, 440]);
 });

@@ -4,7 +4,8 @@ import {
   createTransitionGate,
   visualDifference,
 } from "../public/scan-transition.js";
-import { confidentPrinting } from "../public/scan-resolution.js";
+import { confidentPrinting, resolveScan } from "../public/scan-resolution.js";
+import { recognitionQuery } from "../public/catalog-query.js";
 import { createScanAudio } from "../public/scan-audio.js";
 
 const frame = (flip = false, brightness = 0) =>
@@ -60,6 +61,8 @@ test("automatic match requires confident agreeing exact printing, name and langu
   assert.equal(confidentPrinting(reading, data), card);
   for (const changed of [
     { confidence: 45 },
+    { confidence: undefined },
+    { confidence: NaN },
     { name: "Lightning Strike" },
     { exact: null },
     { exact: { set: "M11", number: "149", language: "ES" } },
@@ -114,6 +117,50 @@ test("success and error cues are distinct, once per attempt, muted safely and cl
   audio.setMuted(true);
   audio.cue("error", 3);
   assert.equal(notes.length, 4);
+  audio.setMuted(false);
+  context.state = "interrupted";
+  assert.equal(audio.state(), "interrupted");
+  assert.equal(audio.cue("success", 4), false);
+  await audio.activate({ test: true });
+  assert.deepEqual(notes, [660, 880, 230, 170, 440]);
+  audio.cue("success", 4);
+  assert.equal(notes.length, 5, "resuming cannot replay a stale success");
   await audio.close();
   assert.equal(closed, 1);
+});
+
+test("OCR punctuation stays a literal name, including after an exact lookup misses", async () => {
+  for (const name of [
+    "Melek, (Izzet",
+    "Will of the Jeskai \\",
+    'A \"quoted\" name OR set:lea',
+  ]) {
+    const query = recognitionQuery({ name });
+    assert(query.startsWith('!"') && query.endsWith('"'));
+    assert.equal((query.match(/"/g) || []).length, 2);
+    assert(!query.includes("\\"));
+  }
+  assert.equal(recognitionQuery({ name: "(( \\" }), "");
+  const queries = [];
+  const row = await resolveScan(
+    {
+      name: "Melek (",
+      confidence: 95,
+      exact: { set: "dgm", number: "084", language: "en" },
+    },
+    async (path) => {
+      queries.push(new URL(path, "http://test").searchParams.get("q"));
+      return { cards: [], hasMore: false };
+    },
+  );
+  assert.deepEqual(queries, ["set:dgm cn:84 lang:en", '!"Melek ("']);
+  assert.equal(row.selected, null);
+  assert.deepEqual(row.candidates, []);
+  assert.equal(
+    recognitionQuery({
+      name: "Melek",
+      exact: { set: "dgm) OR game:digital", number: "84" },
+    }),
+    '!"Melek"',
+  );
 });

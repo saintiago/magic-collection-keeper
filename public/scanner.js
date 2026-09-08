@@ -5,6 +5,7 @@ import { createTransitionGate } from "./scan-transition.js";
 import { resolveScan } from "./scan-resolution.js";
 import { createScanAudio } from "./scan-audio.js";
 import { createScanWheel } from "./scan-wheel.js";
+import { esc } from "./view.js";
 
 export function createScanner({ api, onReview }) {
   const dialog = document.createElement("dialog");
@@ -12,6 +13,7 @@ export function createScanner({ api, onReview }) {
   dialog.setAttribute("aria-label", "Continuous card scanner");
   document.body.append(dialog);
   let rows,
+    possible,
     queue,
     wheel,
     audio,
@@ -30,8 +32,43 @@ export function createScanner({ api, onReview }) {
   function update(newest = false) {
     wheel.update(rows, newest);
     el("scan-count").textContent =
-      `${rows.length} readings · ${rows.reduce((n, r) => n + r.quantity, 0)} copies`;
+      `${rows.length} matched · ${rows.reduce((n, r) => n + r.quantity, 0)} copies`;
     el("scan-empty").hidden = rows.length > 0;
+    el("scan-review").disabled = rows.length === 0;
+    renderPossible();
+  }
+  function soundState(state) {
+    if (!el("scan-sound-state")) return;
+    el("scan-sound-state").textContent =
+      {
+        running: "Audio ready · check your device volume",
+        muted: "Sound muted",
+        inactive: "Sound not activated",
+        suspended: "Sound paused · tap Test sound",
+        interrupted: "Sound interrupted · tap Test sound",
+        closed: "Sound stopped",
+        unavailable: "Sound unavailable · follow visual status",
+      }[state] || "Sound unavailable · follow visual status";
+  }
+  function renderPossible() {
+    const panel = el("scan-possible");
+    panel.hidden = !possible.length;
+    panel.querySelector("summary").textContent =
+      `Possible matches (${possible.length})`;
+    panel.querySelector(".scan-possible-list").innerHTML = possible
+      .map(
+        (row) =>
+          `<section><p>Choose only if this matches your card:</p>${row.candidates
+            .slice(0, 8)
+            .map(
+              (card, index) =>
+                `<button data-attempt="${row.scanId}" data-candidate="${index}">${esc(card.printed_name || card.name)} · ${esc(card.set)} #${esc(card.collector_number)} · ${esc(card.lang)}</button>`,
+            )
+            .join(
+              "",
+            )}<button data-dismiss="${row.scanId}">Dismiss this reading</button></section>`,
+      )
+      .join("");
   }
   function stop() {
     session++;
@@ -44,11 +81,6 @@ export function createScanner({ api, onReview }) {
     const video = el("camera-video");
     if (video) video.srcObject = null;
     queue = [];
-    for (const row of rows || [])
-      if (row.processing) {
-        row.processing = false;
-        row.error = "Reading interrupted. Review this card before saving.";
-      }
     void stopRecognition();
     void audio?.close();
     if (el("camera-start")) {
@@ -76,10 +108,13 @@ export function createScanner({ api, onReview }) {
   });
   window.addEventListener("pagehide", stop);
   function enqueue(canvas) {
-    if (rows.length >= 50) {
+    if (
+      rows.length + possible.length + queue.length + Number(processing) >=
+      50
+    ) {
       stop();
       update();
-      status("50 readings ready. Tap Review to save this batch.");
+      status("Batch full. Review matched cards or dismiss possible matches.");
       return;
     }
     const row = {
@@ -93,16 +128,11 @@ export function createScanner({ api, onReview }) {
       condition: "NM",
       processing: true,
     };
-    rows.push(row);
-    update(true);
     if (queue.length >= 3) {
-      row.processing = false;
-      row.name = "Card needs another look";
-      row.error =
-        "Cards arrived faster than recognition. Review this card or scan it again.";
       audio.cue("error", row.scanId);
-      update();
-      status(row.error);
+      status(
+        "Scanning is busy. Move this card out, then try again after the cue.",
+      );
       return;
     }
     queue.push({ row, canvas });
@@ -113,7 +143,6 @@ export function createScanner({ api, onReview }) {
     processing = true;
     while (queue.length && current === session && dialog.open) {
       const { row, canvas } = queue.shift();
-      if (!rows.includes(row)) continue;
       let result;
       try {
         status("Reading card locally… Keep each card still until the cue.");
@@ -123,20 +152,26 @@ export function createScanner({ api, onReview }) {
       } catch (error) {
         result = {
           name: "Unclear reading",
-          error: `Recognition failed: ${error.message}. Review this card later.`,
+          error: "Recognition failed. Move the card out, then try again.",
           selected: null,
         };
       }
       if (current !== session || !dialog.open) return;
-      if (!rows.includes(row)) continue;
       const quantity = row.quantity;
       Object.assign(row, result, { quantity, processing: false });
+      if (row.selected) rows.push(row);
+      else if (row.candidates?.length) {
+        possible.push(row);
+        if (possible.length > 10) possible.shift();
+      }
       audio.cue(row.selected ? "success" : "error", row.scanId);
-      update(row === rows.at(-1));
+      update(Boolean(row.selected));
       status(
         row.selected
           ? `${row.name} matched. ${running ? "Slide in the next card." : "Upload another photo or start the camera."}`
-          : `${row.error} ${running ? "Scanning can continue." : "Upload another photo or start the camera."}`,
+          : row.candidates?.length
+            ? "Printing uncertain. Move the card out and retry, or open Possible matches. No copy counted."
+            : `${row.error || "No match. Move the card out, then try again."} No copy counted.`,
       );
     }
     if (current === session) processing = false;
@@ -165,10 +200,7 @@ export function createScanner({ api, onReview }) {
     el("camera-start").disabled = true;
     status("Waiting for camera permission…");
     // Called directly from the initial tap, before awaiting camera permission.
-    let soundReady = false;
-    void audio.activate().then((ready) => {
-      soundReady = ready;
-    });
+    void audio.activate({ test: true });
     try {
       const candidate = await startCamera(el("camera-video"));
       if (current !== session || !dialog.open || document.hidden) {
@@ -180,7 +212,7 @@ export function createScanner({ api, onReview }) {
       dialog.dataset.running = "true";
       el("camera-start").hidden = true;
       status(
-        `Hold one card inside the guide until the cue, then slide in the next.${soundReady ? "" : " Use the visual status if sound is unavailable."}`,
+        "Hold one card inside the guide until the cue, then slide in the next.",
       );
       tick(current);
     } catch (error) {
@@ -192,11 +224,12 @@ export function createScanner({ api, onReview }) {
   return {
     open() {
       rows = [];
+      possible = [];
       queue = [];
       attempt = 0;
-      audio = createScanAudio();
-      audio.setMuted(muted);
       dialog.innerHTML = scannerShell(muted);
+      audio = createScanAudio({ onState: soundState });
+      audio.setMuted(muted);
       wheel = createScanWheel({
         viewport: el("scan-wheel"),
         controls: el("scan-controls"),
@@ -205,12 +238,38 @@ export function createScanner({ api, onReview }) {
       el("camera-start").onclick = start;
       el("scan-back").onclick = leave;
       el("scan-review").onclick = leave;
+      el("scan-test-sound").onclick = () => {
+        muted = false;
+        audio.setMuted(false);
+        el("scan-mute").setAttribute("aria-pressed", "false");
+        el("scan-mute").textContent = "Mute sound";
+        void audio.activate({ test: true });
+      };
+      el("scan-possible").onclick = (event) => {
+        const button = event.target.closest("button");
+        if (!button) return;
+        const id = Number(button.dataset.attempt || button.dataset.dismiss);
+        const index = possible.findIndex((row) => row.scanId === id);
+        if (index < 0) return;
+        const row = possible[index];
+        if (button.dataset.candidate !== undefined) {
+          row.selected = row.candidates[Number(button.dataset.candidate)];
+          row.name = row.selected.name;
+          row.error = null;
+          if (!row.selected.finishes.includes(row.finish))
+            row.finish = row.selected.finishes[0];
+          rows.push(row);
+          rows.sort((a, b) => a.scanId - b.scanId);
+        }
+        possible.splice(index, 1);
+        update(true);
+      };
       el("scan-mute").onclick = async () => {
         muted = !muted;
         audio.setMuted(muted);
         el("scan-mute").setAttribute("aria-pressed", String(muted));
-        el("scan-mute").textContent = muted ? "Sound off" : "Sound on";
-        if (!muted) await audio.activate();
+        el("scan-mute").textContent = muted ? "Enable sound" : "Mute sound";
+        if (!muted) await audio.activate({ test: true });
       };
       el("photo").onchange = async (event) => {
         const file = event.target.files[0];
