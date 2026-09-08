@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export function createBackendRecognition({ request }) {
+import { resolveRecognition } from "./recognition-candidates.js";
+export function createBackendRecognition({ request, path = "/api/recognize" }) {
   let active = false;
   return {
+    kind: path.endsWith("sagemaker") ? "sagemaker" : "lambda",
     async recognize(canvas, { signal, attempt }) {
       signal?.throwIfAborted();
       if (active) throw new Error("Scanner busy. Retry this card.");
@@ -26,59 +27,13 @@ export function createBackendRecognition({ request }) {
         for (let i = 0; i < bytes.length; i += 32768)
           binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
         signal?.throwIfAborted();
-        const data = await request("/api/recognize", {
+        const data = await request(path, {
           method: "POST",
           body: JSON.stringify({ image: btoa(binary), attempt }),
           signal,
         });
         signal?.throwIfAborted();
-        if (
-          data.contractVersion !== 1 ||
-          data.attempt !== attempt ||
-          !["unknown", "possible"].includes(data.status)
-        )
-          throw new Error("Recognition response is not approved");
-        const candidates = (
-          data.status === "possible" && Array.isArray(data.candidates)
-            ? data.candidates
-            : []
-        )
-          .slice(0, 5)
-          .filter(
-            (c) =>
-              uuid.test(c.id) &&
-              uuid.test(c.oracle_id) &&
-              typeof c.name === "string" &&
-              c.name.length <= 200,
-          );
-        const cards = [];
-        // Resolve exact printings through the existing canonical catalog adapter.
-        // Candidate metadata never becomes an ownership write payload directly.
-        for (const candidate of candidates) {
-          signal?.throwIfAborted();
-          const data = await request(
-            `/api/card?${new URLSearchParams({ printing: candidate.id, oracle: candidate.oracle_id })}`,
-            { signal },
-          );
-          const card = data.cards?.[0];
-          signal?.throwIfAborted();
-          if (
-            card?.id === candidate.id &&
-            card.oracle_id === candidate.oracle_id &&
-            Array.isArray(card.finishes) &&
-            card.finishes.length
-          )
-            cards.push(card);
-        }
-        return {
-          status: data.status,
-          name: cards[0]?.name || "Unclear reading",
-          candidates: cards,
-          selected: null,
-          finish: "nonfoil",
-          condition: "NM",
-          quantity: 1,
-        };
+        return resolveRecognition(data, { request, signal, attempt });
       } finally {
         active = false;
       }

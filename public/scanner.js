@@ -6,7 +6,13 @@ import { resolveScan } from "./scan-resolution.js";
 import { createScanAudio } from "./scan-audio.js";
 import { createScanWheel } from "./scan-wheel.js";
 
-export function createScanner({ api, onReview, recognition = null }) {
+export function createScanner({
+  api,
+  onReview,
+  recognition = null,
+  modes = null,
+}) {
+  let mode = recognition?.kind || "ocr";
   let requestController = new AbortController();
   const dialog = document.createElement("dialog");
   dialog.className = "scanner-dialog";
@@ -80,6 +86,7 @@ export function createScanner({ api, onReview, recognition = null }) {
   }
   function leave() {
     stop();
+    recognition?.dispose?.();
     wheel.destroy();
     dialog.close();
     document.documentElement.classList.remove("scanning");
@@ -92,6 +99,7 @@ export function createScanner({ api, onReview, recognition = null }) {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden && dialog.open) {
       stop();
+      recognition?.dispose?.();
       update();
       status("Camera paused in the background. Tap Start camera to resume.");
     }
@@ -99,6 +107,7 @@ export function createScanner({ api, onReview, recognition = null }) {
   window.addEventListener("pagehide", stop);
   window.addEventListener("keeper-sign-out", () => {
     stop();
+    recognition?.dispose?.();
     dialog.close();
     document.documentElement.classList.remove("scanning");
   });
@@ -130,14 +139,16 @@ export function createScanner({ api, onReview, recognition = null }) {
       );
       return;
     }
-    queue.push({ row, canvas });
+    queue.push({ row, canvas, capturedAt: performance.now() });
     void drain(session);
   }
   async function drain(current) {
     if (processing) return;
     processing = true;
     while (queue.length && current === session && dialog.open) {
-      const { row, canvas } = queue.shift();
+      const { row, canvas, capturedAt } = queue.shift();
+      const began = performance.now();
+      let failure = null;
       let result;
       try {
         status(
@@ -156,9 +167,15 @@ export function createScanner({ api, onReview, recognition = null }) {
         } else {
           const reading = await recognizeCard(canvas);
           if (current !== session) return;
+          const resolving = performance.now();
           result = await resolveScan(reading, api);
+          result.measurement = {
+            processing: reading.timings,
+            hydrateMs: performance.now() - resolving,
+          };
         }
       } catch (error) {
+        failure = { name: error.name, status: error.status || null };
         result = {
           name: "Unclear reading",
           error: "Recognition failed. Move the card out, then try again.",
@@ -181,6 +198,32 @@ export function createScanner({ api, onReview, recognition = null }) {
           : row.candidates?.length
             ? "Printing uncertain. Move the card out and retry, or open Possible matches. No copy counted."
             : `${row.error || "No match. Move the card out, then try again."} No copy counted.`,
+      );
+      window.dispatchEvent(
+        new CustomEvent("keeper-scan-measurement", {
+          detail: {
+            mode,
+            attempt: row.scanId,
+            captureToCandidateMs: performance.now() - capturedAt,
+            processingAndHydrationMs: performance.now() - began,
+            queueMs: began - capturedAt,
+            outcome: failure
+              ? "error"
+              : row.selected
+                ? "selected"
+                : row.candidates?.length
+                  ? "possible"
+                  : "unknown",
+            failure,
+            selected: row.selected?.id || null,
+            candidates:
+              row.candidates?.map((c) => ({
+                id: c.id,
+                oracle_id: c.oracle_id,
+              })) || [],
+            ...row.measurement,
+          },
+        }),
       );
     }
     if (current === session) processing = false;
@@ -237,12 +280,38 @@ export function createScanner({ api, onReview, recognition = null }) {
       queue = [];
       attempt = 0;
       dialog.innerHTML = scannerShell(muted);
+      if (modes) {
+        const label = document.createElement("label");
+        label.className = "scan-comparison";
+        label.textContent = "Comparison mode ";
+        const select = document.createElement("select");
+        select.id = "scan-mode";
+        for (const item of modes) {
+          const option = document.createElement("option");
+          option.value = item.id;
+          option.textContent = item.label;
+          select.append(option);
+        }
+        select.value = mode;
+        select.onchange = () => {
+          stop();
+          recognition?.dispose?.();
+          mode = select.value;
+          recognition = modes.find((item) => item.id === mode).create();
+          dialog.dataset.recognition = mode;
+          update();
+          status("Mode ready to test. Upload the same photo for comparison.");
+        };
+        label.append(select);
+        el("scan-status").before(label);
+      }
       dialog.dataset.recognition = recognition ? "backend" : "local";
-      if (recognition) {
+      if (recognition || modes) {
         const notice = document.createElement("p");
         notice.className = "recognition-notice";
-        notice.textContent =
-          "Card crops are sent securely for recognition, processed in memory and not saved. ";
+        notice.textContent = modes
+          ? "Browser modes process photos on this device. Cloud modes send card crops securely for recognition, in memory without saving them. "
+          : "Card crops are sent securely for recognition, processed in memory and not saved. ";
         const source = document.createElement("button");
         source.textContent = "Recognition source (AGPL-3.0)";
         source.onclick = async () => {

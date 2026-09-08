@@ -4,6 +4,7 @@ import { batchShell, reviewRows } from "./batch-view.js";
 import { createScanner } from "./scanner.js";
 import { config } from "./auth.js";
 import { createBackendRecognition } from "./backend-recognition.js";
+import { comparisonModes } from "./recognition-modes.js";
 export function setupBatch({ api, onSaved }) {
   let rows = [],
     busy = false;
@@ -196,6 +197,7 @@ export function setupBatch({ api, onSaved }) {
   }
   const scanner = createScanner({
     api,
+    modes: config.recognitionComparison ? comparisonModes(api) : null,
     recognition:
       config.backendRecognition === true
         ? createBackendRecognition({ request: api })

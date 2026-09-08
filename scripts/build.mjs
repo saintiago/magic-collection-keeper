@@ -1,6 +1,19 @@
 import { mkdir, cp, writeFile, access } from "node:fs/promises";
 import { build } from "esbuild";
 await mkdir("public/vendor/core", { recursive: true });
+await mkdir("public/vendor/ort", { recursive: true });
+for (const name of [
+  "ort.webgpu.min.mjs",
+  "ort-wasm-simd-threaded.asyncify.mjs",
+  "ort-wasm-simd-threaded.asyncify.wasm",
+  "ort-wasm-simd-threaded.mjs",
+  "ort-wasm-simd-threaded.wasm",
+]) {
+  await cp(
+    `node_modules/onnxruntime-web/dist/${name}`,
+    `public/vendor/ort/${name}`,
+  );
+}
 await mkdir("public/vendor/lang", { recursive: true });
 await build({
   entryPoints: ["public/name-worker-entry.js"],

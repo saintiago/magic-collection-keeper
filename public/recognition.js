@@ -32,6 +32,8 @@ let worker,
   generation = 0,
   progress = () => {};
 export async function recognizeCard(canvas, onProgress = () => {}) {
+  const started = performance.now(),
+    reused = Boolean(worker);
   progress = onProgress;
   const current = generation;
   if (!worker) {
@@ -53,8 +55,17 @@ export async function recognizeCard(canvas, onProgress = () => {}) {
     throw error;
   }
   if (current !== generation) throw new Error("Reading cancelled.");
+  const prepared = performance.now();
   const { data } = await engine.recognize(canvas);
-  return { ...parseRecognition(data.text), confidence: data.confidence };
+  return {
+    ...parseRecognition(data.text),
+    confidence: data.confidence,
+    timings: {
+      prepareMs: prepared - started,
+      ocrMs: performance.now() - prepared,
+      modelsReused: reused,
+    },
+  };
 }
 export async function stopRecognition() {
   generation++;

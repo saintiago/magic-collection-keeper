@@ -37,9 +37,12 @@ export async function api(path, options) {
   }
   if (generation !== sessionGeneration)
     throw new Error("Session changed. Please sign in again.");
-  if (!response.ok)
-    throw new Error(
+  if (!response.ok) {
+    const error = new Error(
       data.error || data.message || "Request failed. Please try again.",
     );
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }

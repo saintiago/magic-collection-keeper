@@ -55,7 +55,9 @@ test("possible recognition is never an automatic selected printing", async () =>
       candidates: [],
     }),
   });
-  assert.deepEqual(await port.recognize(canvas, { attempt: 1 }), {
+  const { measurement, ...row } = await port.recognize(canvas, { attempt: 1 });
+  assert.ok(measurement.hydrateMs >= 0);
+  assert.deepEqual(row, {
     status: "possible",
     candidates: [],
     selected: null,
