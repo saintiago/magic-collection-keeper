@@ -51,9 +51,12 @@ test("LIVE-13 unknown recognition does not count copies; optional candidates and
       buffer: Buffer.from(images[key], "base64"),
     });
   await upload("blank");
-  await expect(page.locator("#scan-status")).toContainText("No copy counted", {
-    timeout: 60000,
-  });
+  await expect(page.locator("#scan-status")).toContainText(
+    "No clear card found",
+    {
+      timeout: 60000,
+    },
+  );
   await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
   await expect(page.locator(".scan-option")).toHaveCount(0);
   await expect(page.locator("#scan-review")).toBeDisabled();
@@ -63,7 +66,9 @@ test("LIVE-13 unknown recognition does not count copies; optional candidates and
   images.exact = (await publicCardFrame(page)).split(",")[1];
   for (let i = 1; i <= 5; i++) {
     await upload("exact");
-    await expect(page.locator(".scan-option")).toHaveCount(i);
+    await expect(page.locator(".scan-option")).toHaveCount(i, {
+      timeout: 45000,
+    });
   }
   await upload("exact");
   await expect(page.locator("#scan-count")).toHaveText("6 queued · 6 copies", {

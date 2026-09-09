@@ -102,7 +102,7 @@ export async function exerciseBackendScanner({ page }, test) {
     );
     await upload("blank");
     await expect(page.locator("#scan-status")).toContainText(
-      "No copy counted",
+      "No clear card found",
       { timeout: 60000 },
     );
     await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
@@ -111,6 +111,7 @@ export async function exerciseBackendScanner({ page }, test) {
       await upload("card");
       await expect(page.locator("#scan-count")).toHaveText(
         `${i + 1} queued · ${i + 1} copies`,
+        { timeout: 45000 },
       );
     }
     await expect

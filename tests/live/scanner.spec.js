@@ -19,6 +19,16 @@ test("LIVE-04 continuous synthetic camera with real recognition, real printing r
   await expect(page.locator("#total")).toHaveText("0");
   const image = await publicCardFrame(page);
   await page.addInitScript(installSyntheticCardCamera, image);
+  await page.addInitScript(() => {
+    window.emptyGeometryChecks = 0;
+    window.addEventListener(
+      "keeper-card-geometry-measurement",
+      ({ detail }) => {
+        if (detail.state === "none" && detail.sameScene)
+          window.emptyGeometryChecks++;
+      },
+    );
+  });
   await page.reload();
   await page.locator("#scan").click();
   await page.locator("#camera-start").click();
@@ -32,8 +42,17 @@ test("LIVE-04 continuous synthetic camera with real recognition, real printing r
   await expect(page.locator(".scan-option")).toHaveCount(1);
   await page.waitForTimeout(1800);
   await expect(page.locator(".scan-option")).toHaveCount(1);
-  await page.evaluate(() => window.paintSyntheticCard(true));
-  await page.waitForTimeout(700);
+  await page.evaluate(() => {
+    window.emptyGeometryChecks = 0;
+    window.paintSyntheticCard(true);
+  });
+  // Actual geometry must observe departure; a fixed 700 ms flash can finish
+  // before a slow worker has checked even one empty frame.
+  await expect
+    .poll(() => page.evaluate(() => window.emptyGeometryChecks), {
+      timeout: 15000,
+    })
+    .toBeGreaterThanOrEqual(3);
   await page.evaluate(() => window.paintSyntheticCard());
   await choose();
   await expect(page.locator(".scan-option")).toHaveCount(2);
