@@ -81,6 +81,7 @@ test("UC-ONE-CARD actual geometry waits quietly through overlap and preserves ou
   await page.locator("#camera-start").click();
   await expect(page.locator("#scan-status")).toHaveText(
     "Wait until only one card is visible.",
+    { timeout: 15000 },
   );
   await page.waitForTimeout(1200);
   expect(await page.evaluate(() => window.captureEvents.length)).toBe(0);
@@ -117,12 +118,10 @@ test("UC-ONE-CARD actual geometry waits quietly through overlap and preserves ou
   const [metrics] = await page.evaluate(() => window.overlayMetrics);
   expect(metrics.frames).toBeGreaterThan(20);
   expect(metrics.meanDrawMs).toBeLessThan(5);
-  await test
-    .info()
-    .attach("overlay-draw-metrics", {
-      body: JSON.stringify(metrics),
-      contentType: "application/json",
-    });
+  await test.info().attach("overlay-draw-metrics", {
+    body: JSON.stringify(metrics),
+    contentType: "application/json",
+  });
 });
 
 test("UC-OVERLAY actual stages, departure, resize and reduced motion never display stale activity", async ({

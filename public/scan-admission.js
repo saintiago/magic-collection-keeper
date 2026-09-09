@@ -16,7 +16,7 @@ export function createScanAdmission({
   function matches(frame, capturedAt) {
     return (
       capturedAt >= stableSince &&
-      latestAt - capturedAt <= 450 &&
+      latestAt - capturedAt <= 2000 &&
       visualDifference(latest, frame) <= 5
     );
   }

@@ -6,6 +6,18 @@ export const test = base.extend({
   realCardPresence: [false, { option: true }],
   serverNames: [
     async ({ page, realCardPresence }, use) => {
+      if (realCardPresence)
+        await page.addInitScript(() => {
+          window.geometryMeasurements = [];
+          window.addEventListener(
+            "keeper-card-geometry-measurement",
+            (event) => {
+              window.geometryMeasurements.push(event.detail);
+              if (window.geometryMeasurements.length > 100)
+                window.geometryMeasurements.shift();
+            },
+          );
+        });
       if (!realCardPresence)
         await page.route("**/card-presence.js", (route) =>
           route.fulfill({
@@ -24,5 +36,17 @@ export const test = base.extend({
     },
     { auto: true },
   ],
+});
+test.afterEach(async ({ page, realCardPresence }, testInfo) => {
+  if (realCardPresence) {
+    const measurements = await page
+      .evaluate(() => window.geometryMeasurements || [])
+      .catch(() => []);
+    console.log("Actual geometry timings", JSON.stringify(measurements));
+    await testInfo.attach("geometry-timings", {
+      body: JSON.stringify(measurements),
+      contentType: "application/json",
+    });
+  }
 });
 export { expect };

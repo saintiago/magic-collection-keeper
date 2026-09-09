@@ -331,6 +331,17 @@ export function createScanner({
           task
             .then(
               (geometry) => {
+                if (current === session)
+                  window.dispatchEvent(
+                    new CustomEvent("keeper-card-geometry-measurement", {
+                      detail: {
+                        state: geometry.state,
+                        workerMs: geometry.elapsedMs,
+                        frameAgeMs: performance.now() - capturedAt,
+                        sameScene: gate.matches(sampled, capturedAt),
+                      },
+                    }),
+                  );
                 if (
                   !running ||
                   current !== session ||

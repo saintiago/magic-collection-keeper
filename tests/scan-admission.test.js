@@ -22,11 +22,11 @@ test("UC-ONE-CARD measured 600ms setting rejects a 480ms transient and stale che
   assert.equal(gate.validate(b, 1080, "single"), true);
   const slow = createScanAdmission();
   slow.track(a, 0);
-  slow.track(a, 720);
+  slow.track(a, 2700);
   assert.equal(
     slow.validate(a, 120, "single"),
     false,
-    "no stale geometry after 450ms",
+    "no stale geometry after two seconds",
   );
 });
 test("UC-ONE-CARD continuous stability is credited before slow geometry without a second hold; stale frames cannot queue", () => {
