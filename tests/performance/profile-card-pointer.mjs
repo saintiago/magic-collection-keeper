@@ -243,7 +243,7 @@ try {
               y + Math.sin(step / 10) * 18,
             );
             if (phase === "dwell-boundaries" && step % 18 === 0)
-              await sleep(220);
+              await sleep(320);
             if (phase === "drag") await sleep(8);
           }
         }

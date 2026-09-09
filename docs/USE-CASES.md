@@ -1,5 +1,7 @@
 # Use cases and E2E coverage
 
+[Owner requirements, acceptance criteria and queued requests](REQUIREMENTS.md).
+
 **UC-SCAN-START:** Home Scan remains disabled and marked busy while the verified account and saved captures load. Once initialized, the first tap opens the scanner. `tests/ui/phone-review.spec.js` delays capture recovery deterministically; LIVE-13 starts at Home immediately after sign-in against the deployed app. No test changes that origin to bypass startup.
 
 ## Loading, device cache and release identity
@@ -144,7 +146,9 @@ Persisted receipt and no-op comparisons use structural JSON values: database map
 
 The WebKit CI selection explicitly includes the card-action suite. Live cleanup clears assignments, only newly staged capture drafts and test-owned rows in keeper-e2e, then removes its temporary tags. Existing keeper-tags/import source fixtures and owner data remain untouched.
 
-- **UC-CARD-TILES / UC-CARD-WHEEL:** Native shared-tile clicks/taps keep their route; 200% preview corner/center matrix sweeps use a stable untransformed hit plane. Early hover departure resets dwell; reduced motion keeps zoom without animated tilt. All four viewport edges at 1280, 390, 320 and landscape widths retain full wrapped labels, viewport bounds and translucent proportional ghost screenshots. Pending previews remain unowned. `tests/ui/card-actions.spec.js`, LIVE-17/18.
+- **UC-CARD-TILES / UC-CARD-WHEEL:** Native shared-tile clicks/taps keep their route; 200% preview corner/center matrix sweeps use a stable untransformed hit plane. A continuous 300ms hover starts the 200% lift; information is immediate. Departure at 299ms cancels the lift and re-entry starts a fresh 300ms dwell; reduced motion keeps zoom without animated tilt. All four viewport edges at 1280, 390, 320 and landscape widths retain full wrapped labels, viewport bounds and translucent proportional ghost screenshots. Pending previews remain unowned. `tests/ui/card-actions.spec.js`, LIVE-17/18.
+
+Click/tap retains the source slot and visible grid, enlarges around the source center and shifts only for dismissal gutters. Ultrawide left/middle/right and scrolled application cases verify this placement, nearby info/actions, outside-click consumption and restored scroll/focus.
 
 Hover and expanded zoom use a brief damped spring: a small overshoot then exact 200%/300% settling. Nested reveal and tilt layers keep cursor tilt continuous; reduced-motion preferences skip the reveal animation.
 

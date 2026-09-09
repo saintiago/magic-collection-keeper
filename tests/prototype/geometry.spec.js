@@ -1,4 +1,7 @@
-import { expectInspectorFit } from "../helpers/artwork-fit.js";
+import {
+  expectInspectorFit,
+  expectInspectorSides,
+} from "../helpers/artwork-fit.js";
 import { test, expect } from "@playwright/test";
 
 test.describe("touch viewport changes", () => {
@@ -53,6 +56,77 @@ test.describe("touch viewport changes", () => {
 
 const svg = (width, height) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#294535"/><text x="30" y="120" fill="white" font-size="30">Sample full card</text></svg>`;
+
+test("UC-CARD-TILES immediate info, 299/300ms hover boundary and cancellation restart", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.evaluate(() => document.fonts.ready);
+  await page.clock.install();
+  await page.clock.pauseAt(Date.now() + 1000);
+  await page.evaluate(() => {
+    const original = window.setTimeout;
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay === 300) window.hoverScheduledAt = performance.now();
+      return original(callback, delay, ...args);
+    };
+  });
+  const tile = page.locator("#grid .card-open").first();
+  const b = await tile.boundingBox();
+  const enter = async () => {
+    await tile.dispatchEvent("pointermove", {
+      pointerType: "mouse",
+      clientX: b.x + b.width / 2,
+      clientY: b.y + b.height / 2,
+      bubbles: true,
+    });
+    await page.clock.runFor(17);
+    await expect(tile.locator("..").locator(".card-hover-info")).toBeVisible();
+    const elapsed = await page.evaluate(
+      () => performance.now() - window.hoverScheduledAt,
+    );
+    expect(elapsed).toBeLessThan(18);
+    await page.clock.runFor(299 - elapsed);
+    await expect(page.locator(".artwork-hover")).not.toBeVisible();
+  };
+  await enter();
+  await page.evaluate(() => {
+    window.departedLift = false;
+    const preview = document.querySelector(".artwork-hover");
+    new MutationObserver((records) => {
+      if (
+        records.some(
+          (record) =>
+            record.attributeName === "hidden" && record.oldValue !== null,
+        )
+      )
+        window.departedLift = true;
+    }).observe(preview, {
+      attributes: true,
+      attributeOldValue: true,
+      attributeFilter: ["hidden"],
+    });
+  });
+  await page.locator("body").dispatchEvent("pointermove", {
+    pointerType: "mouse",
+    clientX: 5,
+    clientY: 5,
+    bubbles: true,
+  });
+  await page.clock.runFor(17);
+  await page.clock.runFor(350);
+  await expect(page.locator(".artwork-hover")).not.toBeVisible();
+  expect(await page.evaluate(() => window.departedLift)).toBe(false);
+  await enter();
+  await page.clock.runFor(1);
+  await expect(page.locator(".artwork-hover")).toBeVisible();
+  expect(
+    (await page.locator(".artwork-hover").boundingBox()).width / b.width,
+  ).toBeCloseTo(2, 2);
+  await page.dispatchEvent("body", "pointercancel");
+  await page.clock.runFor(350);
+  await expect(page.locator(".artwork-hover")).not.toBeVisible();
+});
 
 test.beforeEach(async ({ page }) => {
   await page.route("https://cards.scryfall.io/**", (route) =>
@@ -124,8 +198,7 @@ for (const viewport of [
       });
       const left = await page.locator(".artwork-details").boundingBox();
       const right = await page.locator(".artwork-controls").boundingBox();
-      if (left) expect(left.x + left.width).toBeLessThan(viewport.width / 2);
-      expect(right.x).toBeGreaterThan(viewport.width / 2);
+      await expectInspectorSides(page, enlarged);
       if (left)
         expect(left.y + left.height).toBeLessThanOrEqual(viewport.height);
       expect(right.y + right.height).toBeLessThanOrEqual(viewport.height);

@@ -12,7 +12,21 @@ export function artworkOpening(bounds, viewport, requested = 3) {
     Math.max(1, viewport.width - gutterX * 2) / bounds.width,
     Math.max(1, viewport.height - gutterY * 2) / bounds.height,
   );
-  return { zoom, gutterX, gutterY };
+  const width = bounds.width * zoom,
+    height = bounds.height * zoom;
+  const sourceX =
+    bounds.x === undefined ? viewport.width / 2 : bounds.x + bounds.width / 2;
+  const sourceY =
+    bounds.y === undefined ? viewport.height / 2 : bounds.y + bounds.height / 2;
+  return {
+    zoom,
+    gutterX,
+    gutterY,
+    width,
+    height,
+    x: clamp(sourceX - width / 2, gutterX, viewport.width - gutterX - width),
+    y: clamp(sourceY - height / 2, gutterY, viewport.height - gutterY - height),
+  };
 }
 
 // Hover aims for 2x while retaining room to leave at viewport edges.
@@ -160,18 +174,38 @@ export function boundedArtwork({
   baseHeight,
   zoom,
   minZoom = 1,
+  centerX = width / 2,
+  centerY = height / 2,
   x = 0,
   y = 0,
 }) {
   const scale = clamp(zoom, minZoom, 6),
     limitX = Math.max(0, (baseWidth * scale - width) / 2),
     limitY = Math.max(0, (baseHeight * scale - height) / 2);
+  const minX = width - (baseWidth * scale) / 2 - centerX;
+  const maxX = (baseWidth * scale) / 2 - centerX;
+  const minY = height - (baseHeight * scale) / 2 - centerY;
+  const maxY = (baseHeight * scale) / 2 - centerY;
+  const restX = clamp(
+    0,
+    (baseWidth * scale) / 2 - centerX,
+    width - (baseWidth * scale) / 2 - centerX,
+  );
+  const restY = clamp(
+    0,
+    (baseHeight * scale) / 2 - centerY,
+    height - (baseHeight * scale) / 2 - centerY,
+  );
   return {
     zoom: scale,
-    x: limitX ? clamp(x, -limitX, limitX) : 0,
-    y: limitY ? clamp(y, -limitY, limitY) : 0,
+    x: limitX ? clamp(x, minX, maxX) : restX,
+    y: limitY ? clamp(y, minY, maxY) : restY,
     limitX,
     limitY,
+    minX: limitX ? minX : restX,
+    maxX: limitX ? maxX : restX,
+    minY: limitY ? minY : restY,
+    maxY: limitY ? maxY : restY,
   };
 }
 

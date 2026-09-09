@@ -10,6 +10,43 @@ import {
   wheelPickupSize,
 } from "../public/card-action-layout.js";
 
+test("UC-CARD-ART source center stays in place unless a viewport gutter forces a shift", () => {
+  const viewport = { width: 3799, height: 1905 };
+  const middle = artworkOpening(
+    { x: 1000, y: 700, width: 200, height: 280 },
+    viewport,
+  );
+  assert.equal(middle.x, 800);
+  assert.equal(middle.y, 420);
+  const left = artworkOpening(
+    { x: 0, y: 0, width: 200, height: 280 },
+    viewport,
+  );
+  assert.equal(left.x, 24);
+  assert.equal(left.y, 32);
+  const right = artworkOpening(
+    { x: 3599, y: 1625, width: 200, height: 280 },
+    viewport,
+  );
+  assert.equal(right.x, 3175);
+  assert.equal(right.y, 1033);
+  const anchor = {
+    width: 1200,
+    height: 800,
+    baseWidth: 200,
+    baseHeight: 280,
+    centerX: 310,
+    centerY: 420,
+  };
+  const resting = boundedArtwork({ ...anchor, zoom: 2, x: 999, y: -999 });
+  assert.equal(resting.x, 0);
+  assert.equal(resting.y, 0);
+  const zoomed = boundedArtwork({ ...anchor, zoom: 6, x: -999, y: 999 });
+  assert.equal(zoomed.x, 290);
+  assert.equal(zoomed.y, 420);
+  assert.equal(boundedArtwork({ ...anchor, zoom: 3 }).x, 0);
+});
+
 test("UC-CARD-ACTIONS fixed wheel geometry stays inside phone edges and every visible target matches its drop sector", () => {
   const tags = Array.from({ length: 40 }, (_, i) => ({
     id: String(i),

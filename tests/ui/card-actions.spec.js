@@ -1,7 +1,11 @@
-import { expectInspectorFit } from "../helpers/artwork-fit.js";
+import {
+  expectInspectorFit,
+  expectInspectorSides,
+} from "../helpers/artwork-fit.js";
 import { test, expect } from "./fixtures.js";
 import { fixture, card } from "../helpers/import-page-fixture.js";
 import { savePrinting } from "../../db.js";
+import { randomUUID } from "node:crypto";
 const art = {
   ...card,
   image_uris: { normal: "http://127.0.0.1:3100/fixture-card.svg" },
@@ -257,8 +261,7 @@ test("UC-CARD-TILES owned deck tiles are image-only; visible 200% preview tilts 
     const details = await page.locator(".artwork-details").boundingBox(),
       stage = await page.locator(".artwork-stage").boundingBox(),
       controls = await page.locator(".artwork-controls").boundingBox();
-    expect(details.x + details.width).toBeLessThan(stage.width / 2);
-    expect(controls.x).toBeGreaterThan(stage.width / 2);
+    await expectInspectorSides(page, (await expectInspectorFit(page)).image);
     expect(stage).toMatchObject({ x: 0, y: 0, width: 1280, height: 720 });
     await expectInspectorFit(page);
     await expect(
@@ -301,6 +304,115 @@ test("UC-CARD-TILES owned deck tiles are image-only; visible 200% preview tilts 
     await expect(page.getByLabel("Owned quantity")).toHaveValue("3");
     await page.goBack();
     await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+  } finally {
+    f.db.close();
+  }
+});
+
+test("UC-CARD-TILES ultrawide natural and physical-edge anchors preserve grid, scroll, filters and consumed dismissal", async ({
+  page,
+}) => {
+  const f = await setup(page, 1);
+  try {
+    for (let i = 0; i < 79; i++) {
+      const sample = {
+        ...art,
+        id: randomUUID(),
+        name: `Anchor sample ${String(i).padStart(2, "0")}`,
+      };
+      savePrinting(f.db, sample);
+      await f.tagged.add("test", {
+        printing_id: sample.id,
+        quantity: 1,
+        finish: "nonfoil",
+        condition: "NM",
+      });
+    }
+    await page.setViewportSize({ width: 3799, height: 1905 });
+    await page.goto("/#collection");
+    const tiles = page.locator("#grid .card-open");
+    await expect(tiles).toHaveCount(80);
+    const firstRow = await tiles.evaluateAll((nodes) => {
+      const firstY = nodes[0].getBoundingClientRect().y;
+      return nodes.filter((node) => node.getBoundingClientRect().y === firstY)
+        .length;
+    });
+    for (const [name, index] of [
+      ["left", 0],
+      ["middle", Math.floor(firstRow / 2)],
+      ["right", firstRow - 1],
+      ["scrolled", firstRow * 6],
+      ["physical-left", 0],
+      ["physical-right", 1],
+    ]) {
+      const tile = tiles.nth(index);
+      await tile.scrollIntoViewIfNeeded();
+      if (name.startsWith("physical"))
+        await tile.locator("..").evaluate((el, name) => {
+          el.style.cssText = `position:fixed;top:450px;width:180px;z-index:3;${name === "physical-left" ? "left:8px" : "right:8px"}`;
+        }, name);
+      await page.mouse.move(5, 5);
+      const before = await tiles.evaluateAll((nodes) =>
+        nodes.map((node) => node.getBoundingClientRect().toJSON()),
+      );
+      const scroll = await page.evaluate(() => scrollY);
+      const filter = await page.locator("#sort").inputValue();
+      await tile.click();
+      const fit = await expectInspectorFit(page);
+      await expectInspectorSides(page, fit.image);
+      expect(
+        await tiles.evaluateAll((nodes) =>
+          nodes.map((node) => node.getBoundingClientRect().toJSON()),
+        ),
+      ).toEqual(before);
+      expect(
+        await page
+          .locator(".artwork-viewer")
+          .evaluate((el) => getComputedStyle(el).backgroundColor),
+      ).toBe("rgba(7, 19, 13, 0.267)");
+      await page.screenshot({
+        path: test.info().outputPath(`anchored-${name}.png`),
+      });
+      // Dismiss over an actual neighboring card, not only a blank gutter.
+      const occupied = await page
+        .locator(".artwork-full-image,.artwork-details,.artwork-controls")
+        .evaluateAll((nodes) =>
+          nodes.map((node) => node.getBoundingClientRect().toJSON()),
+        );
+      const neighbor = before.find((r, i) => {
+        const x = r.x + r.width / 2,
+          y = r.y + r.height / 2;
+        return (
+          i !== index &&
+          r.y >= 0 &&
+          r.bottom < 1905 &&
+          occupied.every(
+            (o) =>
+              x < o.x - 2 || x > o.right + 2 || y < o.y - 2 || y > o.bottom + 2,
+          )
+        );
+      });
+      expect(neighbor).toBeTruthy();
+      await page.mouse.click(
+        neighbor.x + neighbor.width / 2,
+        neighbor.y + neighbor.height / 2,
+      );
+      await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+      await page.waitForTimeout(450);
+      await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+      await expect(tile).toBeFocused();
+      expect(await page.evaluate(() => scrollY)).toBe(scroll);
+      expect(await tile.boundingBox()).toMatchObject({
+        x: before[index].x,
+        y: before[index].y,
+      });
+      await expect(page.locator("#sort")).toHaveValue(filter);
+      await expect(page).toHaveURL(/#collection$/);
+      await tile.locator("..").evaluate((el) => el.removeAttribute("style"));
+    }
+    expect(
+      (await f.tagged.list("test")).reduce((sum, row) => sum + row.quantity, 0),
+    ).toBe(80);
   } finally {
     f.db.close();
   }
@@ -456,7 +568,7 @@ test("UC-CARD-ART catalogue is artwork-only; hover, zoom, outside dismissal and 
     const openingPercent = await page
       .locator(".artwork-viewer output")
       .textContent();
-    await page.locator(".artwork-stage").hover();
+    await page.locator(".artwork-full-image").hover();
     await page.mouse.wheel(0, -400);
     await expect(page.locator(".artwork-viewer output")).not.toHaveText(
       openingPercent,

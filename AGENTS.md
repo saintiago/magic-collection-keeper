@@ -1,5 +1,7 @@
 # Repository guidance
 
+- Always translate the owner's feature requests and corrections into saved, testable requirements in `docs/REQUIREMENTS.md` before or alongside implementation. Keep stable requirement IDs, acceptance criteria, status and evidence links. Record queued requests too; mark superseded decisions explicitly. Do not equate requested, locally implemented or tested behavior with production delivery. Keep use cases and architecture documentation aligned with the latest requirements.
+
 - Read README and the relevant architecture/use-case/operations section before edits. Preserve the owner's data and the separate test profiles.
 - Keep dependency direction inward: transports and adapters depend on application/domain, never the reverse. Compose concrete adapters in `server.js` and `cloud.mjs`.
 - Keep inventory ownership separate from cached catalog printings. Derive cloud owner from verified JWT only. Preserve quantity bounds, exact-printing language/finish rules and idempotency.

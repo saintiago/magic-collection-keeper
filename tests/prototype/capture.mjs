@@ -6,16 +6,19 @@ import { execFileSync } from "node:child_process";
 const mode = process.argv[2] || "hover";
 const scene = mode.replace(/-webgl$/, "");
 const root = resolve(process.argv[3] || "data/prototype-captures");
-const viewport = scene.endsWith("small")
-  ? { width: 320, height: 568 }
-  : scene === "drag-tablet"
-    ? { width: 768, height: 1024 }
-    : scene.endsWith("landscape")
-      ? { width: 844, height: 390 }
-      : mode.includes("phone")
-        ? { width: 390, height: 844 }
-        : { width: 1080, height: 800 };
+const viewport = scene.startsWith("anchored-wide")
+  ? { width: 3799, height: 1905 }
+  : scene.endsWith("small")
+    ? { width: 320, height: 568 }
+    : scene === "drag-tablet"
+      ? { width: 768, height: 1024 }
+      : scene.endsWith("landscape")
+        ? { width: 844, height: 390 }
+        : mode.includes("phone")
+          ? { width: 390, height: 844 }
+          : { width: 1080, height: 800 };
 const touchInput =
+  (scene.startsWith("anchored") && viewport.width < 500) ||
   scene.startsWith("phone") ||
   scene === "drag-phone" ||
   scene.endsWith("small");
@@ -68,7 +71,20 @@ if (process.argv[4] === "animation-module")
   query.set("card", "animation-module");
 await page.goto("http://127.0.0.1:3120/?" + query);
 await page.evaluate(() => document.fonts.ready);
-const tile = page.locator("#grid .card-open").nth(touchInput ? 0 : 1);
+if (scene.endsWith("scrolled"))
+  await page.locator("#density").selectOption("1000");
+const index = scene.endsWith("scrolled")
+  ? 40
+  : scene.endsWith("right")
+    ? 4
+    : scene.endsWith("middle")
+      ? 2
+      : scene.startsWith("anchored")
+        ? 0
+        : touchInput
+          ? 0
+          : 1;
+const tile = page.locator("#grid .card-open").nth(index);
 await tile.waitFor();
 await tile.scrollIntoViewIfNeeded();
 await page.waitForFunction(
@@ -164,7 +180,24 @@ const evidence = {
   performanceOrigin: await page.evaluate(() => performance.timeOrigin),
 };
 await pause(700);
-if (mode.startsWith("controls")) {
+if (mode.startsWith("anchored")) {
+  const beforeScroll = await page.evaluate(() => scrollY);
+  await (touchInput ? tile.tap() : tile.click());
+  await pause(1000);
+  evidence.image = await page.locator(".artwork-full-image").boundingBox();
+  evidence.background = await page
+    .locator(".artwork-viewer")
+    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  evidence.sourceAfter = await tile.boundingBox();
+  await page.screenshot({ path: root + "/" + mode + ".png" });
+  await (touchInput
+    ? page.touchscreen.tap(12, viewport.height / 2)
+    : page.mouse.click(12, viewport.height / 2));
+  await pause(450);
+  evidence.closed = !(await page.locator(".artwork-viewer").isVisible());
+  evidence.scrollPreserved =
+    (await page.evaluate(() => scrollY)) === beforeScroll;
+} else if (mode.startsWith("controls")) {
   await tile.click();
   await pause(650);
   for (const [name, selector] of [

@@ -296,9 +296,11 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       event.target.closest(".artwork-stage")
     ) {
       state.x =
-        (1 - (2 * (event.clientX - rect.left)) / rect.width) * state.limitX;
+        state.maxX -
+        ((event.clientX - rect.left) / rect.width) * (state.maxX - state.minX);
       state.y =
-        (1 - (2 * (event.clientY - rect.top)) / rect.height) * state.limitY;
+        state.maxY -
+        ((event.clientY - rect.top) / rect.height) * (state.maxY - state.minY);
       schedule();
     }
   });
@@ -359,8 +361,22 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       dialog.style.left = (viewport?.offsetLeft || 0) + "px";
       dialog.style.top = (viewport?.offsetTop || 0) + "px";
       const safe = getComputedStyle(dialog.querySelector(".artwork-safe-area"));
+      const source = origin?.isConnected
+        ? origin.getBoundingClientRect()
+        : state.sourceBounds;
       const opening = artworkOpening(
-        { width: state.baseWidth, height: state.baseHeight },
+        {
+          width: state.baseWidth,
+          height: state.baseHeight,
+          x:
+            source.x -
+            (viewport?.offsetLeft || 0) +
+            (source.width - state.baseWidth) / 2,
+          y:
+            source.y -
+            (viewport?.offsetTop || 0) +
+            (source.height - state.baseHeight) / 2,
+        },
         {
           width: viewport?.width || innerWidth,
           height: viewport?.height || innerHeight,
@@ -381,37 +397,52 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       }
       dialog.style.setProperty("--artwork-gutter-x", opening.gutterX + "px");
       dialog.style.setProperty("--artwork-gutter-y", opening.gutterY + "px");
-      dialog.style.setProperty(
-        "--artwork-card-top",
-        ((viewport?.height || innerHeight) - state.baseHeight * opening.zoom) /
-          2 +
-          "px",
-      );
-      dialog.style.setProperty(
-        "--artwork-card-left",
-        ((viewport?.width || innerWidth) - state.baseWidth * opening.zoom) / 2 +
-          "px",
-      );
+      state.opening = opening;
+      state.centerX = opening.x + opening.width / 2 - opening.gutterX;
+      state.centerY = opening.y + opening.height / 2 - opening.gutterY;
+      const reveal = dialog.querySelector(".artwork-open-reveal");
+      reveal.style.left = opening.x - opening.gutterX + "px";
+      reveal.style.top = opening.y - opening.gutterY + "px";
+      reveal.style.width = opening.width + "px";
+      reveal.style.height = opening.height + "px";
       const details = dialog.querySelector(".artwork-details");
-      if ((viewport?.width || innerWidth) <= 700) {
-        const cardTop =
-          ((viewport?.height || innerHeight) -
-            state.baseHeight * opening.zoom) /
-          2;
-        const detailsHeight = details.offsetHeight;
-        const above = cardTop - detailsHeight - 12;
-        details.style.top =
-          Math.max(
-            opening.gutterY + 8,
-            Math.min(
-              above >= opening.gutterY + 8 ? above : cardTop + 48,
-              (viewport?.height || innerHeight) -
-                opening.gutterY -
-                detailsHeight -
-                8,
-            ),
-          ) + "px";
-      } else details.style.removeProperty("top");
+      const controls = dialog.querySelector(".artwork-controls");
+      const infoWidth = details.offsetWidth,
+        infoHeight = details.offsetHeight;
+      const controlsWidth = controls.offsetWidth,
+        controlsHeight = controls.offsetHeight;
+      const availableWidth = viewport?.width || innerWidth,
+        availableHeight = viewport?.height || innerHeight;
+      const leftSpace = opening.x - infoWidth - 16;
+      const rightSpace = opening.x + opening.width + 16;
+      details.style.left =
+        (leftSpace >= opening.gutterX ? leftSpace : opening.x + 8) + "px";
+      controls.style.left =
+        (rightSpace + controlsWidth <= availableWidth - opening.gutterX
+          ? rightSpace
+          : opening.x + opening.width - controlsWidth - 8) + "px";
+      const above = opening.y - infoHeight - 12;
+      const infoTop =
+        leftSpace >= opening.gutterX
+          ? opening.y + 24
+          : above >= opening.gutterY
+            ? above
+            : opening.y + 48;
+      details.style.top =
+        Math.max(
+          opening.gutterY,
+          Math.min(infoTop, availableHeight - opening.gutterY - infoHeight),
+        ) + "px";
+      controls.style.top =
+        Math.max(
+          opening.gutterY,
+          Math.min(
+            opening.y + opening.height / 2 - controlsHeight / 2,
+            availableHeight - opening.gutterY - controlsHeight,
+          ),
+        ) + "px";
+      glass?.element.removeAttribute("data-lit");
+      glass = null;
       schedule();
     }
   }
@@ -460,6 +491,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       origin.classList.add("artwork-source-lifted");
       originKey = element.closest("[data-card-key]")?.dataset.cardKey || null;
       state = {
+        sourceBounds: bounds.toJSON(),
         baseWidth: bounds.width,
         baseHeight: bounds.height,
         zoom: 3,
@@ -479,12 +511,15 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       const viewport = window.visualViewport;
       const reveal = dialog.querySelector(".artwork-open-reveal");
       dialog.style.setProperty("--artwork-start-tilt", tilt);
+      dialog.showModal();
+      resize();
       reveal.style.setProperty(
         "--artwork-start-x",
         visual.x +
           visual.width / 2 -
           (viewport?.offsetLeft || 0) -
-          (viewport?.width || innerWidth) / 2 +
+          state.opening.x -
+          state.opening.width / 2 +
           "px",
       );
       reveal.style.setProperty(
@@ -492,11 +527,10 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
         visual.y +
           visual.height / 2 -
           (viewport?.offsetTop || 0) -
-          (viewport?.height || innerHeight) / 2 +
+          state.opening.y -
+          state.opening.height / 2 +
           "px",
       );
-      dialog.showModal();
-      resize();
       reveal.style.setProperty(
         "--artwork-start-scale",
         String(visual.width / (state.baseWidth * state.zoom)),

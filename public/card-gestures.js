@@ -399,7 +399,7 @@ export function createCardGestures({
         target.closest("a[data-tag-id]")?.closest(".card-tile") || target,
       );
     if (!found) return clearHover();
-    if (hover?.element === found.element) return;
+    if (hover?.element === found.element && !hover.interrupted) return;
     // Read the stable input plane before changing either visual's styles.
     const bounds = found.element.getBoundingClientRect();
     clearHover();
@@ -411,6 +411,7 @@ export function createCardGestures({
     hover = { ...found, image: img, bounds, tilt: { x: 0, y: 0 }, time: 0 };
     found.element.closest(".card-tile")?.classList.add("card-hovered");
     timer = setTimeout(() => {
+      timer = 0;
       if (!hover) return;
       const bounds = viewer.hover(
         hover,
@@ -419,7 +420,7 @@ export function createCardGestures({
       );
       if (bounds) hover.bounds = bounds;
       schedule();
-    }, 200);
+    }, 300);
   }
   document.addEventListener(
     "pointerdown",
@@ -521,6 +522,19 @@ export function createCardGestures({
         event.buttons
       )
         return;
+      // Cancel a departing dwell immediately, even if its deadline falls before
+      // the next frame. Resolve geometry and update visuals in that frame.
+      if (
+        timer &&
+        hover &&
+        !hover.element.contains(event.target) &&
+        !hover.element.closest(".card-tile")?.contains(event.target) &&
+        !viewer.hoverSource(event.target)
+      ) {
+        clearTimeout(timer);
+        timer = 0;
+        hover.interrupted = true;
+      }
       hoverTarget = event.target;
       hoverDirty = true;
       lastPoint = { x: event.clientX, y: event.clientY };
@@ -581,7 +595,10 @@ export function createCardGestures({
   );
   document.addEventListener(
     "pointercancel",
-    () => cancel({ focus: false }),
+    () => {
+      clearHover();
+      cancel({ focus: false });
+    },
     true,
   );
   document.addEventListener(

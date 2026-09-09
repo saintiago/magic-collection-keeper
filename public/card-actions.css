@@ -133,14 +133,6 @@
   scrollbar-width: thin;
 }
 .artwork-details {
-  top: max(
-    calc(var(--artwork-gutter-y, 32px) + 8px),
-    calc(var(--artwork-card-top) + 24px)
-  );
-  left: max(
-    calc(var(--artwork-gutter-x, 24px) + 8px),
-    calc(var(--artwork-card-left) - 170px)
-  );
   width: 154px;
   animation: details-left 320ms 90ms both;
 }
@@ -148,12 +140,8 @@
   display: none;
 }
 .artwork-controls {
-  top: 50%;
-  translate: 0 -50%;
-  right: max(
-    calc(var(--artwork-gutter-x, 24px) + 8px),
-    calc(var(--artwork-card-left) - 148px)
-  );
+  right: auto;
+  translate: none;
   width: 132px;
   text-align: right;
   display: flex;
@@ -386,8 +374,7 @@
   }
 }
 .artwork-open-reveal {
-  width: 100%;
-  height: 100%;
+  position: absolute;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -453,7 +440,7 @@
   padding: 0;
   border: 0;
   border-radius: 0;
-  background: #111913;
+  background: #07130d44;
   color: #fff;
   overflow: hidden;
 }
@@ -466,28 +453,14 @@
   backdrop-filter: none;
 }
 .artwork-viewer::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    #07130da8,
-    #07130d70 34%,
-    transparent 48%,
-    transparent 54%,
-    #07130d55 90%,
-    #07130d88
-  );
-  animation: details-left 320ms 90ms both;
+  content: none;
 }
 @keyframes artwork-shade {
   from {
     background: transparent;
   }
   to {
-    background: #111913;
+    background: #07130d44;
   }
 }
 @media (prefers-reduced-motion: reduce) {
