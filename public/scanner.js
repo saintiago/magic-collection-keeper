@@ -181,6 +181,8 @@ export function createScanner({ api, onReview, recognition = null }) {
             AbortSignal.timeout(35000),
           ]),
         });
+        if (current === session && dialog.open && el("scan-preparation"))
+          el("scan-preparation").textContent = "Scanner ready.";
       } catch (error) {
         failure = { name: error.name, status: error.status || null };
         result = {

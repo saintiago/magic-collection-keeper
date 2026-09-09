@@ -120,6 +120,35 @@ test("UC-37 stalled preparation and unavailable cloud allow a bounded retry then
   await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
   expect(writes).toBe(0);
 });
+test("UC-37 a retry after transient cloud preparation failure clears the unavailable status", async ({
+  page,
+}) => {
+  let requests = 0;
+  await page.route("**/api/recognize", (r) => {
+    if (requests++ === 0)
+      return r.fulfill({
+        status: 503,
+        json: { error: "Controlled temporary failure" },
+      });
+    return r.fulfill({
+      json: {
+        contractVersion: 1,
+        attempt: r.request().postDataJSON().attempt,
+        status: "possible",
+        selected: null,
+        candidates: [card],
+      },
+    });
+  });
+  const photo = await setup(page);
+  await expect(page.locator("#scan-preparation")).toContainText(
+    "Recognition unavailable",
+  );
+  await page.locator("#photo").setInputFiles(photo);
+  await expect(page.locator("#scan-possible")).toBeVisible();
+  await expect(page.locator("#scan-preparation")).toHaveText("Scanner ready.");
+  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+});
 test("UC-36 busy, unknown and unapproved confirmations add no copy; closing cancels late recognition", async ({
   page,
 }) => {
