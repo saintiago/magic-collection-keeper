@@ -42,6 +42,15 @@ Traceability: [card use cases](USE-CASES.md), [layout/gesture architecture](ARCH
 | VIEW-04 | Display whole-collection total statistics only on Home, after the user's content; omit that block from catalogue, collection and deck views.                                                                                                                                                                                                                                                                                            | queued |
 | CARD-09 | True double-sided cards expose a flip action with overshoot-and-settle animation. Handle rapid input, image loading/failure and composition with zoom/tilt without changing ownership.                                                                                                                                                                                                                                                  | queued |
 
+## Frontend deployment workflow — in progress
+
+- **DEPLOY-01:** Provide a frontend-only path through the existing main deployment workflow for eligible UI changes. Publish versioned frontend assets without rebuilding or updating unchanged application/recognition backends or model assets.
+- **DEPLOY-02:** Determine eligibility from the change set and explicit compatibility rules; backend, API-contract, recognition or infrastructure changes require the full path. Unknown changes must not silently take the fast path.
+- **DEPLOY-03:** Keep frontend and backend release identities independently accurate, retain atomic HTML publication and rollback/version ordering, and preserve the complete corresponding source offer for the deployed combination.
+- **DEPLOY-04:** Run meaningful frontend/browser/build checks and live compatibility smoke checks using separate test profiles. Measure total deployment time against the full workflow. Reuse verified immutable artifacts; do not weaken integrity checks, permissions or owner-data protection to gain speed.
+
+Initial implementation is isolated in `codex/frontend-only-deploy`. The release classifier has explicit presentation inputs and a full-release fallback for missing metadata or unknown changes; pipeline reuse, source composition and production verification are not implemented yet. [Use cases](USE-CASES.md) and [classifier tests](../tests/release-plan.test.js) record coverage.
+
 ## Documentation workflow
 
 For each new request, update this ledger and the relevant use case before or alongside code. Retain corrections explicitly, add verifiable acceptance criteria, and attach test/release evidence when available. Link detailed design decisions in ARCHITECTURE.md and operational limits in OPERATIONS.md. Never silently drop queued work or report it as implemented.

@@ -155,3 +155,7 @@ Hover and expanded zoom use a brief damped spring: a small overshoot then exact 
 Active pickup suppresses text selection and native image callouts only for the gesture; pointer release, cancellation, lost capture and navigation restore normal interaction. A gesture-created selection is cleared only when anchored inside its card and no prior selection existed.
 
 - **UC-FONTS:** Self-hosted licensed display/body faces load from the release origin. Loaded, failed and delayed fonts preserve inspector fit and fixed active wheel targets; actual Chromium platform-font checks verify Cinzel is used. `tests/prototype/fit-fonts.spec.js`.
+
+## Frontend deployment (in progress)
+
+- **UC-DEPLOY-FAST / DEPLOY-01–04:** Compare the proposed tree with the actually published frontend. Only explicitly supported presentation changes may reuse an independently identified application backend and verified immutable model/runtime assets. Unknown inputs or incomplete metadata require the full path. Documentation/test-only changes run checks without republishing application code. API compatibility, source completeness, publication ordering, failure recovery and reserved-profile live checks remain required before delivery. Classifier coverage: `tests/release-plan.test.js`; pipeline integration and live speed measurements are pending.
