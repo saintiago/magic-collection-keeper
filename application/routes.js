@@ -63,5 +63,7 @@ export async function routeCollection(
     return service.remove(owner, decodeURIComponent(row[1]));
   if (path === "/api/tag-assignments" && method === "PUT")
     return service.assign(owner, input.inventory_id, input);
+  if (path === "/api/tag-actions" && method === "POST")
+    return service.applyTagAction(owner, input);
   return undefined;
 }

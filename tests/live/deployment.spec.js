@@ -47,6 +47,7 @@ test("LIVE-01 protected collection survives reload and isolates a second owner",
   await expect(page.locator(".card")).toHaveCount(1);
   await expect(page.locator(".card img")).toBeVisible();
   await page.locator(".card").click();
+  await page.getByRole("button", { name: "Card details", exact: true }).click();
   await page.locator("#quantity").fill("3");
   await page
     .getByRole("button", { name: "Add to collection", exact: false })

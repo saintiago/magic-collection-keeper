@@ -1,3 +1,4 @@
+import { createCardActions } from "./card-actions.js";
 import { setupAutocomplete } from "./autocomplete.js";
 import { createNameClient } from "./name-client.js";
 import { createCardPage } from "./card-page.js";
@@ -38,6 +39,10 @@ let owned = [],
   requestId = 0,
   searchController;
 const detailCache = createDetailCache();
+let visibleCards = [],
+  cardActionEpoch = 0,
+  cardActions = null,
+  cardRenderPending = false;
 let collectionReady = Promise.resolve();
 let filterTags = [],
   activeTagId = tagFromHash(location.hash),
@@ -66,6 +71,8 @@ const collection = createCollectionLoader({
   },
 });
 window.addEventListener("keeper-sign-out", () => {
+  cardActionEpoch++;
+  cardActions.stop();
   collection.stop();
   recentSearches.stop();
   home.stop();
@@ -143,6 +150,7 @@ const cardPage = createCardPage({
   root: $("detail"),
   back: () => cardNavigation.back(),
   enter: (ref, options) => {
+    cardActionEpoch++;
     $("search").disabled = false;
     $("close").disabled = false;
     closeCardEditors();
@@ -273,6 +281,26 @@ const home = createHome({
     else cardPage.open(item);
   },
 });
+cardActions = createCardActions({
+  request,
+  currentView: () => cardActionEpoch,
+  onOwned: (rows) => collection.replace(rows),
+  onPending: enterImport,
+  getState: () => ({ visibleCards, mode, filterTags, activeTagId }),
+  home,
+  importPage,
+  cardPage,
+  detail,
+  editTags: (row) => tagController.edit(row),
+  remember: (item) => recentSearches.remember(item),
+  notify: message,
+  onSettled: () => {
+    if (cardRenderPending && !cardActions.holding) {
+      cardRenderPending = false;
+      render();
+    }
+  },
+});
 $("clear-recent-searches").onclick = () => recentSearches.clear();
 autocomplete.setEnabled(true);
 async function api(path, options) {
@@ -336,6 +364,11 @@ function stats() {
     : "";
 }
 function render() {
+  if (cardActions?.holding) {
+    cardRenderPending = true;
+    return;
+  }
+  cardRenderPending = false;
   stats();
   home.update({
     collection: collectionState,
@@ -369,6 +402,7 @@ function render() {
     String(mode === "catalog" ? loading : busy),
   );
   if (mode === "home" || mode === "import" || mode === "card") {
+    visibleCards = [];
     $("grid").replaceChildren();
     return;
   }
@@ -413,8 +447,11 @@ function render() {
         },
       )
     : "";
+  visibleCards = rows;
   $("grid").innerHTML = rows
-    .map((row, index) => collectionCard(row, index, selectedTag))
+    .map((row, index) =>
+      collectionCard(row, index, selectedTag, mode === "catalog"),
+    )
     .join("");
   $("grid")
     .querySelectorAll(".card-open")
@@ -456,6 +493,8 @@ function closeCardEditors() {
     .forEach((dialog) => dialog.close());
 }
 function switchMode(next, { restore = false } = {}) {
+  cardActionEpoch++;
+  cardActions.cancel();
   $("search").disabled = false;
   $("close").disabled = false;
   closeCardEditors();
@@ -527,6 +566,8 @@ async function refreshTags() {
   }
 }
 async function search(more = false) {
+  cardActionEpoch++;
+  cardActions.cancel();
   const nextQuery = $("search").value.trim();
   if (!nextQuery) {
     message("Enter a card name or a set and collector number.", true);
@@ -583,6 +624,8 @@ async function search(more = false) {
   }
 }
 function navigateTag(id, tag) {
+  cardActionEpoch++;
+  cardActions.cancel();
   closeCardEditors();
   const ref = cardFromHash(location.hash);
   if (ref) {
@@ -655,6 +698,7 @@ await setupScanImport({ api, enter: enterImport, notify: message });
 async function initializeCollection() {
   try {
     const identity = await collectionIdentity();
+    cardActions.start(snapshotKey(identity));
     home.start(snapshotKey(identity));
     if (mode === "collection" && activeTagId) home.tag(activeTagId);
     recentSearches.start(snapshotKey(identity));

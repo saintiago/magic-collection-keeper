@@ -111,6 +111,57 @@ function reorderedReads(store) {
   };
 }
 
+test("UC-CARD-ACTIONS catalogue drops stage tagged review with honest provenance and never imply ownership", async () => {
+  const s = setup({ storeWrapper: reorderedReads });
+  try {
+    const [tag] = await s.collection.createTag("a", {
+      label: "Binder",
+      type: "location",
+      kind: "binder",
+    });
+    const raw = {
+      id: randomUUID(),
+      kind: "catalog",
+      tag_id: tag.id,
+      rows: [
+        {
+          id: randomUUID(),
+          name: card.name,
+          printing_id: card.id,
+          quantity: 1,
+          finish: "nonfoil",
+          condition: "UNK",
+        },
+      ],
+    };
+    const staged = await s.service.stageDraft("a", raw);
+    assert.equal(staged.draft.name, "Catalogue selections");
+    assert.equal(staged.draft.rows[0].original.capture_kind, "catalog");
+    assert.deepEqual(staged.draft.rows[0].locations, [
+      { tag_id: tag.id, quantity: 1 },
+    ]);
+    assert.deepEqual(await s.collection.list("a"), []);
+    assert.deepEqual(await s.service.stageDraft("a", raw), staged);
+    await assert.rejects(
+      s.service.stageDraft("b", raw),
+      /tag is no longer available/,
+    );
+    await assert.rejects(
+      s.service.stageDraft("a", { ...raw, tag_id: randomUUID() }),
+      /different lines/,
+    );
+    await s.service.addDraft("a", { ...input(staged), kind: "capture" });
+    const [owned] = await s.collection.list("a");
+    assert.equal(owned.quantity, 1);
+    assert.equal(owned.locations[0].tag_id, tag.id);
+    assert.equal(owned.locations[0].quantity, 1);
+    assert.equal((await s.service.stageDraft("a", raw)).draft, null);
+    assert.equal((await s.collection.list("a"))[0].quantity, 1);
+  } finally {
+    s.db.close();
+  }
+});
+
 test("UC-SCAN-IMPORT persisted map order cannot reject an identical receipt or turn a no-op into an edit", async () => {
   let time = "2026-09-09T10:00:00Z";
   const s = setup({ now: () => time, storeWrapper: reorderedReads });

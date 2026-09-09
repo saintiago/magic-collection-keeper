@@ -29,6 +29,12 @@ export function createCardDetail({
         )}</select></label><label>Language<input value="${esc(c.lang.toUpperCase())}" disabled></label></div><p class="hint">${row.source_managed && !row.provenance_list?.every((source) => source.provider === "reviewed-capture") ? "Imported condition is unknown. Source printing and finish are retained with their provenance." : row.id ? "To change finish or condition, remove this entry and add it with the correct attributes." : "Check the set, collector number and language against your card. Change printing or language when needed."}</p>${row.id ? `<div class="card-tags">${tagBadges(row)}</div>${allocationWarning(row)}<button type="button" class="secondary full" id="edit-card-tags">Edit locations & tags</button>${(row.provenance_list ?? []).map((p) => `<p class="hint">Source: ${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noreferrer">${esc(p.name)}</a>` : esc(p.name)} · ${esc(p.section)}</p>`).join("")}` : ""}<p id="detail-message" role="status"></p><button class="primary full" type="submit">${row.id ? "Save quantity" : "+ Add to collection"}</button>${row.id && (!row.source_managed || row.provenance_list?.every((source) => source.provider === "reviewed-capture")) ? '<button type="button" class="danger full" id="remove">Remove this entry</button>' : ""}</form><a class="scryfall-link" href="${esc(c.scryfall_uri)}" target="_blank" rel="noreferrer">View printing on Scryfall ↗</a></div>`;
     if ($("choose-printing"))
       $("choose-printing").onclick = () => onPrinting(c);
+    const actions = document.createElement("button");
+    actions.type = "button";
+    actions.dataset.detailCardActions = "";
+    actions.className = "secondary";
+    actions.textContent = "Card actions";
+    $("detail-content").querySelector(".detail-image").append(actions);
     if ($("edit-card-tags")) $("edit-card-tags").onclick = () => onTags(row);
     if (!row.id) {
       const section = document.createElement("section");

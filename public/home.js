@@ -54,5 +54,37 @@ export function createHome({ root, onCard, onClearSearches, onRetry }) {
       });
     },
     tag: (id) => history.remember({ kind: "tag", id }),
+    get recentTags() {
+      return history.state.entries
+        .filter((item) => item.kind === "tag")
+        .map((item) => item.id);
+    },
+    cardAction(element) {
+      const button = element.closest("[data-home-card]");
+      if (!button) return null;
+      const ref = cards[Number(button.dataset.homeCard)];
+      if (!ref) return null;
+      const row =
+        (inputs.collection.rows || []).find(
+          (row) => row.printing_id === ref.printing_id,
+        ) ||
+        (inputs.collection.rows || []).find(
+          (row) => row.card.oracle_id === ref.oracle_id,
+        );
+      return {
+        element: button,
+        item: row
+          ? { kind: "owned", row, card: row.card }
+          : {
+              kind: "reference",
+              ref,
+              card: {
+                ...ref,
+                id: ref.printing_id,
+                image_uris: { normal: ref.image_url },
+              },
+            },
+      };
+    },
   };
 }

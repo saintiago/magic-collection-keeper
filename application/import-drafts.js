@@ -159,6 +159,14 @@ export function createImportDraftService({
           "Find a verified paper printing again before staging these cards.",
         );
       const canonical = new Map(cards.map((card) => [card.id, card]));
+      const targetTag = input.tag_id
+        ? (await registry(owner)).get(input.tag_id)
+        : null;
+      if (input.tag_id && !targetTag)
+        throw new ApplicationError(
+          "This tag is no longer available. Choose another before reviewing the card.",
+          409,
+        );
       const rows = input.rows.map((line) => {
         const card = canonical.get(line.printing_id);
         return {
@@ -169,8 +177,12 @@ export function createImportDraftService({
           condition: line.condition,
           card: printingSummary(card),
           in_deck: false,
-          locations: [],
-          tag_ids: [],
+          locations:
+            targetTag?.type === "location"
+              ? [{ tag_id: targetTag.id, quantity: line.quantity }]
+              : [],
+          tag_ids:
+            targetTag && targetTag.type !== "location" ? [targetTag.id] : [],
           created_at: now(),
           updated_at: now(),
           recognition_candidates: (line.recognition || []).map((candidate) => ({
@@ -200,13 +212,23 @@ export function createImportDraftService({
         provider: "reviewed-capture",
         source_id: "capture:" + input.id,
         url: "",
-        name: input.kind === "scan" ? "Scanned cards" : "Pasted card list",
+        name:
+          input.kind === "scan"
+            ? "Scanned cards"
+            : input.kind === "catalog"
+              ? "Catalogue selections"
+              : "Pasted card list",
         source_version: 0,
         retrieved_at: now(),
         created_at: now(),
         updated_at: now(),
         original: {
-          name: input.kind === "scan" ? "Camera suggestions" : "Pasted list",
+          name:
+            input.kind === "scan"
+              ? "Camera suggestions"
+              : input.kind === "catalog"
+                ? "Catalogue selection"
+                : "Pasted list",
           rows: rows.map((row) => row.original),
           total: rows.reduce((n, row) => n + row.quantity, 0),
           excluded: [],

@@ -9,6 +9,7 @@ import { normalizeDeck, planDeck, deckRows } from "../domain/deck-import.js";
 import { isSystemTag } from "../domain/system-tags.js";
 import { cardTimestamps } from "../domain/card-timestamps.js";
 import { sameStoredValue } from "../domain/stored-value.js";
+import { tagActionInput, planTagAction } from "../domain/tag-action.js";
 
 export function createTaggedCollection({
   collection,
@@ -186,46 +187,99 @@ export function createTaggedCollection({
     await store.commit(owner, [change("tags", id, record, null)]);
     return tags(owner);
   }
+  async function saveAssignments(
+    owner,
+    row,
+    registry,
+    input,
+    extraChanges = [],
+  ) {
+    const id = row.id,
+      current = await store.get(owner, "assignments", String(id));
+    const assignment = validateAssignments(
+      input,
+      { ...row, provenance: row.source_managed },
+      new Map([...registry].map(([id, r]) => [id, r.value])),
+    );
+    assignment.source_ids = [
+      ...new Set((row.provenance_list || []).map((source) => source.source_id)),
+    ];
+    const { created_at, updated_at, ...previousAssignment } =
+      current?.value || {};
+    if (sameStoredValue(previousAssignment, assignment)) {
+      if (extraChanges.length) await store.commit(owner, extraChanges);
+      return list(owner);
+    }
+    assignment.created_at = current ? created_at || null : now();
+    assignment.updated_at = now();
+    const before = referencedTags(current?.value),
+      after = referencedTags(assignment),
+      changes = [
+        change("assignments", String(id), current, assignment),
+        ...extraChanges,
+      ];
+    for (const tagId of new Set([...before, ...after])) {
+      const tag = registry.get(tagId);
+      if (!tag)
+        throw new ApplicationError("A tag is missing. Refresh and retry.", 409);
+      const delta = Number(after.has(tagId)) - Number(before.has(tagId));
+      changes.push(
+        change("tags", tagId, tag, {
+          ...tag.value,
+          references: tag.value.references + delta,
+        }),
+      );
+    }
+    await store.commit(owner, changes);
+    return list(owner);
+  }
   async function assign(owner, id, input) {
     return store.withInventoryLock(owner, async () => {
       const row = await existingRow(owner, id),
-        registry = await tagRecords(owner),
-        current = await store.get(owner, "assignments", String(id));
-      const assignment = validateAssignments(
-        input,
-        { ...row, provenance: row.source_managed },
-        new Map([...registry].map(([id, r]) => [id, r.value])),
-      );
-      assignment.source_ids = [
-        ...new Set(
-          (row.provenance_list || []).map((source) => source.source_id),
-        ),
-      ];
-      const { created_at, updated_at, ...previousAssignment } =
-        current?.value || {};
-      if (sameStoredValue(previousAssignment, assignment)) return list(owner);
-      assignment.created_at = current ? created_at || null : now();
-      assignment.updated_at = now();
-      const before = referencedTags(current?.value),
-        after = referencedTags(assignment),
-        changes = [change("assignments", String(id), current, assignment)];
-      for (const tagId of new Set([...before, ...after])) {
-        const tag = registry.get(tagId);
-        if (!tag)
+        registry = await tagRecords(owner);
+      return saveAssignments(owner, row, registry, input);
+    });
+  }
+  async function applyTagAction(owner, raw) {
+    const input = tagActionInput(raw);
+    return store.withInventoryLock(owner, async () => {
+      const receipt = await store.get(owner, "tag-actions", input.operation_id);
+      if (receipt) {
+        if (!sameStoredValue(receipt.value.input, input))
           throw new ApplicationError(
-            "A tag is missing. Refresh and retry.",
+            "This action was already used with different copies or tags.",
             409,
           );
-        const delta = Number(after.has(tagId)) - Number(before.has(tagId));
-        changes.push(
-          change("tags", tagId, tag, {
-            ...tag.value,
-            references: tag.value.references + delta,
-          }),
-        );
+        return list(owner);
       }
-      await store.commit(owner, changes);
-      return list(owner);
+      const row = await existingRow(owner, input.inventory_id),
+        registry = await tagRecords(owner);
+      const tag = registry.get(input.tag_id)?.value;
+      if (!tag)
+        throw new ApplicationError(
+          "This tag is no longer available. Refresh and choose another.",
+          409,
+        );
+      const assignment = planTagAction(row, tag, input);
+      const receiptChanges = [
+        change("tag-actions", input.operation_id, null, {
+          input,
+          created_at: now(),
+        }),
+      ];
+      if (
+        sameStoredValue(assignment, {
+          locations: row.locations.map(({ tag_id, quantity }) => ({
+            tag_id,
+            quantity,
+          })),
+          tag_ids: row.tag_ids,
+        })
+      ) {
+        await store.commit(owner, receiptChanges);
+        return list(owner);
+      }
+      return saveAssignments(owner, row, registry, assignment, receiptChanges);
     });
   }
   async function deckPlan(owner, raw) {
@@ -499,6 +553,7 @@ export function createTaggedCollection({
     renameTag,
     deleteTag,
     assign,
+    applyTagAction,
     previewDeck,
     importDeck,
     prepareDeckImport,

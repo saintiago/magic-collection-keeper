@@ -1,24 +1,30 @@
 import { ApplicationError, validateQuantity } from "./inventory.js";
+import { validateTagId } from "./tags.js";
 
 const uuid =
   /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 export function captureInput(input) {
   if (
     !input ||
-    Object.keys(input).some((key) => !["id", "kind", "rows"].includes(key)) ||
+    Object.keys(input).some(
+      (key) => !["id", "kind", "rows", "tag_id"].includes(key),
+    ) ||
     !uuid.test(input.id) ||
-    !["scan", "text"].includes(input.kind) ||
+    !["scan", "text", "catalog"].includes(input.kind) ||
+    (input.tag_id !== undefined && input.kind !== "catalog") ||
     !Array.isArray(input.rows) ||
     !input.rows.length ||
     input.rows.length > 50
   )
     throw new ApplicationError(
-      "Stage 1–50 reviewed scan or text lines with a stable batch ID.",
+      "Stage 1–50 reviewed scan, text or catalogue lines with a stable batch ID.",
     );
   const used = new Set();
+  if (input.tag_id !== undefined) validateTagId(input.tag_id);
   return {
     id: input.id,
     kind: input.kind,
+    ...(input.tag_id ? { tag_id: input.tag_id } : {}),
     rows: input.rows.map((row) => {
       if (
         !row ||
@@ -40,6 +46,7 @@ export function captureInput(input) {
         !row.name.trim() ||
         row.name.length > 200 ||
         (row.printing_id !== null && !uuid.test(row.printing_id)) ||
+        (input.kind === "catalog" && row.printing_id === null) ||
         !["nonfoil", "foil", "etched"].includes(row.finish) ||
         !["NM", "LP", "MP", "HP", "DMG", "UNK"].includes(row.condition)
       )
