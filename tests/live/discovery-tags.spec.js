@@ -64,6 +64,14 @@ test("LIVE-08 Discover opens owned printings and persists tag add/remove without
   const ownedCount = before
     .filter((row) => row.card.oracle_id === target.card.oracle_id)
     .reduce((sum, row) => sum + row.quantity, 0);
+  const targetLabel = `${target.card.set.toUpperCase()} #${target.card.collector_number} · ${target.card.lang.toUpperCase()} · Nonfoil · ${target.condition}`;
+  const ownedRow = () =>
+    page.locator(".owned-printing").filter({
+      has: page.getByRole("button", {
+        name: `Edit locations & tags for ${targetLabel}`,
+        exact: true,
+      }),
+    });
   async function open(keyboard = false) {
     await page.locator("#collection-nav").click();
     const input = page.getByRole("combobox", { name: "Search cards" });
@@ -85,12 +93,8 @@ test("LIVE-08 Discover opens owned printings and persists tag add/remove without
       await input.press("Enter");
     } else await suggestion.click();
     await expect(page.locator("#detail")).toBeVisible({ timeout: 30000 });
-    await expect(
-      page.locator(".owned-printing").filter({ hasText: "Nonfoil" }),
-    ).toHaveCount(1, { timeout: 30000 });
+    await expect(ownedRow()).toHaveCount(1, { timeout: 30000 });
   }
-  const ownedRow = () =>
-    page.locator(".owned-printing").filter({ hasText: "Nonfoil" });
   try {
     await open(true);
     await expect(page.locator(".detail-ownership")).not.toContainText(
