@@ -72,6 +72,9 @@ export async function exerciseCardActions(
     await page.goto("/#tag=" + source.id);
     await page.reload();
     await expect(page.locator("#grid .card")).toHaveCount(1);
+    await expect(
+      page.locator(`#tag-filter option[value="${target.id}"]`),
+    ).toHaveCount(1);
     let loseResponse = true;
     await page.route("**/api/tag-actions", async (route) => {
       operations.push(route.request().postDataJSON());
@@ -94,7 +97,10 @@ export async function exerciseCardActions(
       );
     } else {
       const img = page.locator("#grid img");
-      await img.scrollIntoViewIfNeeded();
+      await expect(async () => {
+        await img.scrollIntoViewIfNeeded();
+        await expect(img).toBeInViewport({ ratio: 0.9 });
+      }).toPass({ timeout: 5000 });
       const b = await img.boundingBox();
       await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
       await page.mouse.down();
@@ -205,6 +211,7 @@ export async function exerciseCardActions(
     ]);
     expect(await liveApi(page, "/api/collection")).toEqual([]);
     await activate(page.locator("#draft-clear"));
+    await expect(page.locator(".draft-row")).toHaveCount(0);
     // A second untagged selection verifies explicit Add without retaining a
     // temporary tag in permanent source provenance.
     await page.goto("/#catalog");

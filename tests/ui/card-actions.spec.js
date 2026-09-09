@@ -143,9 +143,15 @@ test("UC-CARD-ACTIONS drag keeps a small offset copy, frozen targets and one-cop
       tag_ids: [],
     });
     await page.goto("/#tag=" + box.id);
+    await expect(
+      page.locator(`#tag-filter option[value="${target.id}"]`),
+    ).toHaveCount(1);
     const img = page.locator("#grid .card-open img");
     await expect(img).toBeVisible();
-    await img.scrollIntoViewIfNeeded();
+    await expect(async () => {
+      await img.scrollIntoViewIfNeeded();
+      await expect(img).toBeInViewport({ ratio: 0.9 });
+    }).toPass({ timeout: 5000 });
     const b = await img.boundingBox(),
       start = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
     await page.mouse.move(start.x, start.y);
@@ -156,11 +162,17 @@ test("UC-CARD-ACTIONS drag keeps a small offset copy, frozen targets and one-cop
       48,
     );
     await expect(img).toBeVisible();
+    const refreshedTags = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/tags") &&
+        response.request().method() === "GET",
+    );
     await page.evaluate(() => {
       window.heldCard = document.querySelector("#grid .card");
       document.querySelector("#refresh").click();
     });
-    await expect(page.locator("#refresh")).toBeEnabled();
+    await refreshedTags;
+    await page.evaluate(() => new Promise(requestAnimationFrame));
     expect(
       await page.evaluate(
         () => window.heldCard === document.querySelector("#grid .card"),
@@ -400,7 +412,10 @@ test.describe("phone card actions", () => {
       await page.locator('[data-artwork="close"]').tap();
       await expect(page.locator(".artwork-viewer")).not.toBeVisible();
       const img = page.locator("#grid .card-open img");
-      await img.scrollIntoViewIfNeeded();
+      await expect(async () => {
+        await img.scrollIntoViewIfNeeded();
+        await expect(img).toBeInViewport({ ratio: 0.9 });
+      }).toPass({ timeout: 5000 });
       const r = await img.boundingBox(),
         x = r.x + r.width / 2,
         y = r.y + r.height / 2;
