@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, writeFile, readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 export function deploymentRelease(baseVersion, env, now = new Date()) {
   if (!/^\d+\.\d+\.\d+$/.test(baseVersion))
@@ -46,7 +46,12 @@ export function assertNewerRelease(release, previousIndex) {
     );
   }
 }
-export async function packageWebsite({ source, destination, release }) {
+export async function packageWebsite({
+  source,
+  destination,
+  release,
+  reuseAssets = false,
+}) {
   const prefix = `/releases/${release.id}/`;
   const directory = join(destination, "releases", release.id);
   await mkdir(directory, { recursive: true });
@@ -57,12 +62,29 @@ export async function packageWebsite({ source, destination, release }) {
       // Old generated assets may remain in local builds; omit retired engines.
       return (
         !path.endsWith("index.html") &&
+        !(reuseAssets && (name === "vendor" || name.startsWith("vendor/"))) &&
         !/^(?:vendor\/(?:core|lang)(?:\/|$)|vendor\/(?:ocr\.js|worker\.min\.js)$|vendor\/ort\/.*(?:webgpu|asyncify))/.test(
           name,
         )
       );
     },
   });
+  if (reuseAssets) {
+    if (!/^r[1-9]\d*-a[1-9]\d*$/.test(release.assets?.id || ""))
+      throw Error("Verified asset release required");
+    const vendor = `/releases/${release.assets.id}/vendor/`;
+    // Only audited literal vendor references are rewritten; the source itself
+    // remains unchanged in the matching source overlay.
+    for (const name of await readdir(directory))
+      if (name.endsWith(".js")) {
+        const path = join(directory, name),
+          text = await readFile(path, "utf8");
+        await writeFile(
+          path,
+          text.replace(/(["'])\.\/vendor\//g, `$1${vendor}`),
+        );
+      }
+  }
   await writeFile(
     join(directory, "release.js"),
     `export const release = ${JSON.stringify(release)};\n`,

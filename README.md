@@ -10,6 +10,8 @@ A private Magic collection app with Scryfall printing lookup, persistent invento
 - [Architecture and adapter contracts](docs/ARCHITECTURE.md)
 - [Development, deployment, recovery](docs/OPERATIONS.md)
 
+Deployment classifies changes against the published application. Supported presentation changes use a separate frontend workflow that reuses the verified API and browser model assets; other runtime changes use the full workflow. About shows the frontend and API identities independently, and the authenticated source download includes the matching frontend and backend source. See operations for compatibility checks, rollback and the current verification evidence.
+
 ## Use it
 
 Scan stays briefly disabled while your account and saved captures load after sign-in; it becomes available as soon as that recovery finishes.

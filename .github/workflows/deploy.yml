@@ -4,13 +4,58 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      force_full:
+        description: Force the full backend/model release path
+        type: boolean
+        default: false
+      redeploy_frontend:
+        description: Redeploy the compatible frontend, preserving all reuse guards
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
   group: keeper-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - id: plan
+        name: Classify against the published release
+        env:
+          WEBSITE_URL: ${{ vars.WEBSITE_URL }}
+          API_URL: ${{ vars.API_URL }}
+          CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
+          BACKEND_RECOGNITION: ${{ vars.BACKEND_RECOGNITION }}
+          RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
+          FORCE_FULL: ${{ inputs.force_full || 'false' }}
+          REDEPLOY_FRONTEND: ${{ inputs.redeploy_frontend || 'false' }}
+        run: node scripts/select-release.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keeper-release-plan
+          path: build/release-plan.json
+  frontend:
+    needs: plan
+    permissions:
+      contents: read
+      id-token: write
+    if: needs.plan.outputs.mode == 'frontend'
+    uses: ./.github/workflows/frontend-deploy.yml
+    secrets: inherit
   test:
+    needs: plan
+    if: needs.plan.outputs.mode != 'frontend'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,6 +63,10 @@ jobs:
         with:
           node-version: "24"
           cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: keeper-release-plan
+          path: build
       - run: npm ci
       - run: node scripts/build-name-index.mjs
       - run: npm test
@@ -43,12 +92,13 @@ jobs:
             public/
             build/cloud.mjs
             build/catalog/
+            build/release-plan.json
   deploy:
     concurrency:
       group: keeper-catalog-publication
       cancel-in-progress: false
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.plan.outputs.mode == 'full'
+    needs: [plan, test]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -76,15 +126,29 @@ jobs:
       - name: Prepare unique deployment
         env:
           BUCKET: ${{ vars.WEBSITE_BUCKET }}
+          RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
         run: |
           aws s3 cp "s3://$BUCKET/index.html" build/previous-index.html --no-progress
           node scripts/prepare-release.mjs
+      - name: Verify corresponding private source before API publication
+        env:
+          RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
+          KEEPER_TEST_USER: ${{ secrets.KEEPER_TEST_USER }}
+          KEEPER_TEST_PASSWORD: ${{ secrets.KEEPER_TEST_PASSWORD }}
+        run: |
+          aws lambda get-function-configuration --function-name magic-collection-keeper --query '{CodeSha256:CodeSha256,LastUpdateStatus:LastUpdateStatus}' > build/lambda-identity.json
+          node scripts/verify-release-backend.mjs full
+          python scripts/verify-corresponding-source.py build/recognition-source.zip
       - name: Deploy API
         run: |
           cd build
           zip ../cloud.zip cloud.mjs catalog/current.json catalog/*.server.gz
           aws lambda update-function-code --function-name magic-collection-keeper --zip-file fileb://../cloud.zip > /dev/null
           aws lambda wait function-updated --function-name magic-collection-keeper
+      - name: Package frontend with the published API identity
+        run: |
+          aws lambda get-function-configuration --function-name magic-collection-keeper --query '{CodeSha256:CodeSha256,LastUpdateStatus:LastUpdateStatus}' > build/lambda-identity.json
+          node scripts/prepare-release.mjs --package
       - name: Publish multilingual card names
         run: node scripts/publish-name-index.mjs
         env:

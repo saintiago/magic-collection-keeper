@@ -62,7 +62,7 @@ Duplicate capture (SCAN-03/04) has priority over split-card handling and the dep
 - **IMPORT-03:** Order pending cards by immutable creation time, oldest first (scan/import sequence), with stable tie-breaking. Editing or recognition refinements must not reorder them. Retain date grouping where useful without reversing the within-group sequence; do not fabricate timestamps for legacy entries.
 - **IMPORT-04:** Preserve persisted drafts, source provenance, retry idempotency and explicit Add semantics. Pending items remain excluded from owned totals until confirmation succeeds. Treat the tag as system lifecycle state, not an ordinary removable user label that bypasses confirmation. Reuse navigation/filter/scroll behavior; test reload, partial failures and long sessions.
 
-## Frontend deployment workflow — queued
+## Frontend deployment workflow — in progress, current priority
 
 - **DEPLOY-01:** Provide a frontend-only path through the existing main deployment workflow for eligible UI changes. Publish versioned frontend assets without rebuilding or updating unchanged application/recognition backends or model assets.
 - **DEPLOY-02:** Determine eligibility from the change set and explicit compatibility rules; backend, API-contract, recognition or infrastructure changes require the full path. Unknown changes must not silently take the fast path.
@@ -104,5 +104,7 @@ Duplicate capture (SCAN-03/04) has priority over split-card handling and the dep
 - **DEPLOY-05 (priority update):** Prioritize a separate frontend-only deployment workflow ahead of the remaining UI requirements. It must reuse the existing trusted main-branch release process and published backend compatibility checks, with fail-closed eligibility and a full-deployment fallback under DEPLOY-01–04. Preserve already completed work on other requirements; resume that backlog after the faster deployment route is verified. This supersedes the earlier decision to pause deployment-speed work behind UI/scanner implementation. Status: requested, highest implementation priority.
 
 ## Documentation workflow
+
+DEPLOY-01–05 implementation checkpoint: separate reusable frontend workflow, conservative main-diff classification, checksum-verified asset reuse, independent API/recognition identities, exact frontend source overlay and guarded publication/rollback are implemented locally. Explicit compatible frontend redeploy is included for controlled comparison; it never overrides full-input or compatibility guards. Evidence: [use case and tests](USE-CASES.md#frontend-deployment-in-progress). Local tests are being completed; production bootstrap, deployed checks and actual elapsed-time improvement remain unverified. Paused scanner/UI work remains separate and unshipped.
 
 For each new request, update this ledger and the relevant use case before or alongside code. Retain corrections explicitly, add verifiable acceptance criteria, and attach test/release evidence when available. Link detailed design decisions in ARCHITECTURE.md and operational limits in OPERATIONS.md. Never silently drop queued work or report it as implemented.
