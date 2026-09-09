@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { createHash } from "node:crypto";
+import { verifySourceDownload } from "./source-bundle.js";
 
 export async function liveApi(page, path, options = {}) {
   return page.evaluate(
@@ -132,14 +132,22 @@ export async function exerciseBackendScanner({ page }, test) {
       .click();
     const download = await downloading;
     const stream = await download.createReadStream();
-    const hash = createHash("sha256");
+    const chunks = [];
     let bytes = 0;
     for await (const chunk of stream) {
-      hash.update(chunk);
+      chunks.push(chunk);
       bytes += chunk.length;
     }
     expect(bytes).toBeGreaterThan(100000);
-    expect(hash.digest("hex")).toBe(process.env.RECOGNITION_SOURCE_SHA256);
+    const release = await page.evaluate(async () => {
+      const url = document.querySelector('script[type="module"]').src;
+      return (await import(new URL("release.js", url).href)).release;
+    });
+    verifySourceDownload(
+      Buffer.concat(chunks),
+      release,
+      process.env.RECOGNITION_SOURCE_SHA256,
+    );
     await page.getByRole("button", { name: "Close about" }).click();
     await page.locator("#scan").click();
     await expect(page.locator("#scan-preparation")).toHaveText(

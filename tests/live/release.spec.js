@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import { verifySourceDownload } from "../helpers/source-bundle.js";
 test("LIVE-05 published HTML, loaded assets and API identify the deployment", async ({
   page,
   request,
@@ -58,8 +59,12 @@ test("LIVE-05 published HTML, loaded assets and API identify the deployment", as
     headers: { Authorization: "Bearer " + AuthenticationResult.IdToken },
   });
   expect(identity.ok()).toBe(true);
-  expect(identity.headers()["x-keeper-version"]).toBe(metadata.version);
-  expect(identity.headers()["x-keeper-commit"]).toBe(metadata.commit);
+  expect(identity.headers()["x-keeper-version"]).toBe(
+    metadata.api?.version || metadata.version,
+  );
+  expect(identity.headers()["x-keeper-commit"]).toBe(
+    metadata.api?.commit || metadata.commit,
+  );
   // Read-only test identity; close the sign-in modal to inspect public release details.
   await page.evaluate(() => document.querySelector(".auth-dialog").close());
   await page.locator("#app-version").click();
@@ -68,4 +73,36 @@ test("LIVE-05 published HTML, loaded assets and API identify the deployment", as
   ).toBeVisible();
   await page.getByRole("button", { name: "Close about" }).click();
   await expect(page.locator(".release-dialog")).toHaveCount(0);
+  if (metadata.sourceOverlay) {
+    // Use the already authenticated read-only identity; no inventory mutations.
+    const blob = await page.evaluate(
+      async ({ token, config, metadata }) => {
+        const module = document.querySelector('script[type="module"]').src;
+        const { downloadSourcePackage } = await import(
+          new URL("source-package.js", module).href
+        );
+        const result = await downloadSourcePackage({
+          release: metadata,
+          api: async (path) => {
+            const r = await fetch(config.apiUrl + path, {
+              headers: { Authorization: "Bearer " + token },
+            });
+            if (!r.ok) throw Error("Authenticated source download failed");
+            return r.blob();
+          },
+        });
+        const bytes = new Uint8Array(await result.blob.arrayBuffer());
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += 8192)
+          binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+        return btoa(binary);
+      },
+      { token: AuthenticationResult.IdToken, config, metadata },
+    );
+    verifySourceDownload(
+      Buffer.from(blob, "base64"),
+      metadata,
+      process.env.RECOGNITION_SOURCE_SHA256,
+    );
+  }
 });
