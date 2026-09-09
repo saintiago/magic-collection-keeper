@@ -12,6 +12,47 @@ export async function liveApi(page, path, options = {}) {
   );
 }
 
+export function reviewedOwnership(rows) {
+  const totals = new Map();
+  for (const { printing_id, finish, condition, quantity } of rows) {
+    const key = JSON.stringify([printing_id, finish, condition]);
+    const current = totals.get(key);
+    totals.set(key, {
+      printing_id,
+      finish,
+      condition,
+      quantity: quantity + (current?.quantity || 0),
+    });
+  }
+  return [...totals.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([, row]) => row);
+}
+
+export async function clearCaptureTestData(page, beforeDrafts) {
+  expect(process.env.KEEPER_TEST_USER).toBe("keeper-e2e");
+  for (const descriptor of (await liveApi(page, "/api/import-draft"))
+    .pending_drafts) {
+    if (beforeDrafts.has(descriptor.id) || descriptor.kind !== "capture")
+      continue;
+    const { draft } = await liveApi(
+      page,
+      "/api/import-draft?id=" + descriptor.id,
+    );
+    await liveApi(page, "/api/import-draft/clear", {
+      method: "POST",
+      body: JSON.stringify({
+        id: draft.id,
+        version: draft.version,
+        kind: "capture",
+      }),
+    });
+  }
+  for (const row of await liveApi(page, "/api/collection"))
+    await liveApi(page, "/api/collection/" + row.id, { method: "DELETE" });
+  expect(await liveApi(page, "/api/collection")).toEqual([]);
+}
+
 // Public catalog artwork in a generated frame; never physical-camera evidence.
 export async function exerciseBackendScanner({ page }, test) {
   test.setTimeout(180000);
@@ -32,6 +73,11 @@ export async function exerciseBackendScanner({ page }, test) {
   await expect(page.locator(".auth-dialog")).toHaveCount(0);
   const before = await liveApi(page, "/api/collection");
   expect(before).toEqual([]);
+  const beforeDrafts = new Set(
+    (await liveApi(page, "/api/import-draft")).pending_drafts.map(
+      (draft) => draft.id,
+    ),
+  );
   const found = await liveApi(
     page,
     "/api/search?q=" + encodeURIComponent('!"Adaptive Training Post" set:tdc'),
@@ -134,6 +180,11 @@ export async function exerciseBackendScanner({ page }, test) {
     await expect(page.locator(".draft-row")).toHaveCount(2);
     await expect(page.locator("#draft-add")).toBeEnabled();
     expect(await liveApi(page, "/api/collection")).toEqual([]);
+    const { draft } = await liveApi(page, "/api/import-draft");
+    expect(draft.rows).toHaveLength(2);
+    for (const row of draft.rows)
+      expect(row.card.oracle_id).toBe(card.oracle_id);
+    const reviewed = reviewedOwnership(draft.rows);
     await page.locator("#draft-add").click();
     await expect(page.locator(".import-status")).toContainText(
       "Added 3 new copies",
@@ -143,12 +194,10 @@ export async function exerciseBackendScanner({ page }, test) {
     await page.reload();
     await expect(page.locator("#total")).toHaveText("3");
     const saved = await liveApi(page, "/api/collection");
-    expect(saved).toHaveLength(1);
-    expect(saved[0].quantity).toBe(3);
+    expect(saved).toHaveLength(reviewed.length);
+    expect(reviewedOwnership(saved)).toEqual(reviewed);
   } finally {
-    const entries = await liveApi(page, "/api/collection");
-    for (const entry of entries)
-      await liveApi(page, "/api/collection/" + entry.id, { method: "DELETE" });
+    await clearCaptureTestData(page, beforeDrafts);
     expect(await liveApi(page, "/api/collection")).toEqual(before);
     await page.reload();
     await page.locator("#sign-out").click();
