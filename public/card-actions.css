@@ -1,64 +1,277 @@
-body[data-mode="catalog"] .card-grid {
-  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+/* The outer tile is the stable input plane; only its inner visual tilts. */
+.card-grid {
+  grid-template-columns: repeat(auto-fill, minmax(205px, 1fr));
   gap: 10px;
 }
-body[data-mode="catalog"] .card-image {
+.card-tile {
+  position: relative;
+  min-width: 0;
+}
+.card-tile .card-image {
   padding: 0;
   background: transparent;
   border-radius: 10px;
+  transition: none;
 }
-body[data-mode="catalog"] .card:hover .card-image {
+.card-tile:hover .card-image {
   transform: none;
 }
-body[data-mode="catalog"] .card-image img {
-  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.card {
-  position: relative;
-}
-.card img,
-.home-card img,
-.draft-row > img {
-  -webkit-touch-callout: none;
+.card-tile img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 488 / 680;
+  border-radius: 10px;
   user-select: none;
+  -webkit-touch-callout: none;
 }
-.card-actions-trigger {
+.card-tile button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.card-hover-info {
   position: absolute;
-  right: 5px;
-  top: 5px;
-  min-width: 40px;
-  min-height: 40px;
-  border-radius: 50%;
-  background: #10261fe6;
+  inset: auto 0 0;
+  max-height: 72%;
+  overflow: auto;
+  padding: 12px;
   color: white;
-  z-index: 1;
+  background: #13251de8;
+  border-radius: 0 0 10px 10px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  font-size: 12px;
+  line-height: 1.45;
 }
-@media (hover: hover) and (pointer: fine) {
-  .card-actions-trigger {
+.card-hover-info strong,
+.card-hover-info small {
+  display: block;
+}
+.card-hover-info .tag-badge {
+  color: white;
+  background: #31583f;
+  white-space: normal;
+}
+.card-hover-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.card-hovered > .card-hover-info,
+.card-tile:has(button:focus-visible) > .card-hover-info,
+.artwork-hover .card-hover-info {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: none;
+}
+.card-hover-info a {
+  pointer-events: auto;
+}
+.home-cards .home-card {
+  width: 164px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  flex-shrink: 0;
+  text-align: left;
+}
+.home-cards .home-card img {
+  height: auto;
+  object-fit: contain;
+}
+.home-cards .home-card-placeholder {
+  height: auto;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 488/680;
+}
+.artwork-hover-visual {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-origin: center;
+}
+.artwork-inspector {
+  display: grid;
+  grid-template-columns: minmax(190px, 23%) minmax(0, 1fr) minmax(180px, 21%);
+  flex: 1;
+  min-height: 0;
+}
+.artwork-details,
+.artwork-controls {
+  padding: 24px 20px;
+  overflow: auto;
+  background: #14231ebd;
+  z-index: 1;
+  font-size: 13px;
+}
+.artwork-details {
+  animation: details-left 220ms ease-out;
+}
+.artwork-controls {
+  animation: controls-right 220ms ease-out;
+}
+.artwork-details h3 {
+  margin-top: 0;
+  font:
+    22px Georgia,
+    serif;
+}
+.artwork-details .oracle {
+  white-space: pre-wrap;
+}
+.artwork-details .hint,
+.artwork-controls .hint {
+  color: #bfcfc4;
+}
+.artwork-details .tag-badge {
+  white-space: normal;
+  color: white;
+  background: #31583f;
+}
+.artwork-controls button,
+.artwork-controls input {
+  width: 100%;
+  margin: 8px 0;
+}
+.artwork-controls label {
+  color: white;
+}
+.artwork-stage {
+  padding: 18px;
+}
+.artwork-viewport {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+}
+.artwork-placeholder {
+  display: grid;
+  place-items: center;
+  background: #304737;
+  font-size: 12px;
+}
+@keyframes details-left {
+  from {
     opacity: 0;
+    transform: translateX(24px);
   }
-  .card:hover .card-actions-trigger,
-  .card:focus-within .card-actions-trigger {
+  to {
     opacity: 1;
+    transform: none;
+  }
+}
+@keyframes controls-right {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (max-width: 700px) {
+  .card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .artwork-inspector {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: minmax(210px, 48%) minmax(0, 1fr);
+  }
+  .artwork-stage {
+    grid-area: 1 / 1 / 2 / 3;
+    padding: 12px;
+  }
+  .artwork-details,
+  .artwork-controls {
+    padding: 12px;
+    font-size: 12px;
+  }
+  .artwork-details h3 {
+    font-size: 18px;
+  }
+  .artwork-controls {
+    grid-area: 2 / 2;
+  }
+  .artwork-details {
+    grid-area: 2 / 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .artwork-details,
+  .artwork-controls {
+    animation: none;
   }
 }
 .artwork-hover {
   position: fixed;
   z-index: 30;
-  pointer-events: none;
+  pointer-events: auto;
   filter: drop-shadow(0 16px 22px #0006);
-  animation: artwork-reveal 180ms cubic-bezier(0.2, 0.85, 0.3, 1.1);
+}
+.artwork-hover-reveal {
+  width: 100%;
+  height: 100%;
+  animation: artwork-reveal 360ms ease-out;
 }
 @keyframes artwork-reveal {
-  from {
+  0% {
     opacity: 0;
-    transform: translateY(5px) scale(0.98);
+    transform: scale(0.5);
   }
-  to {
+  64% {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: scale(1.028);
+  }
+  83% {
+    transform: scale(0.994);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
   }
 }
+.artwork-open-reveal {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: artwork-expand 380ms ease-out;
+}
+@keyframes artwork-expand {
+  0% {
+    opacity: 0.4;
+    transform: scale(0.34);
+  }
+  65% {
+    opacity: 1;
+    transform: scale(1.025);
+  }
+  84% {
+    transform: scale(0.995);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .artwork-open-reveal {
+    animation: none;
+  }
+}
+
 .artwork-hover img {
   width: 100%;
   height: 100%;
@@ -147,12 +360,9 @@ body[data-mode="catalog"] .card-image img {
     padding: 8px;
     font-size: 12px;
   }
-  .artwork-hover {
-    display: none;
-  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .artwork-hover {
+  .artwork-hover-reveal {
     animation: none;
   }
   body[data-mode="catalog"] .card-image img {
@@ -169,17 +379,15 @@ body[data-mode="catalog"] .card-image img {
   position: absolute;
   left: var(--wheel-x);
   top: var(--wheel-y);
-  width: calc(var(--wheel-radius) * 2);
-  height: calc(var(--wheel-radius) * 2);
+  width: var(--wheel-width);
+  height: var(--wheel-height);
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: radial-gradient(
-    circle,
-    transparent 21px,
-    #152b22ed 23px,
-    #152b22ed 58%,
-    #6c897b99 59%,
-    #14261dee 60%
+    ellipse,
+    transparent 44%,
+    #152b22e8 46%,
+    #14261df5 100%
   );
   box-shadow: 0 10px 40px #0006;
   border: 1px solid #a6bdaf;
@@ -189,16 +397,17 @@ body[data-mode="catalog"] .card-image img {
   position: absolute;
   pointer-events: auto;
   transform: translate(-50%, -50%);
-  width: 85px;
+  width: 112px;
   min-height: 44px;
   padding: 6px;
   font-size: 11px;
   line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
   color: #fff;
-  background: #3a5146;
+  background: #294537;
+  border: 1px solid #9bb4a3;
+  border-radius: 9px;
   transition:
     transform 80ms,
     opacity 80ms;
@@ -237,8 +446,7 @@ body[data-mode="catalog"] .card-image img {
   position: fixed;
   left: 0;
   top: 0;
-  width: 48px;
-  height: 67px;
+  opacity: 0.32;
   object-fit: contain;
   pointer-events: none;
   z-index: 1;
@@ -248,6 +456,8 @@ body[data-mode="catalog"] .card-image img {
 }
 .card-dragging {
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   cursor: grabbing;
 }
 .card-action-status {
@@ -295,4 +505,27 @@ body[data-mode="catalog"] .card-image img {
   .card-action-target {
     transition: none;
   }
+}
+
+.card-open,
+.home-card button,
+.detail-image img,
+.draft-row [role="button"] {
+  touch-action: manipulation;
+}
+
+.detail-image .detail-artwork {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  touch-action: manipulation;
+}
+
+.card-pickup {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }

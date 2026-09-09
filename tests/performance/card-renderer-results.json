@@ -1,0 +1,140 @@
+[
+  {
+    "engine": "chromium",
+    "mode": "css",
+    "frames": 240,
+    "frameMs": {
+      "p50": 16.7,
+      "p95": 16.8
+    },
+    "missed60HzSlots": 0,
+    "syntheticInputToRafMs": {
+      "p50": 7.3,
+      "p95": 15.1
+    },
+    "jsSubmitMs": {
+      "p50": 0,
+      "p95": 0.1
+    },
+    "gpu": null,
+    "text": "DOM text",
+    "backgroundCards": 1000,
+    "physicalDevice": false,
+    "chromiumDrawingLayers": 10
+  },
+  {
+    "engine": "chromium",
+    "mode": "canvas2d",
+    "frames": 240,
+    "frameMs": {
+      "p50": 16.7,
+      "p95": 16.8
+    },
+    "missed60HzSlots": 0,
+    "syntheticInputToRafMs": {
+      "p50": 7,
+      "p95": 12.1
+    },
+    "jsSubmitMs": {
+      "p50": 0.3,
+      "p95": 0.4
+    },
+    "gpu": null,
+    "text": "488\u00d7680 raster text",
+    "backgroundCards": 1000,
+    "physicalDevice": false,
+    "chromiumDrawingLayers": 10
+  },
+  {
+    "engine": "chromium",
+    "mode": "webgl",
+    "frames": 240,
+    "frameMs": {
+      "p50": 16.7,
+      "p95": 16.7
+    },
+    "missed60HzSlots": 0,
+    "syntheticInputToRafMs": {
+      "p50": 7.2,
+      "p95": 11.6
+    },
+    "jsSubmitMs": {
+      "p50": 0,
+      "p95": 0.1
+    },
+    "gpu": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+    "text": "488\u00d7680 raster text",
+    "backgroundCards": 1000,
+    "physicalDevice": false,
+    "chromiumDrawingLayers": 10
+  },
+  {
+    "engine": "webkit",
+    "mode": "css",
+    "frames": 240,
+    "frameMs": {
+      "p50": 16,
+      "p95": 16
+    },
+    "missed60HzSlots": 0,
+    "syntheticInputToRafMs": {
+      "p50": 15,
+      "p95": 17
+    },
+    "jsSubmitMs": {
+      "p50": 0,
+      "p95": 0
+    },
+    "gpu": null,
+    "text": "DOM text",
+    "backgroundCards": 1000,
+    "physicalDevice": false,
+    "chromiumDrawingLayers": null
+  },
+  {
+    "engine": "webkit",
+    "mode": "canvas2d",
+    "frames": 240,
+    "frameMs": {
+      "p50": 14,
+      "p95": 22
+    },
+    "missed60HzSlots": 0,
+    "syntheticInputToRafMs": {
+      "p50": 10,
+      "p95": 13
+    },
+    "jsSubmitMs": {
+      "p50": 0,
+      "p95": 1
+    },
+    "gpu": null,
+    "text": "488\u00d7680 raster text",
+    "backgroundCards": 1000,
+    "physicalDevice": false,
+    "chromiumDrawingLayers": null
+  },
+  {
+    "engine": "webkit",
+    "mode": "webgl",
+    "frames": 240,
+    "frameMs": {
+      "p50": 8,
+      "p95": 17
+    },
+    "missed60HzSlots": 0,
+    "syntheticInputToRafMs": {
+      "p50": 8,
+      "p95": 16
+    },
+    "jsSubmitMs": {
+      "p50": 0,
+      "p95": 1
+    },
+    "gpu": "Apple GPU",
+    "text": "488\u00d7680 raster text",
+    "backgroundCards": 1000,
+    "physicalDevice": false,
+    "chromiumDrawingLayers": null
+  }
+]

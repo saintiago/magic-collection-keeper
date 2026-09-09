@@ -144,7 +144,8 @@ test("UC-32 actual card opens and tag visits order recent activity, persist and 
   const f = await fixture(page);
   await page.locator("#collection-nav").click();
   for (const name of ["Lightning Bolt", "Sol Ring", "Lightning Bolt"]) {
-    await page.locator(".card-open").filter({ hasText: name }).click();
+    await page.getByRole("button", { name: `Open ${name} printing` }).click();
+    await page.locator('[data-artwork="details"]').click();
     await page.locator("#close").click();
   }
   await page.locator("#home-nav").click();
@@ -175,6 +176,7 @@ test("UC-32 actual card opens and tag visits order recent activity, persist and 
     "Lightning Bolt",
   );
   await page.locator(".home-card").last().tap();
+  await page.locator('[data-artwork="details"]').click();
   await expect(page.locator("#detail h2")).toHaveText("Sol Ring");
   await page.locator("#close").click();
   await expect(page.locator(".home-card").first()).toContainText("Sol Ring");
@@ -190,6 +192,7 @@ test("UC-32 home respects verified account isolation and sign-out hides every pr
   const f = await fixture(page, { cloud: true });
   await page.locator("#collection-nav").click();
   await page.locator(".card-open").first().click();
+  await page.locator('[data-artwork="details"]').click();
   await page.locator("#close").click();
   await page.locator("#home-nav").click();
   await expect(page.locator(".home-card")).toHaveCount(1);

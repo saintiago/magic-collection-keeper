@@ -292,6 +292,7 @@ cardActions = createCardActions({
   cardPage,
   detail,
   editTags: (row) => tagController.edit(row),
+  navigateTag: (tag) => tagNavigation.go(tag.id, tag),
   remember: (item) => recentSearches.remember(item),
   notify: message,
   onSettled: () => {
@@ -449,9 +450,7 @@ function render() {
     : "";
   visibleCards = rows;
   $("grid").innerHTML = rows
-    .map((row, index) =>
-      collectionCard(row, index, selectedTag, mode === "catalog"),
-    )
+    .map((row, index) => collectionCard(row, index, selectedTag))
     .join("");
   $("grid")
     .querySelectorAll(".card-open")

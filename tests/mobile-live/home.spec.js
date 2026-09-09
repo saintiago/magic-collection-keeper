@@ -47,6 +47,8 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
     await page.locator("#collection-nav").tap();
     await expect(page.locator(".card")).toHaveCount(before.length);
     await page.locator(".card-open").first().tap();
+    await expect(page.locator(".artwork-viewer output")).toHaveText("300%");
+    await page.locator('[data-artwork="details"]').tap();
     await expect(page.locator("#detail")).toBeVisible();
     await expect(page.locator("#inventory-form")).toBeVisible({
       timeout: 30000,
@@ -94,6 +96,8 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
       page.getByRole("region", { name: "Recent tags" }),
     ).toContainText(label);
     await page.locator(".home-card").tap();
+    await expect(page.locator(".artwork-viewer output")).toHaveText("300%");
+    await page.locator('[data-artwork="details"]').tap();
     await expect(page.locator("#detail")).toBeVisible();
     await expect(page.locator("#inventory-form")).toBeVisible({
       timeout: 30000,

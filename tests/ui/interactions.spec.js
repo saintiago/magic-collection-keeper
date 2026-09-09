@@ -136,7 +136,7 @@ test("UC-04 catalog blank, no-result, error, pagination, example and detail fiel
   await page.locator("#more").click();
   await expect(page.locator(".card")).toHaveCount(2);
   await page.locator(".card").first().click();
-  await page.getByRole("button", { name: "Card details", exact: true }).click();
+  await page.locator('[data-artwork="details"]').click();
   await page.locator("#flip").click();
   await expect(page.locator(".detail-image img")).toHaveAttribute(
     "alt",
@@ -154,6 +154,7 @@ test("UC-04 catalog blank, no-result, error, pagination, example and detail fiel
   await page.locator("#close").click();
   await expect(page.locator("#detail")).not.toBeVisible();
   await page.locator(".card").last().click();
+  await page.locator('[data-artwork="details"]').click();
   await expect(page.locator("#detail .image-missing")).toBeVisible();
   await page.locator("#close").click();
   await expect(page.locator("#detail")).not.toBeVisible();
@@ -182,7 +183,7 @@ test("UC-05 add failure, retry, remove cancellation and remove failure", async (
   await page.locator("#search").fill("Alpha");
   await page.locator("#search-submit").click();
   await page.locator(".card").click();
-  await page.getByRole("button", { name: "Card details", exact: true }).click();
+  await page.locator('[data-artwork="details"]').click();
   await page.locator("#inventory-form button[type=submit]").click();
   await expect(page.locator("#detail-message")).toHaveText(
     "Please retry this change",
@@ -191,6 +192,7 @@ test("UC-05 add failure, retry, remove cancellation and remove failure", async (
   await page.locator("#inventory-form button[type=submit]").click();
   await page.locator("#collection-nav").click();
   await page.locator(".card").click();
+  await page.locator('[data-artwork="details"]').click();
   page.once("dialog", (d) => d.dismiss());
   await page.locator("#remove").click();
   await expect(page.locator("#detail")).toBeVisible();

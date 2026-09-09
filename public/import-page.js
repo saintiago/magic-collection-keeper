@@ -444,18 +444,13 @@ export function createImportPage({ root, api, onAdded, back, select }) {
   draw();
   return {
     cardAction(target) {
-      if (
-        !visible ||
-        busy ||
-        editingRows ||
-        !target.matches('img,[data-action="card-actions"]')
-      )
+      if (!visible || busy || editingRows || !target.closest(".draft-artwork"))
         return null;
       const element = target.closest("[data-row]"),
         row = currentRows()?.find((row) => row.id === element?.dataset.row);
       if (!row?.card) return null;
       return {
-        element: element.querySelector('[data-action="card-actions"]'),
+        element: element.querySelector(".draft-artwork"),
         item: {
           kind: "pending",
           row,

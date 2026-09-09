@@ -47,7 +47,7 @@ test("LIVE-01 protected collection survives reload and isolates a second owner",
   await expect(page.locator(".card")).toHaveCount(1);
   await expect(page.locator(".card img")).toBeVisible();
   await page.locator(".card").click();
-  await page.getByRole("button", { name: "Card details", exact: true }).click();
+  await page.locator('[data-artwork="details"]').click();
   await page.locator("#quantity").fill("3");
   await page
     .getByRole("button", { name: "Add to collection", exact: false })
@@ -120,10 +120,12 @@ test("LIVE-01 protected collection survives reload and isolates a second owner",
   await expect(other.locator("#total")).toHaveText("0");
   await second.close();
   await page.locator(".card").click();
+  await page.locator('[data-artwork="details"]').click();
   await page.locator("#quantity").fill("2");
   await page.getByRole("button", { name: "Save quantity" }).click();
   await expect(page.locator("#total")).toHaveText("2");
   await page.locator(".card").click();
+  await page.locator('[data-artwork="details"]').click();
   page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Remove this entry" }).click();
   await expect(page.locator("#total")).toHaveText("0");

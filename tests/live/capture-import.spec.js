@@ -28,6 +28,7 @@ test("LIVE-02 real text import, explicit ownership and durable quantity", async 
   await page.reload();
   await expect(page.locator("#total")).toHaveText("1");
   await page.locator(".card").click();
+  await page.locator('[data-artwork="details"]').click();
   page.once("dialog", (dialog) => dialog.accept());
   await page.locator("#remove").click();
   await expect(page.locator("#total")).toHaveText("0");

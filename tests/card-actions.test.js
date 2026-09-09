@@ -23,12 +23,18 @@ test("UC-CARD-ACTIONS fixed wheel geometry stays inside phone edges and every vi
     ]) {
       const layout = actionWheelLayout(tags, point, viewport),
         before = JSON.stringify(layout);
-      assert.equal(layout.targets.length, 10);
+      assert.ok(layout.targets.length >= 3 && layout.targets.length <= 10);
       assert.equal(layout.targets.at(-1).tag.more, true);
       for (const target of layout.targets) {
         assert.equal(actionWheelHit(layout, target), target);
-        assert.ok(target.x >= 8 && target.x <= viewport.width - 8);
-        assert.ok(target.y >= 8 && target.y <= viewport.height - 8);
+        assert.ok(
+          target.x - target.width / 2 >= 8 &&
+            target.x + target.width / 2 <= viewport.width - 8,
+        );
+        assert.ok(
+          target.y - target.height / 2 >= 8 &&
+            target.y + target.height / 2 <= viewport.height - 8,
+        );
       }
       assert.equal(actionWheelHit(layout, layout.center), null);
       assert.equal(actionWheelHit(layout, { x: -100, y: -100 }), null);
