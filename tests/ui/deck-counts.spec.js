@@ -100,15 +100,17 @@ test("UC-18 deck copies, unique entries, pooled ownership, pending source and ca
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
-  const plains = page
-    .locator(".card")
-    .filter({ has: page.getByText("Plains", { exact: true }) });
+  const plains = page.locator(".card").filter({
+    has: page.getByRole("button", { name: /^Open Plains printing/ }),
+  });
   await expect(plains.locator(".card-open")).toHaveAccessibleName(
     /2 assigned here/,
   );
   await expect(plains).toContainText("26 owned");
   await page.locator("#sort").selectOption("quantity");
-  await expect(page.locator(".card-title").first()).toHaveText("Forest");
+  await expect(page.locator(".card-open").first()).toHaveAccessibleName(
+    /^Open Forest printing/,
+  );
   await page.locator("#color").selectOption("G");
   await expect(page.locator("#result-count")).toHaveText(
     "6 assigned copies of 99 · 1 distinct entry",

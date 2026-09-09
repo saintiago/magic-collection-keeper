@@ -8,22 +8,19 @@ export const TAG_STYLE = {
   role: { icon: "✧", label: "Role" },
   category: { icon: "◇", label: "Category" },
 };
-export function tagLink(tag, quantity) {
+export function tagLink(tag) {
   if (!tag?.id) return '<span class="tag-badge">Unknown tag</span>';
-  return `<a class="tag-badge tag-${esc(tag.kind || "other")}" href="${esc(tagHref(tag.id))}" data-tag-id="${esc(tag.id)}" data-tag-label="${esc(tag.label)}" data-tag-type="${esc(tag.type || "location")}" data-tag-kind="${esc(tag.kind || "other")}" aria-label="Show cards tagged ${esc(tag.label)} (${esc(TAG_STYLE[tag.kind]?.label || "Tag")})">${TAG_STYLE[tag.kind]?.icon || "◇"} ${esc(tag.label)}${quantity == null ? "" : ` <b>×${quantity}</b>`} </a>`;
+  return `<a class="tag-badge tag-${esc(tag.kind || "other")}" href="${esc(tagHref(tag.id))}" data-tag-id="${esc(tag.id)}" data-tag-label="${esc(tag.label)}" data-tag-type="${esc(tag.type || "location")}" data-tag-kind="${esc(tag.kind || "other")}" aria-label="Show cards tagged ${esc(tag.label)} (${esc(TAG_STYLE[tag.kind]?.label || "Tag")})">${esc(tag.label)}</a>`;
 }
 export function tagBadges(row) {
   return [
     ...(row.locations ?? []).map((a) =>
-      tagLink(
-        {
-          ...a.tag,
-          id: a.tag_id,
-          label: a.tag?.label || "Unknown location",
-          type: "location",
-        },
-        a.quantity,
-      ),
+      tagLink({
+        ...a.tag,
+        id: a.tag_id,
+        label: a.tag?.label || "Unknown location",
+        type: "location",
+      }),
     ),
     ...(row.tags ?? []).map((t) => tagLink(t)),
   ].join("");

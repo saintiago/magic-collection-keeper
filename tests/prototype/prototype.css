@@ -11,7 +11,8 @@ body {
 }
 .prototype-header strong {
   font:
-    24px Georgia,
+    24px "Cinzel",
+    Georgia,
     serif;
   color: #203b2e;
 }

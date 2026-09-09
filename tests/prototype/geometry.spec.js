@@ -1,3 +1,7 @@
+import {
+  expectInspectorFit,
+  expectInspectorSides,
+} from "../helpers/artwork-fit.js";
 import { test, expect } from "@playwright/test";
 
 test.describe("touch viewport changes", () => {
@@ -33,14 +37,14 @@ test.describe("touch viewport changes", () => {
     await photo.dispatchEvent("pointercancel", pointer(42, 260, 680));
     await expect(page.locator(".artwork-viewer")).toBeVisible();
     await page.getByRole("button", { name: "Reset zoom" }).tap();
-    await expect(page.locator(".artwork-viewer output")).toHaveText("300%");
+    await expectInspectorFit(page);
     await page.setViewportSize({ width: 844, height: 390 });
     await expect
       .poll(
         async () => (await page.locator(".artwork-stage").boundingBox()).height,
       )
       .toBe(390);
-    expect((await photo.boundingBox()).width).toBeCloseTo(source.width * 3, 1);
+    await expectInspectorFit(page);
     expect(
       await photo.evaluate((el) => getComputedStyle(el).transform),
     ).not.toContain("NaN");
@@ -52,6 +56,77 @@ test.describe("touch viewport changes", () => {
 
 const svg = (width, height) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#294535"/><text x="30" y="120" fill="white" font-size="30">Sample full card</text></svg>`;
+
+test("UC-CARD-TILES immediate info, 299/300ms hover boundary and cancellation restart", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.evaluate(() => document.fonts.ready);
+  await page.clock.install();
+  await page.clock.pauseAt(Date.now() + 1000);
+  await page.evaluate(() => {
+    const original = window.setTimeout;
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay === 300) window.hoverScheduledAt = performance.now();
+      return original(callback, delay, ...args);
+    };
+  });
+  const tile = page.locator("#grid .card-open").first();
+  const b = await tile.boundingBox();
+  const enter = async () => {
+    await tile.dispatchEvent("pointermove", {
+      pointerType: "mouse",
+      clientX: b.x + b.width / 2,
+      clientY: b.y + b.height / 2,
+      bubbles: true,
+    });
+    await page.clock.runFor(17);
+    await expect(tile.locator("..").locator(".card-hover-info")).toBeVisible();
+    const elapsed = await page.evaluate(
+      () => performance.now() - window.hoverScheduledAt,
+    );
+    expect(elapsed).toBeLessThan(18);
+    await page.clock.runFor(299 - elapsed);
+    await expect(page.locator(".artwork-hover")).not.toBeVisible();
+  };
+  await enter();
+  await page.evaluate(() => {
+    window.departedLift = false;
+    const preview = document.querySelector(".artwork-hover");
+    new MutationObserver((records) => {
+      if (
+        records.some(
+          (record) =>
+            record.attributeName === "hidden" && record.oldValue !== null,
+        )
+      )
+        window.departedLift = true;
+    }).observe(preview, {
+      attributes: true,
+      attributeOldValue: true,
+      attributeFilter: ["hidden"],
+    });
+  });
+  await page.locator("body").dispatchEvent("pointermove", {
+    pointerType: "mouse",
+    clientX: 5,
+    clientY: 5,
+    bubbles: true,
+  });
+  await page.clock.runFor(17);
+  await page.clock.runFor(350);
+  await expect(page.locator(".artwork-hover")).not.toBeVisible();
+  expect(await page.evaluate(() => window.departedLift)).toBe(false);
+  await enter();
+  await page.clock.runFor(1);
+  await expect(page.locator(".artwork-hover")).toBeVisible();
+  expect(
+    (await page.locator(".artwork-hover").boundingBox()).width / b.width,
+  ).toBeCloseTo(2, 2);
+  await page.dispatchEvent("body", "pointercancel");
+  await page.clock.runFor(350);
+  await expect(page.locator(".artwork-hover")).not.toBeVisible();
+});
 
 test.beforeEach(async ({ page }) => {
   await page.route("https://cards.scryfall.io/**", (route) =>
@@ -70,7 +145,7 @@ for (const viewport of [
   { width: 320, height: 568 },
   { width: 844, height: 390 },
 ]) {
-  test(`UC-CARD-PROTOTYPE exact source scaling, full viewport and side overlays ${viewport.width}x${viewport.height}`, async ({
+  test(`UC-CARD-PROTOTYPE comfortable source scaling, dismissal gutters and side overlays ${viewport.width}x${viewport.height}`, async ({
     page,
   }) => {
     await page.setViewportSize(viewport);
@@ -90,8 +165,15 @@ for (const viewport of [
       await tile.hover();
       await expect(page.locator(".artwork-hover")).toBeVisible();
       const preview = await page.locator(".artwork-hover").boundingBox();
-      expect(preview.width).toBeCloseTo(base.width * 2, 1);
-      expect(preview.height).toBeCloseTo(base.height * 2, 1);
+      const hoverZoom = Math.min(
+        2,
+        (viewport.width - 32) / base.width,
+        (viewport.height - 32) / base.height,
+      );
+      expect(preview.width).toBeCloseTo(base.width * hoverZoom, 1);
+      expect(preview.height).toBeCloseTo(base.height * hoverZoom, 1);
+      expect(preview.x).toBeGreaterThanOrEqual(15.9);
+      expect(preview.y).toBeGreaterThanOrEqual(15.9);
       await page.mouse.click(
         Math.max(1, preview.x + preview.width / 2),
         Math.max(1, preview.y + preview.height / 2),
@@ -102,8 +184,8 @@ for (const viewport of [
         "none",
       );
       const enlarged = await page.locator(".artwork-full-image").boundingBox();
-      expect(enlarged.width).toBeCloseTo(base.width * 3, 1);
-      expect(enlarged.height).toBeCloseTo(base.height * 3, 1);
+      await expectInspectorFit(page);
+
       await expect
         .poll(() =>
           page.locator(".artwork-full-image").evaluate((el) => el.naturalWidth),
@@ -116,9 +198,9 @@ for (const viewport of [
       });
       const left = await page.locator(".artwork-details").boundingBox();
       const right = await page.locator(".artwork-controls").boundingBox();
-      expect(left.x + left.width).toBeLessThan(viewport.width / 2);
-      expect(right.x).toBeGreaterThan(viewport.width / 2);
-      expect(left.y + left.height).toBeLessThanOrEqual(viewport.height);
+      await expectInspectorSides(page, enlarged);
+      if (left)
+        expect(left.y + left.height).toBeLessThanOrEqual(viewport.height);
       expect(right.y + right.height).toBeLessThanOrEqual(viewport.height);
       await expect(
         page.locator(".artwork-viewer header,.artwork-viewer footer"),
@@ -184,7 +266,7 @@ test("UC-CARD-PROTOTYPE failed full-card upgrade preserves image and source dime
   );
   const base = await tile.boundingBox();
   const enlarged = await page.locator(".artwork-full-image").boundingBox();
-  expect(enlarged.width).toBeCloseTo(base.width * 3, 1);
+  await expectInspectorFit(page);
   await expect
     .poll(() =>
       page.locator(".artwork-full-image").evaluate((el) => el.naturalWidth),
@@ -220,9 +302,7 @@ test("UC-CARD-PROTOTYPE dense grid handles interrupted hover spring and Back wit
     "transform",
     "none",
   );
-  expect(await page.locator(".artwork-full-image").boundingBox()).toMatchObject(
-    { width: (await tile.boundingBox()).width * 3 },
-  );
+  await expectInspectorFit(page);
   await page.keyboard.press("Escape");
   await expect(tile).toBeFocused();
 });

@@ -1,0 +1,26 @@
+{
+  "id": "34bdc973-db45-46a6-ac48-ce88fb59920a",
+  "oracle_id": "af42079b-a3c0-448c-9bb2-b915252e87a9",
+  "name": "Animation Module",
+  "set": "kld",
+  "set_name": "Kaladesh",
+  "collector_number": "194",
+  "lang": "en",
+  "type_line": "Artifact",
+  "oracle_text": "Whenever one or more +1/+1 counters are put on a permanent you control, you may pay {1}. If you do, create a 1/1 colorless Servo artifact creature token.\n{3}, {T}: Choose a counter on target permanent or player. Give that permanent or player another counter of that kind.",
+  "finishes": ["nonfoil", "foil"],
+  "image_uris": {
+    "small": "https://cards.scryfall.io/small/front/3/4/34bdc973-db45-46a6-ac48-ce88fb59920a.jpg?1783937163",
+    "normal": "https://cards.scryfall.io/normal/front/3/4/34bdc973-db45-46a6-ac48-ce88fb59920a.jpg?1783937163",
+    "large": "https://cards.scryfall.io/large/front/3/4/34bdc973-db45-46a6-ac48-ce88fb59920a.jpg?1783937163",
+    "png": "https://cards.scryfall.io/png/front/3/4/34bdc973-db45-46a6-ac48-ce88fb59920a.png?1783937163",
+    "art_crop": "https://cards.scryfall.io/art_crop/front/3/4/34bdc973-db45-46a6-ac48-ce88fb59920a.jpg?1783937163",
+    "border_crop": "https://cards.scryfall.io/border_crop/front/3/4/34bdc973-db45-46a6-ac48-ce88fb59920a.jpg?1783937163",
+    "thumb": "https://cards.scryfall.io/thumb/front/3/4/34bdc973-db45-46a6-ac48-ce88fb59920a.webp?1783937163",
+    "grid": "https://cards.scryfall.io/grid/front/3/4/34bdc973-db45-46a6-ac48-ce88fb59920a.webp?1783937163",
+    "display": "https://cards.scryfall.io/display/front/3/4/34bdc973-db45-46a6-ac48-ce88fb59920a.webp?1783937163",
+    "art": "https://cards.scryfall.io/art/front/3/4/34bdc973-db45-46a6-ac48-ce88fb59920a.webp?1783937163",
+    "crop": "https://cards.scryfall.io/crop/front/3/4/34bdc973-db45-46a6-ac48-ce88fb59920a.webp?1783937163"
+  },
+  "scryfall_uri": "https://scryfall.com/card/kld/194/animation-module?utm_source=api"
+}

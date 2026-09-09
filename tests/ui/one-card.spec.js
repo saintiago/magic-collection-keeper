@@ -96,11 +96,28 @@ test("UC-ONE-CARD actual geometry waits quietly through overlap and preserves ou
   await page.evaluate(() => window.paintScene("single"));
   await page.waitForTimeout(1500);
   await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
-  await page.evaluate(() => window.paintScene("blank"));
+  await page.evaluate(() => {
+    window.geometryMeasurements.length = 0;
+    window.paintScene("blank");
+  });
   await expect(page.locator("#scan-status")).toHaveText(
     "Place one card inside the guide.",
   );
-  await page.waitForTimeout(500);
+  // A fixed 500ms pause can end before the second empty-frame result on a
+  // slower runner. Keep this controlled scene until multiple current-scene
+  // observations have arrived, leaving the production departure gate intact.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            window.geometryMeasurements.filter(
+              (frame) => frame.state === "none" && frame.sameScene,
+            ).length,
+        ),
+      { timeout: 10000 },
+    )
+    .toBeGreaterThanOrEqual(3);
   await page.evaluate(() => window.paintScene("single"));
   await expect(page.locator("#scan-count")).toHaveText("2 queued · 2 copies", {
     timeout: 10000,

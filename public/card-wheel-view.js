@@ -7,26 +7,10 @@ const svgNode = (name, attributes = {}) => {
 };
 
 export function wheelLabel(button, tag) {
-  const icon = document.createElement("span");
-  icon.className = "card-action-icon";
-  icon.setAttribute("aria-hidden", "true");
-  icon.textContent = tag.more
-    ? "···"
-    : tag.action === "details"
-      ? "◇"
-      : tag.action === "edit"
-        ? "+"
-        : tag.kind === "deck"
-          ? "▱"
-          : tag.kind === "binder"
-            ? "▤"
-            : tag.kind === "box"
-              ? "▣"
-              : "✦";
   const label = document.createElement("span");
   label.className = "card-action-label";
   label.textContent = tag.label;
-  button.append(icon, label);
+  button.append(label);
 }
 
 export function wheelSectorPath(radius, inner, start, end) {
@@ -56,10 +40,10 @@ export function createWheelSectors(layout, choose) {
   });
   for (const [offset, color, opacity] of [
     ["30%", "#23473a", 0],
-    ["52%", "#274f42", 0.3],
-    ["78%", "#19392f", 0.65],
-    ["96%", "#416552", 0.4],
-    ["100%", "#d9ead0", 0.18],
+    ["52%", "#d6f4df", 0.02],
+    ["78%", "#19392f", 0.035],
+    ["96%", "#416552", 0.05],
+    ["100%", "#e8fff0", 0.25],
   ])
     glass.append(
       svgNode("stop", { offset, "stop-color": color, "stop-opacity": opacity }),
@@ -73,9 +57,10 @@ export function createWheelSectors(layout, choose) {
   });
   for (const [offset, color, opacity] of [
     ["34%", "#b2a76e", 0],
-    ["48%", "#acb37c", 0.8],
-    ["74%", "#658d70", 0.62],
-    ["100%", "#507262", 0.08],
+    ["48%", "#c9efb3", 0.08],
+    ["74%", "#8ee5bb", 0.12],
+    ["94%", "#c7ffdb", 0.26],
+    ["100%", "#507262", 0.02],
   ])
     gradient.append(
       svgNode("stop", { offset, "stop-color": color, "stop-opacity": opacity }),

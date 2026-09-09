@@ -5,7 +5,47 @@ import {
   actionWheelHit,
   rankActionTags,
   boundedArtwork,
+  artworkOpening,
+  enlargedArtwork,
+  wheelPickupSize,
 } from "../public/card-action-layout.js";
+
+test("UC-CARD-ART source center stays in place unless a viewport gutter forces a shift", () => {
+  const viewport = { width: 3799, height: 1905 };
+  const middle = artworkOpening(
+    { x: 1000, y: 700, width: 200, height: 280 },
+    viewport,
+  );
+  assert.equal(middle.x, 800);
+  assert.equal(middle.y, 420);
+  const left = artworkOpening(
+    { x: 0, y: 0, width: 200, height: 280 },
+    viewport,
+  );
+  assert.equal(left.x, 24);
+  assert.equal(left.y, 32);
+  const right = artworkOpening(
+    { x: 3599, y: 1625, width: 200, height: 280 },
+    viewport,
+  );
+  assert.equal(right.x, 3175);
+  assert.equal(right.y, 1033);
+  const anchor = {
+    width: 1200,
+    height: 800,
+    baseWidth: 200,
+    baseHeight: 280,
+    centerX: 310,
+    centerY: 420,
+  };
+  const resting = boundedArtwork({ ...anchor, zoom: 2, x: 999, y: -999 });
+  assert.equal(resting.x, 0);
+  assert.equal(resting.y, 0);
+  const zoomed = boundedArtwork({ ...anchor, zoom: 6, x: -999, y: 999 });
+  assert.equal(zoomed.x, 290);
+  assert.equal(zoomed.y, 420);
+  assert.equal(boundedArtwork({ ...anchor, zoom: 3 }).x, 0);
+});
 
 test("UC-CARD-ACTIONS fixed wheel geometry stays inside phone edges and every visible target matches its drop sector", () => {
   const tags = Array.from({ length: 40 }, (_, i) => ({
@@ -131,4 +171,76 @@ test("UC-CARD-ACTIONS recency and relevance affect the next wheel only; artwork 
   });
   assert.equal(small.x, 0);
   assert.equal(small.y, 0);
+});
+
+test("UC-CARD-ART safe-area fitting preserves full portrait and minimum dismissal gutters", () => {
+  const card = { x: 0, y: 0, width: 180, height: 251 };
+  const phone = artworkOpening(card, { width: 390, height: 844 });
+  assert.equal(phone.zoom, 1.9);
+  const landscape = artworkOpening(card, {
+    width: 844,
+    height: 390,
+    safeLeft: 44,
+    safeRight: 44,
+    safeBottom: 21,
+  });
+  assert.equal(landscape.gutterX, 68);
+  assert.equal(landscape.gutterY, 53);
+  assert.equal(landscape.zoom * card.height, 284);
+  const tiny = artworkOpening(
+    { width: 300, height: 418 },
+    { width: 320, height: 390 },
+  );
+  assert.ok(tiny.zoom < 1);
+  assert.equal(
+    boundedArtwork({
+      ...card,
+      baseWidth: 300,
+      baseHeight: 418,
+      width: 272,
+      height: 326,
+      zoom: tiny.zoom,
+      minZoom: tiny.zoom,
+      x: 999,
+      y: 999,
+    }).zoom,
+    tiny.zoom,
+  );
+  const hover = enlargedArtwork(card, 2, { width: 320, height: 390 });
+  assert.equal(hover.height, 358);
+  assert.equal(hover.y, 16);
+});
+
+test("UC-CARD-WHEEL centered pickup keeps labels clear without changing ghost or hit geometry", () => {
+  for (const width of [320, 390, 1080]) {
+    const bounds = {
+      width: width < 700 ? 180 : 254,
+      height: width < 700 ? 251 : 354,
+    };
+    const layout = actionWheelLayout(
+      Array.from({ length: 12 }, (_, i) => ({
+        id: String(i),
+        label: `Label ${i}`,
+      })),
+      { x: 40, y: 220 },
+      { width, height: 800, cardHeight: bounds.height },
+    );
+    const before = JSON.stringify(layout);
+    const pickup = wheelPickupSize(layout, bounds);
+    assert.ok(pickup.scale <= 1 && pickup.scale > 0.5);
+    for (const target of layout.targets) {
+      const dx =
+        Math.abs(target.x - layout.center.x) -
+        (pickup.width + target.width) / 2;
+      const dy =
+        Math.abs(target.y - layout.center.y) -
+        (pickup.height + target.height) / 2;
+      assert.ok(dx >= 7.99 || dy >= 7.99);
+    }
+    assert.equal(JSON.stringify(layout), before);
+    assert.ok(
+      Math.abs(pickup.width / pickup.height - bounds.width / bounds.height) <
+        1e-12,
+    );
+  }
 });

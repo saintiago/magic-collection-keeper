@@ -1,3 +1,4 @@
+import { expectInspectorFit } from "./artwork-fit.js";
 import { expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { liveApi, clearCaptureTestData } from "./backend-live.js";
@@ -189,7 +190,7 @@ export async function exerciseCardActions(
     await expect(tile.locator(".card-hover-info")).not.toBeVisible();
     await activate(cardButton);
     await expect(page).toHaveURL(new RegExp("#tag=" + source.id + "$"));
-    await expect(page.locator(".artwork-viewer output")).toHaveText("300%");
+    await expectInspectorFit(page);
     await expect(page.locator(".artwork-details")).toContainText("3 owned");
     await expect(page.getByLabel("Owned quantity")).toHaveValue("3");
     await page.screenshot({
@@ -303,7 +304,7 @@ export async function exerciseCardActions(
     await activate(page.locator("#search-submit"));
     await expect(page.locator("#grid .card")).toHaveCount(1);
     await activate(page.locator(".card-open"));
-    await expect(page.locator(".artwork-viewer output")).toHaveText("300%");
+    await expectInspectorFit(page);
     await activate(
       page.getByRole("button", { name: "Card details", exact: true }),
     );

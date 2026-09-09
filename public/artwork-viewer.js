@@ -1,12 +1,18 @@
 import { image, esc } from "./view.js";
 import { cardHoverInfo } from "./card-tile-view.js";
 import { inspectorDetails, inspectorView } from "./artwork-inspector.js";
-import { boundedArtwork, enlargedArtwork } from "./card-action-layout.js";
+import {
+  artworkOpening,
+  boundedArtwork,
+  enlargedArtwork,
+} from "./card-action-layout.js";
 import { upgradeArtwork } from "./artwork-images.js";
 
 export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
   const dialog = document.createElement("dialog");
   dialog.className = "artwork-viewer";
+  dialog.tabIndex = -1;
+  dialog.autofocus = true;
   dialog.setAttribute("aria-label", "Card artwork and information");
   document.body.append(dialog);
   const preview = document.createElement("div");
@@ -25,7 +31,8 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     gesture = null,
     state = null,
     rect = null,
-    suppressUntil = 0;
+    suppressUntil = 0,
+    glass = null;
 
   function hidePreview() {
     if (preview.hidden) return;
@@ -51,6 +58,10 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       "--artwork-lift-y",
       bounds.y + bounds.height / 2 - y - height / 2 + "px",
     );
+    preview.style.setProperty(
+      "--artwork-lift-scale",
+      String(bounds.width / width),
+    );
     preview.hidden = false;
     found.element.classList.add("artwork-source-lifted");
     previewSource = found;
@@ -65,6 +76,11 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
   function draw() {
     frame = 0;
     if (!dialog.open || !state) return;
+    if (glass?.dirty) {
+      glass.element.style.setProperty("--glass-x", glass.x + "%");
+      glass.element.style.setProperty("--glass-y", glass.y + "%");
+      glass.dirty = false;
+    }
     if (!rect)
       rect = dialog.querySelector(".artwork-viewport").getBoundingClientRect();
     state = {
@@ -83,6 +99,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     frame = 0;
     points.clear();
     gesture = null;
+    glass = null;
     origin?.classList.remove("artwork-source-lifted");
     if (dialog.open) dialog.close();
     dialog.replaceChildren();
@@ -155,6 +172,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       dialog.querySelector(".artwork-details").innerHTML =
         inspectorDetails(item);
       status.textContent = "Quantity saved.";
+      resize();
     } catch (error) {
       if (form.isConnected) status.textContent = error.message;
     } finally {
@@ -175,7 +193,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     if (action === "in") state.zoom *= 1.25;
     if (action === "out") state.zoom /= 1.25;
     if (action === "reset") {
-      state.zoom = 3;
+      state.zoom = state.initialZoom;
       state.x = state.y = 0;
     }
     schedule();
@@ -222,7 +240,40 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
           : null,
     };
   });
+  const glassSelector =
+    '.artwork-controls > button:not([data-artwork="close"]), .artwork-quantity, .artwork-zoom';
+  dialog.addEventListener("pointerover", (event) => {
+    const surface = event.target.closest(glassSelector);
+    if (glass?.element === surface) return;
+    glass?.element.removeAttribute("data-lit");
+    glass = surface
+      ? { element: surface, bounds: surface.getBoundingClientRect() }
+      : null;
+    surface?.setAttribute("data-lit", "");
+  });
+  dialog.addEventListener("pointerleave", () => {
+    glass?.element.removeAttribute("data-lit");
+    glass = null;
+  });
   dialog.addEventListener("pointermove", (event) => {
+    if (glass) {
+      glass.x = Math.max(
+        0,
+        Math.min(
+          100,
+          ((event.clientX - glass.bounds.x) / glass.bounds.width) * 100,
+        ),
+      );
+      glass.y = Math.max(
+        0,
+        Math.min(
+          100,
+          ((event.clientY - glass.bounds.y) / glass.bounds.height) * 100,
+        ),
+      );
+      glass.dirty = true;
+      schedule();
+    }
     if (!state || !rect) return;
     if (points.has(event.pointerId)) {
       event.preventDefault();
@@ -245,9 +296,11 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       event.target.closest(".artwork-stage")
     ) {
       state.x =
-        (1 - (2 * (event.clientX - rect.left)) / rect.width) * state.limitX;
+        state.maxX -
+        ((event.clientX - rect.left) / rect.width) * (state.maxX - state.minX);
       state.y =
-        (1 - (2 * (event.clientY - rect.top)) / rect.height) * state.limitY;
+        state.maxY -
+        ((event.clientY - rect.top) / rect.height) * (state.maxY - state.minY);
       schedule();
     }
   });
@@ -307,6 +360,89 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       dialog.style.height = (viewport?.height || innerHeight) + "px";
       dialog.style.left = (viewport?.offsetLeft || 0) + "px";
       dialog.style.top = (viewport?.offsetTop || 0) + "px";
+      const safe = getComputedStyle(dialog.querySelector(".artwork-safe-area"));
+      const source = origin?.isConnected
+        ? origin.getBoundingClientRect()
+        : state.sourceBounds;
+      const opening = artworkOpening(
+        {
+          width: state.baseWidth,
+          height: state.baseHeight,
+          x:
+            source.x -
+            (viewport?.offsetLeft || 0) +
+            (source.width - state.baseWidth) / 2,
+          y:
+            source.y -
+            (viewport?.offsetTop || 0) +
+            (source.height - state.baseHeight) / 2,
+        },
+        {
+          width: viewport?.width || innerWidth,
+          height: viewport?.height || innerHeight,
+          safeLeft: parseFloat(safe.paddingLeft),
+          safeRight: parseFloat(safe.paddingRight),
+          safeTop: parseFloat(safe.paddingTop),
+          safeBottom: parseFloat(safe.paddingBottom),
+        },
+      );
+      const atOpening =
+        state.initialZoom === undefined ||
+        Math.abs(state.zoom - state.initialZoom) < 0.001;
+      state.initialZoom = opening.zoom;
+      state.minZoom = Math.min(1, opening.zoom);
+      if (atOpening) {
+        state.zoom = opening.zoom;
+        state.x = state.y = 0;
+      }
+      dialog.style.setProperty("--artwork-gutter-x", opening.gutterX + "px");
+      dialog.style.setProperty("--artwork-gutter-y", opening.gutterY + "px");
+      state.opening = opening;
+      state.centerX = opening.x + opening.width / 2 - opening.gutterX;
+      state.centerY = opening.y + opening.height / 2 - opening.gutterY;
+      const reveal = dialog.querySelector(".artwork-open-reveal");
+      reveal.style.left = opening.x - opening.gutterX + "px";
+      reveal.style.top = opening.y - opening.gutterY + "px";
+      reveal.style.width = opening.width + "px";
+      reveal.style.height = opening.height + "px";
+      const details = dialog.querySelector(".artwork-details");
+      const controls = dialog.querySelector(".artwork-controls");
+      const infoWidth = details.offsetWidth,
+        infoHeight = details.offsetHeight;
+      const controlsWidth = controls.offsetWidth,
+        controlsHeight = controls.offsetHeight;
+      const availableWidth = viewport?.width || innerWidth,
+        availableHeight = viewport?.height || innerHeight;
+      const leftSpace = opening.x - infoWidth - 16;
+      const rightSpace = opening.x + opening.width + 16;
+      details.style.left =
+        (leftSpace >= opening.gutterX ? leftSpace : opening.x + 8) + "px";
+      controls.style.left =
+        (rightSpace + controlsWidth <= availableWidth - opening.gutterX
+          ? rightSpace
+          : opening.x + opening.width - controlsWidth - 8) + "px";
+      const above = opening.y - infoHeight - 12;
+      const infoTop =
+        leftSpace >= opening.gutterX
+          ? opening.y + 24
+          : above >= opening.gutterY
+            ? above
+            : opening.y + 48;
+      details.style.top =
+        Math.max(
+          opening.gutterY,
+          Math.min(infoTop, availableHeight - opening.gutterY - infoHeight),
+        ) + "px";
+      controls.style.top =
+        Math.max(
+          opening.gutterY,
+          Math.min(
+            opening.y + opening.height / 2 - controlsHeight / 2,
+            availableHeight - opening.gutterY - controlsHeight,
+          ),
+        ) + "px";
+      glass?.element.removeAttribute("data-lit");
+      glass = null;
       schedule();
     }
   }
@@ -355,6 +491,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       origin.classList.add("artwork-source-lifted");
       originKey = element.closest("[data-card-key]")?.dataset.cardKey || null;
       state = {
+        sourceBounds: bounds.toJSON(),
         baseWidth: bounds.width,
         baseHeight: bounds.height,
         zoom: 3,
@@ -374,12 +511,15 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       const viewport = window.visualViewport;
       const reveal = dialog.querySelector(".artwork-open-reveal");
       dialog.style.setProperty("--artwork-start-tilt", tilt);
+      dialog.showModal();
+      resize();
       reveal.style.setProperty(
         "--artwork-start-x",
         visual.x +
           visual.width / 2 -
           (viewport?.offsetLeft || 0) -
-          (viewport?.width || innerWidth) / 2 +
+          state.opening.x -
+          state.opening.width / 2 +
           "px",
       );
       reveal.style.setProperty(
@@ -387,18 +527,22 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
         visual.y +
           visual.height / 2 -
           (viewport?.offsetTop || 0) -
-          (viewport?.height || innerHeight) / 2 +
+          state.opening.y -
+          state.opening.height / 2 +
           "px",
       );
       reveal.style.setProperty(
         "--artwork-start-scale",
-        String(visual.width / (state.baseWidth * 3)),
+        String(visual.width / (state.baseWidth * state.zoom)),
       );
-      dialog.showModal();
-      resize();
+      dialog.querySelector("output").value = `${Math.round(state.zoom * 100)}%`;
       if (src)
         upgradeArtwork(dialog.querySelector(".artwork-full-image"), card);
-      dialog.querySelector('[data-artwork="close"]').focus();
+      dialog.focus({ preventScroll: true });
+      const openedKey = historyKey;
+      document.fonts.ready.then(() => {
+        if (dialog.open && historyKey === openedKey) resize();
+      });
     },
   };
 }

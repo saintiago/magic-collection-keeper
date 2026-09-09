@@ -4,9 +4,13 @@ import { createArtworkViewer } from "/artwork-viewer.js";
 import { createCardGestures } from "/card-gestures.js";
 import { createWheelSectors } from "/card-wheel-view.js";
 import { createWebGLWheel } from "/wheel-webgl.js";
-const card = await fetch("/cards.json").then((r) => r.json());
+const animationModule =
+  new URL(location.href).searchParams.get("card") === "animation-module";
+const card = await fetch(
+  animationModule ? "/animation-module.json" : "/cards.json",
+).then((r) => r.json());
 const tags = [
-  "Double Dragon",
+  animationModule ? "Elesh Norn Artifacts" : "Double Dragon",
   "A long readable deck label",
   "Draft Box",
   "Card Draw",
@@ -22,12 +26,15 @@ const rows = Array.from({ length: 1000 }, (_, i) => ({
   id: `prototype-row-${i}`,
   printing_id: card.id,
   card,
-  quantity: 3,
+  quantity: animationModule ? 1 : 3,
   finish: "nonfoil",
-  condition: "NM",
+  condition: animationModule ? "UNK" : "NM",
+  provenance_list: animationModule
+    ? [{ name: "Elesh Norn Artifacts", section: "mainboard" }]
+    : [],
   locations: [{ tag_id: tags[0].id, quantity: 1, tag: tags[0] }],
-  tag_ids: [tags[3].id],
-  tags: [tags[3]],
+  tag_ids: animationModule ? [] : [tags[3].id],
+  tags: animationModule ? [] : [tags[3]],
   allocated_quantity: 1,
 }));
 let mode = "deck",

@@ -2,15 +2,44 @@ export const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 export const actionTargetWidth = (width) =>
   Math.min(112, Math.max(64, ((width - 36) / 2) * 0.48));
 
-// Scale the rendered, untransformed source tile exactly. Edges affect position,
-// never the requested scale; oversized artwork may extend past the viewport.
+export function artworkOpening(bounds, viewport, requested = 3) {
+  const gutterX =
+    24 + Math.max(viewport.safeLeft || 0, viewport.safeRight || 0);
+  const gutterY =
+    32 + Math.max(viewport.safeTop || 0, viewport.safeBottom || 0);
+  const zoom = Math.min(
+    requested,
+    Math.max(1, viewport.width - gutterX * 2) / bounds.width,
+    Math.max(1, viewport.height - gutterY * 2) / bounds.height,
+  );
+  const width = bounds.width * zoom,
+    height = bounds.height * zoom;
+  const sourceX =
+    bounds.x === undefined ? viewport.width / 2 : bounds.x + bounds.width / 2;
+  const sourceY =
+    bounds.y === undefined ? viewport.height / 2 : bounds.y + bounds.height / 2;
+  return {
+    zoom,
+    gutterX,
+    gutterY,
+    width,
+    height,
+    x: clamp(sourceX - width / 2, gutterX, viewport.width - gutterX - width),
+    y: clamp(sourceY - height / 2, gutterY, viewport.height - gutterY - height),
+  };
+}
+
+// Hover aims for 2x while retaining room to leave at viewport edges.
 export function enlargedArtwork(bounds, scale, viewport) {
-  const width = bounds.width * scale,
-    height = bounds.height * scale;
+  const zoom = Math.min(
+    scale,
+    (viewport.width - 32) / bounds.width,
+    (viewport.height - 32) / bounds.height,
+  );
+  const width = bounds.width * zoom,
+    height = bounds.height * zoom;
   const place = (start, source, size, available) =>
-    size > available - 24
-      ? (available - size) / 2
-      : clamp(start + (source - size) / 2, 12, available - size - 12);
+    clamp(start + (source - size) / 2, 16, available - size - 16);
   return {
     width,
     height,
@@ -45,7 +74,7 @@ export function actionWheelLayout(tags, point, viewport) {
     ),
   );
   const innerRadius =
-    radius * (0.42 + 0.16 * clamp((available - 320) / 480, 0, 1));
+    radius * (0.52 + 0.1 * clamp((available - 320) / 480, 0, 1));
   const labelRadius = innerRadius + (radius - innerRadius) * 0.52;
   const width = actionTargetWidth(available);
   const measure = viewport.measure || (() => 52);
@@ -144,17 +173,58 @@ export function boundedArtwork({
   baseWidth,
   baseHeight,
   zoom,
+  minZoom = 1,
+  centerX = width / 2,
+  centerY = height / 2,
   x = 0,
   y = 0,
 }) {
-  const scale = clamp(zoom, 1, 6),
+  const scale = clamp(zoom, minZoom, 6),
     limitX = Math.max(0, (baseWidth * scale - width) / 2),
     limitY = Math.max(0, (baseHeight * scale - height) / 2);
+  const minX = width - (baseWidth * scale) / 2 - centerX;
+  const maxX = (baseWidth * scale) / 2 - centerX;
+  const minY = height - (baseHeight * scale) / 2 - centerY;
+  const maxY = (baseHeight * scale) / 2 - centerY;
+  const restX = clamp(
+    0,
+    (baseWidth * scale) / 2 - centerX,
+    width - (baseWidth * scale) / 2 - centerX,
+  );
+  const restY = clamp(
+    0,
+    (baseHeight * scale) / 2 - centerY,
+    height - (baseHeight * scale) / 2 - centerY,
+  );
   return {
     zoom: scale,
-    x: limitX ? clamp(x, -limitX, limitX) : 0,
-    y: limitY ? clamp(y, -limitY, limitY) : 0,
+    x: limitX ? clamp(x, minX, maxX) : restX,
+    y: limitY ? clamp(y, minY, maxY) : restY,
     limitX,
     limitY,
+    minX: limitX ? minX : restX,
+    maxX: limitX ? maxX : restX,
+    minY: limitY ? minY : restY,
+    maxY: limitY ? maxY : restY,
+  };
+}
+
+// Move the presentation once into the clamped wheel. Scale only when labels
+// would cover it; pointer and ghost geometry continue to use the source tile.
+export function wheelPickupSize(layout, bounds) {
+  let scale = 1;
+  for (const target of layout.targets) {
+    const x =
+      (Math.abs(target.x - layout.center.x) - target.width / 2 - 8) /
+      (bounds.width / 2);
+    const y =
+      (Math.abs(target.y - layout.center.y) - target.height / 2 - 8) /
+      (bounds.height / 2);
+    scale = Math.min(scale, Math.max(x, y));
+  }
+  return {
+    width: bounds.width * Math.max(0.1, scale),
+    height: bounds.height * Math.max(0.1, scale),
+    scale: Math.max(0.1, scale),
   };
 }

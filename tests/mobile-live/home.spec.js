@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+import { expectInspectorFit } from "../helpers/artwork-fit.js";
 test("LIVE-10 home opens real recent cards/decks/tags across reload without changing ownership", async ({
   page,
   request,
@@ -47,7 +48,7 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
     await page.locator("#collection-nav").tap();
     await expect(page.locator(".card")).toHaveCount(before.length);
     await page.locator(".card-open").first().tap();
-    await expect(page.locator(".artwork-viewer output")).toHaveText("300%");
+    await expectInspectorFit(page);
     await page.locator('[data-artwork="details"]').tap();
     await expect(page.locator("#detail")).toBeVisible();
     await expect(page.locator("#inventory-form")).toBeVisible({
@@ -96,7 +97,7 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
       page.getByRole("region", { name: "Recent tags" }),
     ).toContainText(label);
     await page.locator(".home-card").tap();
-    await expect(page.locator(".artwork-viewer output")).toHaveText("300%");
+    await expectInspectorFit(page);
     await page.locator('[data-artwork="details"]').tap();
     await expect(page.locator("#detail")).toBeVisible();
     await expect(page.locator("#inventory-form")).toBeVisible({
