@@ -179,7 +179,9 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   await page
     .locator(".card")
     .filter({ has: page.locator(".allocation-warning") })
+    .locator(".card-open")
     .click();
+  await page.locator('[data-artwork="details"]').click();
   await page.locator("#quantity").fill("1");
   await page.getByRole("button", { name: "Save quantity" }).click();
   await expect(page.locator(".card .allocation-warning")).toHaveText(
@@ -192,7 +194,9 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   await page
     .locator(".card")
     .filter({ has: page.locator(".allocation-warning") })
+    .locator(".card-open")
     .click();
+  await page.locator('[data-artwork="details"]').click();
   await page.locator("#edit-card-tags").click();
   await page.getByRole("button", { name: "Remove location 1" }).click();
   await page.getByLabel("Copies at location 1").fill("1");
@@ -292,10 +296,13 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   await expect(page.locator("#result-count")).toHaveText(
     "2 assigned copies · 1 distinct entry",
   );
-  await expect(page.locator(".card-bottom b")).toHaveText("2 assigned here");
-  await expect(page.locator(".owned-caption")).toHaveText(
-    "3 owned across collection",
+  await expect(page.locator(".card-open")).toHaveAccessibleName(
+    /3 owned, 2 assigned here/,
   );
+  await expect(page.locator(".card-hover-info")).toContainText(
+    "3 owned · 2 assigned here",
+  );
+  await expect(page.locator(".card-bottom")).toHaveCount(0);
   await expect(page.locator("#detail")).not.toBeVisible();
   await page.locator(".card-open").click();
   await page.locator('[data-artwork="details"]').click();
