@@ -66,6 +66,9 @@ export function createCardGestures({
   }
   function cancel({ focus = true } = {}) {
     const held = Boolean(active || candidate || preparing);
+    const origin = active?.element || preparing?.element || candidate?.element;
+    const originKey = origin?.closest("[data-card-key]")?.dataset.cardKey;
+    const originContainer = origin?.closest("[data-card-key]")?.parentElement;
     openingGeneration++;
     preparing?.element.removeAttribute("aria-busy");
     preparing = null;
@@ -73,7 +76,6 @@ export function createCardGestures({
     timer = 0;
     cancelAnimationFrame(frame);
     frame = 0;
-    const origin = active?.element;
     active?.surface.destroy?.();
     candidate?.element.classList.remove("card-pickup");
     active?.element.classList.remove("card-pickup", "card-wheel-source");
@@ -85,7 +87,21 @@ export function createCardGestures({
     ghost.removeAttribute("src");
     document.body.classList.remove("card-dragging");
     if (focus && origin?.isConnected) origin.focus({ preventScroll: true });
-    if (held) setTimeout(onSettled, 0);
+    if (held)
+      setTimeout(() => {
+        onSettled();
+        if (
+          !focus ||
+          !originKey ||
+          origin?.isConnected ||
+          document.activeElement !== document.body ||
+          document.querySelector("dialog[open]")
+        )
+          return;
+        originContainer
+          ?.querySelector(`[data-card-key="${CSS.escape(originKey)}"] button`)
+          ?.focus({ preventScroll: true });
+      }, 0);
   }
   function choices(item) {
     const assigned = assignedTagIds(item);
@@ -339,6 +355,25 @@ export function createCardGestures({
     onAction(item, tag, element);
   }
   function openMore(item, element, all) {
+    const key = element.closest("[data-card-key]")?.dataset.cardKey;
+    const container = element.closest("[data-card-key]")?.parentElement;
+    const currentSource = () =>
+      element.isConnected
+        ? element
+        : key
+          ? container?.querySelector(
+              `[data-card-key="${CSS.escape(key)}"] button`,
+            )
+          : null;
+    function apply(tag) {
+      const target = currentSource();
+      more.close();
+      if (target) onAction(item, tag, target);
+    }
+    more.onclose = () => {
+      if (!document.querySelector("dialog[open]"))
+        currentSource()?.focus({ preventScroll: true });
+    };
     more.replaceChildren();
     const title = document.createElement("h2");
     title.textContent = "Choose a tag";
@@ -363,10 +398,7 @@ export function createCardGestures({
       for (const tag of filtered.slice(offset, offset + 20)) {
         const button = document.createElement("button");
         button.textContent = tag.label;
-        button.onclick = () => {
-          more.close();
-          if (element.isConnected) onAction(item, tag, element);
-        };
+        button.onclick = () => apply(tag);
         list.append(button);
       }
       next.hidden = offset + 20 >= filtered.length;
@@ -386,10 +418,7 @@ export function createCardGestures({
     for (const tag of all.filter((tag) => tag.action)) {
       const button = document.createElement("button");
       button.textContent = tag.label;
-      button.onclick = () => {
-        more.close();
-        if (element.isConnected) onAction(item, tag, element);
-      };
+      button.onclick = () => apply(tag);
       actions.append(button);
     }
     more.append(title, actions, input, list, next, close);
@@ -800,7 +829,7 @@ export function createCardGestures({
   });
   return {
     get holding() {
-      return Boolean(active || candidate);
+      return Boolean(active || candidate || preparing);
     },
     cancel: leave,
     open: (item, element) => {

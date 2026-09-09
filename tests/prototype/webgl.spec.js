@@ -12,7 +12,9 @@ test("UC-CARD-WEBGL unsupported context keeps accessible SVG actions and selecti
   await page.goto("/?renderer=webgl");
   await page.locator("#grid .card-open").first().press("Shift+F10");
   await expect(page.locator("#renderer-status")).toContainText("unavailable");
-  await page.getByRole("menuitem", { name: "Card Draw", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "Remove Card Draw", exact: true })
+    .click();
   await expect(page.locator("#prototype-status")).toContainText(
     "Card Draw selected",
   );
@@ -23,6 +25,7 @@ test("UC-CARD-WEBGL actual context renders, keeps fixed targets and falls back o
 }) => {
   await page.goto("/?renderer=webgl");
   await page.locator("#grid .card-open").first().press("Shift+F10");
+  await expect(page.locator(".card-action-layer")).toBeVisible();
   const status = await page.evaluate(() => window.prototypeRenderer);
   test.skip(
     status.renderer !== "webgl",
@@ -64,7 +67,9 @@ test("UC-CARD-WEBGL actual context renders, keeps fixed targets and falls back o
     "opacity",
     "1",
   );
-  await page.getByRole("menuitem", { name: "Card Draw", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "Remove Card Draw", exact: true })
+    .click();
   await expect(page.locator("#prototype-status")).toContainText(
     "Card Draw selected",
   );

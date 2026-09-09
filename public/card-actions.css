@@ -901,7 +901,13 @@
   padding: 9px 12px;
   border: 1px dashed #e8f5e7a0;
   border-radius: 16px;
-  background: #193a2b55;
+  background-color: #193a2b40;
+  background-image: radial-gradient(
+    circle at var(--glass-x, 35%) var(--glass-y, 25%),
+    #e7ffe329,
+    transparent 75%
+  );
+  transition: transform 180ms cubic-bezier(0.2, 1.6, 0.3, 1);
   color: #fff;
   backdrop-filter: blur(8px) saturate(1.12);
   -webkit-backdrop-filter: blur(8px) saturate(1.12);
@@ -920,7 +926,7 @@
 .card-tag-toggle[aria-pressed="true"] {
   border-style: solid;
   border-color: #eaffd7;
-  background: #afc69b33;
+  background-color: #afc69b33;
   font-weight: 700;
 }
 .card-tag-selected {
@@ -931,7 +937,7 @@
   display: inline;
 }
 .card-tag-toggle:hover {
-  background: #a7c8b347;
+  background-color: #a7c8b347;
 }
 .card-tag-toggle:focus-visible {
   outline: 2px solid #fff0ab;
@@ -967,5 +973,10 @@
   }
   .card-tag-toggle[aria-pressed="true"] {
     background: #426b4ce8;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card-tag-toggle {
+    transition: none;
   }
 }

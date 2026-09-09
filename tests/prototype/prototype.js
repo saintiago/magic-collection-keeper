@@ -41,17 +41,25 @@ let mode = "deck",
   gestures;
 const status = document.querySelector("#prototype-status");
 const viewer = createArtworkViewer({
-  onDetails: () =>
-    (status.textContent =
-      "Prototype: Card details selected. No account or API is connected."),
-  onEdit: () =>
-    (status.textContent =
-      "Prototype: tag editing selected. No account or API is connected."),
-  onTag: (tag) => (status.textContent = `Prototype tag: ${tag.label}`),
-  onQuantity: async (item, quantity) => {
-    item.row.quantity = quantity;
-    status.textContent = "Sample quantity updated in memory only.";
-    return item.row;
+  tags: () => tags,
+  onToggle: async (item, tag, selected, quantity) => {
+    if (tag.type === "location") {
+      item.row.locations = (item.row.locations || []).filter(
+        (entry) => entry.tag_id !== tag.id,
+      );
+      if (selected) item.row.locations.push({ tag_id: tag.id, quantity, tag });
+    } else {
+      item.row.tag_ids = (item.row.tag_ids || []).filter((id) => id !== tag.id);
+      item.row.tags = (item.row.tags || []).filter(
+        (entry) => entry.id !== tag.id,
+      );
+      if (selected) {
+        item.row.tag_ids.push(tag.id);
+        item.row.tags.push(tag);
+      }
+    }
+    status.textContent =
+      "Prototype tag updated in memory only. No account or API is connected.";
   },
 });
 function resolve(target) {

@@ -171,7 +171,16 @@ export function createCardActions({
     tags: () => getState().filterTags,
     recent: () => home.recentTags,
     viewer: artworkViewer,
-    prepare: (item) => tagActions.load(item),
+    prepare: async (item) => {
+      const settled = await cardActionSave.whenSettled();
+      if (item.kind === "owned" && settled?.intent.kind === "owned") {
+        const row = settled.result.find(
+          (row) => String(row.id) === String(item.row.id),
+        );
+        if (row) item.row = row;
+      }
+      return tagActions.load(item);
+    },
     onError: (error) => notify(error.message, true),
     onAction: handleCardAction,
     onSettled,

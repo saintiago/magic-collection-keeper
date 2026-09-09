@@ -12,7 +12,8 @@ export function createCardActionSave({
   let key = null,
     pending = null,
     busy = false,
-    generation = 0;
+    generation = 0,
+    completion = null;
   const status = document.createElement("aside");
   status.className = "card-action-status";
   status.hidden = true;
@@ -44,6 +45,11 @@ export function createCardActionSave({
     const turn = generation,
       intent = pending,
       view = currentView();
+    let finish,
+      settledOutcome = null;
+    completion = new Promise((resolve) => {
+      finish = resolve;
+    });
     busy = true;
     if (!intent.inline) show("Saving card action…");
     try {
@@ -56,6 +62,7 @@ export function createCardActionSave({
         { method: "POST", body: JSON.stringify(intent.payload) },
       );
       if (turn !== generation) return { cancelled: true };
+      settledOutcome = { result, intent };
       sessionStorage.removeItem(key);
       pending = null;
       try {
@@ -115,9 +122,13 @@ export function createCardActionSave({
         busy = false;
         status.querySelector("button")?.removeAttribute("disabled");
       }
+      finish(turn === generation ? settledOutcome : null);
     }
   }
   return {
+    whenSettled() {
+      return busy ? completion : Promise.resolve(null);
+    },
     start(account) {
       const next = "keeper-card-action-v1:" + account;
       if (key === next) return;

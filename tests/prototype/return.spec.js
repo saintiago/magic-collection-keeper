@@ -115,7 +115,8 @@ test("CARD-10 a zoomed card returns to its replaced, scrolled source; repeated c
   await tile.scrollIntoViewIfNeeded();
   await tile.click();
   await expectInspectorFit(page);
-  await page.getByLabel("Zoom in", { exact: true }).click();
+  await page.locator(".artwork-full-image").hover();
+  await page.mouse.wheel(0, -200);
   await recordReturn(page, { replace: true, scroll: true });
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");

@@ -25,13 +25,10 @@ for (const viewport of [
       const tile = page.locator("#grid .card-open").first();
       await tile.tap();
       await expectInspectorFit(page);
-      await expect(page.locator(".artwork-details")).not.toContainText(
-        "Animation Module",
-      );
-      await expect(page.locator(".artwork-details")).not.toContainText("194");
-      await expect(page.locator(".artwork-details .tag-badge")).toHaveText(
-        "Elesh Norn Artifacts",
-      );
+      await expect(
+        page.locator(".artwork-details,.artwork-controls"),
+      ).toHaveCount(0);
+      await expect(page.locator(".artwork-touch-wheel")).toBeVisible();
       await expect(page.locator(".artwork-full-image")).toHaveAttribute(
         "alt",
         "Animation Module",
@@ -43,7 +40,9 @@ for (const viewport of [
       await expectInspectorFit(page);
       await page.setViewportSize({ ...viewport, height: viewport.height - 40 });
       await expectInspectorFit(page);
-      await page.getByLabel("Zoom in", { exact: true }).tap();
+      await page
+        .locator(".artwork-full-image")
+        .dispatchEvent("wheel", { deltaY: -200, bubbles: true });
       const input = page.locator(".artwork-viewport");
       const viewportBox = await input.boundingBox();
       expect(viewportBox.x).toBeGreaterThanOrEqual(36);
@@ -137,14 +136,18 @@ for (const outcome of ["ready", "failed", "delayed"]) {
     }
     await tile.press("Enter");
     await expectInspectorFit(page);
-    await expect(page.getByLabel("Edit locations & tags")).toBeVisible();
-    await expect(page.getByLabel("Close artwork")).toHaveText("×");
+    await expect(
+      page.locator(".artwork-tags .card-tag-toggle").first(),
+    ).toBeVisible();
+    await expect(page.getByLabel("Close artwork")).toHaveCount(0);
     expect(requests.length).toBeLessThanOrEqual(4);
     expect(
       requests.every((url) => new URL(url).origin === "http://127.0.0.1:3120"),
     ).toBe(true);
     await page.keyboard.press("Escape");
+    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
     await tile.press("Shift+F10");
+    await expect(layer).toBeVisible();
     expect(
       await layer.evaluate((el) => el.style.getPropertyValue("--wheel-font")),
     ).toContain(outcome === "failed" ? "Arial" : "Inter");
@@ -158,9 +161,9 @@ test("UC-CARD-ART directional glass light and press spring preserve inspector fi
   await page.goto("/?card=animation-module");
   await page.locator("#grid .card-open").first().click();
   await expectInspectorFit(page);
-  const edit = page.getByLabel("Edit locations & tags");
+  const edit = page.locator(".artwork-tags .card-tag-toggle").first();
   const bounds = await edit.boundingBox();
-  await page.mouse.move(bounds.x + 4, bounds.y + 4);
+  await page.mouse.move(bounds.x + 8, bounds.y + 8);
   await expect(edit).toHaveAttribute("data-lit", "");
   await expect
     .poll(() =>
@@ -171,8 +174,8 @@ test("UC-CARD-ART directional glass light and press spring preserve inspector fi
     (el) => getComputedStyle(el).backgroundImage,
   );
   await page.mouse.move(
-    bounds.x + bounds.width - 4,
-    bounds.y + bounds.height - 4,
+    bounds.x + bounds.width - 8,
+    bounds.y + bounds.height - 8,
     { steps: 8 },
   );
   await expect
@@ -184,7 +187,7 @@ test("UC-CARD-ART directional glass light and press spring preserve inspector fi
     await edit.evaluate((el) => getComputedStyle(el).backgroundImage),
   ).not.toBe(first);
   expect(await edit.boundingBox()).toEqual(bounds);
-  const reset = page.getByLabel("Reset zoom", { exact: true });
+  const reset = edit;
   await reset.hover();
   await page.mouse.down();
   await expect(reset).not.toHaveCSS("transform", "none");
