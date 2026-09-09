@@ -13,9 +13,9 @@ export function assignedTagIds(item) {
 export function relevantCardTags(item, available, recent = []) {
   const all = new Map(
     [
-      ...available,
       ...(item.row?.tags || []),
       ...(item.row?.locations || []).map((entry) => entry.tag).filter(Boolean),
+      ...available,
     ].map((tag) => [tag.id, tag]),
   );
   return rankActionTags(
@@ -43,10 +43,12 @@ export function createCardTagState(item, { available, recent, load, toggle }) {
   let tags = relevantCardTags(item, available(), recent()),
     confirmed = assignedTagIds(item),
     desired = new Map(),
+    revisions = new Map(),
     errors = new Map(),
     busy = null,
     loading = true,
-    loadError = "";
+    loadError = "",
+    loadGeneration = 0;
   const publish = () => listeners.forEach((listener) => listener());
   async function drain() {
     if (busy || loading || loadError) return;
@@ -55,6 +57,7 @@ export function createCardTagState(item, { available, recent, load, toggle }) {
     );
     if (!next) return;
     const [id, value] = next,
+      revision = revisions.get(id),
       tag = tags.find((tag) => tag.id === id);
     if (!tag) {
       desired.delete(id);
@@ -68,9 +71,15 @@ export function createCardTagState(item, { available, recent, load, toggle }) {
       confirmed = assignedTagIds(item);
       for (const entry of item.row?.locations || [])
         quantities.set(entry.tag_id, entry.quantity);
-      if (desired.get(id) === confirmed.has(id)) desired.delete(id);
+      // A replay returns current server state, which may already supersede this
+      // operation. Only a newer deliberate click can request another write.
+      if (
+        revisions.get(id) === revision ||
+        desired.get(id) === confirmed.has(id)
+      )
+        desired.delete(id);
     } catch (error) {
-      desired.clear();
+      desired.delete(id);
       errors.set(
         id,
         error.name === "AbortError"
@@ -84,19 +93,24 @@ export function createCardTagState(item, { available, recent, load, toggle }) {
     }
   }
   async function prepare() {
+    const generation = ++loadGeneration;
     loading = true;
     loadError = "";
     publish();
     try {
-      tags = relevantCardTags(item, await load(item), recent());
+      const availableTags = await load(item);
+      if (generation !== loadGeneration) return;
+      tags = relevantCardTags(item, availableTags, recent());
       confirmed = assignedTagIds(item);
       for (const entry of item.row?.locations || [])
         quantities.set(entry.tag_id, entry.quantity);
     } catch (error) {
-      loadError = error.message;
+      if (generation === loadGeneration) loadError = error.message;
     } finally {
-      loading = false;
-      publish();
+      if (generation === loadGeneration) {
+        loading = false;
+        publish();
+      }
     }
   }
   void prepare();
@@ -109,8 +123,17 @@ export function createCardTagState(item, { available, recent, load, toggle }) {
     get view() {
       return { tags, confirmed, desired, errors, busy, loading, loadError };
     },
+    reconcile(tagId) {
+      confirmed = assignedTagIds(item);
+      tags = relevantCardTags(item, available(), recent());
+      for (const entry of item.row?.locations || [])
+        quantities.set(entry.tag_id, entry.quantity);
+      if (tagId) errors.delete(tagId);
+      publish();
+    },
     select(id) {
       if (loading || loadError || !tags.some((tag) => tag.id === id)) return;
+      revisions.set(id, (revisions.get(id) || 0) + 1);
       desired.set(id, !(desired.has(id) ? desired.get(id) : confirmed.has(id)));
       errors.delete(id);
       publish();

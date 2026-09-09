@@ -56,6 +56,8 @@ Each release contains a bounded ZIP of the exact committed public source tree. T
 
 The composition roots are `server.js` (local HTTP + SQLite) and `cloud.mjs` (API Gateway + Lambda). Both create the same application service. Dependency direction is **transport → application → domain**. Adapters implement plain object ports supplied by the composition root. Domain and application code import no browser, AWS, or Scryfall SDK.
 
+The in-progress shared card tag controls separate per-card state (`card-tag-state.js`), DOM controls (`card-tag-view.js`) and browser I/O (`card-tag-actions.js`). The account-scoped save journal retains exact uncertain operations across reload; discovering a staged catalogue row as pending does not replace its original retry payload. Bounded catalogue references store identities, while server reads determine current pending state. Save results reconcile active artwork tags and the hidden source tile after collection rendering. This branch's local tag tests do not imply deployed delivery; touch/radial integration remains in progress.
+
 ## Modules and contracts
 
 | Module                                    | Responsibility / replacement contract                                                                                                       |

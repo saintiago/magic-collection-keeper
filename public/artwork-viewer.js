@@ -32,6 +32,7 @@ export function createArtworkViewer({
     selection = null,
     origin = null,
     originKey = null,
+    originContainer = null,
     historyKey = null,
     afterClose = null,
     frame = 0,
@@ -89,6 +90,11 @@ export function createArtworkViewer({
     preview.hidden = false;
     found.element.classList.add("artwork-source-lifted");
     previewSource = found;
+    previewSource.container = found.element.closest(
+      "#grid,#home-page,#import-page,.detail-artwork",
+    );
+    previewSource.sourceKey =
+      found.element.closest("[data-card-key]")?.dataset.cardKey;
     unmountPreviewTags = mountCardTags(
       preview.querySelector(".artwork-preview-tags"),
       tagState(found.item),
@@ -142,13 +148,7 @@ export function createArtworkViewer({
     rect = null;
     selection = null;
     historyKey = null;
-    const focus = origin?.isConnected
-      ? origin
-      : originKey
-        ? document.querySelector(
-            `[data-card-key="${CSS.escape(originKey)}"] button`,
-          )
-        : null;
+    const focus = sourceElement();
     focus?.focus({ preventScroll: true });
     const next = afterClose;
     afterClose = null;
@@ -159,7 +159,7 @@ export function createArtworkViewer({
     return origin?.isConnected
       ? origin
       : originKey
-        ? document.querySelector(
+        ? originContainer?.querySelector(
             `[data-card-key="${CSS.escape(originKey)}"] button`,
           )
         : null;
@@ -480,6 +480,64 @@ export function createArtworkViewer({
     finish();
   });
   return {
+    reconcile(result, intent) {
+      for (const item of new Set([selection, previewSource?.item])) {
+        if (!item) continue;
+        if (intent.kind === "owned") {
+          if (
+            item.kind !== "owned" ||
+            String(item.row.id) !== intent.payload.inventory_id
+          )
+            continue;
+          const row = result.find(
+            (row) => String(row.id) === intent.payload.inventory_id,
+          );
+          if (!row) continue;
+          item.row = row;
+        } else {
+          const draft = result.draft;
+          if (!draft || (item.draftId && item.draftId !== draft.id)) continue;
+          const rowId =
+            intent.kind === "catalog"
+              ? intent.payload.rows?.[0]?.id
+              : intent.payload.row_id;
+          const row = draft.rows.find(
+            (row) => row.id === rowId && row.printing_id === item.card.id,
+          );
+          if (!row || item.kind === "owned") continue;
+          item.kind = "pending";
+          item.row = row;
+          item.draftId = draft.id;
+          item.draftKind =
+            draft.provider === "reviewed-capture" ? "capture" : "url";
+          item.sourceId = draft.source_id;
+        }
+        item.tagState?.reconcile(intent.tag);
+      }
+      // Collection replacement can replace the hidden tile during a save.
+      // Keep the replacement hidden until the lifted image returns to it.
+      if (dialog.open) {
+        const target = sourceElement();
+        if (returningSource !== target) {
+          returningSource?.classList.remove("artwork-source-lifted");
+          returningSource = target;
+          target?.classList.add("artwork-source-lifted");
+        }
+      }
+      if (
+        previewSource &&
+        !previewSource.element.isConnected &&
+        previewSource.sourceKey
+      ) {
+        const target = previewSource.container?.querySelector(
+          `[data-card-key="${CSS.escape(previewSource.sourceKey)}"] button`,
+        );
+        if (target) {
+          previewSource.element = target;
+          target.classList.add("artwork-source-lifted");
+        } else hidePreview();
+      }
+    },
     hover,
     setHoverTilt,
     previewBounds: (element) =>
@@ -514,6 +572,9 @@ export function createArtworkViewer({
       origin = element;
       origin.classList.add("artwork-source-lifted");
       originKey = element.closest("[data-card-key]")?.dataset.cardKey || null;
+      originContainer = element.closest(
+        "#grid,#home-page,#import-page,.detail-artwork",
+      );
       state = {
         sourceBounds: bounds.toJSON(),
         baseWidth: bounds.width,

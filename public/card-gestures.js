@@ -714,7 +714,12 @@ export function createCardGestures({
   window.addEventListener(
     "scroll",
     (event) => {
-      if (event.target.closest?.(".card-hover-info")) return;
+      if (
+        event.target.closest?.(
+          ".card-hover-info,.artwork-preview-tags,.artwork-tags,.card-action-more",
+        )
+      )
+        return;
       clearHover();
       if (!active && candidate) cancel({ focus: false });
     },

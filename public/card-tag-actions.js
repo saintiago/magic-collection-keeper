@@ -5,7 +5,7 @@ export function createCardTagActions({ api, save, tags }) {
     generation = 0,
     refs = [],
     storageError = "";
-  function remember(ref) {
+  function remember(ref, saved = false) {
     const next = [
       ref,
       ...refs.filter((entry) => entry.printingId !== ref.printingId),
@@ -16,7 +16,9 @@ export function createCardTagActions({ api, save, tags }) {
       sessionStorage.setItem(key, JSON.stringify(next));
     } catch {
       throw Error(
-        "This browser could not protect the pending selection. No new capture was staged.",
+        saved
+          ? "Your tag was saved, but this browser could not remember the pending review. Open Import to continue."
+          : "This browser could not protect the pending selection. No new capture was staged.",
       );
     }
     refs = next;
@@ -31,13 +33,8 @@ export function createCardTagActions({ api, save, tags }) {
   }
   function decorate(item) {
     if (!["catalog", "reference"].includes(item.kind)) return item;
-    const ref = refs.find((ref) => ref.printingId === item.card.id && ref.row);
-    if (ref)
-      pendingItem(
-        item,
-        { id: ref.draftId, provider: "reviewed-capture" },
-        structuredClone(ref.row),
-      );
+    // Stored references locate a server review; cached row contents are never
+    // rendered or treated as evidence that the review is still pending.
     return item;
   }
   return {
@@ -48,20 +45,26 @@ export function createCardTagActions({ api, save, tags }) {
       storageError = "";
       try {
         const raw = sessionStorage.getItem(key);
-        const parsed = raw && raw.length < 250000 ? JSON.parse(raw) : [];
+        if (raw && raw.length >= 250000)
+          throw Error("Pending references too large");
+        const parsed = raw ? JSON.parse(raw) : [];
         if (
           !Array.isArray(parsed) ||
           parsed.length > 50 ||
           parsed.some(
             (ref) =>
               !ref ||
-              typeof ref.printingId !== "string" ||
-              typeof ref.draftId !== "string" ||
-              typeof ref.rowId !== "string",
+              !validId(ref.printingId) ||
+              !validId(ref.draftId) ||
+              !validId(ref.rowId),
           )
         )
           throw Error("Invalid pending references");
-        refs = parsed;
+        refs = parsed.map(({ printingId, draftId, rowId }) => ({
+          printingId,
+          draftId,
+          rowId,
+        }));
       } catch {
         key = null;
         storageError =
@@ -81,9 +84,15 @@ export function createCardTagActions({ api, save, tags }) {
         throw new DOMException("Account changed", "AbortError");
       const ref = refs.find((ref) => ref.printingId === item.card.id);
       if (ref && (!item.draftId || item.draftId === ref.draftId)) {
-        const result = await api(
-          "/api/import-draft?" + new URLSearchParams({ id: ref.draftId }),
-        );
+        let result;
+        try {
+          result = await api(
+            "/api/import-draft?" + new URLSearchParams({ id: ref.draftId }),
+          );
+        } catch (error) {
+          if (error.status !== 404) throw error;
+          result = { draft: null };
+        }
         if (turn !== generation)
           throw new DOMException("Account changed", "AbortError");
         const row = result.draft?.rows.find((row) => row.id === ref.rowId);
@@ -94,6 +103,9 @@ export function createCardTagActions({ api, save, tags }) {
             item.kind = "catalog";
             item.row = { card: item.card };
             delete item.draftId;
+            delete item.draftKind;
+            delete item.sourceId;
+            delete item.sourceTagId;
           }
           if (key) sessionStorage.setItem(key, JSON.stringify(refs));
         }
@@ -105,6 +117,7 @@ export function createCardTagActions({ api, save, tags }) {
     },
     async toggle(item, tag, selected, quantity = 1) {
       const turn = generation;
+      if (["catalog", "reference"].includes(item.kind)) await this.load(item);
       let intent;
       if (item.kind === "owned")
         intent = {
@@ -153,9 +166,7 @@ export function createCardTagActions({ api, save, tags }) {
               "This printing could not be verified. Open its card page.",
             );
         }
-        const prior = refs.find(
-          (ref) => ref.printingId === card.id && !ref.row,
-        );
+        const prior = refs.find((ref) => ref.printingId === card.id);
         const ref = prior || {
           printingId: card.id,
           draftId: crypto.randomUUID(),
@@ -218,12 +229,14 @@ export function createCardTagActions({ api, save, tags }) {
               ref.draftId === result.draft.id,
           )
         )
-          remember({
-            printingId: item.card.id,
-            draftId: result.draft.id,
-            rowId: row.id,
-            row,
-          });
+          remember(
+            {
+              printingId: item.card.id,
+              draftId: result.draft.id,
+              rowId: row.id,
+            },
+            true,
+          );
       }
       item.sourceTagId = tags().find(
         (entry) => entry.source?.id && entry.source.id === item.sourceId,
@@ -231,4 +244,13 @@ export function createCardTagActions({ api, save, tags }) {
       return item;
     },
   };
+}
+
+function validId(value) {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+  );
 }

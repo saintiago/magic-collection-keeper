@@ -27,6 +27,7 @@ export function createCardActions({
     onOwned: (rows) => onOwned(rows),
     onPending: (id) => onPending(id),
     onDraft: (result) => importPage.receiveDraft?.(result),
+    onSaved: (result, intent) => artworkViewer.reconcile(result, intent),
     onUsed: (id) => home.tag(id),
     notify,
   });

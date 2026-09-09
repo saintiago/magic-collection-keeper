@@ -4,6 +4,7 @@ export function createCardActionSave({
   onOwned,
   onPending,
   onDraft = () => {},
+  onSaved = () => {},
   onUsed,
   notify,
   currentView,
@@ -65,6 +66,7 @@ export function createCardActionSave({
             onPending(result.draft.id);
         }
         if (intent.tag) onUsed(intent.tag);
+        onSaved(result, intent);
       } catch {
         show(
           "Your card action was saved. Refresh to see the updated collection or pending review.",
@@ -168,7 +170,7 @@ export function createCardActionSave({
           !busy &&
           intent.inline &&
           pending.inline &&
-          intent.itemKey === pending.itemKey &&
+          sameInlineTarget(intent, pending) &&
           intent.tag === pending.tag
         )
           return run();
@@ -192,4 +194,18 @@ export function createCardActionSave({
       return run();
     },
   };
+}
+
+// Loading a committed catalogue review after a lost response changes its local
+// descriptor to pending. Its original stage receipt must still be retried.
+function sameInlineTarget(next, saved) {
+  if (typeof next.itemKey === "string" && next.itemKey === saved.itemKey)
+    return true;
+  return (
+    saved.kind === "catalog" &&
+    next.kind === "pending" &&
+    saved.payload.id === next.payload.id &&
+    saved.payload.rows?.length === 1 &&
+    saved.payload.rows[0].id === next.payload.row_id
+  );
 }
