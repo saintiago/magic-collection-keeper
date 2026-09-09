@@ -11,10 +11,12 @@ const server = createServer(async (request, response) => {
     "wheel-webgl.js",
     "prototype.css",
     "cards.json",
+    "animation-module.json",
   ].includes(name);
   if (
     request.method !== "GET" ||
-    (!local && !/^[a-z0-9-]+\.(js|css)$/.test(name))
+    (!local &&
+      !/^(?:[a-z0-9-]+\.(?:js|css)|fonts\/[a-z0-9-]+\.woff2)$/.test(name))
   ) {
     response.writeHead(404);
     response.end("Local prototype: no API or account access");
@@ -23,13 +25,15 @@ const server = createServer(async (request, response) => {
   try {
     const body = await readFile(new URL(name, local ? root : publicRoot));
     response.writeHead(200, {
-      "Content-Type": name.endsWith(".js")
-        ? "text/javascript"
-        : name.endsWith(".css")
-          ? "text/css"
-          : name.endsWith(".json")
-            ? "application/json"
-            : "text/html",
+      "Content-Type": name.endsWith(".woff2")
+        ? "font/woff2"
+        : name.endsWith(".js")
+          ? "text/javascript"
+          : name.endsWith(".css")
+            ? "text/css"
+            : name.endsWith(".json")
+              ? "application/json"
+              : "text/html",
       "Cache-Control": "no-store",
       "Content-Security-Policy":
         "default-src 'self'; img-src 'self' blob: data: https://cards.scryfall.io; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'",

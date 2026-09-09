@@ -150,9 +150,9 @@ test("UC-32 actual card opens and tag visits order recent activity, persist and 
   }
   await page.locator("#home-nav").click();
   await expect(page.locator(".home-card")).toHaveCount(2);
-  await expect(page.locator(".home-card").first()).toContainText(
-    "Lightning Bolt",
-  );
+  await expect(
+    page.locator(".home-card").first().locator("button"),
+  ).toHaveAccessibleName(/^Open Lightning Bolt artwork/);
   await page
     .getByRole("region", { name: "Your decks" })
     .locator('[data-tag-id="deck-0"]')
@@ -172,14 +172,16 @@ test("UC-32 actual card opens and tag visits order recent activity, persist and 
   await expect(page.getByRole("region", { name: "Recent tags" })).toContainText(
     "Deck role",
   );
-  await expect(page.locator(".home-card").first()).toContainText(
-    "Lightning Bolt",
-  );
+  await expect(
+    page.locator(".home-card").first().locator("button"),
+  ).toHaveAccessibleName(/^Open Lightning Bolt artwork/);
   await page.locator(".home-card").last().tap();
   await page.locator('[data-artwork="details"]').click();
   await expect(page.locator("#detail h2")).toHaveText("Sol Ring");
   await page.locator("#close").click();
-  await expect(page.locator(".home-card").first()).toContainText("Sol Ring");
+  await expect(
+    page.locator(".home-card").first().locator("button"),
+  ).toHaveAccessibleName(/^Open Sol Ring artwork/);
   await page.locator("#clear-home-history").click();
   await page.reload();
   await expect(page.locator(".home-card")).toHaveCount(0);

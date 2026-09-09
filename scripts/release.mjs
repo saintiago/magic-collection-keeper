@@ -73,6 +73,9 @@ export async function packageWebsite({ source, destination, release }) {
       "<head>",
       `<head>\n    <meta name="keeper-release" content="${release.id}">`,
     )
-    .replace(/(href|src)="\/(?!\/)([^"?#]+\.(?:css|js))"/g, `$1="${prefix}$2"`);
+    .replace(
+      /(href|src)="\/(?!\/)([^"?#]+\.(?:css|js|woff2))"/g,
+      `$1="${prefix}$2"`,
+    );
   await writeFile(join(destination, "index.html"), html);
 }

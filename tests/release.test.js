@@ -51,13 +51,15 @@ test("UC-16 publishing new HTML retains old asset and metadata identity", async 
   await mkdir(source);
   await writeFile(
     join(source, "index.html"),
-    '<head><link href="/style.css"><script src="/app.js"></script></head>',
+    '<head><link href="/style.css"><link rel="preload" as="font" href="/fonts/inter-latin.woff2"><script src="/app.js"></script></head>',
   );
   await writeFile(
     join(source, "app.js"),
     'import {release} from "./release.js";',
   );
   await writeFile(join(source, "style.css"), "body{}");
+  await mkdir(join(source, "fonts"));
+  await writeFile(join(source, "fonts/inter-latin.woff2"), "font fixture");
   await mkdir(join(source, "vendor/ort"), { recursive: true });
   await writeFile(join(source, "vendor/ocr.js"), "retired runtime");
   await writeFile(join(source, "vendor/ort/ort.webgpu.min.mjs"), "retired GPU");
@@ -88,6 +90,14 @@ test("UC-16 publishing new HTML retains old asset and metadata identity", async 
   const oldIndex = await readFile(join(destination, "index.html"), "utf8");
   await packageWebsite({ source, destination, release: second });
   assert.match(oldIndex, /src="\/releases\/r19-a1\/app.js"/);
+  assert.match(oldIndex, /href="\/releases\/r19-a1\/fonts\/inter-latin.woff2"/);
+  assert.equal(
+    await readFile(
+      join(destination, "releases/r19-a1/fonts/inter-latin.woff2"),
+      "utf8",
+    ),
+    "font fixture",
+  );
   assert.match(
     await readFile(join(destination, "index.html"), "utf8"),
     /r20-a1\/style.css/,

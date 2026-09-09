@@ -31,8 +31,8 @@ void main(){
   float bulge=sin(PI*band)*sin(PI*local);
   vec2 radial=p/max(r,.001);
   vec2 tangent=vec2(-radial.y,radial.x);
-  float dr=cos(PI*band)*sin(PI*local)*.72;
-  float dt=sin(PI*band)*cos(PI*local)*.4;
+  float dr=cos(PI*band)*sin(PI*local)*.14;
+  float dt=sin(PI*band)*cos(PI*local)*.09;
   vec3 normal=normalize(vec3(-radial*dr-tangent*dt,1.0));
   vec3 light=normalize(vec3(lightPoint-p,1.35));
   float diffuse=max(dot(normal,light),0.0);
@@ -46,7 +46,7 @@ void main(){
   float innerRim=1.0-smoothstep(0.0,.04,band);
   float outerRim=smoothstep(.965,1.0,band);
   tint+=vec3(.43,.62,.52)*(innerRim*.11+outerRim*.15);
-  float alpha=(.22+.36*sqrt(max(bulge,0.0))+.16*strength+highlight*.10)*radialMask*angularMask;
+  float alpha=(.035+.065*bulge+.08*strength+highlight*.07+outerRim*.2)*radialMask*angularMask;
   gl_FragColor=vec4(tint,alpha);
 }`;
 

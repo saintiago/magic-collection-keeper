@@ -75,20 +75,32 @@ test("UC-02/03 collection filters, every sort, refresh success and failure", asy
   await expect(page.locator(".card")).toHaveCount(2);
   await page.locator("#search").fill("");
   await page.locator("#set-filter").selectOption("two");
-  await expect(page.locator(".card-title")).toHaveText("Beta");
+  await expect(page.locator(".card-open")).toHaveAccessibleName(
+    /^Open Beta printing/,
+  );
   await page.locator("#set-filter").selectOption("");
   await page.locator("#finish-filter").selectOption("nonfoil");
-  await expect(page.locator(".card-title")).toHaveText("Alpha");
+  await expect(page.locator(".card-open")).toHaveAccessibleName(
+    /^Open Alpha printing/,
+  );
   await page.locator("#finish-filter").selectOption("");
   await page.locator("#color").selectOption("C");
-  await expect(page.locator(".card-title")).toHaveText("Beta");
+  await expect(page.locator(".card-open")).toHaveAccessibleName(
+    /^Open Beta printing/,
+  );
   await page.locator("#color").selectOption("");
   await page.locator("#sort").selectOption("quantity");
-  await expect(page.locator(".card-title").first()).toHaveText("Beta");
+  await expect(page.locator(".card-open").first()).toHaveAccessibleName(
+    /^Open Beta printing/,
+  );
   await page.locator("#sort").selectOption("recent");
-  await expect(page.locator(".card-title").first()).toHaveText("Beta");
+  await expect(page.locator(".card-open").first()).toHaveAccessibleName(
+    /^Open Beta printing/,
+  );
   await page.locator("#sort").selectOption("name");
-  await expect(page.locator(".card-title").first()).toHaveText("Alpha");
+  await expect(page.locator(".card-open").first()).toHaveAccessibleName(
+    /^Open Alpha printing/,
+  );
   fail = true;
   await page.locator("#refresh").click();
   await expect(page.getByText("Offline test")).toBeVisible();
@@ -209,9 +221,14 @@ test("UC-08 missing camera and uploaded photo recognition failure", async ({
 }) => {
   await collection(page);
   await page.addInitScript(() => {
-    navigator.mediaDevices.getUserMedia = async () => {
-      throw new DOMException("None", "NotFoundError");
-    };
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => {
+          throw new DOMException("None", "NotFoundError");
+        },
+      },
+    });
   });
   await mockVisualReading(page, { failAlways: true });
   await page.goto("/#collection");

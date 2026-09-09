@@ -1,0 +1,30 @@
+[
+  {
+    "bytes": 14540,
+    "sha256": "8fc2606f8ae6c569f444e138dba052d9a6e3f0657f9031796503bbb94eced600",
+    "source": "https://fonts.gstatic.com/s/cinzel/v26/8vIJ7ww63mVu7gt7-GT7LEc.woff2",
+    "family": "Cinzel",
+    "file": "cinzel-latin-ext.woff2"
+  },
+  {
+    "bytes": 25904,
+    "sha256": "09941fb1c169c38fd414536b37690057fc01b3117a5c63dd6571186540c8f370",
+    "source": "https://fonts.gstatic.com/s/cinzel/v26/8vIJ7ww63mVu7gt79mT7.woff2",
+    "family": "Cinzel",
+    "file": "cinzel-latin.woff2"
+  },
+  {
+    "bytes": 85068,
+    "sha256": "34b9c504cab7a73e37b746343a449132e56cf7b5481af2cb81dc74dcff25c956",
+    "source": "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa25L7SUc.woff2",
+    "family": "Inter",
+    "file": "inter-latin-ext.woff2"
+  },
+  {
+    "bytes": 48256,
+    "sha256": "3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62",
+    "source": "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2",
+    "family": "Inter",
+    "file": "inter-latin.woff2"
+  }
+]

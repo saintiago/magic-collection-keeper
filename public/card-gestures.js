@@ -3,6 +3,7 @@ import {
   actionWheelHit,
   rankActionTags,
   actionTargetWidth,
+  wheelPickupSize,
 } from "./card-action-layout.js";
 import { pointerTilt, approachTilt, tiltTransform } from "./card-tilt.js";
 import { image } from "./view.js";
@@ -68,7 +69,7 @@ export function createCardGestures({
     const origin = active?.element;
     active?.surface.destroy?.();
     candidate?.element.classList.remove("card-pickup");
-    active?.element.classList.remove("card-pickup");
+    active?.element.classList.remove("card-pickup", "card-wheel-source");
     active = null;
     candidate = null;
     layer.hidden = true;
@@ -118,6 +119,20 @@ export function createCardGestures({
       width = actionTargetWidth(Math.min(innerWidth, innerHeight)),
       probes = document.createElement("div"),
       heights = new Map();
+    const fontText = all
+      .slice(0, 10)
+      .map((tag) => tag.label)
+      .join(" ");
+    const wheelFont =
+      [...document.fonts].some(
+        (face) =>
+          face.family.replaceAll('"', "") === "Inter" &&
+          face.status === "loaded",
+      ) && document.fonts.check('600 13px "Inter"', fontText)
+        ? '"Inter"'
+        : "Arial";
+    document.fonts.load('600 13px "Inter"', fontText).catch(() => {});
+    probes.style.setProperty("--wheel-font", wheelFont);
     // Batch writes before reads: one layout flush for all bounded wrapped labels.
     for (const label of new Set([
       ...all.slice(0, 10).map((tag) => tag.label),
@@ -127,7 +142,13 @@ export function createCardGestures({
       probe.className = "card-action-target";
       probe.style.cssText = `position:fixed;visibility:hidden;transform:none;height:auto;left:0;top:0;width:${width}px`;
       probe.dataset.label = label;
-      wheelLabel(probe, { label });
+      wheelLabel(probe, {
+        label,
+        more: label === "More tags…",
+        action: all.some((tag) => tag.label === label && tag.action)
+          ? "details"
+          : undefined,
+      });
       probes.append(probe);
     }
     document.body.append(probes);
@@ -167,8 +188,17 @@ export function createCardGestures({
     layer.style.setProperty("--wheel-x", layout.center.x + "px");
     layer.style.setProperty("--wheel-y", layout.center.y + "px");
     layer.style.setProperty("--wheel-radius", layout.radius + "px");
+    layer.style.setProperty("--wheel-font", wheelFont);
     layer.style.setProperty("--wheel-width", (layout.width || 100) + "px");
     layer.style.setProperty("--wheel-height", (layout.height || 100) + "px");
+    const material = document.createElement("div");
+    material.className = "card-wheel-material";
+    material.style.width = material.style.height = layout.radius * 2 + "px";
+    material.style.setProperty(
+      "--wheel-mask",
+      `radial-gradient(circle, transparent ${layout.innerRadius - 1}px, #000 ${layout.innerRadius + 18}px, #000 ${layout.radius - 2}px, transparent ${layout.radius}px)`,
+    );
+    layer.append(material);
     const wheel = createWheelSurface(layout, choose);
     layer.append(wheel.svg);
     active.sectors = wheel.sectors;
@@ -179,7 +209,23 @@ export function createCardGestures({
       anchor.className = "card-action-origin";
       anchor.src = sourceImage;
       anchor.alt = "";
-      anchor.style.cssText = `left:${bounds.x}px;top:${bounds.y}px;width:${bounds.width}px;height:${bounds.height}px`;
+      const pickup = wheelPickupSize(layout, bounds);
+      anchor.style.cssText = `left:${layout.center.x - pickup.width / 2}px;top:${layout.center.y - pickup.height / 2}px;width:${pickup.width}px;height:${pickup.height}px`;
+      anchor.style.setProperty(
+        "--pickup-start-scale",
+        String(1 / pickup.scale),
+      );
+      anchor.style.setProperty(
+        "--pickup-x",
+        bounds.x + bounds.width / 2 - layout.center.x + "px",
+      );
+      anchor.style.setProperty(
+        "--pickup-y",
+        bounds.y + bounds.height / 2 - layout.center.y + "px",
+      );
+      layer.style.setProperty("--pickup-width", pickup.width + "px");
+      layer.style.setProperty("--pickup-height", pickup.height + "px");
+      element.classList.add("card-wheel-source");
       layer.append(anchor);
     }
     const caption = document.createElement("span");
@@ -578,6 +624,8 @@ export function createCardGestures({
   document.addEventListener(
     "keydown",
     (event) => {
+      if (!active && (event.key === "Enter" || event.key === " "))
+        suppress = null;
       if (event.key === "Escape" && (active || candidate)) {
         event.preventDefault();
         event.stopImmediatePropagation();

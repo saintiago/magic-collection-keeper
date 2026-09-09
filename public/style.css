@@ -3,7 +3,8 @@
 }
 .auth-dialog h2 {
   font:
-    28px Georgia,
+    28px "Cinzel",
+    Georgia,
     serif;
   margin: 16px 0;
 }
@@ -89,7 +90,7 @@ button[hidden],
   flex-direction: column;
 }
 .brand {
-  font-family: Georgia, serif;
+  font-family: "Cinzel", Georgia, serif;
   font-size: 39px;
   display: flex;
   gap: 14px;
@@ -160,7 +161,7 @@ nav button.active {
   margin-right: 6px;
 }
 .sidebar-bottom p {
-  font-family: Georgia, serif;
+  font-family: "Cinzel", Georgia, serif;
   font-size: 25px;
   line-height: 1.35;
   color: #657462;
@@ -213,7 +214,7 @@ header {
   color: #8a946e;
 }
 h1 {
-  font-family: Georgia, serif;
+  font-family: "Cinzel", Georgia, serif;
   font-size: 43px;
   letter-spacing: -1.7px;
   font-weight: 400;
@@ -280,7 +281,7 @@ h1 span {
 }
 .stats strong {
   display: block;
-  font-family: Georgia, serif;
+  font-family: "Cinzel", Georgia, serif;
   font-size: 34px;
   font-weight: 400;
   margin: 12px 0 7px;
@@ -393,7 +394,8 @@ select {
 }
 .empty h3 {
   font:
-    26px Georgia,
+    26px "Cinzel",
+    Georgia,
     serif;
   letter-spacing: -0.6px;
   margin: 11px 0;
@@ -635,7 +637,8 @@ dialog::backdrop {
 }
 .detail-info h2 {
   font:
-    28px Georgia,
+    28px "Cinzel",
+    Georgia,
     serif;
   margin: 12px 0;
 }
@@ -928,7 +931,8 @@ dialog::backdrop {
 }
 .tag-dialog h2 {
   font:
-    28px Georgia,
+    28px "Cinzel",
+    Georgia,
     serif;
   margin: 12px 0;
 }

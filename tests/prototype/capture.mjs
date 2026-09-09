@@ -6,18 +6,19 @@ import { execFileSync } from "node:child_process";
 const mode = process.argv[2] || "hover";
 const scene = mode.replace(/-webgl$/, "");
 const root = resolve(process.argv[3] || "data/prototype-captures");
-const viewport =
-  scene === "drag-small"
-    ? { width: 320, height: 568 }
-    : scene === "drag-tablet"
-      ? { width: 768, height: 1024 }
-      : scene === "drag-landscape"
-        ? { width: 844, height: 390 }
-        : mode.includes("phone")
-          ? { width: 390, height: 844 }
-          : { width: 1080, height: 800 };
+const viewport = scene.endsWith("small")
+  ? { width: 320, height: 568 }
+  : scene === "drag-tablet"
+    ? { width: 768, height: 1024 }
+    : scene.endsWith("landscape")
+      ? { width: 844, height: 390 }
+      : mode.includes("phone")
+        ? { width: 390, height: 844 }
+        : { width: 1080, height: 800 };
 const touchInput =
-  scene === "phone" || scene === "drag-phone" || scene === "drag-small";
+  scene.startsWith("phone") ||
+  scene === "drag-phone" ||
+  scene.endsWith("small");
 const browser = await chromium.launch();
 const context = await browser.newContext({
   viewport,
@@ -61,9 +62,12 @@ await page.addInitScript(() => {
     true,
   );
 });
-await page.goto(
-  "http://127.0.0.1:3120/" + (mode.endsWith("-webgl") ? "?renderer=webgl" : ""),
-);
+const query = new URLSearchParams();
+if (mode.endsWith("-webgl")) query.set("renderer", "webgl");
+if (process.argv[4] === "animation-module")
+  query.set("card", "animation-module");
+await page.goto("http://127.0.0.1:3120/?" + query);
+await page.evaluate(() => document.fonts.ready);
 const tile = page.locator("#grid .card-open").nth(touchInput ? 0 : 1);
 await tile.waitFor();
 await tile.scrollIntoViewIfNeeded();
@@ -160,7 +164,43 @@ const evidence = {
   performanceOrigin: await page.evaluate(() => performance.timeOrigin),
 };
 await pause(700);
-if (mode === "hover") {
+if (mode.startsWith("controls")) {
+  await tile.click();
+  await pause(650);
+  for (const [name, selector] of [
+    ["save", ".artwork-save"],
+    ["edit", '[data-artwork="edit"]'],
+    ["details", '[data-artwork="details"]'],
+  ]) {
+    const b = await page.locator(selector).boundingBox();
+    await page.mouse.move(b.x + 5, b.y + 5, { steps: 12 });
+    await pause(180);
+    await page.screenshot({
+      path: root + "/" + mode + "-" + name + "-left.png",
+    });
+    await page.mouse.move(b.x + b.width - 5, b.y + b.height - 5, { steps: 20 });
+    await pause(180);
+    await page.screenshot({
+      path: root + "/" + mode + "-" + name + "-right.png",
+    });
+  }
+  const reset = await page
+    .getByLabel("Reset zoom", { exact: true })
+    .boundingBox();
+  await page.mouse.move(reset.x + reset.width / 2, reset.y + reset.height / 2, {
+    steps: 10,
+  });
+  await page.mouse.down();
+  await pause(130);
+  await page.screenshot({ path: root + "/" + mode + "-pressed.png" });
+  await page.mouse.up();
+  await pause(450);
+  await page.mouse.move(12, 88, { steps: 10 });
+  await pause(200);
+  await page.screenshot({ path: root + "/" + mode + ".png" });
+  await page.keyboard.press("Escape");
+  await pause(250);
+} else if (mode === "hover") {
   await page.mouse.move(base.x + base.width / 2, base.y + base.height / 2);
   await page.locator(".artwork-hover").waitFor({ state: "visible" });
   await pause(550);
@@ -193,35 +233,43 @@ if (mode === "hover") {
   await pause(70);
   await page.mouse.move(4, 88);
   await pause(350);
-} else if (mode === "phone") {
+} else if (scene.startsWith("phone")) {
   await tile.tap();
   await pause(1000);
   evidence.image = await page.locator(".artwork-full-image").boundingBox();
-  await page.screenshot({ path: root + "/phone.png" });
-  await touch("touchStart", [
-    [170, 560],
-    [225, 650],
-  ]);
-  for (let i = 1; i <= 32; i++) {
-    await touch("touchMove", [
-      [170 - i, 560 - i],
-      [225 + i, 650 + i],
+  await page.screenshot({ path: root + "/" + mode + ".png" });
+  if (mode !== "phone") {
+    await page.touchscreen.tap(12, viewport.height / 2);
+    evidence.outsideDismissed = !(await page
+      .locator(".artwork-viewer")
+      .isVisible());
+    await pause(400);
+  } else {
+    await touch("touchStart", [
+      [170, 560],
+      [225, 650],
     ]);
-    await pause(1);
+    for (let i = 1; i <= 32; i++) {
+      await touch("touchMove", [
+        [170 - i, 560 - i],
+        [225 + i, 650 + i],
+      ]);
+      await pause(1);
+    }
+    await touch("touchEnd", []);
+    await pause(400);
+    await touch("touchStart", [[190, 700]]);
+    for (let i = 1; i <= 32; i++) {
+      await touch("touchMove", [[190 - i, 700 - i * 4.5]]);
+      await pause(1);
+    }
+    await touch("touchEnd", []);
+    await pause(500);
+    await page.getByRole("button", { name: "Reset zoom" }).tap();
+    await pause(700);
+    await page.getByLabel("Close artwork").tap();
+    await pause(350);
   }
-  await touch("touchEnd", []);
-  await pause(400);
-  await touch("touchStart", [[190, 700]]);
-  for (let i = 1; i <= 32; i++) {
-    await touch("touchMove", [[190 - i, 700 - i * 4.5]]);
-    await pause(1);
-  }
-  await touch("touchEnd", []);
-  await pause(500);
-  await page.getByRole("button", { name: "Reset zoom" }).tap();
-  await pause(700);
-  await page.getByLabel("Close artwork").tap();
-  await pause(350);
 } else {
   const x = base.x + base.width / 2,
     y = base.y + base.height / 2;

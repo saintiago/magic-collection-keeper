@@ -151,6 +151,7 @@ const server = http.createServer(async (req, res) => {
           ".js": "text/javascript",
           ".mjs": "text/javascript",
           ".css": "text/css",
+          ".woff2": "font/woff2",
           ".wasm": "application/wasm",
           ".gz": "application/octet-stream",
         }[extname(file)] || "application/octet-stream",

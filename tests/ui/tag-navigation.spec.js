@@ -119,9 +119,13 @@ test("UC-19 all six tag kinds navigate by ID; same-name tags, conflicts, back an
     await expect(page.locator("#color")).toHaveValue("");
     await expect(page.locator("#active-tag")).toContainText(tag.label);
     await expect(page.locator("#section-title")).toBeFocused();
-    await expect(page.locator(".card-title")).toHaveText(
-      tag === empty ? [] : [tag.id === duplicate.id ? "Beta" : "Alpha"],
-    );
+    await expect(page.locator(".card-open")).toHaveCount(tag === empty ? 0 : 1);
+    if (tag !== empty)
+      await expect(page.locator(".card-open")).toHaveAccessibleName(
+        new RegExp(
+          "^Open " + (tag.id === duplicate.id ? "Beta" : "Alpha") + " printing",
+        ),
+      );
   }
   await expect(
     page.getByRole("heading", { name: "No cards match this tag" }),
@@ -182,7 +186,9 @@ test("UC-19 deep links survive cache refresh and rename; deletion keeps an expli
   const data = await fixture(page);
   await page.goto("/#tag=" + tags[0].id);
   await expect(page.locator("#tag-filter")).toHaveValue(tags[0].id);
-  await expect(page.locator(".card-title")).toHaveText("Alpha");
+  await expect(page.locator(".card-open")).toHaveAccessibleName(
+    /^Open Alpha printing/,
+  );
   await page.locator("#manage-tags").click();
   await page
     .getByLabel("Rename Shared name", { exact: true })
@@ -212,7 +218,9 @@ test("UC-19 deep links survive cache refresh and rename; deletion keeps an expli
     "Showing saved snapshot",
   );
   await expect(page.locator("#tag-filter")).toHaveValue(tags[0].id);
-  await expect(page.locator(".card-title")).toHaveText("Alpha");
+  await expect(page.locator(".card-open")).toHaveAccessibleName(
+    /^Open Alpha printing/,
+  );
   data.release();
   await page.locator("#manage-tags").click();
   await page.locator(`.tag-record[data-id="${empty.id}"] a`).click();
