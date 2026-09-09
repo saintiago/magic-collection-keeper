@@ -99,6 +99,10 @@ Duplicate capture (SCAN-03/04) has priority over split-card handling and the dep
 - **CARD-16:** Desktop mouse behavior remains 300 ms hover to 200% with tilt and click to 300% target enlargement with glass tag controls. Preserve drag pickup from hover enlargement. Choose behavior by actual input capability/event rather than viewport width alone so touch laptops and narrow desktop windows remain usable. Both input modes share relevant tags, assigned state, persistence and error semantics, but use the requested different presentation.
 - **CARD-17:** Refine glass tags to a clearer, more transparent surface with visible background blur, restrained tint and fine edges. Keep readable labels and clear assigned/unassigned states over light and dark card art. Provide a legible fallback when backdrop blur is unsupported and respect reduced motion. Verify rendered appearance and interaction performance on desktop and touch layouts; do not equate emulation with physical-device verification. Status: requested, not deployed.
 
+## Current priority — frontend-only deployment
+
+- **DEPLOY-05 (priority update):** Prioritize a separate frontend-only deployment workflow ahead of the remaining UI requirements. It must reuse the existing trusted main-branch release process and published backend compatibility checks, with fail-closed eligibility and a full-deployment fallback under DEPLOY-01–04. Preserve already completed work on other requirements; resume that backlog after the faster deployment route is verified. This supersedes the earlier decision to pause deployment-speed work behind UI/scanner implementation. Status: requested, highest implementation priority.
+
 ## Documentation workflow
 
 For each new request, update this ledger and the relevant use case before or alongside code. Retain corrections explicitly, add verifiable acceptance criteria, and attach test/release evidence when available. Link detailed design decisions in ARCHITECTURE.md and operational limits in OPERATIONS.md. Never silently drop queued work or report it as implemented.
