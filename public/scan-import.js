@@ -173,6 +173,8 @@ export async function setupScanImport({ api, enter, notify }) {
     void persist().catch(() => {});
     scanner.open();
   };
+  document.getElementById("scan").disabled = false;
+  document.getElementById("scan").removeAttribute("aria-busy");
   resume.onclick = handoff;
   window.addEventListener("keeper-sign-out", () => {
     epoch++;
