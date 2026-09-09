@@ -5,10 +5,37 @@ import { mockCaptureDrafts } from "../helpers/capture-draft-fixture.js";
 export const test = base.extend({
   realCardPresence: [false, { option: true }],
   serverNames: [
-    async ({ page, realCardPresence }, use) => {
+    async ({ page, realCardPresence }, use, testInfo) => {
       if (realCardPresence)
         await page.addInitScript(() => {
           window.geometryMeasurements = [];
+          const NativeWorker = window.Worker;
+          window.geometryWorkerEvents = [];
+          window.Worker = class extends NativeWorker {
+            constructor(url, options) {
+              super(url, options);
+              if (String(url).includes("card-presence-worker")) {
+                const began = performance.now();
+                this.addEventListener("message", (event) => {
+                  window.geometryWorkerEvents.push({
+                    ms: performance.now() - began,
+                    type: event.data.type,
+                    state: event.data.result?.state,
+                    workerMs: event.data.result?.elapsedMs,
+                    message: event.data.message,
+                  });
+                  if (window.geometryWorkerEvents.length > 50)
+                    window.geometryWorkerEvents.shift();
+                });
+                this.addEventListener("error", (event) =>
+                  window.geometryWorkerEvents.push({
+                    ms: performance.now() - began,
+                    error: event.message,
+                  }),
+                );
+              }
+            }
+          };
           window.addEventListener(
             "keeper-card-geometry-measurement",
             (event) => {
@@ -32,21 +59,28 @@ export const test = base.extend({
           json: { error: "Server fallback fixture" },
         }),
       );
-      await use();
+      try {
+        await use();
+      } finally {
+        if (realCardPresence) {
+          const measurements = await page
+            .evaluate(() => ({
+              status: document.querySelector("#scan-status")?.textContent,
+              preparation:
+                document.querySelector("#scan-preparation")?.textContent,
+              frames: window.geometryMeasurements || [],
+              worker: window.geometryWorkerEvents || [],
+            }))
+            .catch(() => ({ unavailable: true }));
+          console.log("Actual geometry timings", JSON.stringify(measurements));
+          await testInfo.attach("geometry-timings", {
+            body: JSON.stringify(measurements),
+            contentType: "application/json",
+          });
+        }
+      }
     },
     { auto: true },
   ],
-});
-test.afterEach(async ({ page, realCardPresence }, testInfo) => {
-  if (realCardPresence) {
-    const measurements = await page
-      .evaluate(() => window.geometryMeasurements || [])
-      .catch(() => []);
-    console.log("Actual geometry timings", JSON.stringify(measurements));
-    await testInfo.attach("geometry-timings", {
-      body: JSON.stringify(measurements),
-      contentType: "application/json",
-    });
-  }
 });
 export { expect };
