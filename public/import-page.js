@@ -443,6 +443,56 @@ export function createImportPage({ root, api, onAdded, back, select }) {
   });
   draw();
   return {
+    cardAction(target) {
+      if (
+        !visible ||
+        busy ||
+        editingRows ||
+        !target.matches('img,[data-action="card-actions"]')
+      )
+        return null;
+      const element = target.closest("[data-row]"),
+        row = currentRows()?.find((row) => row.id === element?.dataset.row);
+      if (!row?.card) return null;
+      return {
+        element: element.querySelector('[data-action="card-actions"]'),
+        item: {
+          kind: "pending",
+          row,
+          card: { ...row.card, image_uris: { normal: row.card.image } },
+          draftId: data.draft.id,
+          generation,
+        },
+      };
+    },
+    async cardActionApply(item, tag) {
+      if (
+        !visible ||
+        busy ||
+        generation !== item.generation ||
+        data?.draft?.id !== item.draftId
+      )
+        return;
+      const row = currentRows().find((row) => row.id === item.row.id);
+      if (!row) return;
+      if (tag.action === "details") {
+        root
+          .querySelector(`[data-row="${row.id}"]`)
+          ?.scrollIntoView({ block: "center" });
+        return;
+      }
+      if (tag.action === "edit") return editTags(row);
+      if (tag.source?.id === data.draft.source_id)
+        return changeRow(row.id, { in_deck: true });
+      const locations = row.locations.map((a) => ({ ...a })),
+        tag_ids = [...row.tag_ids];
+      if (tag.type === "location") {
+        const existing = locations.find((a) => a.tag_id === tag.id);
+        if (existing) existing.quantity++;
+        else locations.push({ tag_id: tag.id, quantity: 1 });
+      } else if (!tag_ids.includes(tag.id)) tag_ids.push(tag.id);
+      return changeRow(row.id, { locations, tag_ids });
+    },
     show() {
       visible = true;
       return load();

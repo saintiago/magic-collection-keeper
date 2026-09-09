@@ -109,16 +109,22 @@ test("LIVE-09 real WebKit touch opens English and translated suggestions exactly
   await page.locator("#close").click();
   await input.fill("Piracy");
   await page.locator("#search-submit").tap();
-  await expect(page.locator(".card-title").first()).toHaveText("Piracy", {
-    timeout: 30000,
-  });
+  await expect(page.locator(".card-open").first()).toHaveAccessibleName(
+    /^Open Piracy printing /,
+    {
+      timeout: 30000,
+    },
+  );
   await input.fill("");
   await expect(options()).toHaveCount(4);
   await expect(options().first()).toContainText("Run this search again");
   await options().first().tap();
-  await expect(page.locator(".card-title").first()).toHaveText("Piracy", {
-    timeout: 30000,
-  });
+  await expect(page.locator(".card-open").first()).toHaveAccessibleName(
+    /^Open Piracy printing /,
+    {
+      timeout: 30000,
+    },
+  );
   await expect(page.locator("#detail")).not.toBeVisible();
   await input.fill("");
   await expect(options()).toHaveCount(4);

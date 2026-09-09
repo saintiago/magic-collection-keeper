@@ -99,15 +99,20 @@ test("LIVE-12 direct card pages show immediately, reuse details, preserve Back/s
   }
   await page.locator("#search").fill("Piracy");
   await page.locator("#search-submit").tap();
-  await expect(page.locator("#grid .card-title").first()).toHaveText("Piracy", {
-    timeout: 30000,
-  });
+  await expect(page.locator("#grid .card-open").first()).toHaveAccessibleName(
+    /^Open Piracy printing /,
+    {
+      timeout: 30000,
+    },
+  );
   const count = await page.locator("#grid .card").count();
   await page.locator("#grid .card-open").first().tap();
+  await page.getByRole("button", { name: "Card details", exact: true }).tap();
   await expect(page.locator("#inventory-form")).toBeVisible();
   await page.locator("#close").click();
   await expect(page.locator("#grid .card")).toHaveCount(count);
   await page.locator("#grid .card-open").first().tap();
+  await page.getByRole("button", { name: "Card details", exact: true }).tap();
   const url = page.url();
   await page.reload();
   await expect(page.locator("#inventory-form")).toBeVisible({ timeout: 30000 });

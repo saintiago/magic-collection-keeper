@@ -38,6 +38,109 @@ function setup() {
     }),
   };
 }
+test("UC-CARD-ACTIONS moves one copy atomically, preserves shortfalls and retries without replaying an old allocation", async () => {
+  const { db, store, service: s } = setup();
+  try {
+    await s.add("a", {
+      printing_id: card.id,
+      quantity: 5,
+      finish: "nonfoil",
+      condition: "NM",
+    });
+    const [row] = await s.list("a");
+    const [from] = await s.createTag("a", {
+      label: "Box",
+      type: "location",
+      kind: "box",
+    });
+    const target = (
+      await s.createTag("a", { label: "Deck", type: "location", kind: "deck" })
+    ).find((t) => t.id !== from.id);
+    await s.assign("a", row.id, {
+      locations: [{ tag_id: from.id, quantity: 2 }],
+      tag_ids: [],
+    });
+    const unchanged = await store.get("a", "assignments", String(row.id));
+    await s.applyTagAction("a", {
+      operation_id: randomUUID(),
+      inventory_id: String(row.id),
+      tag_id: from.id,
+      from_tag_id: from.id,
+    });
+    assert.deepEqual(
+      await store.get("a", "assignments", String(row.id)),
+      unchanged,
+    );
+    const action = {
+      operation_id: randomUUID(),
+      inventory_id: String(row.id),
+      tag_id: target.id,
+      from_tag_id: from.id,
+    };
+    let [result] = await s.applyTagAction("a", action);
+    assert.equal(result.quantity, 5);
+    assert.deepEqual(
+      result.locations.map(({ tag_id, quantity }) => ({ tag_id, quantity })),
+      [
+        { tag_id: from.id, quantity: 1 },
+        { tag_id: target.id, quantity: 1 },
+      ],
+    );
+    const receipt = await store.get("a", "tag-actions", action.operation_id);
+    assert.equal(receipt.value.input.quantity, 1);
+    await s.applyTagAction("a", { ...action, operation_id: randomUUID() });
+    [result] = await s.applyTagAction("a", action);
+    assert.deepEqual(
+      result.locations.map(({ tag_id, quantity }) => ({ tag_id, quantity })),
+      [{ tag_id: target.id, quantity: 2 }],
+    );
+    await assert.rejects(
+      s.applyTagAction("a", { ...action, quantity: 2 }),
+      /different copies/,
+    );
+    await assert.rejects(
+      s.applyTagAction("b", action),
+      /tag is no longer available/,
+    );
+    assert.equal(
+      await store.get("b", "tag-actions", action.operation_id),
+      null,
+    );
+    await assert.rejects(
+      s.applyTagAction("a", { ...action, operation_id: randomUUID() }),
+      /no longer has/,
+    );
+    await s.assign("a", row.id, {
+      locations: [{ tag_id: target.id, quantity: 6 }],
+      tag_ids: [],
+    });
+    [result] = await s.applyTagAction("a", {
+      ...action,
+      operation_id: randomUUID(),
+      from_tag_id: null,
+    });
+    assert.equal(result.quantity, 5);
+    assert.equal(result.allocation_shortfall, 2);
+    const before = await s.list("a"),
+      failed = { ...action, operation_id: randomUUID(), from_tag_id: null };
+    const commit = store.commit;
+    store.commit = async () => {
+      throw Error("Interrupted commit");
+    };
+    await assert.rejects(s.applyTagAction("a", failed), /Interrupted/);
+    store.commit = commit;
+    assert.deepEqual(await s.list("a"), before);
+    assert.equal(
+      await store.get("a", "tag-actions", failed.operation_id),
+      null,
+    );
+    await s.applyTagAction("a", failed);
+    assert.equal((await s.list("a"))[0].allocated_quantity, 8);
+  } finally {
+    db.close();
+  }
+});
+
 test("official precon sources preserve provenance, printing finishes, namespace and permanent idempotency", async () => {
   const { db, service: s } = setup();
   const official = {

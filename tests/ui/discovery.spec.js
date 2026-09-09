@@ -219,11 +219,15 @@ test("UC-24/26 exact ranking, Spanish autocomplete keyboard selection and explic
     input = page.getByRole("combobox", { name: "Search cards" });
   await input.fill("Piracy");
   await page.locator("#search-submit").click();
-  await expect(page.locator(".card-title")).toHaveText([
+  await expect(page.locator(".card-open")).toHaveCount(3);
+  for (const [index, name] of [
     "Piracy",
     "Coastal Piracy",
     "Conspiracy",
-  ]);
+  ].entries())
+    await expect(page.locator(".card-open").nth(index)).toHaveAccessibleName(
+      new RegExp(`^Open ${name} printing `),
+    );
   await input.fill("relampa");
   await expect(
     page.locator("#suggestion-panel").getByRole("option"),
@@ -351,8 +355,9 @@ test("UC-26 mobile touch choice, no matches, suggestion/search failures and retr
   f.failSearch(false);
   await input.fill("Fuego");
   await page.locator("#search-submit").click();
-  await expect(page.locator(".card-title")).toHaveText(["Fire // Ice"]);
-  await expect(page.locator(".matched-name")).toContainText("Fuego · ES");
+  await expect(page.locator(".card-open")).toHaveAccessibleName(
+    /Open Fire \/\/ Ice printing .*matched Fuego · ES/,
+  );
   await page.locator("#collection-nav").click();
   await expect(page.locator("#suggestion-panel")).toBeHidden();
   await expect(page.locator("#search")).toHaveAttribute("role", "combobox");
@@ -628,11 +633,15 @@ test("UC-29 one shared search marks ownership across languages without extra inv
   await input.fill("Piracy");
   await input.press("Escape");
   await page.locator("#search-submit").click();
-  await expect(page.locator(".card-title")).toHaveText([
+  await expect(page.locator(".card-open")).toHaveCount(3);
+  for (const [index, name] of [
     "Piracy",
     "Coastal Piracy",
     "Conspiracy",
-  ]);
+  ].entries())
+    await expect(page.locator(".card-open").nth(index)).toHaveAccessibleName(
+      new RegExp(`^Open ${name} printing `),
+    );
 });
 
 test("UC-29 unknown ownership stays honest, retry updates visible suggestions in place, and saved failures remain labeled", async ({
@@ -706,7 +715,7 @@ test("UC-30 empty focus shows recent committed cards and queries, supports touch
   await page.locator("#close").click();
   await input.fill("Piracy");
   await page.locator("#search-submit").click();
-  await expect(page.locator(".card-title")).toHaveCount(3);
+  await expect(page.locator(".card-open")).toHaveCount(3);
   await input.fill("");
   await expect(options()).toHaveCount(2);
   await expect(options().first()).toContainText("Piracy");
@@ -717,7 +726,7 @@ test("UC-30 empty focus shows recent committed cards and queries, supports touch
   await expect(options()).toHaveCount(2);
   expect(f.counts().suggestRequests).toBe(lookups);
   await options().first().tap();
-  await expect(page.locator(".card-title")).toHaveCount(3);
+  await expect(page.locator(".card-open")).toHaveCount(3);
   await expect(page.locator("#detail")).not.toBeVisible();
   await input.fill("");
   await expect(options()).toHaveCount(2);

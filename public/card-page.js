@@ -119,5 +119,8 @@ export function createCardPage({
     get current() {
       return current;
     },
+    get currentRow() {
+      return resolvedRow;
+    },
   };
 }
