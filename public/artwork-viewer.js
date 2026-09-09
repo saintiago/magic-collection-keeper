@@ -1,7 +1,9 @@
 import { image, esc } from "./view.js";
+import { cardHoverInfo } from "./card-tile-view.js";
+import { inspectorDetails, inspectorControls } from "./artwork-inspector.js";
 import { boundedArtwork } from "./card-action-layout.js";
 
-export function createArtworkViewer({ onDetails, onActions }) {
+export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
   const dialog = document.createElement("dialog");
   dialog.className = "artwork-viewer";
   document.body.append(dialog);
@@ -9,8 +11,11 @@ export function createArtworkViewer({ onDetails, onActions }) {
   preview.className = "artwork-hover";
   preview.hidden = true;
   document.body.append(preview);
-  let selection = null,
+  let previewSource = null,
+    previewVisual = null,
+    selection = null,
     origin = null,
+    originKey = null,
     historyKey = null,
     afterClose = null,
     frame = 0,
@@ -21,22 +26,49 @@ export function createArtworkViewer({ onDetails, onActions }) {
     suppressUntil = 0;
 
   function hidePreview() {
+    if (preview.hidden) return;
     preview.hidden = true;
+    previewSource = null;
+    previewVisual = null;
     preview.replaceChildren();
   }
-  function hover(card, element) {
-    if (dialog.open || !image(card)) return;
-    const bounds = element.getBoundingClientRect(),
-      width = bounds.width * 2,
-      height = (width * 680) / 488;
-    preview.innerHTML = `<img src="${esc(image(card))}" alt="">`;
-    preview.style.cssText = `width:${width}px;height:${height}px;left:${Math.max(8, Math.min(innerWidth - width - 8, bounds.x + (bounds.width - width) / 2))}px;top:${Math.max(8, Math.min(innerHeight - height - 8, bounds.y + (bounds.height - height) / 2))}px`;
+  function hover(found, bounds, transform) {
+    if (dialog.open || !image(found.item.card)) return;
+    const width = Math.min(
+        bounds.width * 2,
+        innerWidth - 24,
+        ((innerHeight - 24) * 488) / 680,
+      ),
+      height = (width * 680) / 488,
+      x = Math.max(
+        12,
+        Math.min(
+          innerWidth - width - 12,
+          bounds.x + (bounds.width - width) / 2,
+        ),
+      ),
+      y = Math.max(
+        12,
+        Math.min(
+          innerHeight - height - 12,
+          bounds.y + (bounds.height - height) / 2,
+        ),
+      );
+    preview.innerHTML = `<div class="artwork-hover-reveal"><div class="artwork-hover-visual"><img src="${esc(image(found.item.card))}" alt="${esc(found.item.card.name)}">${cardHoverInfo(found.item.row || { card: found.item.card }, null, { pending: found.item.kind === "pending" })}</div></div>`;
+    preview.style.cssText = `width:${width}px;height:${height}px;left:${x}px;top:${y}px`;
     preview.hidden = false;
+    previewSource = found;
+    previewVisual = preview.querySelector(".artwork-hover-visual");
+    setHoverTilt(transform);
+    return { x, y, width, height };
+  }
+  function setHoverTilt(transform) {
+    if (previewVisual) previewVisual.style.transform = transform;
   }
   function draw() {
     frame = 0;
     if (!dialog.open || !state) return;
-    const area = dialog.querySelector(".artwork-stage");
+    const area = dialog.querySelector(".artwork-viewport");
     rect = area.getBoundingClientRect();
     state = {
       ...state,
@@ -58,7 +90,14 @@ export function createArtworkViewer({ onDetails, onActions }) {
     dialog.replaceChildren();
     selection = null;
     historyKey = null;
-    origin?.isConnected && origin.focus({ preventScroll: true });
+    const focus = origin?.isConnected
+      ? origin
+      : originKey
+        ? document.querySelector(
+            `[data-card-key="${CSS.escape(originKey)}"] button`,
+          )
+        : null;
+    focus?.focus({ preventScroll: true });
     const next = afterClose;
     afterClose = null;
     next?.();
@@ -76,17 +115,62 @@ export function createArtworkViewer({ onDetails, onActions }) {
     event.preventDefault();
     close();
   });
+  dialog.addEventListener(
+    "click",
+    (event) => {
+      const link = event.target.closest("a[data-tag-id]");
+      if (
+        !link ||
+        event.button ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        event.altKey
+      )
+        return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const tag = {
+        id: link.dataset.tagId,
+        label: link.dataset.tagLabel,
+        type: link.dataset.tagType,
+        kind: link.dataset.tagKind,
+      };
+      close(() => onTag(tag));
+    },
+    true,
+  );
+  dialog.addEventListener("submit", async (event) => {
+    if (!event.target.matches(".artwork-quantity")) return;
+    event.preventDefault();
+    const form = event.target,
+      item = selection,
+      button = form.querySelector("button"),
+      status = form.querySelector('[role="status"]');
+    button.disabled = true;
+    status.textContent = "Saving…";
+    try {
+      const row = await onQuantity(item, Number(form.elements.quantity.value));
+      if (!form.isConnected || selection !== item || !row) return;
+      item.row = row;
+      dialog.querySelector(".artwork-details").innerHTML =
+        inspectorDetails(item);
+      status.textContent = "Quantity saved.";
+    } catch (error) {
+      if (form.isConnected) status.textContent = error.message;
+    } finally {
+      if (form.isConnected) button.disabled = false;
+    }
+  });
   dialog.addEventListener("click", (event) => {
     const action = event.target.closest("[data-artwork]")?.dataset.artwork;
     if (!action) return;
     if (action === "close") return close();
-    if (action === "details" || action === "actions") {
+    if (action === "details" || action === "edit") {
       const item = selection,
         element = origin;
       return close(() =>
-        action === "details"
-          ? onDetails(item, element)
-          : onActions(item, element),
+        action === "details" ? onDetails(item, element) : onEdit(item, element),
       );
     }
     if (action === "in") state.zoom *= 1.25;
@@ -122,7 +206,10 @@ export function createArtworkViewer({ onDetails, onActions }) {
       x: state.x,
       y: state.y,
       zoom: state.zoom,
-      outside: event.target.classList.contains("artwork-stage"),
+      outside:
+        event.target.classList.contains("artwork-stage") ||
+        event.target.classList.contains("artwork-viewport") ||
+        event.target.classList.contains("artwork-open-reveal"),
       distance:
         all.length === 2
           ? Math.hypot(all[0].x - all[1].x, all[0].y - all[1].y)
@@ -225,6 +312,9 @@ export function createArtworkViewer({ onDetails, onActions }) {
   });
   return {
     hover,
+    setHoverTilt,
+    hoverSource: (target) =>
+      !preview.hidden && preview.contains(target) ? previewSource : null,
     hidePreview,
     close,
     get isOpen() {
@@ -233,13 +323,12 @@ export function createArtworkViewer({ onDetails, onActions }) {
     open(item, element) {
       const card = item.card,
         src = image(card);
-      if (!src || dialog.open) return;
+      if (dialog.open) return;
       hidePreview();
       selection = item;
       origin = element;
-      const bounds =
-        element.querySelector("img")?.getBoundingClientRect() ||
-        element.getBoundingClientRect();
+      originKey = element.closest("[data-card-key]")?.dataset.cardKey || null;
+      const bounds = element.getBoundingClientRect();
       state = {
         baseWidth: Math.max(80, bounds.width),
         baseHeight: (Math.max(80, bounds.width) * 680) / 488,
@@ -253,7 +342,7 @@ export function createArtworkViewer({ onDetails, onActions }) {
         "",
         location.href,
       );
-      dialog.innerHTML = `<header><h2>${esc(card.name)}</h2><button data-artwork="close" aria-label="Close artwork">×</button></header><div class="artwork-stage"><img class="artwork-full-image" src="${esc(src)}" alt="${esc(card.name)}" draggable="false" style="width:${state.baseWidth}px;height:${state.baseHeight}px"></div><footer><button data-artwork="out" aria-label="Zoom out">−</button><output aria-label="Artwork zoom">300%</output><button data-artwork="in" aria-label="Zoom in">+</button><button data-artwork="reset">Reset</button><button data-artwork="details">Card details</button><button data-artwork="actions">Card actions</button></footer>`;
+      dialog.innerHTML = `<header><h2>${esc(card.name)}</h2><button data-artwork="close" aria-label="Close artwork">×</button></header><div class="artwork-inspector"><aside class="artwork-details" aria-label="Card information">${inspectorDetails(item)}</aside><div class="artwork-stage"><div class="artwork-viewport"><div class="artwork-open-reveal">${src ? `<img class="artwork-full-image" src="${esc(src)}" alt="${esc(card.name)}" draggable="false" style="width:${state.baseWidth}px;height:${state.baseHeight}px">` : `<div class="artwork-full-image artwork-placeholder" style="width:${state.baseWidth}px;height:${state.baseHeight}px">Artwork unavailable</div>`}</div></div></div><aside class="artwork-controls" aria-label="Card controls">${inspectorControls(item)}</aside></div><footer><button data-artwork="out" aria-label="Zoom out">−</button><output aria-label="Artwork zoom">300%</output><button data-artwork="in" aria-label="Zoom in">+</button><button data-artwork="reset">Reset</button></footer>`;
       dialog.showModal();
       draw();
       dialog.querySelector('[data-artwork="close"]').focus();

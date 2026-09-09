@@ -60,7 +60,10 @@ export function createHome({ root, onCard, onClearSearches, onRetry }) {
         .map((item) => item.id);
     },
     cardAction(element) {
-      const button = element.closest("[data-home-card]");
+      const button = element
+        .closest(".home-card")
+        ?.querySelector("[data-home-card]");
+      if (element.closest("a[data-tag-id]")) return null;
       if (!button) return null;
       const ref = cards[Number(button.dataset.homeCard)];
       if (!ref) return null;

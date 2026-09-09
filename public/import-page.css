@@ -48,7 +48,8 @@
   border-radius: 12px;
   margin-bottom: 16px;
 }
-.draft-row > img {
+.draft-artwork,
+.draft-artwork img {
   width: 112px;
   height: 156px;
   object-fit: contain;
@@ -205,7 +206,8 @@
     gap: 12px;
     padding: 12px;
   }
-  .draft-row > img,
+  .draft-artwork,
+  .draft-artwork img,
   .draft-no-image {
     width: 70px;
     min-width: 70px;
@@ -233,4 +235,12 @@
   .draft-actions button {
     flex: 1;
   }
+}
+
+.draft-artwork {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  flex-shrink: 0;
+  touch-action: manipulation;
 }

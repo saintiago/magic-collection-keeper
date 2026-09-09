@@ -138,6 +138,7 @@ test("UC-35 real query keeps results, grid selection is immediate, Back restores
   await page.locator("#search-submit").click();
   await expect(page.locator("#grid .card")).toHaveCount(2);
   await page.locator("#grid .card-open").first().click();
+  await page.locator('[data-artwork="details"]').click();
   await ready(page);
   expect(f.calls.length).toBe(1);
   await expect(page.locator("#title")).toHaveText("Card");
@@ -147,6 +148,7 @@ test("UC-35 real query keeps results, grid selection is immediate, Back restores
   await expect(page.locator("#grid .card-open").first()).toBeFocused();
   await page.locator("#home-nav").click();
   await page.locator("#home-page [data-home-card]").first().click();
+  await page.locator('[data-artwork="details"]').click();
   await ready(page);
   await page.locator("#close").click();
   await expect(page.locator("#home-page")).toBeVisible();
@@ -235,11 +237,14 @@ test("UC-35 owned entry link refreshes only current account, preserves quantity 
   await page.locator("#collection-nav").click();
   await page.locator("#finish-filter").selectOption("foil");
   await page.locator("#grid .card-open").click();
+  await page.locator('[data-artwork="details"]').click();
   await ready(page);
   await expect(page.locator("#quantity")).toHaveValue("3");
   await page.locator("#close").click();
   await expect(page.locator("#finish-filter")).toHaveValue("foil");
   await page.locator("#grid .card-open").click();
+  await page.locator('[data-artwork="details"]').click();
+  await expect(page).toHaveURL(/#card=/);
   await page.reload();
   await ready(page);
   await expect(page.locator("#quantity")).toHaveValue("3");

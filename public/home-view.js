@@ -1,6 +1,7 @@
 import { esc, image } from "./view.js";
 import { tagLink } from "./tag-view.js";
 import { suggestionOwnership, searchOwnership } from "./search-ownership.js";
+import { cardHoverInfo } from "./card-tile-view.js";
 export function homeContent({
   activity,
   searches,
@@ -57,7 +58,7 @@ export function homeContent({
           );
         const source = row ? image(row.card) : item.image_url;
         const badge = suggestionOwnership(item, ownership);
-        return `<button class="home-card" data-home-card="${i}">${source ? `<img src="${esc(source)}" alt="" loading="lazy">` : '<span class="home-card-placeholder" aria-hidden="true">✦</span>'}<span class="home-card-name">${esc(item.name)} <span role="img" aria-label="${esc(badge.label)}" title="${esc(badge.label)}">${badge.icon}</span></span></button>`;
+        return `<article class="home-card card-tile" data-card-key="${esc(String(row?.id || item.printing_id || item.oracle_id))}"><button data-home-card="${i}" aria-label="Open ${esc(item.name)} artwork · ${esc(badge.label)}" title="View card · drag to organize · Shift+F10 for keyboard pickup">${source ? `<img src="${esc(source)}" alt="" loading="lazy">` : '<span class="home-card-placeholder" aria-hidden="true">✦</span>'}</button>${cardHoverInfo(row || { card: item })}</article>`;
       })
       .join(
         "",

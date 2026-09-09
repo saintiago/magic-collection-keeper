@@ -36,6 +36,81 @@ export async function exerciseCardActions(
   const post = (path, body, method = "POST") =>
     liveApi(page, path, { method, body: JSON.stringify(body) });
   const activate = (locator) => (mobile ? locator.tap() : locator.click());
+  async function directDrop(tagId) {
+    if (!["edit", "details"].includes(tagId))
+      await expect(
+        page.locator(`#tag-filter option[value="${tagId}"]`),
+      ).toHaveCount(1);
+    const button = page.locator("#grid .card-open");
+    await expect(async () => {
+      await button.scrollIntoViewIfNeeded();
+      await expect(button).toBeInViewport({ ratio: 0.9 });
+    }).toPass({ timeout: 5000 });
+    const b = await button.boundingBox(),
+      x = b.x + b.width / 2,
+      y = b.y + b.height / 2;
+    const pointer = (x, y) => ({
+      pointerId: 71,
+      pointerType: "touch",
+      clientX: x,
+      clientY: y,
+      bubbles: true,
+      buttons: 1,
+      button: 0,
+    });
+    if (mobile) {
+      // Controlled WebKit hold/move sequence; native tap is verified separately.
+      await button.dispatchEvent("pointerdown", pointer(x, y));
+    } else {
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + 15, y);
+    }
+    await expect(page.locator(".card-drag-copy")).toBeVisible();
+    const xy = await page
+      .locator(`.card-action-target[data-tag-id="${tagId}"]`)
+      .evaluate((el) => [parseFloat(el.style.left), parseFloat(el.style.top)]);
+    const bounds = await page
+      .locator(".card-action-target")
+      .evaluateAll((nodes) =>
+        nodes.map((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            x: r.x,
+            y: r.y,
+            right: r.right,
+            bottom: r.bottom,
+            width: innerWidth,
+            height: innerHeight,
+            clipped: el.scrollHeight > el.clientHeight + 1,
+          };
+        }),
+      );
+    expect(
+      bounds.every(
+        (r) =>
+          r.x >= 0 &&
+          r.y >= 0 &&
+          r.right <= r.width &&
+          r.bottom <= r.height &&
+          !r.clipped,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: test
+        .info()
+        .outputPath(
+          `live-wheel-${mobile ? "webkit-touch" : "chromium"}-${tagId.slice(0, 8)}.png`,
+        ),
+    });
+    if (mobile) {
+      await button.dispatchEvent("pointermove", pointer(...xy));
+      await button.dispatchEvent("pointerup", pointer(...xy));
+    } else {
+      await page.mouse.move(...xy, { steps: 5 });
+      await page.mouse.up();
+    }
+  }
   let otherContext;
   try {
     for (const name of ["Source", "Target"]) {
@@ -75,6 +150,44 @@ export async function exerciseCardActions(
     await expect(
       page.locator(`#tag-filter option[value="${target.id}"]`),
     ).toHaveCount(1);
+    const tile = page.locator("#grid .card"),
+      cardButton = tile.locator(".card-open");
+    await expect(
+      tile.locator(".card-info,.card-bottom,.card-actions-trigger"),
+    ).toHaveCount(0);
+    await expect(tile.locator(".card-hover-info")).not.toBeVisible();
+    await activate(cardButton);
+    await expect(page).toHaveURL(new RegExp("#tag=" + source.id + "$"));
+    await expect(page.locator(".artwork-viewer output")).toHaveText("300%");
+    await expect(page.locator(".artwork-details")).toContainText("3 owned");
+    await expect(page.getByLabel("Owned quantity")).toHaveValue("3");
+    await page.screenshot({
+      path: test
+        .info()
+        .outputPath(`live-owned-inspector-${mobile ? "phone" : "desktop"}.png`),
+    });
+    await page.getByLabel("Owned quantity").fill("4");
+    await activate(
+      page.getByRole("button", { name: "Save quantity", exact: true }),
+    );
+    await expect(page.locator(".artwork-quantity [role=status]")).toHaveText(
+      "Quantity saved.",
+    );
+    expect((await liveApi(page, "/api/collection"))[0].quantity).toBe(4);
+    await activate(page.getByLabel("Close artwork"));
+    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+    await page.reload();
+    await activate(page.locator("#grid .card-open"));
+    await expect(page.getByLabel("Owned quantity")).toHaveValue("4");
+    await page.getByLabel("Owned quantity").fill("3");
+    await activate(
+      page.getByRole("button", { name: "Save quantity", exact: true }),
+    );
+    await expect(page.locator(".artwork-quantity [role=status]")).toHaveText(
+      "Quantity saved.",
+    );
+    await activate(page.getByLabel("Close artwork"));
+    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
     let loseResponse = true;
     await page.route("**/api/tag-actions", async (route) => {
       operations.push(route.request().postDataJSON());
@@ -90,31 +203,7 @@ export async function exerciseCardActions(
         });
       } else await route.fulfill({ response });
     });
-    if (mobile) {
-      await activate(page.locator(".card-actions-trigger"));
-      await activate(
-        page.locator(`.card-action-target[data-tag-id="${target.id}"]`),
-      );
-    } else {
-      const img = page.locator("#grid img");
-      await expect(async () => {
-        await img.scrollIntoViewIfNeeded();
-        await expect(img).toBeInViewport({ ratio: 0.9 });
-      }).toPass({ timeout: 5000 });
-      const b = await img.boundingBox();
-      await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(b.x + b.width / 2 + 15, b.y + b.height / 2);
-      await expect(page.locator(".card-drag-copy")).toBeVisible();
-      const xy = await page
-        .locator(`.card-action-target[data-tag-id="${target.id}"]`)
-        .evaluate((el) => [
-          parseFloat(el.style.left),
-          parseFloat(el.style.top),
-        ]);
-      await page.mouse.move(...xy, { steps: 5 });
-      await page.mouse.up();
-    }
+    await directDrop(target.id);
     await expect(page.locator(".card-action-status")).toContainText(
       "delivery interruption",
     );
@@ -190,10 +279,7 @@ export async function exerciseCardActions(
     await expect(page.locator("#inventory-form")).toBeVisible();
     await activate(page.locator("#close"));
     await expect(page.locator("#search")).toHaveValue(query);
-    await activate(page.locator(".card-actions-trigger"));
-    await activate(
-      page.locator(`.card-action-target[data-tag-id="${target.id}"]`),
-    );
+    await directDrop(target.id);
     await expect(page.locator(".draft-row")).toHaveCount(1);
     await page.reload();
     await expect(page.locator(".draft-row")).toHaveCount(1);
@@ -218,10 +304,7 @@ export async function exerciseCardActions(
     await page.locator("#search").fill(query);
     await activate(page.locator("#search-submit"));
     await expect(page.locator("#grid .card")).toHaveCount(1);
-    await activate(page.locator(".card-actions-trigger"));
-    await activate(
-      page.getByRole("menuitem", { name: "Review & add", exact: true }),
-    );
+    await directDrop("edit");
     await expect(page.locator(".draft-row")).toHaveCount(1);
     expect(await liveApi(page, "/api/collection")).toEqual([]);
     await activate(page.locator("#draft-add"));

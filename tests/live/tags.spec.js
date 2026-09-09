@@ -285,7 +285,10 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   const alpha = sources.find(
     (source) => source.source_id === "keeper_test_deck_alpha",
   );
-  await page.locator(`.card a[data-tag-id="${alpha.tag_id}"]`).click();
+  await page.locator(".card-open").first().click();
+  await page
+    .locator(`.artwork-details a[data-tag-id="${alpha.tag_id}"]`)
+    .click();
   await expect(page.locator("#result-count")).toHaveText(
     "2 assigned copies · 1 distinct entry",
   );
@@ -295,6 +298,7 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   );
   await expect(page.locator("#detail")).not.toBeVisible();
   await page.locator(".card-open").click();
+  await page.locator('[data-artwork="details"]').click();
   const beta = sources.find(
     (source) => source.source_id === "keeper_test_deck_beta_",
   );

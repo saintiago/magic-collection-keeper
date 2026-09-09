@@ -103,8 +103,10 @@ test("UC-18 deck copies, unique entries, pooled ownership, pending source and ca
   const plains = page
     .locator(".card")
     .filter({ has: page.getByText("Plains", { exact: true }) });
-  await expect(plains.locator(".card-bottom b")).toHaveText("2 assigned here");
-  await expect(plains).toContainText("26 owned across collection");
+  await expect(plains.locator(".card-open")).toHaveAccessibleName(
+    /2 assigned here/,
+  );
+  await expect(plains).toContainText("26 owned");
   await page.locator("#sort").selectOption("quantity");
   await expect(page.locator(".card-title").first()).toHaveText("Forest");
   await page.locator("#color").selectOption("G");

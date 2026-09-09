@@ -14,10 +14,12 @@ export function createCardActions({
   cardPage,
   detail,
   editTags,
+  navigateTag,
   remember,
   notify,
   onSettled,
 }) {
+  let accountGeneration = 0;
   const cardActionSave = createCardActionSave({
     api: request,
     currentView: () => currentView(),
@@ -31,8 +33,7 @@ export function createCardActions({
     if (target.closest("#grid")) {
       const card = target.closest(".card"),
         button = card?.querySelector(".card-open");
-      if (!button || !target.closest(".card-open,.card-actions-trigger"))
-        return null;
+      if (!button || target.closest("a[data-tag-id]")) return null;
       const row = visibleCards[Number(button.dataset.index)];
       if (!row) return null;
       return {
@@ -52,9 +53,9 @@ export function createCardActions({
     }
     if (target.closest("#home-page")) return home.cardAction(target);
     if (target.closest("#import-page")) return importPage.cardAction(target);
-    if (target.matches(".detail-image img,[data-detail-card-actions]")) {
+    if (target.closest(".detail-artwork")) {
       const row = cardPage.currentRow,
-        element = document.querySelector(".detail-image img");
+        element = document.querySelector(".detail-artwork");
       if (row && element)
         return {
           element,
@@ -141,7 +142,19 @@ export function createCardActions({
   const artworkViewer = createArtworkViewer({
     onDetails: (item, element) =>
       handleCardAction(item, { action: "details" }, element),
-    onActions: (item, element) => cardGestures.open(item, element),
+    onEdit: (item, element) =>
+      handleCardAction(item, { action: "edit" }, element),
+    onTag: (tag) => navigateTag(tag),
+    onQuantity: async (item, quantity) => {
+      const generation = accountGeneration;
+      const rows = await request(
+        `/api/collection/${encodeURIComponent(item.row.id)}`,
+        { method: "PATCH", body: JSON.stringify({ quantity }) },
+      );
+      if (generation !== accountGeneration) return;
+      onOwned(rows);
+      return rows.find((row) => String(row.id) === String(item.row.id));
+    },
   });
   const cardGestures = createCardGestures({
     resolve: cardActionSource,
@@ -156,8 +169,12 @@ export function createCardActions({
     get holding() {
       return cardGestures.holding;
     },
-    start: cardActionSave.start,
+    start(account) {
+      accountGeneration++;
+      cardActionSave.start(account);
+    },
     stop() {
+      accountGeneration++;
       cardActionSave.stop();
       cardGestures.cancel();
     },

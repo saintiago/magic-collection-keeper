@@ -1,13 +1,12 @@
 import { esc, picture, finishName } from "./view.js";
 import { displayedQuantity } from "./collection-counts.js";
-import { tagBadges, allocationWarning } from "./tag-view.js";
-export function collectionCard(row, index, tag, catalog = false) {
+import { cardHoverInfo } from "./card-tile-view.js";
+export function collectionCard(row, index, tag) {
   const alias = row.card.discovery?.matched_name
     ? `, matched ${row.card.discovery.matched_name} · ${row.card.discovery.matched_language?.toUpperCase() || ""}`
     : "";
-  const local = row.id && tag?.type === "location";
-  const info = catalog
-    ? ""
-    : `<div class="card-info"><div class="card-title">${esc(row.card.name)}</div>${row.card.discovery?.matched_name ? `<p class="matched-name">${esc(row.card.discovery.matched_name)} · ${esc(row.card.discovery.matched_language?.toUpperCase())}</p>` : ""}<div class="card-meta">${esc(row.card.set.toUpperCase())} · #${esc(row.card.collector_number)} <span>${esc(row.card.lang.toUpperCase())}</span></div><div class="card-bottom"><span>${row.id ? esc(`${finishName[row.finish]} · ${row.condition}`) : esc(row.card.rarity)}</span><b>${row.id ? (local ? `${displayedQuantity(row, tag)} assigned here` : `${row.quantity} owned`) : "Review card & printing"}</b></div>${local ? `<small class="owned-caption">${row.quantity} owned across collection</small>` : ""}</div>`;
-  return `<article class="card"><button class="card-open" data-index="${index}" aria-label="Open ${esc(row.card.name)} printing ${esc(row.card.set)} ${esc(row.card.collector_number)}${esc(alias)}"><div class="card-image">${picture(row.card)}</div>${info}</button><button class="card-actions-trigger" data-index="${index}" aria-label="Card actions for ${esc(row.card.name)}" title="Card actions · drag or Shift+F10">⋯</button>${row.id ? `<div class="card-tags">${tagBadges(row)}</div>${allocationWarning(row)}` : ""}</article>`;
+  const ownership = row.id
+    ? `, ${finishName[row.finish] || row.finish} ${row.condition}, ${row.quantity} owned${tag?.type === "location" ? `, ${displayedQuantity(row, tag)} assigned here` : ""}`
+    : "";
+  return `<article class="card card-tile" data-card-key="${esc(String(row.id || row.card.id))}"><button class="card-open" data-index="${index}" aria-label="Open ${esc(row.card.name)} printing ${esc(row.card.set)} ${esc(row.card.collector_number)}${esc(alias + ownership)}" title="View card · drag to organize · Shift+F10 for keyboard pickup"><div class="card-image">${picture(row.card)}</div></button>${cardHoverInfo(row, tag)}</article>`;
 }

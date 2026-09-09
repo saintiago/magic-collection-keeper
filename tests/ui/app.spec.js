@@ -40,6 +40,7 @@ test("empty collection, catalog review, quantity edit, filtering and removal", a
     .fill("Lightning Bolt");
   await page.getByRole("button", { name: "Search cards", exact: true }).click();
   await page.locator(".card").click();
+  await page.locator('[data-artwork="details"]').click();
   await page.locator("#quantity").fill("4");
   await page
     .getByRole("button", { name: "Add to collection", exact: false })
@@ -48,6 +49,7 @@ test("empty collection, catalog review, quantity edit, filtering and removal", a
   await page.locator("#collection-nav").click();
   await expect(page.locator("#total")).toHaveText("4");
   await page.locator(".card").click();
+  await page.locator('[data-artwork="details"]').click();
   await page.locator("#quantity").fill("2");
   await page.getByRole("button", { name: "Save quantity" }).click();
   await expect(page.locator("#total")).toHaveText("2");
@@ -55,6 +57,7 @@ test("empty collection, catalog review, quantity edit, filtering and removal", a
   await expect(page.getByText("No cards match these filters")).toBeVisible();
   await page.getByRole("button", { name: "Clear filters" }).click();
   await page.locator(".card").click();
+  await page.locator('[data-artwork="details"]').click();
   page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Remove this entry" }).click();
   await expect(page.getByText("Your collection begins here")).toBeVisible();

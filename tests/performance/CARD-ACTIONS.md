@@ -1,7 +1,46 @@
 # Catalogue interaction observations
 
+## Actual-app pointer profile, September 9
+
+`node tests/performance/profile-card-pointer.mjs data/card-pointer [baseline-commit-sha]` loads the actual app with 1,000 isolated synthetic printing rows, fourteen location tags and twenty-four cached local SVG artwork URLs. It runs three 270-move horizontal sweeps: traversal, crossing the 200ms dwell boundary, then active direct pickup/drag with an 8ms pause between automated moves. The baseline commit is `3969ed3`. Results and Chromium trace aggregates are in `card-pointer-results.json`; the command also saves a raw Chromium performance trace. No account credentials or live writes are used.
+
+| Engine / phase | Frame p95 before → after (ms) | Event → rAF p95 before → after (ms) | Pointer handler max before → after (ms) |
+| --- | --- | --- | --- |
+| Chromium traversal | 16.7 → 16.7 | 0.3 → 0.2 | 1.3 → 0.1 |
+| Chromium dwell boundaries | 16.7 → 16.8 | 0.2 → 0.2 | 1.4 → 0.1 |
+| Chromium paced drag | 16.7 → 16.7 | 0.2 → 0.2 | 4.3 → 2.7 |
+| WebKit traversal | 30 → 16 | 28 → 14 | 2 → 1 |
+| WebKit dwell boundaries | 30 → 17 | 28 → 15 | 2 → 1 |
+| WebKit paced drag | 16 → 16 | 15 → 15 | 5 → 5 |
+
+The WebKit drag maximum frame interval fell from 108ms to 30ms after removing body-wide inherited cursor/selection styles; the intermediate run still applying those styles peaked at 110ms. Chromium's worst style-update trace event fell from 12.65ms to 0.43ms, with total layout time 63.8ms → 48.6ms across all phases. Maximum drawing layers fell from seven to six during hover and sixteen to thirteen during drag. No phase replaced the grid; at most one application frame was pending and none remained after idle. Chromium's final Long Tasks observer recorded zero tasks above 50ms; WebKit does not expose that observer here.
+
+The implementation coalesces hover resolution into rAF, reads the stable source plane before style changes, computes preview bounds without a write/read layout round trip, batches wrapped-label measurement at pickup, caches wheel/preview nodes, avoids restarting drag target transitions, and uses box shadows instead of filtering transformed subtrees. Selection remains blocked during pickup through active-source styles and a temporary gesture guard. Finite spring reveals, smoothed tilt, touch scrolling, frozen wheel targets and explicit ownership confirmation remain covered by E2E tests.
+
+These are individual desktop runs with automated browser pointer input, not physical mouse input-to-photon measurements or proof of an OS cursor fix. Timing quantization and browser-driver scheduling differ; shorter event-to-rAF values do not rank hardware. Repeated SVG fixtures exclude real image-download/decode pressure, and GPU memory is unavailable. The grid still renders all returned rows. The regression gate checks bounded work and cleanup rather than flaky hardware timing thresholds.
+
 September 9, 2026. `tests/ui/card-actions.spec.js` renders 1,000 controlled catalogue cards with local SVG artwork. Desktop-host observations were 84 ms in Chromium and 199 ms in WebKit from search submission to the expected DOM count; these are individual fixture samples, not percentile estimates or provider/image-download timings. Subsequent regression samples vary.
 
 The test counts requestAnimationFrame callbacks during idle windows and after hover departure: no continuing callbacks. Computed styles confirm no per-card `will-change`. Hover and active drag use a single preview/ghost; the artwork viewer promotes only its active image. The grid itself still renders all returned cards and is not virtualized.
 
 Phone-sized Chromium/WebKit tests inspect the bounded wheel and native tap, plus controlled pointer-event pinch, scroll cancellation and long press. Screenshots are attached to test output. This does not verify physical iPhone gestures, frame rate, memory pressure or GPU behavior. Deployed LIVE-17/18 separately verify genuine JWT/Dynamo transactions and review persistence, with a controlled lost-response delivery check.
+
+
+## Shared tile correction and bounded renderer comparison
+
+The corrected shared tile is image-only in owned/deck/tag/catalogue/Home views. Native Chromium/WebKit clicks and phone-sized taps open the same-route 300% inspector. The 200% hover's visible inner artwork has distinct corner/center transform matrices while its outer hit rectangle stays unchanged; 200ms dwell resets on early leave. Both zoom reveals use a finite damped spring with overshoot/settle and no reduced-motion animation. Full-size translucent direct pickup is tested at all four edges of 1280×720, 390×844, 320×568 and 844×390 viewports. Labels are measured, wrapped and fitted once; screenshots verify readable targets. The inspector's phone panels and desktop left/right positions are checked, alongside quantity failure/retry/reload and account-change rejection.
+
+`node tests/performance/compare-card-renderers.mjs` reproduces a bounded rendering prototype. September 9 results are saved in `card-renderer-results.json`; screenshots are generated in `data/card-renderers`. Each engine/backend runs 240 animation callbacks: 80 at 200%, 80 at 300%, then 80 with a translucent dragged copy. All variants use the same 1,000-card DOM background, active artwork, pointer path, six readable DOM action targets and metadata content. CSS keeps the active text in DOM; Canvas/WebGL rasterize it into a 488×680 texture. Canvas 2D approximates perspective with an 8×8 triangle mesh; WebGL draws a textured projective quad. This prototype compares the compositor, not full application behavior: action persistence, hit testing, navigation and accessibility are separately covered by production E2E tests.
+
+| Engine | Renderer | Frame interval p50 / p95 (ms) | Synthetic input → rAF p50 / p95 (ms) | JS submit p95 (ms) | Estimated missed 60Hz slots | Drawing layers |
+| --- | --- | --- | --- | --- | --- | --- |
+| chromium | css | 16.7 / 16.8 | 7.3 / 15.1 | 0.1 | 0 | 10 |
+| chromium | canvas2d | 16.7 / 16.8 | 7 / 12.1 | 0.4 | 0 | 10 |
+| chromium | webgl | 16.7 / 16.7 | 7.2 / 11.6 | 0.1 | 0 | 10 |
+| webkit | css | 16 / 16 | 15 / 17 | 0 | 0 | Unavailable |
+| webkit | canvas2d | 14 / 22 | 10 / 13 | 1 | 0 | Unavailable |
+| webkit | webgl | 8 / 17 | 8 / 16 | 1 | 0 | Unavailable |
+
+These are individual controlled runs, not confidence intervals. Timers and scheduling differ across engines; WebKit's shorter median is not evidence that its prototype runs faster on a phone. The input metric measures synthetic event handling to animation callback, not physical input-to-photon latency. Missed slots are rounded estimates from callback intervals, not compositor frame-drop telemetry. Layer counts come from Chromium's LayerTree; GPU memory and WebKit layer counts were unavailable. Chromium WebGL reported SwiftShader; WebKit reported “Apple GPU.” Neither identifies verified physical user hardware.
+
+Visual inspection found Canvas 2D mesh seams and resampling artifacts. WebGL's textured text remains raster content, while the CSS version preserves selectable, accessible DOM text. Chromium's frame intervals and layer counts were effectively tied; Canvas 2D submitted more JS work, and WebGL supplied no demonstrated advantage sufficient to replace the existing DOM controls. Retain CSS transforms and active-only animation. This conclusion does not claim CSS is unaccelerated or rule out a different result on actual hardware. The production grid still renders all returned cards; it is not virtualized.

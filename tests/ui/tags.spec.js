@@ -142,6 +142,7 @@ test("UC-10 contextual typed tags, allocation shortfall, rename, filtering and s
   await page.locator("#create-tag button").click();
   await page.locator("#tags-close").click();
   await page.locator(".card").click();
+  await page.locator('[data-artwork="details"]').click();
   await page.locator("#edit-card-tags").click();
   await page.locator("#add-location").click();
   await page.getByLabel("Copies at location 1").fill("3");
@@ -156,8 +157,11 @@ test("UC-10 contextual typed tags, allocation shortfall, rename, filtering and s
   await expect(page.locator(".card .allocation-warning")).toHaveText(
     "3 assigned · 2 owned",
   );
-  await expect(page.locator(".card .card-tags")).toContainText("<Deck A>");
+  await expect(page.locator(".card .card-hover-tags")).toContainText(
+    "<Deck A>",
+  );
   await page.locator(".card").click();
+  await page.locator('[data-artwork="details"]').click();
   await page.locator("#quantity").fill("1");
   await page.getByRole("button", { name: "Save quantity" }).click();
   await expect(page.locator(".card .allocation-warning")).toHaveText(
@@ -190,6 +194,7 @@ test("UC-10 contextual typed tags, allocation shortfall, rename, filtering and s
   await page.locator("#back-tags").click();
   await page.locator("#tags-close").click();
   await page.locator(".card").click();
+  await page.locator('[data-artwork="details"]').click();
   await page.locator("#edit-card-tags").click();
   await page.getByRole("button", { name: "Remove location 1" }).click();
   await page
