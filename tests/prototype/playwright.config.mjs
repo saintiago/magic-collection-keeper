@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import { fileURLToPath } from "node:url";
 export default defineConfig({
   testDir: ".",
   testMatch: "*.spec.js",
@@ -9,9 +10,10 @@ export default defineConfig({
     { name: "webkit", use: { browserName: "webkit" } },
   ],
   webServer: {
+    cwd: fileURLToPath(new URL("../..", import.meta.url)),
     command: "node tests/prototype/serve.mjs",
     url: "http://127.0.0.1:3120",
-    reuseExistingServer: true,
+    reuseExistingServer: !process.env.CI,
   },
   reporter: "list",
 });
