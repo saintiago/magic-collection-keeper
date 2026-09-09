@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures.js";
+import { mockVisualReading } from "./visual-fixture.js";
 test("UC-07 completion waits for collection refresh before allowing close", async ({
   page,
 }) => {
@@ -79,12 +80,7 @@ test("UC-08 optional candidate choice is separate from failed reads and requires
     }
     return r.fulfill({ json: [] });
   });
-  await page.route("**/recognition.js", (r) =>
-    r.fulfill({
-      contentType: "text/javascript",
-      body: 'export async function stopRecognition(){}; export async function recognizeCard(){return {name:"Scanned Card",text:"Scanned Card",confidence:40};}',
-    }),
-  );
+  await mockVisualReading(page, { card });
   await page.route("**/api/search?*", (r) =>
     r.fulfill({ json: { cards: [card], total: 1, hasMore: false } }),
   );

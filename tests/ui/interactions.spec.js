@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures.js";
+import { mockVisualReading } from "./visual-fixture.js";
 const a = {
   id: "a",
   oracle_id: "oa",
@@ -262,12 +263,7 @@ test("UC-08 missing camera and uploaded photo recognition failure", async ({
       throw new DOMException("None", "NotFoundError");
     };
   });
-  await page.route("**/recognition.js", (r) =>
-    r.fulfill({
-      contentType: "text/javascript",
-      body: 'export async function stopRecognition(){}; export async function recognizeCard(){throw new Error("Model unavailable")};',
-    }),
-  );
+  await mockVisualReading(page, { failAlways: true });
   await page.goto("/#collection");
   await page.locator("#scan").click();
   await page.locator("#camera-start").click();

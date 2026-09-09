@@ -2,6 +2,8 @@ import { parseList } from "./import.js";
 import { listQuery } from "./catalog-query.js";
 import { batchShell, reviewRows } from "./batch-view.js";
 import { createScanner } from "./scanner.js";
+import { config } from "./auth.js";
+import { createScanRecognition } from "./scan-recognition.js";
 export function setupBatch({ api, onSaved }) {
   let rows = [],
     busy = false;
@@ -194,6 +196,9 @@ export function setupBatch({ api, onSaved }) {
   }
   const scanner = createScanner({
     api,
+    recognition: createScanRecognition(api, {
+      cloudEnabled: config.backendRecognition === true,
+    }),
     onReview: (scanned) => open("review", scanned),
   });
   document.getElementById("scan").onclick = () => scanner.open();

@@ -1,0 +1,26 @@
+[
+  {
+    "key": "adaptive",
+    "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+    "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553",
+    "name": "Adaptive Training Post",
+    "url": "https://cards.scryfall.io/normal/front/4/7/4796e5e4-515c-4d89-92da-b2d5b5b39557.jpg?1783907159",
+    "sha256": "03a53910a88381e2e1e3320d8039b7cc25527c9b4caa1a9f16743b44421c04c4"
+  },
+  {
+    "key": "bolt",
+    "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+    "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070",
+    "name": "Lightning Bolt",
+    "url": "https://cards.scryfall.io/normal/front/e/7/e768c957-3a1f-42f5-853a-96942f645df5.jpg?1783941805",
+    "sha256": "addec86a68a7556fe92faee1189394447c1c597529402d6612e9fbf116438f1a"
+  },
+  {
+    "key": "ring",
+    "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+    "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487",
+    "name": "Sol Ring",
+    "url": "https://cards.scryfall.io/normal/front/b/7/b79cb394-eb91-4b3b-91d4-c6a0f723feb1.jpg?1783938815",
+    "sha256": "f336ded9d57cb5d0501990185af16c9c08cbca5ffe66ae5eca3ec5a5f0ffee20"
+  }
+]

@@ -1,12 +1,12 @@
 import { scannerShell, possibleMatches } from "./scan-view.js";
 import { startCamera, stopCamera, capture, signature } from "./camera.js";
-import { recognizeCard, stopRecognition } from "./recognition.js";
 import { createTransitionGate } from "./scan-transition.js";
-import { resolveScan } from "./scan-resolution.js";
 import { createScanAudio } from "./scan-audio.js";
 import { createScanWheel } from "./scan-wheel.js";
 
-export function createScanner({ api, onReview }) {
+export function createScanner({ api, onReview, recognition = null }) {
+  const mode = recognition?.kind || "hybrid";
+  let requestController = new AbortController();
   const dialog = document.createElement("dialog");
   dialog.className = "scanner-dialog";
   dialog.setAttribute("aria-label", "Continuous card scanner");
@@ -23,11 +23,37 @@ export function createScanner({ api, onReview }) {
     processing = false,
     session = 0,
     attempt = 0,
-    muted = false;
+    muted = false,
+    preparationAttempt = 0;
   const el = (id) => dialog.querySelector(`#${id}`);
   const status = (text) => {
     if (dialog.open) el("scan-status").textContent = text;
   };
+  function prepareRecognition() {
+    if (recognition?.kind !== "hybrid") return;
+    const id = ++preparationAttempt;
+    let label = el("scan-preparation");
+    if (!label) {
+      label = document.createElement("p");
+      label.id = "scan-preparation";
+      label.className = "recognition-notice";
+      label.setAttribute("aria-live", "polite");
+      el("scan-status").before(label);
+    }
+    label.textContent =
+      "Preparing faster recognition… You can start the camera.";
+    recognition.prepare().then(
+      () => {
+        if (dialog.open && id === preparationAttempt)
+          label.textContent = "Scanner ready.";
+      },
+      () => {
+        if (dialog.open && id === preparationAttempt)
+          label.textContent =
+            "Recognition unavailable. Check your connection and retry.";
+      },
+    );
+  }
   function update(newest = false) {
     wheel.update(rows, newest);
     el("scan-count").textContent =
@@ -59,6 +85,8 @@ export function createScanner({ api, onReview }) {
   }
   function stop() {
     session++;
+    requestController.abort();
+    requestController = new AbortController();
     running = false;
     dialog.dataset.running = "false";
     processing = false;
@@ -68,7 +96,6 @@ export function createScanner({ api, onReview }) {
     const video = el("camera-video");
     if (video) video.srcObject = null;
     queue = [];
-    void stopRecognition();
     void audio?.close();
     if (el("camera-start")) {
       el("camera-start").hidden = false;
@@ -77,6 +104,7 @@ export function createScanner({ api, onReview }) {
   }
   function leave() {
     stop();
+    recognition?.dispose?.();
     wheel.destroy();
     dialog.close();
     document.documentElement.classList.remove("scanning");
@@ -89,11 +117,18 @@ export function createScanner({ api, onReview }) {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden && dialog.open) {
       stop();
+      recognition?.dispose?.();
       update();
       status("Camera paused in the background. Tap Start camera to resume.");
     }
   });
   window.addEventListener("pagehide", stop);
+  window.addEventListener("keeper-sign-out", () => {
+    stop();
+    recognition?.dispose?.();
+    dialog.close();
+    document.documentElement.classList.remove("scanning");
+  });
   function enqueue(canvas) {
     if (
       rows.length + possible.length + queue.length + Number(processing) >=
@@ -122,24 +157,40 @@ export function createScanner({ api, onReview }) {
       );
       return;
     }
-    queue.push({ row, canvas });
+    queue.push({ row, canvas, capturedAt: performance.now() });
     void drain(session);
   }
   async function drain(current) {
     if (processing) return;
     processing = true;
     while (queue.length && current === session && dialog.open) {
-      const { row, canvas } = queue.shift();
+      const { row, canvas, capturedAt } = queue.shift();
+      const began = performance.now();
+      let failure = null;
       let result;
       try {
-        status("Reading card locally… Keep each card still until the cue.");
-        const reading = await recognizeCard(canvas);
-        if (current !== session) return;
-        result = await resolveScan(reading, api);
+        status(
+          recognition
+            ? "Reading card… Keep each card still until the cue."
+            : "Reading card locally… Keep each card still until the cue.",
+        );
+        result = await recognition.recognize(canvas, {
+          attempt: row.scanId,
+          signal: AbortSignal.any([
+            requestController.signal,
+            AbortSignal.timeout(35000),
+          ]),
+        });
+        if (current === session && dialog.open && el("scan-preparation"))
+          el("scan-preparation").textContent = "Scanner ready.";
       } catch (error) {
+        failure = { name: error.name, status: error.status || null };
         result = {
           name: "Unclear reading",
-          error: "Recognition failed. Move the card out, then try again.",
+          error:
+            error.code === "SCANNER_PREPARING"
+              ? "Scanner is still preparing. Wait for Ready, then move the card out and retry."
+              : "Recognition failed. Move the card out, then try again.",
           selected: null,
         };
       }
@@ -159,6 +210,32 @@ export function createScanner({ api, onReview }) {
           : row.candidates?.length
             ? "Printing uncertain. Move the card out and retry, or open Possible matches. No copy counted."
             : `${row.error || "No match. Move the card out, then try again."} No copy counted.`,
+      );
+      window.dispatchEvent(
+        new CustomEvent("keeper-scan-measurement", {
+          detail: {
+            mode,
+            attempt: row.scanId,
+            captureToCandidateMs: performance.now() - capturedAt,
+            processingAndHydrationMs: performance.now() - began,
+            queueMs: began - capturedAt,
+            outcome: failure
+              ? "error"
+              : row.selected
+                ? "selected"
+                : row.candidates?.length
+                  ? "possible"
+                  : "unknown",
+            failure,
+            selected: row.selected?.id || null,
+            candidates:
+              row.candidates?.map((c) => ({
+                id: c.id,
+                oracle_id: c.oracle_id,
+              })) || [],
+            ...row.measurement,
+          },
+        }),
       );
     }
     if (current === session) processing = false;
@@ -180,6 +257,7 @@ export function createScanner({ api, onReview }) {
       timer = setTimeout(() => tick(current), 120);
   }
   async function start() {
+    prepareRecognition();
     stop();
     update();
     const current = session;
@@ -215,6 +293,39 @@ export function createScanner({ api, onReview }) {
       queue = [];
       attempt = 0;
       dialog.innerHTML = scannerShell(muted);
+      dialog.dataset.recognition = recognition ? "backend" : "local";
+      if (recognition) {
+        const notice = document.createElement("p");
+        notice.className = "recognition-notice";
+        notice.textContent =
+          "Recognition runs on this device when ready. If needed, card crops are sent securely for temporary cloud processing and are not saved. ";
+        const source = document.createElement("button");
+        source.textContent = "Recognition source (AGPL-3.0)";
+        source.onclick = async () => {
+          const current = session;
+          source.disabled = true;
+          try {
+            const blob = await api("/api/recognition/source", {
+              responseType: "blob",
+              signal: requestController.signal,
+            });
+            if (current !== session || !dialog.open) return;
+            const url = URL.createObjectURL(blob),
+              link = document.createElement("a");
+            link.href = url;
+            link.download = "keeper-recognition-source.zip";
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          } catch {
+            if (current === session)
+              status("Source download unavailable. Please retry.");
+          } finally {
+            source.disabled = false;
+          }
+        };
+        notice.append(source);
+        el("scan-status").before(notice);
+      }
       audio = createScanAudio({ onState: soundState });
       audio.setMuted(muted);
       wheel = createScanWheel({
@@ -247,6 +358,9 @@ export function createScanner({ api, onReview }) {
             row.finish = row.selected.finishes[0];
           rows.push(row);
           rows.sort((a, b) => a.scanId - b.scanId);
+          status(
+            `${row.name} selected for final printing and ownership review.`,
+          );
         }
         possible.splice(index, 1);
         update(true);
@@ -288,6 +402,7 @@ export function createScanner({ api, onReview }) {
       };
       document.documentElement.classList.add("scanning");
       dialog.showModal();
+      prepareRecognition();
       el("camera-start").focus();
       update();
     },

@@ -1,6 +1,6 @@
 # Magic Collection Keeper
 
-A private Magic collection app with Scryfall printing lookup, persistent inventory, reviewed text imports, and browser camera OCR.
+A private Magic collection app with Scryfall printing lookup, persistent inventory, reviewed text imports, and assisted camera recognition.
 
 - App: https://d3r1grp0vvv9f.cloudfront.net
 - Repository: https://github.com/saintiago/magic-collection-keeper
@@ -20,7 +20,7 @@ Use arrow keys and Enter, click, or tap a suggestion to open its dedicated card 
 
 Focus the empty search field to see your ten most recent searches and card choices, newest first. A recent card opens its page; a recent text query runs that search again. Typing switches back to ordinary name suggestions. History records submitted searches and cards selected from suggestions or search results, not unfinished typing. It stays on this browser under your verified account across reloads and sign-ins; signing out hides it. **Clear recent searches**, beside the search label, removes this account's history on this browser. Storage failures are shown explicitly and do not prevent searching.
 
-**Scan cards** opens a full-screen rear-camera view. Tap **Start camera** once for browser camera permission and audio activation; a single test tone is distinct from card cues. **Test sound** activates or resumes audio on a direct tap. The separate sound status reports browser readiness; it cannot prove device volume or audibility. Hold a card inside the guide until the cue, then slide the next card in. There is no per-card shutter or Next button. A rising two-note cue means a confident exact printing was matched into the review batch; a lower cue means retry or check optional possible matches. Sound can be muted. The lower quarter contains a chronological wheel: only matched cards enter the wheel and copy count. The newest card sits at the bottom beside its controls without a trailing gap; scrolling back centers older selections with newer cards below. Swipe or use arrow keys. Only the selected reading has quantity and remove controls. **Back** or **Review** stops the camera and opens final printing/finish/condition review and ownership confirmation. Failed reads show a brief retry message without adding a copy or an empty review form. Up to ten recent uncertain readings with actual candidates are available in a separate **Possible matches** area; choosing a printing is optional. Back/Review includes only selected printings and discards unresolved attempts. Photo upload remains available before starting the camera. Images stay in the browser.
+**Scan cards** opens a full-screen rear-camera view. Tap **Start camera** once for browser camera permission and audio activation; a single test tone is distinct from card cues. **Test sound** activates or resumes audio on a direct tap. The separate sound status reports browser readiness; it cannot prove device volume or audibility. Hold a card inside the guide until the cue, then slide the next card in. There is no per-card shutter or Next button. A lower cue means retry or check possible matches. Every recognized candidate needs an explicit printing choice before it enters the review batch; unresolved captures never play success. Sound can be muted. The lower quarter contains a chronological wheel: only matched cards enter the wheel and copy count. The newest card sits at the bottom beside its controls without a trailing gap; scrolling back centers older selections with newer cards below. Swipe or use arrow keys. Only the selected reading has quantity and remove controls. **Back** or **Review** stops the camera and opens final printing/finish/condition review and ownership confirmation. Failed reads show a brief retry message without adding a copy or an empty review form. Up to ten recent uncertain readings with actual candidates are available in a separate **Possible matches** area; choosing a printing is optional. Back/Review includes only selected printings and discards unresolved attempts. Photo upload remains available before starting the camera. With server recognition enabled, bounded card crops are processed temporarily by the private service; they are not stored. The scanner shows this notice and offers Recognition source (AGPL-3.0) before capture. Server matches currently require an explicit printing choice; automatic ML confirmations remain disabled. The scanner prepares browser ONNX on entry and uses Lambda while those models load or if local recognition fails. Ready models run on the device. There is no model selector.
 
 **Import list** accepts pasted Moxfield/Arena/MTGO-style text, for example:
 
@@ -63,16 +63,18 @@ The footer shows the version of the app files you actually loaded. Select it for
 
 Source cards with unresolved or digital-only printing references remain listed under **Printing review needed** in their deck source. They do not increase the physical owned total until their paper printing is resolved. Imports preserve exported variants; they cannot independently verify the edition, condition or finish of a physical card.
 
-Node 24 and npm are required.
+Node 24, npm and Python 3.12 are required.
 
 ```sh
 npm ci
 node scripts/build-name-index.mjs
+pip install -r recognition/requirements-visual.txt
+python recognition/scripts/prepare.py --visual-only
 npm run build
 npm start
 ```
 
-Open http://localhost:3000. The local server binds to loopback and uses `data/collection.sqlite`; it has no cloud sign-in and is a separate collection. `npm run dev` restarts the server after changes. OCR assets are downloaded at build time and served from the app's own origin.
+Open http://localhost:3000. The local server binds to loopback and uses `data/collection.sqlite`; it has no cloud sign-in and is a separate collection. `npm run dev` restarts the server after changes. Verified recognition assets are prepared at build time and served from the app's own origin. Their initial download is about 56.8 MB plus small app/runtime files; verified cached assets are reused where browser storage permits. See [measured comparison](tests/performance/EVIDENCE.md).
 
 ```sh
 npm test
@@ -82,7 +84,7 @@ npm run test:ui
 
 ## Scope and limitations
 
-OCR is an assisted capture tool, not guaranteed recognition. English names work best; small footer text, foils, glare, rotation, sleeves and older layouts can require manual correction. Visual transition checks detect sustained changes, then require a stable, detailed image; they do not identify card geometry or artwork. A stationary card is read once. Another identical copy can be counted after a visible removal or slide and re-entry. A swap with no visible change cannot be distinguished, and glare, camera movement or a textured background can still cause an extra or unclear reading. Keep the camera steady and review the batch. Recognition is sequential with a small bounded capture queue; moving cards too quickly gives a retry cue without counting a copy. Batches remain limited to 50 matched/pending entries. Review batches are in browser memory and are lost on reload. No physical phone-camera accuracy benchmark has been performed.
+Recognition is an assisted capture tool, not guaranteed identification. Small footer text, foils, glare, rotation, sleeves and older layouts can require manual correction. Visual transition checks detect sustained changes, then require a stable, detailed image; they do not identify card geometry or artwork. A stationary card is read once. Another identical copy can be counted after a visible removal or slide and re-entry. A swap with no visible change cannot be distinguished, and glare, camera movement or a textured background can still cause an extra or unclear reading. Keep the camera steady and review the batch. Recognition is sequential with a small bounded capture queue; moving cards too quickly gives a retry cue without counting a copy. Batches remain limited to 50 matched/pending entries. Review batches are in browser memory and are lost on reload. No physical phone-camera accuracy benchmark has been performed.
 
 Images require a network connection; there is no offline image cache. The whole owned collection is loaded in the initial foundation, so very large inventories will need server pagination. Direct finish/condition editing uses remove-and-add; quantity is editable in place. Price tracking, Cardmarket listing/repricing and deck building are not implemented.
 
@@ -95,3 +97,7 @@ Name suggestions use a compact public catalog of every available translated and 
 Catalog publication runs weekly on Monday at 06:23 UTC. Browsers and warm servers check for changes weekly on use, in the background, and download only a changed snapshot. A complete verified replacement switches atomically; failed updates retain the last good snapshot and mark delayed freshness. Weekly publication plus weekly checks can delay a new name by roughly fourteen days, plus upstream bulk/scheduler delay and up to five minutes of cached suggestions. Manual workflow runs and deployment bootstrap remain available. No change was made to the 24-hour card-detail/Scryfall caches.
 
 Selecting a name resolves its exact English printing and Oracle identity directly. A bounded browser detail cache and a server cache reuse printings previously fetched in another result batch. Public names/details never contain your owned quantities or tags; those indicators come from your verified account's collection. Exact language/finish selection and explicit ownership confirmation remain unchanged.
+
+## Server-assisted recognition
+
+The CollectorVision visual model and independently replaceable Paddle ONNX text adapter are documented in [recognition/README.md](recognition/README.md), including AGPL source access, frozen artifact installation and the isolated administrator review packet. The deployment enables it only after authenticated cloud verification. When enabled, the scanner explains transient server processing before capture and offers the covered source download. ML automatic printing confirmations remain disabled pending real-frame calibration.

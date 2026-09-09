@@ -1,4 +1,15 @@
 import { test, expect } from "./fixtures.js";
+import { mockVisualReading, choosePossible } from "./visual-fixture.js";
+
+test.beforeEach(async ({ page, browserName }) => {
+  const canEmulate = await page.evaluate(
+    () => typeof HTMLCanvasElement.prototype.captureStream === "function",
+  );
+  test.skip(
+    browserName === "webkit" && !canEmulate,
+    "This WebKit build cannot emulate camera streams; photo/model/review checks run separately.",
+  );
+});
 
 async function fixture(page, { failFirst = false, slow = false } = {}) {
   await page.route("**/api/collection", (r) => r.fulfill({ json: [] }));
@@ -19,12 +30,18 @@ async function fixture(page, { failFirst = false, slow = false } = {}) {
       },
     }),
   );
-  await page.route("**/recognition.js", (r) =>
-    r.fulfill({
-      contentType: "text/javascript",
-      body: `let count=0; export async function stopRecognition(){window.stoppedOCR=true;} export async function recognizeCard(){count++; ${slow ? "await new Promise(r=>setTimeout(r,3000));" : ""} if (${failFirst} && count===1) throw new Error("Unclear card"); return {name:"Lightning Bolt",text:"Lightning Bolt",confidence:95,exact:{set:"m11",number:"149",language:"en"}};}`,
-    }),
-  );
+  await mockVisualReading(page, {
+    card: {
+      id: "scan-test",
+      name: "Lightning Bolt",
+      set: "m11",
+      collector_number: "149",
+      lang: "en",
+      finishes: ["nonfoil"],
+    },
+    delayMs: slow ? 3000 : 0,
+    failFirst,
+  });
   await page.addInitScript(() => {
     const ActualAudio = window.AudioContext;
     window.cueNotes = [];
@@ -62,11 +79,13 @@ async function fixture(page, { failFirst = false, slow = false } = {}) {
   await page.goto("/#collection");
   await page.locator("#scan").click();
   await page.locator("#camera-start").click();
+  if (!failFirst && !slow) await choosePossible(page);
 }
 async function nextIdentical(page) {
   await page.evaluate(() => window.paintCard("blank"));
   await page.waitForTimeout(500);
   await page.evaluate(() => window.paintCard("first"));
+  await choosePossible(page);
 }
 test("UC-14 hands-free identical copies, stationary suppression, error cue recovery and safe review", async ({
   page,
@@ -82,9 +101,9 @@ test("UC-14 hands-free identical copies, stationary suppression, error cue recov
   expect(await page.evaluate(() => window.cueNotes)).toEqual([440, 230, 170]);
   await nextIdentical(page);
   await expect(page.locator(".scan-option")).toHaveCount(1);
-  await expect(page.locator("#scan-status")).toContainText("matched");
+  await expect(page.locator("#scan-status")).toContainText("selected");
   expect(await page.evaluate(() => window.cueNotes)).toEqual([
-    440, 230, 170, 660, 880,
+    440, 230, 170, 230, 170,
   ]);
   await nextIdentical(page);
   await expect(page.locator(".scan-option")).toHaveCount(2);
@@ -106,11 +125,11 @@ test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove co
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await fixture(page);
-  await expect(page.locator("#scan-status")).toContainText("matched");
+  await expect(page.locator("#scan-status")).toContainText("selected");
   for (let i = 0; i < 4; i++) {
     await nextIdentical(page);
     await expect(page.locator(".scan-option")).toHaveCount(i + 2);
-    await expect(page.locator("#scan-status")).toContainText("matched");
+    await expect(page.locator("#scan-status")).toContainText("selected");
   }
   await expect(
     page.locator('.scan-option[aria-selected="true"]'),
@@ -233,7 +252,7 @@ test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove co
   const notes = await page.evaluate(() => window.cueNotes.length);
   await nextIdentical(page);
   await expect(page.locator(".scan-option")).toHaveCount(5);
-  await expect(page.locator("#scan-status")).toContainText("matched");
+  await expect(page.locator("#scan-status")).toContainText("selected");
   expect(await page.evaluate(() => window.cueNotes.length)).toBe(notes);
   const layout = await page.evaluate(() => ({
     width: document.querySelector(".scanner-dialog").getBoundingClientRect()
@@ -279,13 +298,14 @@ test("UC-14 back cancels in-flight recognition and background shuts down capture
   await expect(page.locator("#camera-start")).toBeEnabled();
 });
 
-test("UC-14 sampling continues during slow OCR and removing the last queued reading leaves safe selection", async ({
+test("UC-14 sampling continues during slow recognition and removing the last queued reading leaves safe selection", async ({
   page,
 }) => {
   await fixture(page, { slow: true });
   await expect(page.locator("#scan-status")).toContainText("Reading card");
   await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
   await nextIdentical(page);
+  await choosePossible(page);
   await expect(page.locator(".scan-option")).toHaveCount(2, { timeout: 12000 });
   await page.locator(".scan-remove").click();
   await expect(page.locator(".scan-option")).toHaveCount(1);
@@ -304,7 +324,7 @@ test("UC-14 suspended audio cannot block hands-free capture", async ({
     AudioContext.prototype.resume = () => new Promise(() => {});
   });
   await fixture(page);
-  await expect(page.locator("#scan-status")).toContainText("matched");
+  await expect(page.locator("#scan-status")).toContainText("selected");
   await expect(page.locator(".scan-option")).toHaveCount(1);
   await page.locator("#scan-back").click();
   expect(
@@ -325,7 +345,7 @@ test("UC-14 audio interruption remains visible and explicit testing resumes with
     };
   });
   await fixture(page);
-  await expect(page.locator("#scan-status")).toContainText("matched");
+  await expect(page.locator("#scan-status")).toContainText("selected");
   await expect(page.locator("#scan-sound-state")).toContainText("Audio ready");
   await page.evaluate(() => window.scanAudioContext.suspend());
   await expect(page.locator("#scan-sound-state")).toContainText("Sound paused");

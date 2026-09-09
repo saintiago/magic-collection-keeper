@@ -1,0 +1,114 @@
+{
+    "StackResourceSummaries": [
+        {
+            "LogicalResourceId": "Endpoint",
+            "PhysicalResourceId": "arn:aws:sagemaker:us-east-1:698643713254:endpoint/magic-keeper-sagemaker",
+            "ResourceType": "AWS::SageMaker::Endpoint",
+            "LastUpdatedTimestamp": "2026-09-08T23:51:49.620000+00:00",
+            "ResourceStatus": "UPDATE_COMPLETE",
+            "DriftInformation": {
+                "StackResourceDriftStatus": "NOT_CHECKED"
+            }
+        },
+        {
+            "LogicalResourceId": "EndpointConfig",
+            "PhysicalResourceId": "arn:aws:sagemaker:us-east-1:698643713254:endpoint-config/EndpointConfig-3bycFHnGEGVY",
+            "ResourceType": "AWS::SageMaker::EndpointConfig",
+            "LastUpdatedTimestamp": "2026-09-08T23:42:01.078000+00:00",
+            "ResourceStatus": "UPDATE_COMPLETE",
+            "DriftInformation": {
+                "StackResourceDriftStatus": "NOT_CHECKED"
+            }
+        },
+        {
+            "LogicalResourceId": "Integration",
+            "PhysicalResourceId": "m3wi4e7",
+            "ResourceType": "AWS::ApiGatewayV2::Integration",
+            "LastUpdatedTimestamp": "2026-09-08T23:40:34.766000+00:00",
+            "ResourceStatus": "CREATE_COMPLETE",
+            "DriftInformation": {
+                "StackResourceDriftStatus": "NOT_CHECKED"
+            }
+        },
+        {
+            "LogicalResourceId": "Model",
+            "PhysicalResourceId": "arn:aws:sagemaker:us-east-1:698643713254:model/Model-7fKP8SlO26jD",
+            "ResourceType": "AWS::SageMaker::Model",
+            "LastUpdatedTimestamp": "2026-09-08T23:41:57.386000+00:00",
+            "ResourceStatus": "UPDATE_COMPLETE",
+            "DriftInformation": {
+                "StackResourceDriftStatus": "NOT_CHECKED"
+            }
+        },
+        {
+            "LogicalResourceId": "ModelLogs",
+            "PhysicalResourceId": "/aws/sagemaker/Endpoints/magic-keeper-sagemaker",
+            "ResourceType": "AWS::Logs::LogGroup",
+            "LastUpdatedTimestamp": "2026-09-08T23:29:19.898000+00:00",
+            "ResourceStatus": "CREATE_COMPLETE",
+            "DriftInformation": {
+                "StackResourceDriftStatus": "NOT_CHECKED"
+            }
+        },
+        {
+            "LogicalResourceId": "ModelRole",
+            "PhysicalResourceId": "magic-keeper-sagemaker-ModelRole-4JVfdK6VtjU2",
+            "ResourceType": "AWS::IAM::Role",
+            "LastUpdatedTimestamp": "2026-09-08T23:29:27.322000+00:00",
+            "ResourceStatus": "CREATE_COMPLETE",
+            "DriftInformation": {
+                "StackResourceDriftStatus": "NOT_CHECKED"
+            }
+        },
+        {
+            "LogicalResourceId": "Permission",
+            "PhysicalResourceId": "magic-keeper-sagemaker-Permission-nkjIn73BvnwU",
+            "ResourceType": "AWS::Lambda::Permission",
+            "LastUpdatedTimestamp": "2026-09-08T23:40:34.371000+00:00",
+            "ResourceStatus": "CREATE_COMPLETE",
+            "DriftInformation": {
+                "StackResourceDriftStatus": "NOT_CHECKED"
+            }
+        },
+        {
+            "LogicalResourceId": "Proxy",
+            "PhysicalResourceId": "magic-keeper-sagemaker-proxy",
+            "ResourceType": "AWS::Lambda::Function",
+            "LastUpdatedTimestamp": "2026-09-08T23:40:32.732000+00:00",
+            "ResourceStatus": "CREATE_COMPLETE",
+            "DriftInformation": {
+                "StackResourceDriftStatus": "NOT_CHECKED"
+            }
+        },
+        {
+            "LogicalResourceId": "ProxyLogs",
+            "PhysicalResourceId": "/aws/lambda/magic-keeper-sagemaker-proxy",
+            "ResourceType": "AWS::Logs::LogGroup",
+            "LastUpdatedTimestamp": "2026-09-08T23:29:20.059000+00:00",
+            "ResourceStatus": "CREATE_COMPLETE",
+            "DriftInformation": {
+                "StackResourceDriftStatus": "NOT_CHECKED"
+            }
+        },
+        {
+            "LogicalResourceId": "ProxyRole",
+            "PhysicalResourceId": "magic-keeper-sagemaker-ProxyRole-hjlyMZrpsK9l",
+            "ResourceType": "AWS::IAM::Role",
+            "LastUpdatedTimestamp": "2026-09-08T23:29:27.208000+00:00",
+            "ResourceStatus": "CREATE_COMPLETE",
+            "DriftInformation": {
+                "StackResourceDriftStatus": "NOT_CHECKED"
+            }
+        },
+        {
+            "LogicalResourceId": "Route",
+            "PhysicalResourceId": "3to28wd",
+            "ResourceType": "AWS::ApiGatewayV2::Route",
+            "LastUpdatedTimestamp": "2026-09-08T23:40:36.767000+00:00",
+            "ResourceStatus": "CREATE_COMPLETE",
+            "DriftInformation": {
+                "StackResourceDriftStatus": "NOT_CHECKED"
+            }
+        }
+    ]
+}

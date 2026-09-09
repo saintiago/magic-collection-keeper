@@ -1,0 +1,13 @@
+{
+  "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+  "models": {
+    "cornelius.onnx": "650da3cc3e9ac778c6951de631f824ec1e63bdabf3aaa39a35d7435af625612e",
+    "milo.onnx": "bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+  },
+  "catalog": {
+    "key": "milo1/scryfall/mtg",
+    "version": 27,
+    "rows": 112049,
+    "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+  }
+}
