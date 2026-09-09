@@ -67,9 +67,15 @@ export async function exerciseCardActions(
       await page.mouse.move(x + 15, y);
     }
     await expect(page.locator(".card-drag-copy")).toBeVisible();
-    const xy = await page
-      .locator(`.card-action-target[data-tag-id="${tagId}"]`)
-      .evaluate((el) => [parseFloat(el.style.left), parseFloat(el.style.top)]);
+    const direct = page.locator(`.card-action-target[data-tag-id="${tagId}"]`);
+    const overflow = (await direct.count()) === 0;
+    const destination = overflow
+      ? page.locator('.card-action-target[data-tag-id="more"]')
+      : direct;
+    const xy = await destination.evaluate((el) => [
+      parseFloat(el.style.left),
+      parseFloat(el.style.top),
+    ]);
     const bounds = await page
       .locator(".card-action-target")
       .evaluateAll((nodes) =>
@@ -113,6 +119,24 @@ export async function exerciseCardActions(
     } else {
       await page.mouse.move(...xy, { steps: 5 });
       await page.mouse.up();
+    }
+    if (overflow) {
+      await expect(page.locator(".card-action-more")).toBeVisible();
+      const label =
+        tagId === "edit"
+          ? "Review & add"
+          : tagId === "details"
+            ? "Card details"
+            : created.find((tag) => tag.id === tagId)?.label;
+      expect(label).toBeTruthy();
+      if (!["edit", "details"].includes(tagId))
+        await page.locator(".card-action-more input").fill(label);
+      await activate(
+        page.locator(".card-action-more").getByRole("button", {
+          name: label,
+          exact: true,
+        }),
+      );
     }
   }
   let otherContext;
