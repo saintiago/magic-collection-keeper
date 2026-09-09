@@ -6,6 +6,8 @@ import collector_vision as cv
 import onnxruntime as ort
 from timing import measured, stage, TimedCallable
 from adapters.visual_search import rank_identity, supported
+from adapters.visual_lighting import lighting_variants
+from adapters.card_regions import inspect_regions
 
 ort.disable_telemetry_events()
 
@@ -56,7 +58,7 @@ class CollectorVision:
             "models": manifest["models"],
             "catalog": manifest["catalog"],
             "calibration": "research-cosine-v1-not-approved",
-            "processing": "keeper-visual-v2-rotation-reference-margin",
+            "processing": "keeper-visual-v4-bounded-lighting",
         }
         self.identities = np.array(
             [
@@ -87,6 +89,10 @@ class CollectorVision:
                 "calibration": self.version["calibration"],
             },
         }
+        presence = measured("visual.card_regions", inspect_regions, bgr, self.detector)
+        result["evidence"]["cardPresence"] = presence
+        if presence["state"] != "single":
+            return result
         if not found.card_present:
             return result
         h, w = bgr.shape[:2]
@@ -112,6 +118,23 @@ class CollectorVision:
                 matches, other = alternative, alternative_other
                 corners = np.roll(corners, -2, axis=0)
                 orientation = "rotated_180"
+        original_score = matches[0]["score"]
+        preprocessing = "original"
+        # Only plausible, well-separated identities get bounded correction trials.
+        # A correction cannot change the proposed identity or bypass the threshold.
+        if not supported(matches[0]["score"], other) and original_score >= .6 and original_score - other >= .12:
+            identity = matches[0]["identifiers"].get("scryfall_oracle")
+            for variant, adjusted in lighting_variants(crop):
+                for angle in (0, 180):
+                    embedding = measured("visual.embed", self.embedder.embed, adjusted.rotate(angle))
+                    alternative, alternative_other = measured("visual.search", self.search, embedding)
+                    if alternative and alternative[0]["identifiers"].get("scryfall_oracle") == identity and alternative[0]["score"] > matches[0]["score"]:
+                        matches, other = alternative, alternative_other
+                        corners = np.roll(found.corners, -2, axis=0) if angle else found.corners
+                        orientation = "rotated_180" if angle else "upright"
+                        preprocessing = variant
+                if supported(matches[0]["score"], other):
+                    break
         first = matches[0]
         # These conservative research thresholds only admit optional candidates.
         result["identity_supported"] = supported(first["score"], other)
@@ -120,6 +143,8 @@ class CollectorVision:
             differentIdentityMargin=first["score"] - other,
             sharpness=found.sharpness,
             orientation=orientation,
+            preprocessing=preprocessing,
+            originalTopScore=original_score,
         )
         result["corners"] = corners
         result["candidates"] = [

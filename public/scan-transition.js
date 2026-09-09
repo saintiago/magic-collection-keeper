@@ -28,7 +28,22 @@ export function createTransitionGate({
     departureSince,
     armed = true;
   return {
-    observe(frame, now) {
+    observe(frame, now, presence = "single") {
+      if (presence !== "single") {
+        candidate = undefined;
+        stableSince = undefined;
+        // An overlap cannot rearm capture. An observed empty guide can establish
+        // physical departure, preserving consecutive identical-copy scanning.
+        if (
+          presence === "none" &&
+          !armed &&
+          visualDifference(anchor, frame) > 16
+        ) {
+          departureSince ??= now;
+          if (now - departureSince >= departureMs) armed = true;
+        } else departureSince = undefined;
+        return false;
+      }
       if (!armed) {
         if (visualDifference(anchor, frame) > 16) {
           departureSince ??= now;

@@ -101,6 +101,10 @@ if visual_only:
     )
     sys.exit(0)
 
+names = json.loads((root / "name-catalog.json").read_text())
+fetch(names["url"], artifacts / "title-names.json.gz", names["sha256"])
+shutil.copyfile(root / "name-catalog.json", artifacts / "name-catalog.json")
+
 
 for source in json.loads((root.parent / "tests/performance/sources.json").read_text()):
     if source["key"] not in ("bolt", "ring"):

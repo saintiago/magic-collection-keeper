@@ -20,7 +20,10 @@
     "ProvisionedConcurrency": {
       "Type": "Number",
       "Default": 0,
-      "AllowedValues": [0, 1],
+      "AllowedValues": [
+        0,
+        1
+      ],
       "Description": "0 has no idle provisioning charge and can cold-start; 1 requires explicit cost approval"
     }
   },
@@ -64,7 +67,10 @@
               "Principal": {
                 "Service": "lambda.amazonaws.com"
               },
-              "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+              "Action": [
+                "ecr:BatchGetImage",
+                "ecr:GetDownloadUrlForLayer"
+              ],
               "Condition": {
                 "ArnLike": {
                   "aws:sourceArn": {
@@ -107,10 +113,34 @@
               "Statement": [
                 {
                   "Effect": "Allow",
-                  "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
                   "Resource": {
-                    "Fn::GetAtt": ["Logs", "Arn"]
+                    "Fn::GetAtt": [
+                      "Logs",
+                      "Arn"
+                    ]
                   }
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "BoundedCardRecognitionModels",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "bedrock:InvokeModel"
+                  ],
+                  "Resource": [
+                    "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0",
+                    "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0"
+                  ]
                 }
               ]
             }
@@ -124,21 +154,28 @@
       "Properties": {
         "FunctionName": "magic-keeper-recognition",
         "PackageType": "Image",
-        "Architectures": ["x86_64"],
+        "Architectures": [
+          "x86_64"
+        ],
         "Code": {
           "ImageUri": {
             "Ref": "ImageUri"
           }
         },
         "Role": {
-          "Fn::GetAtt": ["Role", "Arn"]
+          "Fn::GetAtt": [
+            "Role",
+            "Arn"
+          ]
         },
         "MemorySize": 3008,
         "Timeout": 20,
         "Environment": {
           "Variables": {
             "RECOGNITION_ARTIFACTS": "/var/task/artifacts",
-            "ORT_DISABLE_TELEMETRY": "1"
+            "ORT_DISABLE_TELEMETRY": "1",
+            "KEEPER_TITLE_MODEL": "amazon.nova-lite-v1:0",
+            "KEEPER_IDENTITY_MODEL": "amazon.nova-pro-v1:0"
           }
         }
       }
@@ -164,7 +201,10 @@
           "Ref": "Function"
         },
         "FunctionVersion": {
-          "Fn::GetAtt": ["Version", "Version"]
+          "Fn::GetAtt": [
+            "Version",
+            "Version"
+          ]
         },
         "ProvisionedConcurrencyConfig": {
           "Fn::If": [
@@ -300,7 +340,9 @@
               "Version": "2012-10-17",
               "Statement": [
                 {
-                  "Action": ["ecr:GetAuthorizationToken"],
+                  "Action": [
+                    "ecr:GetAuthorizationToken"
+                  ],
                   "Effect": "Allow",
                   "Resource": "*"
                 },
@@ -316,7 +358,10 @@
                   ],
                   "Effect": "Allow",
                   "Resource": {
-                    "Fn::GetAtt": ["Images", "Arn"]
+                    "Fn::GetAtt": [
+                      "Images",
+                      "Arn"
+                    ]
                   }
                 }
               ]
@@ -326,17 +371,62 @@
         ]
       },
       "Type": "AWS::IAM::Role"
+    },
+    "IndependentRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Condition": "DeployEngine",
+      "Properties": {
+        "ApiId": {
+          "Ref": "ApiId"
+        },
+        "RouteKey": "POST /api/recognize-independent",
+        "AuthorizationType": "JWT",
+        "AuthorizerId": {
+          "Ref": "AuthorizerId"
+        },
+        "Target": {
+          "Fn::Join": [
+            "/",
+            [
+              "integrations",
+              {
+                "Ref": "Integration"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "IndependentInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Condition": "DeployEngine",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "Alias"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/POST/api/recognize-independent"
+        }
+      }
     }
   },
   "Outputs": {
     "RepositoryUri": {
       "Value": {
-        "Fn::GetAtt": ["Images", "RepositoryUri"]
+        "Fn::GetAtt": [
+          "Images",
+          "RepositoryUri"
+        ]
       }
     },
     "ImagePublisherRoleArn": {
       "Value": {
-        "Fn::GetAtt": ["ImagePublisher", "Arn"]
+        "Fn::GetAtt": [
+          "ImagePublisher",
+          "Arn"
+        ]
       }
     }
   }

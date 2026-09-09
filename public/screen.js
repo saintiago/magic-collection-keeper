@@ -1,10 +1,11 @@
 export function routeMode(hash) {
+  if (hash.startsWith("#review=")) return "import";
   if (hash.startsWith("#card=")) return "card";
   return hash.startsWith("#tag=") || hash === "#collection"
     ? "collection"
     : hash === "#catalog"
       ? "catalog"
-      : hash === "#import"
+      : hash === "#import" || hash.startsWith("#import=")
         ? "import"
         : "home";
 }
@@ -33,7 +34,6 @@ export function showScreen(mode) {
   $("refresh").hidden = !collection;
   $("add").hidden = !collection;
   $("catalog-nav").hidden = !collection;
-  $("import-list").hidden = !importing;
   for (const id of ["scan", "import-nav", "manage-tags"])
     $(id).hidden = importing;
   $("collection-nav").classList.toggle("active", collection);

@@ -54,7 +54,7 @@ test("LIVE-13 unknown recognition does not count copies; optional candidates and
   await expect(page.locator("#scan-status")).toContainText("No copy counted", {
     timeout: 60000,
   });
-  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
   await expect(page.locator(".scan-option")).toHaveCount(0);
   await expect(page.locator("#scan-review")).toBeDisabled();
   await page.screenshot({
@@ -63,21 +63,12 @@ test("LIVE-13 unknown recognition does not count copies; optional candidates and
   images.exact = (await publicCardFrame(page)).split(",")[1];
   for (let i = 1; i <= 5; i++) {
     await upload("exact");
-    const panel = page.locator("#scan-possible");
-    await expect(panel).toBeVisible({ timeout: 60000 });
-    if (!(await panel.evaluate((el) => el.open)))
-      await panel.locator("summary").click();
-    await panel
-      .getByRole("button", {
-        name: "Adaptive Training Post · tdc #58 · en",
-        exact: true,
-      })
-      .click();
     await expect(page.locator(".scan-option")).toHaveCount(i);
   }
   await upload("exact");
-  await expect(page.locator("#scan-possible")).toBeVisible({ timeout: 60000 });
-  await expect(page.locator("#scan-count")).toHaveText("5 matched · 5 copies");
+  await expect(page.locator("#scan-count")).toHaveText("6 queued · 6 copies", {
+    timeout: 60000,
+  });
   const wheel = page.locator("#scan-wheel");
   await expect
     .poll(() =>
@@ -121,10 +112,10 @@ test("LIVE-13 unknown recognition does not count copies; optional candidates and
     path: test.info().outputPath("scanner-live-history.png"),
   });
   await page.locator("#scan-review").click();
-  await expect(page.locator(".review-row")).toHaveCount(5);
-  await expect(page.locator("#save-batch")).toBeDisabled();
-  page.once("dialog", (d) => d.accept());
-  await page.locator("#batch-close").click();
+  await expect(page.locator(".draft-row")).toHaveCount(6);
+  await expect(page.locator("#draft-add")).toBeEnabled();
+  await page.locator("#draft-clear").click();
+  await expect(page.locator(".draft-row")).toHaveCount(0);
   expect(writes).toEqual([]);
   await page.locator("#sign-out").click();
   console.log(
@@ -134,8 +125,8 @@ test("LIVE-13 unknown recognition does not count copies; optional candidates and
       syntheticPhotos: true,
       physicalCameraVerified: false,
       failedCopies: 0,
-      matchedRows: 5,
-      unselectedCandidateExcluded: true,
+      suggestedRows: 6,
+      explicitOwnershipRequired: true,
       writes,
     }),
   );

@@ -67,7 +67,8 @@ test("worker preparation is shared; reviewed canonical metadata is reused withou
       },
     });
     const row = await pending;
-    assert.equal(row.selected, null);
+    assert.deepEqual(row.selected, card);
+    assert.equal(row.suggested, true);
     assert.equal(row.measurement.cacheHits, attempt - 1);
   }
   assert.equal(reads, 1);

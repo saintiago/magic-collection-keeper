@@ -19,7 +19,9 @@ export async function routeCollection(
   if (path === "/api/suggest" && method === "GET")
     return service.suggest((query.q || "").trim());
   if (path === "/api/import-draft" && method === "GET")
-    return service.getDraft(owner);
+    return service.getDraft(owner, query);
+  if (path === "/api/import-draft/stage" && method === "POST")
+    return service.stageDraft(owner, input);
   if (path === "/api/import-draft" && method === "PATCH")
     return service.saveDraft(owner, input);
   if (path === "/api/import-draft/fetch" && method === "POST")
@@ -28,6 +30,10 @@ export async function routeCollection(
     return service.addDraft(owner, input);
   if (path === "/api/import-draft/clear" && method === "POST")
     return service.clearDraft(owner, input);
+  if (path === "/api/collection/batch" && method === "POST")
+    return service.addBatch(owner, input);
+  if (path === "/api/collection/batch" && method === "GET")
+    return service.batchStatus(owner, query.id);
   if (path === "/api/collection" && method === "GET")
     return service.list(owner);
   if (path === "/api/collection" && method === "POST")

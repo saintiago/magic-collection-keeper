@@ -13,18 +13,17 @@ test("LIVE-02 real text import, explicit ownership and durable quantity", async 
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.locator(".auth-dialog")).toHaveCount(0);
   await page.locator("#import-nav").click();
-  await page.locator("#import-list").click();
+  await page.locator("#draft-show-text").click();
   await page.locator("#import-text").fill("1 Lightning Bolt (M11) 149");
-  await page.locator("#preview").click();
-  await expect(page.locator(".candidate")).not.toHaveValue("", {
+  await page.locator("#draft-text-form button").click();
+  await expect(page.locator(".draft-row")).toHaveCount(1, {
     timeout: 25000,
   });
-  await page.locator("#ownership").check();
-  await page.locator("#save-batch").click();
+  await page.locator("#draft-add").click();
   await expect(
-    page.getByText("1 reviewed entries added.", { exact: false }),
+    page.getByText("Added 1 new copies", { exact: false }),
   ).toBeVisible();
-  await page.locator("#batch-close").click();
+  await page.locator("#draft-back").click();
   await page.locator("#collection-nav").click();
   await page.reload();
   await expect(page.locator("#total")).toHaveText("1");

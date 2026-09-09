@@ -55,6 +55,8 @@
   border-radius: 6px;
 }
 .draft-no-image {
+  overflow-wrap: anywhere;
+  font-size: 12px;
   width: 112px;
   min-width: 112px;
   height: 156px;
@@ -109,6 +111,28 @@
   display: flex;
   gap: 12px;
   align-items: center;
+}
+.new-import {
+  margin: 12px 0;
+}
+.new-import summary {
+  cursor: pointer;
+  padding: 10px 0;
+  font-weight: 600;
+}
+.new-import > button {
+  margin-bottom: 12px;
+}
+.recognition-alternatives {
+  display: block;
+  margin: 12px 0;
+  font-size: 13px;
+}
+.recognition-alternatives select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
 }
 .draft-actions p {
   flex: 1;

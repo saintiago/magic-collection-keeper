@@ -1,7 +1,11 @@
 import { importPageView, draftTagForm } from "./import-page-view.js";
 import { esc, picture } from "./view.js";
+import { parseList } from "./import.js";
+import { listQuery } from "./catalog-query.js";
+import { collectionIdentity } from "./auth.js";
+import { snapshotKey } from "./collection-cache.js";
 
-export function createImportPage({ root, api, onAdded }) {
+export function createImportPage({ root, api, onAdded, back, select }) {
   let data = null,
     busy = false,
     message = "",
@@ -9,7 +13,12 @@ export function createImportPage({ root, api, onAdded }) {
     url = "",
     editingRows = null,
     generation = 0,
-    visible = false;
+    visible = false,
+    textOpen = false,
+    text = "",
+    textIntent = null,
+    textKey = null,
+    textStorageError = "";
   const dialog = document.createElement("dialog");
   dialog.className = "draft-dialog";
   document.body.append(dialog);
@@ -22,6 +31,9 @@ export function createImportPage({ root, api, onAdded }) {
       url,
       rows: editingRows,
       dirty: Boolean(editingRows),
+      textOpen,
+      text,
+      textFrozen: Boolean(textIntent),
     }));
   const close = () => dialog.close();
   dialog.addEventListener("click", (event) => {
@@ -31,6 +43,10 @@ export function createImportPage({ root, api, onAdded }) {
     generation++;
     data = null;
     editingRows = null;
+    textIntent = null;
+    textKey = null;
+    text = "";
+    textStorageError = "";
     close();
     draw();
   });
@@ -60,15 +76,78 @@ export function createImportPage({ root, api, onAdded }) {
     }
   }
   const accept = (result) => {
-    data = result;
+    const previous = data?.draft?.id;
+    const pending = (
+      result.pending_drafts ||
+      (data?.pending_drafts || []).filter(
+        (item) => result.draft || item.id !== previous,
+      )
+    ).map((item) =>
+      item.id === result.draft?.id
+        ? { ...item, copies: result.summary.reviewed_copies }
+        : item,
+    );
+    if (result.draft && !pending.some((item) => item.id === result.draft.id))
+      pending.push({
+        id: result.draft.id,
+        name: result.draft.name,
+        kind: result.draft.provider === "reviewed-capture" ? "capture" : "url",
+        copies: result.summary.reviewed_copies,
+        created_at: result.draft.created_at,
+      });
+    data = { ...result, pending_drafts: pending };
+    if (visible)
+      history.replaceState(
+        history.state,
+        "",
+        result.draft ? "#import=" + result.draft.id : "#import",
+      );
     editingRows = null;
-    message = result.draft
-      ? "Saved to your account. Changes are saved as you edit."
-      : "No pending import.";
+    message =
+      textStorageError ||
+      (result.draft
+        ? "Saved to your account. Changes are saved as you edit."
+        : "No pending import.");
   };
   async function load() {
-    return run(() => api("/api/import-draft"), accept);
+    const id = location.hash.startsWith("#import=")
+      ? location.hash.slice(8)
+      : "";
+    return run(async () => {
+      if (!textKey) {
+        const key =
+          "keeper-pending-text:" + snapshotKey(await collectionIdentity());
+        textKey = key;
+        try {
+          const saved = JSON.parse(localStorage.getItem(key) || "null");
+          if (
+            saved &&
+            (!saved.intent ||
+              !Array.isArray(saved.intent.rows) ||
+              saved.intent.rows.length > 50 ||
+              typeof saved.text !== "string")
+          )
+            throw Error("Invalid saved text import");
+          if (saved?.intent) {
+            textIntent = saved.intent;
+            text = saved.text;
+            textOpen = true;
+          }
+        } catch {
+          textStorageError =
+            "An unfinished text import could not be loaded on this browser. Account-saved imports remain available. Reload before staging another text list.";
+        }
+      }
+      return api(
+        "/api/import-draft" + (id ? "?" + new URLSearchParams({ id }) : ""),
+      );
+    }, accept);
   }
+  const identity = () => ({
+    id: data.draft.id,
+    version: data.draft.version,
+    kind: data.draft.provider === "reviewed-capture" ? "capture" : "url",
+  });
   async function save(rows) {
     editingRows = rows;
     return run(
@@ -76,8 +155,7 @@ export function createImportPage({ root, api, onAdded }) {
         api("/api/import-draft", {
           method: "PATCH",
           body: JSON.stringify({
-            id: data.draft.id,
-            version: data.draft.version,
+            ...identity(),
             rows: editingRows.map(
               ({
                 id,
@@ -87,6 +165,7 @@ export function createImportPage({ root, api, onAdded }) {
                 in_deck,
                 locations,
                 tag_ids,
+                condition,
               }) => ({
                 id,
                 quantity,
@@ -95,6 +174,7 @@ export function createImportPage({ root, api, onAdded }) {
                 in_deck,
                 locations,
                 tag_ids,
+                condition,
               }),
             ),
           }),
@@ -151,7 +231,7 @@ export function createImportPage({ root, api, onAdded }) {
   }
   function editPrinting(row) {
     const turn = generation;
-    dialog.innerHTML = `<button type="button" class="close" data-close aria-label="Close printing choices">×</button><h2>Choose an exact printing</h2><form id="draft-printing-search"><label>Search printings<input name="query" required value="${esc('!"' + row.original.name.replaceAll('"', "") + '" lang:' + (row.card?.lang || row.original.language || "en"))}"></label><button class="primary">Find printings</button></form><p id="draft-printing-status" role="status"></p><div id="draft-printing-results"></div><button id="draft-printing-more" class="secondary" hidden>More printings</button>`;
+    dialog.innerHTML = `<button type="button" class="close" data-close aria-label="Close printing choices">×</button><h2>Choose an exact printing</h2><form id="draft-printing-search"><label>Search printings<input name="query" required value="${esc('!"' + (row.card?.name || row.original.name).replaceAll('"', "") + '" lang:' + (row.card?.lang || row.original.language || "en"))}"></label><button class="primary">Find printings</button></form><p id="draft-printing-status" role="status"></p><div id="draft-printing-results"></div><button id="draft-printing-more" class="secondary" hidden>More printings</button>`;
     dialog.showModal();
     let page = 0,
       query = "",
@@ -215,6 +295,61 @@ export function createImportPage({ root, api, onAdded }) {
     search();
   }
   root.addEventListener("submit", (event) => {
+    if (event.target.id === "draft-text-form") {
+      event.preventDefault();
+      text = root.querySelector("#import-text").value;
+      const turn = generation + 1;
+      return run(
+        async () => {
+          if (textStorageError) throw Error(textStorageError);
+          if (!textIntent) {
+            const lines = parseList(text);
+            if (
+              !lines.length ||
+              lines.length > 50 ||
+              lines.some((row) => row.error)
+            )
+              throw Error("Paste 1–50 valid card lines.");
+            const rows = [];
+            for (const row of lines) {
+              const result = await api(
+                "/api/search?" + new URLSearchParams({ q: listQuery(row) }),
+              );
+              if (turn !== generation || !visible)
+                throw Error(
+                  "Import matching canceled. Your owned cards are unchanged.",
+                );
+              const card = result.cards.length === 1 ? result.cards[0] : null;
+              rows.push({
+                id: crypto.randomUUID(),
+                name: card?.name || row.name || row.raw,
+                printing_id: card?.id || null,
+                quantity: row.quantity,
+                finish: row.finish,
+                condition: "UNK",
+              });
+            }
+            textIntent = { id: crypto.randomUUID(), kind: "text", rows };
+          }
+          localStorage.setItem(
+            textKey,
+            JSON.stringify({ intent: textIntent, text }),
+          );
+          return api("/api/import-draft/stage", {
+            method: "POST",
+            body: JSON.stringify(textIntent),
+          });
+        },
+        (result) => {
+          localStorage.removeItem(textKey);
+          textIntent = null;
+          text = "";
+          textOpen = false;
+          accept(result);
+          select(result.draft?.id);
+        },
+      );
+    }
     if (event.target.id !== "draft-fetch-form") return;
     event.preventDefault();
     url = root.querySelector("#moxfield-url").value;
@@ -234,11 +369,22 @@ export function createImportPage({ root, api, onAdded }) {
       changeRow(row.dataset.row, { quantity: Number(event.target.value) });
     if (event.target.dataset.field === "finish")
       changeRow(row.dataset.row, { finish: event.target.value });
+    if (event.target.dataset.field === "condition")
+      changeRow(row.dataset.row, { condition: event.target.value });
+    if (event.target.dataset.field === "identity")
+      changeRow(row.dataset.row, { printing_id: event.target.value });
   });
   root.addEventListener("click", async (event) => {
     const button = event.target.closest("button");
     if (!button || busy) return;
     const id = button.id;
+    if (id === "draft-back") return back();
+    if (button.dataset.draft) return select(button.dataset.draft);
+    if (id === "draft-show-text") {
+      textOpen = !textOpen;
+      draw();
+      return;
+    }
     if (id === "draft-reload") {
       editingRows = null;
       return load();
@@ -250,8 +396,7 @@ export function createImportPage({ root, api, onAdded }) {
           api("/api/import-draft/clear", {
             method: "POST",
             body: JSON.stringify({
-              id: data.draft.id,
-              version: data.draft.version,
+              ...identity(),
             }),
           }),
         (result) => {
@@ -266,12 +411,17 @@ export function createImportPage({ root, api, onAdded }) {
           api("/api/import-draft/add", {
             method: "POST",
             body: JSON.stringify({
-              id: data.draft.id,
-              version: data.draft.version,
+              ...identity(),
             }),
           }),
         async (result) => {
-          data = { draft: null };
+          data = {
+            draft: null,
+            pending_drafts: (data.pending_drafts || []).filter(
+              (item) => item.id !== data.draft.id,
+            ),
+          };
+          history.replaceState(history.state, "", "#import");
           editingRows = null;
           url = "";
           message = `Added ${result.additions} new copies from ${result.reviewed_copies} reviewed copies. This import is saved; retries cannot add duplicates.`;
@@ -295,10 +445,12 @@ export function createImportPage({ root, api, onAdded }) {
   return {
     show() {
       visible = true;
-      load();
+      return load();
     },
     hide() {
       visible = false;
+      generation++;
+      busy = false;
       close();
     },
   };

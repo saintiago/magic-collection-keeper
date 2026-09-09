@@ -75,18 +75,14 @@ export async function exerciseBackendScanner({ page }, test) {
       buffer: Buffer.from(frames[key], "base64"),
     });
   try {
-    await page.locator("#scan").click();
+    await page.locator("#recognition-info").click();
     await expect(
-      page.getByText("Recognition runs on this device", { exact: false }),
+      page.getByText("Recognition uses this device", { exact: false }),
     ).toBeVisible();
     expect(process.env.RECOGNITION_SOURCE_SHA256).toMatch(/^[a-f0-9]{64}$/);
-    await expect(page.locator("#scan-preparation")).toHaveText(
-      "Scanner ready.",
-      { timeout: 90000 },
-    );
     const downloading = page.waitForEvent("download");
     await page
-      .getByRole("button", { name: "Recognition source (AGPL-3.0)" })
+      .getByRole("button", { name: "Download Recognition source (AGPL-3.0)" })
       .click();
     const download = await downloading;
     const stream = await download.createReadStream();
@@ -98,34 +94,23 @@ export async function exerciseBackendScanner({ page }, test) {
     }
     expect(bytes).toBeGreaterThan(100000);
     expect(hash.digest("hex")).toBe(process.env.RECOGNITION_SOURCE_SHA256);
+    await page.getByRole("button", { name: "Close about" }).click();
+    await page.locator("#scan").click();
+    await expect(page.locator("#scan-preparation")).toHaveText(
+      "Scanner ready.",
+      { timeout: 90000 },
+    );
     await upload("blank");
     await expect(page.locator("#scan-status")).toContainText(
       "No copy counted",
       { timeout: 60000 },
     );
-    await expect(page.locator("#scan-count")).toHaveText(
-      "0 matched · 0 copies",
-    );
+    await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
     await expect(page.locator("#scan-possible")).toBeHidden();
     for (let i = 0; i < 2; i++) {
       await upload("card");
-      await expect(page.locator("#scan-possible")).toBeVisible({
-        timeout: 60000,
-      });
       await expect(page.locator("#scan-count")).toHaveText(
-        `${i} matched · ${i} copies`,
-      );
-      const panel = page.locator("#scan-possible");
-      if (!(await panel.evaluate((el) => el.open)))
-        await panel.locator("summary").click();
-      await panel
-        .getByRole("button", {
-          name: "Adaptive Training Post · tdc #58 · en",
-          exact: true,
-        })
-        .click();
-      await expect(page.locator("#scan-count")).toHaveText(
-        `${i + 1} matched · ${i + 1} copies`,
+        `${i + 1} queued · ${i + 1} copies`,
       );
     }
     await expect
@@ -145,16 +130,15 @@ export async function exerciseBackendScanner({ page }, test) {
     });
     await page.locator(".scan-plus").click();
     await page.locator("#scan-review").click();
-    await expect(page.locator(".review-row")).toHaveCount(2);
-    await expect(page.locator("#save-batch")).toBeDisabled();
+    await expect(page.locator(".draft-row")).toHaveCount(2);
+    await expect(page.locator("#draft-add")).toBeEnabled();
     expect(await liveApi(page, "/api/collection")).toEqual([]);
-    await page.locator("#ownership").check();
-    await page.locator("#save-batch").click();
-    await expect(page.locator("#batch-status")).toContainText(
-      "2 reviewed entries added",
+    await page.locator("#draft-add").click();
+    await expect(page.locator(".import-status")).toContainText(
+      "Added 3 new copies",
       { timeout: 30000 },
     );
-    await page.locator("#batch-close").click();
+    await page.locator("#draft-back").click();
     await page.reload();
     await expect(page.locator("#total")).toHaveText("3");
     const saved = await liveApi(page, "/api/collection");

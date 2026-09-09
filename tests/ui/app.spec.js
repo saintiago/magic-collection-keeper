@@ -59,40 +59,7 @@ test("empty collection, catalog review, quantity edit, filtering and removal", a
   await page.getByRole("button", { name: "Remove this entry" }).click();
   await expect(page.getByText("Your collection begins here")).toBeVisible();
 });
-test("import needs review and ownership confirmation; unresolved lines stay out", async ({
-  page,
-}) => {
-  let writes = 0;
-  await page.route("**/api/search?*", (r) =>
-    r.fulfill({ json: { cards: [card], total: 1, hasMore: false } }),
-  );
-  await page.route("**/api/collection", (r) => {
-    if (r.request().method() === "POST") writes++;
-    return r.fulfill({ json: [] });
-  });
-  await page.goto("/#collection");
-  await page.locator("#import-nav").click();
-  await page.getByRole("button", { name: "Import list" }).click();
-  await page
-    .getByLabel("Moxfield card list")
-    .fill("2 Lightning Bolt (M11) 149\ninvalid line");
-  await page.getByRole("button", { name: "Preview matches" }).click();
-  await expect(
-    page.getByText("Review matches below.", { exact: false }),
-  ).toBeVisible();
-  expect(writes).toBe(0);
-  await expect(
-    page.getByRole("button", { name: "Add reviewed cards to collection" }),
-  ).toBeDisabled();
-  await page.locator("#ownership").check();
-  await page
-    .getByRole("button", { name: "Add reviewed cards to collection" })
-    .click();
-  await expect(
-    page.getByText("1 reviewed entries added.", { exact: false }),
-  ).toBeVisible();
-  expect(writes).toBe(1);
-});
+
 test("camera permission error offers photo fallback", async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "mediaDevices", {
@@ -138,10 +105,10 @@ test("real browser ONNX recognizes the frozen public fixture without selecting o
   await page
     .locator("#photo")
     .setInputFiles("recognition/artifacts/public-card-frame.jpg");
-  await expect(page.locator("#scan-possible")).toContainText(
+  await expect(page.locator("#scan-wheel")).toContainText(
     "Adaptive Training Post",
     { timeout: 30000 },
   );
-  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
   await expect(page.locator("#scan-mode")).toHaveCount(0);
 });

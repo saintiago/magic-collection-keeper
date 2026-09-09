@@ -22,19 +22,11 @@ test("LIVE-04 continuous synthetic camera with real recognition, real printing r
   await page.reload();
   await page.locator("#scan").click();
   await page.locator("#camera-start").click();
+  let count = 0;
   async function choose() {
-    await expect(page.locator("#scan-possible")).toBeVisible({
+    await expect(page.locator(".scan-option")).toHaveCount(++count, {
       timeout: 60000,
     });
-    const panel = page.locator("#scan-possible");
-    if (!(await panel.evaluate((el) => el.open)))
-      await panel.locator("summary").click();
-    await panel
-      .getByRole("button", {
-        name: "Adaptive Training Post · tdc #58 · en",
-        exact: true,
-      })
-      .click();
   }
   await choose();
   await expect(page.locator(".scan-option")).toHaveCount(1);
@@ -51,13 +43,12 @@ test("LIVE-04 continuous synthetic camera with real recognition, real printing r
   expect(
     await page.evaluate(() => window.syntheticStream.getTracks()[0].readyState),
   ).toBe("ended");
-  await expect(page.locator(".review-row")).toHaveCount(2);
-  await page.locator("#ownership").check();
-  await page.locator("#save-batch").click();
-  await expect(page.locator("#batch-status")).toContainText(
-    "2 reviewed entries added",
+  await expect(page.locator(".draft-row")).toHaveCount(2);
+  await page.locator("#draft-add").click();
+  await expect(page.locator(".import-status")).toContainText(
+    "Added 3 new copies",
   );
-  await page.locator("#batch-close").click();
+  await page.locator("#draft-back").click();
   await page.reload();
   await expect(page.locator("#total")).toHaveText("3");
   const saved = await liveApi(page, "/api/collection");

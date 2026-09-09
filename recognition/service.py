@@ -1,14 +1,16 @@
 """Application pipeline over independent visual/OCR ports. SPDX-License-Identifier: AGPL-3.0-only"""
 
 from time import perf_counter
-from policy import decide
+from policy import decide, needs_title_check, needs_vlm_check
 
 
 class RecognitionService:
-    def __init__(self, visual, ocr, *, allow_confirmed=False):
+    def __init__(self, visual, ocr, *, names=None, fallback=None, allow_confirmed=False):
         self.visual = visual
         self.ocr = ocr
         self.allow_confirmed = allow_confirmed
+        self.names = names or {}
+        self.fallback = fallback
 
     def recognize(self, image):
         started = perf_counter()
@@ -20,7 +22,8 @@ class RecognitionService:
             timings["visualMs"] = (perf_counter() - step) * 1000
         except Exception:
             return self._failure("visual_unavailable", started, timings, versions)
-        if not visual.get("identity_supported"):
+        aliases = self.names.get((visual.get("candidates") or [{}])[0].get("oracle_id"), [])
+        if not visual.get("identity_supported") and not needs_title_check(visual):
             result = decide(visual, {}, allow_confirmed=False)
         else:
             try:
@@ -33,7 +36,30 @@ class RecognitionService:
                     "footer": [],
                     "evidence": {"error": "ocr_unavailable"},
                 }
-            result = decide(visual, text, allow_confirmed=self.allow_confirmed)
+            result = decide(visual, text, aliases=aliases, allow_confirmed=self.allow_confirmed)
+            if result["status"] == "unknown" and needs_title_check(visual):
+                # A close visual score can choose the wrong 180-degree orientation.
+                # Check the opposite title once, without fuzzy title matching.
+                try:
+                    step = perf_counter()
+                    corners = list(visual["corners"])
+                    opposite = self.ocr.read(image, corners[2:] + corners[:2])
+                    timings["ocrOppositeMs"] = (perf_counter() - step) * 1000
+                    candidate = decide(visual, opposite, aliases=aliases, allow_confirmed=False)
+                    if candidate["status"] == "possible":
+                        result = candidate
+                        result["evidence"]["titleOrientation"] = "opposite"
+                except Exception:
+                    pass
+        if result["status"] == "unknown" and self.fallback and needs_vlm_check(visual):
+            versions["fallback"] = self.fallback.version
+            step = perf_counter()
+            try:
+                transcript = self.fallback.read(image, visual.get("corners"))
+                result = decide(visual, transcript, aliases=aliases, vision_language=True, allow_confirmed=False)
+            except Exception:
+                result["evidence"]["fallbackUnavailable"] = True
+            timings["visionLanguageMs"] = (perf_counter() - step) * 1000
         timings["totalMs"] = (perf_counter() - started) * 1000
         return {**result, "versions": versions, "timings": timings}
 

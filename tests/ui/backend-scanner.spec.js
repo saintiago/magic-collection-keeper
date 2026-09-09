@@ -59,9 +59,9 @@ test("UC-36 backend candidates remain optional until printing choice and final o
     }),
   );
   const photo = await setup(page);
-  await expect(
-    page.getByText("Recognition runs on this device", { exact: false }),
-  ).toBeVisible();
+  await expect(page.locator(".recognition-notice")).toHaveCount(0);
+  await page.locator("#scan-back").click();
+  await page.locator("#recognition-info").click();
   await page.route("**/api/recognition/source", (r) =>
     r.fulfill({
       contentType: "application/zip",
@@ -70,22 +70,21 @@ test("UC-36 backend candidates remain optional until printing choice and final o
   );
   const download = page.waitForEvent("download");
   await page
-    .getByRole("button", { name: "Recognition source (AGPL-3.0)" })
+    .getByRole("button", { name: "Download Recognition source (AGPL-3.0)" })
     .click();
   expect((await download).suggestedFilename()).toBe(
     "keeper-recognition-source.zip",
   );
+  await page.getByRole("button", { name: "Close about" }).click();
+  await page.locator("#scan").click();
   await page.locator("#photo").setInputFiles(photo);
-  await expect(page.locator("#scan-possible")).toBeVisible();
-  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
-  await page.locator("#scan-possible summary").click();
-  await page.getByRole("button", { name: "Sol Ring · cmm #396 · en" }).click();
-  await expect(page.locator("#scan-count")).toHaveText("1 matched · 1 copies");
+  await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
+  await expect(page.locator("#scan-possible")).toHaveCount(0);
   await page.screenshot({
     path: test.info().outputPath("backend-candidate-selected.png"),
   });
   await page.locator("#scan-review").click();
-  await expect(page.locator(".batch-dialog")).toBeVisible();
+  await expect(page.locator("#import-page")).toBeVisible();
   expect(writes).toBe(0);
 });
 test("UC-37 stalled preparation and unavailable cloud allow a bounded retry then recover without counting an unresolved card", async ({
@@ -103,21 +102,20 @@ test("UC-37 stalled preparation and unavailable cloud allow a bounded retry then
   );
   const photo = await setup(
     page,
-    `export function createBrowserRecognition(){ const ready=new Promise(resolve=>window.finishModels=resolve); return {kind:"browser-onnx", prepare:()=>ready, dispose(){}, recognize:async()=>({status:"possible",selected:null,candidates:[${JSON.stringify(card)}]})}; }`,
+    `export function createBrowserRecognition(){ const ready=new Promise(resolve=>window.finishModels=resolve); return {kind:"browser-onnx", prepare:()=>ready, dispose(){}, recognize:async()=>({status:"possible",selected:${JSON.stringify(card)},suggested:true,name:"Sol Ring",candidates:[${JSON.stringify(card)}]})}; }`,
   );
   await page.locator("#photo").setInputFiles(photo);
   await expect(page.locator("#scan-status")).toContainText(
     "Scanner is still preparing",
     { timeout: 15000 },
   );
-  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
   await page.evaluate(() => window.finishModels());
   await expect(page.locator("#scan-preparation")).toContainText(
     "Scanner ready",
   );
   await page.locator("#photo").setInputFiles(photo);
-  await expect(page.locator("#scan-possible")).toBeVisible();
-  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
   expect(writes).toBe(0);
 });
 test("UC-37 a retry after transient cloud preparation failure clears the unavailable status", async ({
@@ -145,9 +143,8 @@ test("UC-37 a retry after transient cloud preparation failure clears the unavail
     "Recognition unavailable",
   );
   await page.locator("#photo").setInputFiles(photo);
-  await expect(page.locator("#scan-possible")).toBeVisible();
+  await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
   await expect(page.locator("#scan-preparation")).toHaveText("Scanner ready.");
-  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
 });
 test("UC-36 busy, unknown and unapproved confirmations add no copy; closing cancels late recognition", async ({
   page,
@@ -210,9 +207,7 @@ test("UC-36 busy, unknown and unapproved confirmations add no copy; closing canc
     await expect(page.locator("#scan-status")).toContainText(
       next === "unknown" ? "No copy counted" : "Recognition failed",
     );
-    await expect(page.locator("#scan-count")).toHaveText(
-      "0 matched · 0 copies",
-    );
+    await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
     await expect(page.locator("#scan-possible")).toBeHidden();
   }
   mode = "late";
@@ -224,6 +219,6 @@ test("UC-36 busy, unknown and unapproved confirmations add no copy; closing canc
   lateResponse.release();
   await lateResponse.finished;
   await page.locator("#scan").click();
-  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
   await expect(page.locator("#scan-possible")).toBeHidden();
 });

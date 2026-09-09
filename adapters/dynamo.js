@@ -1,3 +1,4 @@
+import { createDynamoBatches } from "./dynamo-batches.js";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   DynamoDBDocumentClient,
@@ -34,8 +35,37 @@ export function createDynamoAdapters(tableName, rateKey = "scryfall") {
       );
     throw error;
   };
+  function inventoryUpdate(owner, input, card) {
+    const id = digest(
+      [card.id, card.lang, input.condition, input.finish].join("|"),
+    );
+    return {
+      TableName: tableName,
+      Key: { PK: userKey(owner), SK: id },
+      UpdateExpression:
+        "SET id=:id, printing_id=:p, #lang=:l, #condition=:c, #finish=:f, card=:card, updated_at=:now, created_at=if_not_exists(created_at,:now) ADD quantity :q",
+      ConditionExpression: "attribute_not_exists(quantity) OR quantity <= :max",
+      ExpressionAttributeNames: {
+        "#lang": "language",
+        "#condition": "condition",
+        "#finish": "finish",
+      },
+      ExpressionAttributeValues: {
+        ":id": id,
+        ":p": card.id,
+        ":l": card.lang,
+        ":c": input.condition,
+        ":f": input.finish,
+        ":card": card,
+        ":now": new Date().toISOString(),
+        ":q": input.quantity,
+        ":max": 100000 - input.quantity,
+      },
+    };
+  }
   return {
     repository: {
+      ...createDynamoBatches({ tableName, get, send, inventoryUpdate }),
       async getPrinting(id) {
         return (await get("PRINTINGS", id || "missing"))?.card;
       },
@@ -60,33 +90,7 @@ export function createDynamoAdapters(tableName, rateKey = "scryfall") {
           .map(({ PK, SK, ...row }) => row);
       },
       async add(owner, input, card) {
-        const id = digest(
-          [card.id, card.lang, input.condition, input.finish].join("|"),
-        );
-        const update = {
-          TableName: tableName,
-          Key: { PK: userKey(owner), SK: id },
-          UpdateExpression:
-            "SET id=:id, printing_id=:p, #lang=:l, #condition=:c, #finish=:f, card=:card, updated_at=:now, created_at=if_not_exists(created_at,:now) ADD quantity :q",
-          ConditionExpression:
-            "attribute_not_exists(quantity) OR quantity <= :max",
-          ExpressionAttributeNames: {
-            "#lang": "language",
-            "#condition": "condition",
-            "#finish": "finish",
-          },
-          ExpressionAttributeValues: {
-            ":id": id,
-            ":p": card.id,
-            ":l": card.lang,
-            ":c": input.condition,
-            ":f": input.finish,
-            ":card": card,
-            ":now": new Date().toISOString(),
-            ":q": input.quantity,
-            ":max": 100000 - input.quantity,
-          },
-        };
+        const update = inventoryUpdate(owner, input, card);
         const operationPK = `OPERATIONS#${owner}`,
           fingerprint = digest(JSON.stringify(input));
         async function alreadySaved() {

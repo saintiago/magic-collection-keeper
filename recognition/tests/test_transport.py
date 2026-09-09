@@ -8,6 +8,21 @@ import handler
 
 
 class Tests(unittest.TestCase):
+    def test_independent_route_same_auth_and_limits_separate_service(self):
+        event = self.event()
+        event["routeKey"] = "POST /api/recognize-independent"
+        engine = type("Engine", (), {"recognize": lambda _, img: {"status": "unknown"}})()
+        with patch.object(handler, "get_independent", return_value=engine) as independent, patch.object(handler, "get_engine") as primary:
+            self.assertEqual(handler.handler(event, None)["statusCode"], 200)
+            independent.assert_called_once()
+            primary.assert_not_called()
+            independent.reset_mock()
+            event["body"] = '{"owner":"spoof","image":"x","attempt":1}'
+            self.assertEqual(handler.handler(event, None)["statusCode"], 400)
+            event["requestContext"] = {}
+            self.assertEqual(handler.handler(event, None)["statusCode"], 401)
+            independent.assert_not_called()
+
     def test_invalid_request_never_initializes_models(self):
         event = self.event()
         event["body"] = "{}"

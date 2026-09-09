@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { resolveRecognition } from "./recognition-candidates.js";
-export function createBackendRecognition({ request }) {
+export function createBackendRecognition({
+  request,
+  endpoint = "/api/recognize",
+  provider = "lambda",
+}) {
   let active = false;
   const cache = new Map();
   const port = {
-    kind: "lambda",
+    kind: provider,
     async prepare({ signal } = {}) {
       const blank = document.createElement("canvas");
       blank.width = 200;
@@ -16,7 +20,7 @@ export function createBackendRecognition({ request }) {
       // on session entry. No camera image, ownership data or success cue is used.
       await port.recognize(blank, { signal, attempt: 100000 });
     },
-    async recognize(canvas, { signal, attempt }) {
+    async recognize(canvas, { signal, attempt, onStage }) {
       signal?.throwIfAborted();
       if (active) throw new Error("Scanner busy. Retry this card.");
       if (!Number.isInteger(attempt) || attempt < 1 || attempt > 100000)
@@ -41,7 +45,11 @@ export function createBackendRecognition({ request }) {
           binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
         signal?.throwIfAborted();
         const encoded = performance.now();
-        const data = await request("/api/recognize", {
+        onStage?.({
+          stage: provider === "bedrock-independent" ? "independent" : "backend",
+          active: true,
+        });
+        const data = await request(endpoint, {
           method: "POST",
           body: JSON.stringify({ image: btoa(binary), attempt }),
           signal,
@@ -64,6 +72,10 @@ export function createBackendRecognition({ request }) {
           },
         };
       } finally {
+        onStage?.({
+          stage: provider === "bedrock-independent" ? "independent" : "backend",
+          active: false,
+        });
         active = false;
       }
     },

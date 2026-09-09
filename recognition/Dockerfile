@@ -11,6 +11,7 @@ COPY artifacts/weights ./artifacts/weights
 COPY artifacts/catalog ./artifacts/catalog
 COPY artifacts/ocr-onnx ./artifacts/ocr-onnx
 COPY artifacts/artifact-manifest.json artifacts/ocr-onnx.json ./artifacts/
+COPY artifacts/title-names.json.gz artifacts/name-catalog.json ./artifacts/
 COPY artifacts/public-*-frame.jpg ./artifacts/
 COPY notices ./notices
 COPY LICENSE source.zip ./
