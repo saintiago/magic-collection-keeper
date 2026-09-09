@@ -15,7 +15,6 @@ COPY artifacts/public-*-frame.jpg ./artifacts/
 COPY notices ./notices
 COPY LICENSE source.zip ./
 COPY scripts/smoke.py ./smoke.py
-COPY scripts/sagemaker_smoke.py ./sagemaker_smoke.py
 ENV RECOGNITION_ARTIFACTS=/var/task/artifacts KEEPER_OCR_ADAPTER=paddle-onnx ORT_DISABLE_TELEMETRY=1 XDG_CACHE_HOME=/tmp/cache HF_HUB_OFFLINE=1 OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2
-ENTRYPOINT ["python", "/var/task/container_entry.py"]
+ENTRYPOINT ["/lambda-entrypoint.sh"]
 CMD ["lambda_entry.handler"]

@@ -58,9 +58,33 @@ test("UC-16 publishing new HTML retains old asset and metadata identity", async 
     'import {release} from "./release.js";',
   );
   await writeFile(join(source, "style.css"), "body{}");
+  await mkdir(join(source, "vendor/ort"), { recursive: true });
+  await writeFile(join(source, "vendor/ocr.js"), "retired runtime");
+  await writeFile(join(source, "vendor/ort/ort.webgpu.min.mjs"), "retired GPU");
+  await writeFile(
+    join(source, "vendor/ort/ort.wasm.min.mjs"),
+    "selected runtime",
+  );
   const first = deploymentRelease("0.1.0", env),
     second = deploymentRelease("0.1.0", { ...env, GITHUB_RUN_NUMBER: "20" });
   await packageWebsite({ source, destination, release: first });
+  await assert.rejects(
+    readFile(join(destination, "releases/r19-a1/vendor/ocr.js")),
+    { code: "ENOENT" },
+  );
+  await assert.rejects(
+    readFile(
+      join(destination, "releases/r19-a1/vendor/ort/ort.webgpu.min.mjs"),
+    ),
+    { code: "ENOENT" },
+  );
+  assert.equal(
+    await readFile(
+      join(destination, "releases/r19-a1/vendor/ort/ort.wasm.min.mjs"),
+      "utf8",
+    ),
+    "selected runtime",
+  );
   const oldIndex = await readFile(join(destination, "index.html"), "utf8");
   await packageWebsite({ source, destination, release: second });
   assert.match(oldIndex, /src="\/releases\/r19-a1\/app.js"/);

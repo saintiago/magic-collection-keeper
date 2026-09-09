@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { resolveRecognition } from "./recognition-candidates.js";
-export function createBrowserRecognition({ request, enableWebGpu = false }) {
+export function createBrowserRecognition({ request }) {
   let worker,
     preparation,
     pending,
@@ -61,7 +61,7 @@ export function createBrowserRecognition({ request, enableWebGpu = false }) {
       preparation = null;
       initialized = false;
     };
-    worker.postMessage({ type: "init", enableWebGpu });
+    worker.postMessage({ type: "init" });
     return preparation;
   }
   return {

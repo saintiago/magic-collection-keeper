@@ -34,12 +34,6 @@ jobs:
       - run: docker build -t keeper-recognition recognition
       - run: docker run --rm --network none --read-only --tmpfs /tmp:rw,size=512m --entrypoint python keeper-recognition smoke.py | tee recognition/smoke-linux.json
       - run: test -s recognition/smoke-linux.json
-      - name: Verify the same image through its SageMaker HTTP entrypoint
-        run: |
-          docker run -d --name keeper-sagemaker-smoke --network none --read-only --tmpfs /tmp:rw,size=512m keeper-recognition serve
-          docker exec keeper-sagemaker-smoke python sagemaker_smoke.py | tee recognition/sagemaker-smoke.json
-          docker logs keeper-sagemaker-smoke > recognition/sagemaker-container.log
-          docker stop keeper-sagemaker-smoke
       - run: docker image inspect keeper-recognition --format '{{json .}}' > recognition/image-linux.json
       - run: docker run --rm --network none --entrypoint pip keeper-recognition freeze > recognition/requirements-linux-observed.txt
       - run: docker save keeper-recognition | gzip > recognition/image.tar.gz
@@ -50,8 +44,6 @@ jobs:
           retention-days: 7
           path: |
             recognition/smoke-linux.json
-            recognition/sagemaker-smoke.json
-            recognition/sagemaker-container.log
             recognition/requirements-linux-observed.txt
             recognition/source.zip
             recognition/image-linux.json

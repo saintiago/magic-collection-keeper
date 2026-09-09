@@ -10,9 +10,7 @@ const fixtures = JSON.parse(await readFile(resolve(folder, "fixtures.json")));
 const credentials = JSON.parse(await readFile(process.env.PERF_CREDENTIALS));
 if (credentials.KEEPER_TEST_USER !== "keeper-e2e")
   throw Error("Reserved keeper-e2e profile required");
-const modes = (
-  process.env.PERF_MODES || "ocr,lambda,sagemaker,browser-onnx"
-).split(",");
+const modes = ["hybrid"];
 const browserName = process.env.PERF_BROWSER || "chromium";
 const mobile = process.env.PERF_MOBILE === "true";
 const rounds = Number(process.env.PERF_ROUNDS || 2);
@@ -76,9 +74,11 @@ try {
           .then((size) => {
             network.requests++;
             network.requestBytes +=
-              size.requestBodySize + size.requestHeadersSize;
+              Math.max(0, size.requestBodySize) +
+              Math.max(0, size.requestHeadersSize);
             network.responseBytes +=
-              size.responseBodySize + size.responseHeadersSize;
+              Math.max(0, size.responseBodySize) +
+              Math.max(0, size.responseHeadersSize);
           })
           .catch(() => {}),
       );
@@ -127,9 +127,8 @@ try {
       await page
         .getByRole("button", { name: "▣ Scan cards", exact: true })
         .click();
-      await page
-        .getByRole("combobox", { name: "Comparison mode" })
-        .selectOption(mode);
+      if (await page.locator("#scan-mode").count())
+        throw Error("Temporary comparison control was not removed");
       for (let round = 0; round < rounds; round++) {
         for (const fixture of fixtures.cases) {
           const path = resolve(folder, "frames", fixture.file);
@@ -225,14 +224,11 @@ try {
       if (!run.inventoryUnchanged)
         throw Error("Inventory changed during read-only comparison");
       // New page/worker with retained model cache; independently reported startup.
-      if (mode === "browser-onnx") {
+      {
         await page.reload();
         await page
           .getByRole("button", { name: "▣ Scan cards", exact: true })
           .click();
-        await page
-          .getByRole("combobox", { name: "Comparison mode" })
-          .selectOption(mode);
         await page
           .locator("#photo")
           .setInputFiles(resolve(folder, "frames", fixtures.cases[0].file));

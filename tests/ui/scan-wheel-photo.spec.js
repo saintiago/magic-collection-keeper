@@ -1,16 +1,21 @@
 import { test, expect } from "./fixtures.js";
+import { mockVisualReading, choosePossible } from "./visual-fixture.js";
 
 test("UC-15 phone wheel puts newest beside controls and centers history with newer cards below", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route("**/api/collection", (r) => r.fulfill({ json: [] }));
-  await page.route("**/recognition.js", (r) =>
-    r.fulfill({
-      contentType: "text/javascript",
-      body: 'export async function stopRecognition(){};export async function recognizeCard(){return {name:"Lightning Bolt",confidence:95,exact:{set:"m11",number:"149",language:"en"}};}',
-    }),
-  );
+  await mockVisualReading(page, {
+    card: {
+      id: "scan-test",
+      name: "Lightning Bolt",
+      set: "m11",
+      collector_number: "149",
+      lang: "en",
+      finishes: ["nonfoil"],
+    },
+  });
   await page.route("**/api/search?*", (r) =>
     r.fulfill({
       json: {
@@ -35,6 +40,7 @@ test("UC-15 phone wheel puts newest beside controls and centers history with new
     await page
       .locator("#photo")
       .setInputFiles({ name: "fixture.png", mimeType: "image/png", buffer });
+    await choosePossible(page);
     await expect(page.locator(".scan-option")).toHaveCount(i + 1);
   }
   const wheel = page.locator("#scan-wheel");

@@ -16,8 +16,7 @@
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1127.0",
     "@aws-sdk/lib-dynamodb": "^3.1127.0",
-    "onnxruntime-web": "1.29.0",
-    "tesseract.js": "^7.0.0"
+    "onnxruntime-web": "1.29.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

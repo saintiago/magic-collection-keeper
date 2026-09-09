@@ -81,12 +81,6 @@ CatalogV2Downloader.install(
 for name in ("artifact-manifest.json", "ocr-models.json"):
     shutil.copyfile(root / name, artifacts / name)
 print("Frozen public models and catalog prepared.")
-if visual_only:
-    subprocess.run(
-        [sys.executable, str(root / "scripts/browser_assets.py")], check=True
-    )
-    sys.exit(0)
-
 # A reproducible public-artwork fixture; never a customer camera photograph.
 fetch(
     "https://cards.scryfall.io/normal/front/4/7/4796e5e4-515c-4d89-92da-b2d5b5b39557.jpg?1783907159",
@@ -100,6 +94,13 @@ with Image.open(artifacts / "public-card.jpg") as card:
     frame = Image.new("RGB", (700, 980), (28, 60, 40))
     frame.paste(card, ((700 - card.width) // 2, (980 - card.height) // 2))
     frame.save(artifacts / "public-card-frame.jpg", quality=88)
+
+if visual_only:
+    subprocess.run(
+        [sys.executable, str(root / "scripts/browser_assets.py")], check=True
+    )
+    sys.exit(0)
+
 
 for source in json.loads((root.parent / "tests/performance/sources.json").read_text()):
     if source["key"] not in ("bolt", "ring"):

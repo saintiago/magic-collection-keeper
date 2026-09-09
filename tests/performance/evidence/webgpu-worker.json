@@ -1,0 +1,113 @@
+{
+  "metrics": {
+    "downloadBytes": 42794938,
+    "cacheBytes": 0,
+    "assetMs": 407.69999998807907,
+    "prepareMs": 957.5,
+    "sessionInitMs": 497.59999999403954,
+    "provider": "wasm",
+    "gpuChecked": true,
+    "gpuAdvertised": true,
+    "gpuAvailable": false,
+    "fallback": null,
+    "catalogRows": 112049,
+    "catalogPackedBytes": 28684544,
+    "workerMemoryAvailable": false,
+    "ortVersion": "1.29.0"
+  },
+  "type": "result",
+  "result": {
+    "contractVersion": 1,
+    "attempt": 1,
+    "status": "possible",
+    "candidates": [
+      {
+        "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+        "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553",
+        "name": "Adaptive Training Post",
+        "finishes": [
+          "nonfoil"
+        ],
+        "set": "tdc",
+        "collector_number": "58",
+        "lang": "en"
+      },
+      {
+        "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+        "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553",
+        "name": "Adaptive Training Post",
+        "finishes": [
+          "nonfoil"
+        ],
+        "set": "tdc",
+        "collector_number": "18",
+        "lang": "en"
+      },
+      {
+        "id": "b6f8e7b9-d90b-40a5-88f4-4edfae0d01f7",
+        "oracle_id": "4e58ad76-37c7-4531-b207-6890b39a2679",
+        "name": "Ruthless Technomancer",
+        "finishes": [
+          "nonfoil"
+        ],
+        "set": "nec",
+        "collector_number": "56",
+        "lang": "en"
+      },
+      {
+        "id": "1f198c49-9192-4b7f-bbc6-9f01395836f2",
+        "oracle_id": "d4e124af-d335-4c42-b60a-fe578f69f7ed",
+        "name": "Culmination of Studies",
+        "finishes": [
+          "foil",
+          "nonfoil"
+        ],
+        "set": "stx",
+        "collector_number": "338",
+        "lang": "en"
+      },
+      {
+        "id": "94a50acd-ac2d-47bf-b331-0bcf5edd9c75",
+        "oracle_id": "1bbf9c3a-3791-4523-b832-b163263ffc67",
+        "name": "Avatar",
+        "finishes": [
+          "foil",
+          "nonfoil"
+        ],
+        "set": "tstx",
+        "collector_number": "1",
+        "lang": "en"
+      }
+    ],
+    "selected": null,
+    "evidence": {
+      "sharpness": 0.06791887432336807,
+      "calibrated": false,
+      "orientation": "upright",
+      "topScore": 0.9303988713384976,
+      "differentIdentityMargin": 0.42543291035903597,
+      "isProbability": false,
+      "scoreKind": "cosine_similarity"
+    },
+    "versions": {
+      "visual": {
+        "adapter": "collectorvision-browser",
+        "processing": "keeper-visual-v3-portable-pixels",
+        "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+        "catalog": {
+          "key": "milo1/scryfall/mtg",
+          "version": 27,
+          "rows": 112049,
+          "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+        }
+      }
+    },
+    "timings": {
+      "detectMs": 139.90000000596046,
+      "dewarpMs": 12.199999988079071,
+      "embedMs": 157.59999999403954,
+      "searchMs": 19,
+      "totalMs": 328.69999998807907
+    }
+  }
+}

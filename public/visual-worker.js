@@ -36,13 +36,9 @@ async function run(model, input) {
     if (outputs) for (const output of Object.values(outputs)) output.dispose();
   }
 }
-async function initialize(enableWebGpu) {
+async function initialize() {
   const started = performance.now();
-  ort = await import(
-    enableWebGpu
-      ? "./vendor/ort/ort.webgpu.min.mjs"
-      : "./vendor/ort/ort.wasm.min.mjs"
-  );
+  ort = await import("./vendor/ort/ort.wasm.min.mjs");
   ort.env.wasm.numThreads = 1; // No hidden dependency on COOP/COEP or extra workers.
   ort.env.wasm.wasmPaths = new URL("./vendor/ort/", import.meta.url).href;
   const loaded = await loadVisualAssets((progress) =>
@@ -51,53 +47,23 @@ async function initialize(enableWebGpu) {
   ({ manifest } = loaded);
   records = loaded.assets.records;
   embeddings = new Uint16Array(loaded.assets.embeddings);
-  let provider = "wasm",
-    gpuAvailable = null,
-    fallback = null;
-  if (enableWebGpu && navigator.gpu) {
-    try {
-      gpuAvailable = Boolean(await navigator.gpu.requestAdapter());
-    } catch {
-      gpuAvailable = false;
-    }
-  }
   const initStart = performance.now();
-  let runtimeMetrics = {};
-  if (!enableWebGpu) {
-    const runtime = await loadVisualRuntime();
-    ort.env.wasm.wasmBinary = runtime.buffer;
-    runtimeMetrics = runtime.metrics;
-  }
-  // Detector always uses WASM: upstream reported numerical errors on ARM GPU.
+  const runtime = await loadVisualRuntime();
+  ort.env.wasm.wasmBinary = runtime.buffer;
   detector = await ort.InferenceSession.create(loaded.assets.cornelius, {
     executionProviders: ["wasm"],
   });
-  if (gpuAvailable) {
-    try {
-      embedder = await ort.InferenceSession.create(loaded.assets.milo, {
-        executionProviders: ["webgpu"],
-      });
-      provider = "wasm-detector/webgpu-embedder";
-    } catch {
-      fallback = "WebGPU initialization failed";
-    }
-  }
-  if (!embedder)
-    embedder = await ort.InferenceSession.create(loaded.assets.milo, {
-      executionProviders: ["wasm"],
-    });
+  embedder = await ort.InferenceSession.create(loaded.assets.milo, {
+    executionProviders: ["wasm"],
+  });
   self.postMessage({
     type: "ready",
     metrics: {
       ...loaded.metrics,
-      ...runtimeMetrics,
+      ...runtime.metrics,
       prepareMs: performance.now() - started,
       sessionInitMs: performance.now() - initStart,
-      provider,
-      gpuChecked: enableWebGpu,
-      gpuAdvertised: Boolean(navigator.gpu),
-      gpuAvailable,
-      fallback,
+      provider: "wasm",
       catalogRows: records.length,
       catalogPackedBytes: embeddings.byteLength,
       workerMemoryAvailable: false,
@@ -200,7 +166,7 @@ self.onmessage = async ({ data }) => {
   }
   busy = true;
   try {
-    if (data.type === "init") await initialize(data.enableWebGpu === true);
+    if (data.type === "init") await initialize();
     else if (data.type === "frame")
       self.postMessage({
         type: "result",

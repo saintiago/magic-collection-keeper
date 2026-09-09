@@ -9,7 +9,7 @@ const card = {
   finishes: ["nonfoil"],
   games: ["paper"],
 };
-async function setup(page) {
+async function setup(page, browserBody) {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route("**/config.json", (r) =>
     r.fulfill({ json: { local: true, backendRecognition: true } }),
@@ -17,6 +17,14 @@ async function setup(page) {
   await page.route("**/api/collection", (r) => r.fulfill({ json: [] }));
   await page.route("**/api/card?*", (r) =>
     r.fulfill({ json: { cards: [card], total: 1, hasMore: false } }),
+  );
+  await page.route("**/browser-recognition.js", (r) =>
+    r.fulfill({
+      contentType: "text/javascript",
+      body:
+        browserBody ||
+        `export function createBrowserRecognition(){return {kind:"browser-onnx",prepare:async()=>{throw Error("Controlled model failure")},dispose(){},recognize:async()=>{throw Error("Controlled model failure")}}}`,
+    }),
   );
   await page.goto("/");
   await page.locator("#scan").click();
@@ -52,7 +60,7 @@ test("UC-36 backend candidates remain optional until printing choice and final o
   );
   const photo = await setup(page);
   await expect(
-    page.getByText("Card crops are sent securely", { exact: false }),
+    page.getByText("Recognition runs on this device", { exact: false }),
   ).toBeVisible();
   await page.route("**/api/recognition/source", (r) =>
     r.fulfill({
@@ -80,6 +88,38 @@ test("UC-36 backend candidates remain optional until printing choice and final o
   await expect(page.locator(".batch-dialog")).toBeVisible();
   expect(writes).toBe(0);
 });
+test("UC-37 stalled preparation and unavailable cloud allow a bounded retry then recover without counting an unresolved card", async ({
+  page,
+}) => {
+  let writes = 0;
+  page.on("request", (r) => {
+    if (r.method() !== "GET" && r.url().includes("/api/collection")) writes++;
+  });
+  await page.route("**/api/recognize", (r) =>
+    r.fulfill({
+      status: 503,
+      json: { error: "Controlled unavailable service" },
+    }),
+  );
+  const photo = await setup(
+    page,
+    `export function createBrowserRecognition(){ const ready=new Promise(resolve=>window.finishModels=resolve); return {kind:"browser-onnx", prepare:()=>ready, dispose(){}, recognize:async()=>({status:"possible",selected:null,candidates:[${JSON.stringify(card)}]})}; }`,
+  );
+  await page.locator("#photo").setInputFiles(photo);
+  await expect(page.locator("#scan-status")).toContainText(
+    "Scanner is still preparing",
+    { timeout: 15000 },
+  );
+  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  await page.evaluate(() => window.finishModels());
+  await expect(page.locator("#scan-preparation")).toContainText(
+    "Scanner ready",
+  );
+  await page.locator("#photo").setInputFiles(photo);
+  await expect(page.locator("#scan-possible")).toBeVisible();
+  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  expect(writes).toBe(0);
+});
 test("UC-36 busy, unknown and unapproved confirmations add no copy; closing cancels late recognition", async ({
   page,
 }) => {
@@ -94,6 +134,16 @@ test("UC-36 busy, unknown and unapproved confirmations add no copy; closing canc
     return { started, release, finished };
   }
   await page.route("**/api/recognize", async (r) => {
+    if (r.request().postDataJSON().attempt === 100000)
+      return r.fulfill({
+        json: {
+          contractVersion: 1,
+          attempt: 100000,
+          status: "unknown",
+          candidates: [],
+          selected: null,
+        },
+      });
     const responseMode = mode;
     const gate = pending;
     gate.start();
@@ -125,12 +175,12 @@ test("UC-36 busy, unknown and unapproved confirmations add no copy; closing canc
     const response = holdNextResponse();
     await page.locator("#photo").setInputFiles(photo);
     await response.started;
-    await expect(page.locator("#scan-status")).toContainText(
-      "Reading card securely",
-    );
+    await expect(page.locator("#scan-status")).toContainText("Reading card");
     response.release();
     await response.finished;
-    await expect(page.locator("#scan-status")).toContainText("No copy counted");
+    await expect(page.locator("#scan-status")).toContainText(
+      next === "unknown" ? "No copy counted" : "Recognition failed",
+    );
     await expect(page.locator("#scan-count")).toHaveText(
       "0 matched · 0 copies",
     );
@@ -140,9 +190,7 @@ test("UC-36 busy, unknown and unapproved confirmations add no copy; closing canc
   const lateResponse = holdNextResponse();
   await page.locator("#photo").setInputFiles(photo);
   await lateResponse.started;
-  await expect(page.locator("#scan-status")).toContainText(
-    "Reading card securely",
-  );
+  await expect(page.locator("#scan-status")).toContainText("Reading card");
   await page.locator("#scan-back").click();
   lateResponse.release();
   await lateResponse.finished;

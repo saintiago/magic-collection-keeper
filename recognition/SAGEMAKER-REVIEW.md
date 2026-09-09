@@ -1,3 +1,5 @@
+> Historical comparison review. The stack was deleted after the authorized final hybrid speed checks. See SAGEMAKER-CLEANUP.md. Template/runtime reproduction is available at commit 0d5df87.
+
 # Isolated SageMaker Serverless comparison review
 
 Prepared September 9, 2026. Deployment attempts and corrections are recorded below. The generated

@@ -95,9 +95,14 @@ test("import needs review and ownership confirmation; unresolved lines stay out"
 });
 test("camera permission error offers photo fallback", async ({ page }) => {
   await page.addInitScript(() => {
-    navigator.mediaDevices.getUserMedia = async () => {
-      throw new DOMException("Denied", "NotAllowedError");
-    };
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => {
+          throw new DOMException("Denied", "NotAllowedError");
+        },
+      },
+    });
   });
   await page.goto("/#collection");
   await page.getByRole("button", { name: "Scan cards" }).click();
@@ -107,28 +112,36 @@ test("camera permission error offers photo fallback", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByText("Upload photo", { exact: true })).toBeVisible();
 });
-test("real browser OCR reads a clear card title", async ({ page }) => {
+test("real browser ONNX recognizes the frozen public fixture without selecting ownership", async ({
+  page,
+}) => {
   test.setTimeout(120000);
+  await page.route("**/api/card?*", (route) =>
+    route.fulfill({
+      json: {
+        cards: [
+          {
+            id: "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+            oracle_id: "a6657fcf-f08c-4b03-8ec8-cb0b194eb553",
+            name: "Adaptive Training Post",
+            set: "tdc",
+            collector_number: "58",
+            lang: "en",
+            finishes: ["nonfoil"],
+          },
+        ],
+      },
+    }),
+  );
   await page.goto("/#collection");
-  const result = await page.evaluate(async () => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 700;
-    canvas.height = 980;
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "white";
-    ctx.fillRect(0, 0, 700, 980);
-    ctx.fillStyle = "black";
-    ctx.font = "bold 46px Arial";
-    ctx.fillText("Lightning Bolt", 35, 80);
-    ctx.font = "30px Arial";
-    ctx.fillText("Instant", 35, 620);
-    ctx.fillText("149", 35, 870);
-    ctx.fillText("M11 EN", 35, 920);
-    const { recognizeCard, stopRecognition } = await import("/recognition.js");
-    const result = await recognizeCard(canvas);
-    await stopRecognition();
-    return result;
-  });
-  expect(result.name).toContain("Lightning Bolt");
-  expect(result.confidence).toBeGreaterThan(50);
+  await page.locator("#scan").click();
+  await page
+    .locator("#photo")
+    .setInputFiles("recognition/artifacts/public-card-frame.jpg");
+  await expect(page.locator("#scan-possible")).toContainText(
+    "Adaptive Training Post",
+    { timeout: 30000 },
+  );
+  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  await expect(page.locator("#scan-mode")).toHaveCount(0);
 });

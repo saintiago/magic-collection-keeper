@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { resolveRecognition } from "./recognition-candidates.js";
-export function createBackendRecognition({ request, path = "/api/recognize" }) {
+export function createBackendRecognition({ request }) {
   let active = false;
   const cache = new Map();
-  return {
-    kind: path.endsWith("sagemaker") ? "sagemaker" : "lambda",
+  const port = {
+    kind: "lambda",
+    async prepare({ signal } = {}) {
+      const blank = document.createElement("canvas");
+      blank.width = 200;
+      blank.height = 300;
+      const context = blank.getContext("2d");
+      context.fillStyle = "white";
+      context.fillRect(0, 0, 200, 300);
+      // A fixed blank frame prepares the existing bounded inference path once
+      // on session entry. No camera image, ownership data or success cue is used.
+      await port.recognize(blank, { signal, attempt: 100000 });
+    },
     async recognize(canvas, { signal, attempt }) {
       signal?.throwIfAborted();
       if (active) throw new Error("Scanner busy. Retry this card.");
@@ -30,7 +41,7 @@ export function createBackendRecognition({ request, path = "/api/recognize" }) {
           binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
         signal?.throwIfAborted();
         const encoded = performance.now();
-        const data = await request(path, {
+        const data = await request("/api/recognize", {
           method: "POST",
           body: JSON.stringify({ image: btoa(binary), attempt }),
           signal,
@@ -57,4 +68,5 @@ export function createBackendRecognition({ request, path = "/api/recognize" }) {
       }
     },
   };
+  return port;
 }

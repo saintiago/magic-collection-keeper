@@ -1,18 +1,11 @@
 import { scannerShell, possibleMatches } from "./scan-view.js";
 import { startCamera, stopCamera, capture, signature } from "./camera.js";
-import { recognizeCard, stopRecognition } from "./recognition.js";
 import { createTransitionGate } from "./scan-transition.js";
-import { resolveScan } from "./scan-resolution.js";
 import { createScanAudio } from "./scan-audio.js";
 import { createScanWheel } from "./scan-wheel.js";
 
-export function createScanner({
-  api,
-  onReview,
-  recognition = null,
-  modes = null,
-}) {
-  let mode = recognition?.kind || "ocr";
+export function createScanner({ api, onReview, recognition = null }) {
+  const mode = recognition?.kind || "hybrid";
   let requestController = new AbortController();
   const dialog = document.createElement("dialog");
   dialog.className = "scanner-dialog";
@@ -30,11 +23,37 @@ export function createScanner({
     processing = false,
     session = 0,
     attempt = 0,
-    muted = false;
+    muted = false,
+    preparationAttempt = 0;
   const el = (id) => dialog.querySelector(`#${id}`);
   const status = (text) => {
     if (dialog.open) el("scan-status").textContent = text;
   };
+  function prepareRecognition() {
+    if (recognition?.kind !== "hybrid") return;
+    const id = ++preparationAttempt;
+    let label = el("scan-preparation");
+    if (!label) {
+      label = document.createElement("p");
+      label.id = "scan-preparation";
+      label.className = "recognition-notice";
+      label.setAttribute("aria-live", "polite");
+      el("scan-status").before(label);
+    }
+    label.textContent =
+      "Preparing faster recognition… You can start the camera.";
+    recognition.prepare().then(
+      () => {
+        if (dialog.open && id === preparationAttempt)
+          label.textContent = "Scanner ready.";
+      },
+      () => {
+        if (dialog.open && id === preparationAttempt)
+          label.textContent =
+            "Recognition unavailable. Check your connection and retry.";
+      },
+    );
+  }
   function update(newest = false) {
     wheel.update(rows, newest);
     el("scan-count").textContent =
@@ -77,7 +96,6 @@ export function createScanner({
     const video = el("camera-video");
     if (video) video.srcObject = null;
     queue = [];
-    void stopRecognition();
     void audio?.close();
     if (el("camera-start")) {
       el("camera-start").hidden = false;
@@ -153,32 +171,24 @@ export function createScanner({
       try {
         status(
           recognition
-            ? "Reading card securely… Keep each card still until the cue."
+            ? "Reading card… Keep each card still until the cue."
             : "Reading card locally… Keep each card still until the cue.",
         );
-        if (recognition) {
-          result = await recognition.recognize(canvas, {
-            attempt: row.scanId,
-            signal: AbortSignal.any([
-              requestController.signal,
-              AbortSignal.timeout(35000),
-            ]),
-          });
-        } else {
-          const reading = await recognizeCard(canvas);
-          if (current !== session) return;
-          const resolving = performance.now();
-          result = await resolveScan(reading, api);
-          result.measurement = {
-            processing: reading.timings,
-            hydrateMs: performance.now() - resolving,
-          };
-        }
+        result = await recognition.recognize(canvas, {
+          attempt: row.scanId,
+          signal: AbortSignal.any([
+            requestController.signal,
+            AbortSignal.timeout(35000),
+          ]),
+        });
       } catch (error) {
         failure = { name: error.name, status: error.status || null };
         result = {
           name: "Unclear reading",
-          error: "Recognition failed. Move the card out, then try again.",
+          error:
+            error.code === "SCANNER_PREPARING"
+              ? "Scanner is still preparing. Wait for Ready, then move the card out and retry."
+              : "Recognition failed. Move the card out, then try again.",
           selected: null,
         };
       }
@@ -245,6 +255,7 @@ export function createScanner({
       timer = setTimeout(() => tick(current), 120);
   }
   async function start() {
+    prepareRecognition();
     stop();
     update();
     const current = session;
@@ -280,38 +291,12 @@ export function createScanner({
       queue = [];
       attempt = 0;
       dialog.innerHTML = scannerShell(muted);
-      if (modes) {
-        const label = document.createElement("label");
-        label.className = "scan-comparison";
-        label.textContent = "Comparison mode ";
-        const select = document.createElement("select");
-        select.id = "scan-mode";
-        for (const item of modes) {
-          const option = document.createElement("option");
-          option.value = item.id;
-          option.textContent = item.label;
-          select.append(option);
-        }
-        select.value = mode;
-        select.onchange = () => {
-          stop();
-          recognition?.dispose?.();
-          mode = select.value;
-          recognition = modes.find((item) => item.id === mode).create();
-          dialog.dataset.recognition = mode;
-          update();
-          status("Mode ready to test. Upload the same photo for comparison.");
-        };
-        label.append(select);
-        el("scan-status").before(label);
-      }
       dialog.dataset.recognition = recognition ? "backend" : "local";
-      if (recognition || modes) {
+      if (recognition) {
         const notice = document.createElement("p");
         notice.className = "recognition-notice";
-        notice.textContent = modes
-          ? "Browser modes process photos on this device. Cloud modes send card crops securely for recognition, in memory without saving them. "
-          : "Card crops are sent securely for recognition, processed in memory and not saved. ";
+        notice.textContent =
+          "Recognition runs on this device when ready. If needed, card crops are sent securely for temporary cloud processing and are not saved. ";
         const source = document.createElement("button");
         source.textContent = "Recognition source (AGPL-3.0)";
         source.onclick = async () => {
@@ -415,6 +400,7 @@ export function createScanner({
       };
       document.documentElement.classList.add("scanning");
       dialog.showModal();
+      prepareRecognition();
       el("camera-start").focus();
       update();
     },

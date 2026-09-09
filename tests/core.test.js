@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { openDatabase, savePrinting, addInventory, collection } from "../db.js";
 import { parseList } from "../public/import.js";
 import { listQuery } from "../public/catalog-query.js";
-import { parseRecognition } from "../public/recognition.js";
 import { frameDifference } from "../public/camera.js";
 const card = {
   id: "printing-1",
@@ -75,16 +74,6 @@ test("text import retains quantities and exact printing markers; bad lines remai
   assert.equal(rows[1].name, "Lightning Bolt");
   assert.ok(rows[2].error);
   assert.equal(listQuery(rows[0]), '!"Sol Ring" set:CMM cn:410 lang:en');
-});
-test("OCR reads modern footer and falls back to name", () => {
-  const reading = parseRecognition(
-    "Lightning Bolt\nInstant\n149/249 C\nM11 • EN\n2010 Wizards",
-  );
-  assert.equal(reading.name, "Lightning Bolt");
-  const exact = parseRecognition("Sol Ring\n0410\nCMM • EN\nWizards");
-  assert.equal(exact.exact.set, "CMM");
-  assert.equal(exact.exact.number, "0410");
-  assert.equal(parseRecognition("").name, "");
 });
 test("stable-frame difference distinguishes repeated and changed frames", () => {
   const a = new Uint8ClampedArray([20, 40, 60, 255]);

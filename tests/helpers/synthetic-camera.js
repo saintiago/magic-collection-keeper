@@ -1,6 +1,9 @@
-// Generated text target, never a claim of physical-device camera verification.
-export function installSyntheticCardCamera() {
+// Public artwork in a generated stream, never physical-device verification.
+export function installSyntheticCardCamera(imageData) {
   navigator.mediaDevices.getUserMedia = async () => {
+    const photo = new Image();
+    photo.src = imageData;
+    await photo.decode();
     const video = document
       .querySelector("#camera-video")
       .getBoundingClientRect();
@@ -17,17 +20,7 @@ export function installSyntheticCardCamera() {
         y = (guide.top - video.top) * 2,
         w = guide.width * 2,
         h = guide.height * 2;
-      ctx.fillStyle = "white";
-      ctx.fillRect(x, y, w, h);
-      ctx.fillStyle = "#809986";
-      ctx.fillRect(x + w * 0.05, y + h * 0.15, w * 0.9, h * 0.42);
-      ctx.fillStyle = "black";
-      ctx.font = `bold ${w * 0.066}px Arial`;
-      ctx.fillText("Lightning Bolt", x + w * 0.05, y + h * 0.09);
-      ctx.font = `${w * 0.043}px Arial`;
-      ctx.fillText("Instant", x + w * 0.05, y + h * 0.63);
-      ctx.fillText("149", x + w * 0.05, y + h * 0.89);
-      ctx.fillText("M11 EN", x + w * 0.05, y + h * 0.94);
+      ctx.drawImage(photo, x, y, w, h);
     };
     window.paintSyntheticCard();
     window.syntheticStream = canvas.captureStream(15);

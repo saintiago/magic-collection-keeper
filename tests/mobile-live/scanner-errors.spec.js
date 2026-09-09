@@ -1,14 +1,10 @@
+import { publicCardFrame } from "../helpers/public-frame.js";
 import { test, expect } from "@playwright/test";
 
-test("LIVE-13 failed OCR does not count copies; optional candidates and wheel review stay separate", async ({
+test("LIVE-13 unknown recognition does not count copies; optional candidates and wheel review stay separate", async ({
   page,
 }) => {
   test.setTimeout(150000);
-  const config = await page.request.get("/config.json").then((r) => r.json());
-  test.skip(
-    config.backendRecognition === true,
-    "Browser OCR mode only; server recognition is covered by LIVE-14",
-  );
   await page.goto("/");
   await page
     .getByLabel("Username", { exact: true })
@@ -21,12 +17,15 @@ test("LIVE-13 failed OCR does not count copies; optional candidates and wheel re
   const writes = [];
   page.on("request", (r) => {
     if (
-      r.url().includes("/api/") &&
+      r.url().includes("/api/collection") &&
       !["GET", "HEAD", "OPTIONS"].includes(r.method())
     )
       writes.push(r.method() + " " + new URL(r.url()).pathname);
   });
   await page.locator("#scan").click();
+  await expect(page.locator("#scan-preparation")).toHaveText("Scanner ready.", {
+    timeout: 90000,
+  });
   const images = await page.evaluate(() => {
     const canvas = document.createElement("canvas");
     canvas.width = 700;
@@ -48,7 +47,7 @@ test("LIVE-13 failed OCR does not count copies; optional candidates and wheel re
   const upload = async (key) =>
     page.locator("#photo").setInputFiles({
       name: key + ".png",
-      mimeType: "image/png",
+      mimeType: key === "exact" ? "image/jpeg" : "image/png",
       buffer: Buffer.from(images[key], "base64"),
     });
   await upload("blank");
@@ -61,15 +60,23 @@ test("LIVE-13 failed OCR does not count copies; optional candidates and wheel re
   await page.screenshot({
     path: test.info().outputPath("scanner-failed-no-copy.png"),
   });
-  await upload("name");
-  await expect(page.locator("#scan-possible")).toBeVisible({ timeout: 30000 });
-  await expect(page.locator(".scan-option")).toHaveCount(0);
+  images.exact = (await publicCardFrame(page)).split(",")[1];
   for (let i = 1; i <= 5; i++) {
     await upload("exact");
-    await expect(page.locator(".scan-option")).toHaveCount(i, {
-      timeout: 30000,
-    });
+    const panel = page.locator("#scan-possible");
+    await expect(panel).toBeVisible({ timeout: 60000 });
+    if (!(await panel.evaluate((el) => el.open)))
+      await panel.locator("summary").click();
+    await panel
+      .getByRole("button", {
+        name: "Adaptive Training Post · tdc #58 · en",
+        exact: true,
+      })
+      .click();
+    await expect(page.locator(".scan-option")).toHaveCount(i);
   }
+  await upload("exact");
+  await expect(page.locator("#scan-possible")).toBeVisible({ timeout: 60000 });
   await expect(page.locator("#scan-count")).toHaveText("5 matched · 5 copies");
   const wheel = page.locator("#scan-wheel");
   await expect
@@ -123,7 +130,7 @@ test("LIVE-13 failed OCR does not count copies; optional candidates and wheel re
   console.log(
     JSON.stringify({
       liveScanner: true,
-      realOCR: true,
+      realModels: true,
       syntheticPhotos: true,
       physicalCameraVerified: false,
       failedCopies: 0,

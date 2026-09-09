@@ -15,7 +15,7 @@ const config = {
   region: "us-east-1",
   clientId: "1p2inv2id7ur50opkjmuk46qnb",
   apiUrl: "",
-  recognitionComparison: true,
+  backendRecognition: true,
 };
 const csp =
   "default-src 'self'; img-src 'self' blob: data: https://cards.scryfall.io; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self' https://cognito-idp.us-east-1.amazonaws.com; frame-ancestors 'none'";
@@ -74,8 +74,7 @@ http
         return reply(200, JSON.stringify(config));
       if (url.pathname.startsWith("/api/")) {
         const inference =
-          req.method === "POST" &&
-          ["/api/recognize", "/api/recognize/sagemaker"].includes(url.pathname);
+          req.method === "POST" && url.pathname === "/api/recognize";
         if (req.method !== "GET" && !inference)
           return reply(
             403,

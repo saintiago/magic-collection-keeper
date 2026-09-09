@@ -1,5 +1,5 @@
 import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 export function deploymentRelease(baseVersion, env, now = new Date()) {
   if (!/^\d+\.\d+\.\d+$/.test(baseVersion))
     throw new Error("Use a numeric base version in package.json.");
@@ -52,7 +52,16 @@ export async function packageWebsite({ source, destination, release }) {
   await mkdir(directory, { recursive: true });
   await cp(source, directory, {
     recursive: true,
-    filter: (path) => !path.endsWith("index.html"),
+    filter: (path) => {
+      const name = relative(source, path).replaceAll("\\", "/");
+      // Old generated assets may remain in local builds; omit retired engines.
+      return (
+        !path.endsWith("index.html") &&
+        !/^(?:vendor\/(?:core|lang)(?:\/|$)|vendor\/(?:ocr\.js|worker\.min\.js)$|vendor\/ort\/.*(?:webgpu|asyncify))/.test(
+          name,
+        )
+      );
+    },
   });
   await writeFile(
     join(directory, "release.js"),

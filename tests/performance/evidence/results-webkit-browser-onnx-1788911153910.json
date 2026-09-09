@@ -1,0 +1,4628 @@
+{
+  "schema": 1,
+  "at": "2026-09-08T23:45:53.910Z",
+  "browser": "webkit",
+  "mobileViewportEmulation": true,
+  "physicalDeviceVerified": false,
+  "transport": "actual cloud through loopback bridge; upload-photo UI",
+  "targets": {
+    "cachedReadyMs": 3000,
+    "medianCandidateMs": 1500,
+    "p95CandidateMs": 3000
+  },
+  "percentileMethod": "nearest-rank; failures retained in all-attempt latency; repeated fixtures are not independent accuracy samples",
+  "runs": [
+    {
+      "mode": "browser-onnx",
+      "phase": "fresh-browser-context",
+      "networkDefinition": "Playwright encoded request/response body and header sizes; excludes TLS; browser cache may report zero",
+      "attempts": [
+        {
+          "fixture": "adaptive-clean",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 1,
+          "captureToCandidateMs": 1463,
+          "processingAndHydrationMs": 1463,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 152,
+            "dewarpMs": 10,
+            "embedMs": 200,
+            "searchMs": 25,
+            "totalMs": 387
+          },
+          "evidence": {
+            "sharpness": 0.06791887432336807,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9303988713384976,
+            "differentIdentityMargin": 0.42543291035903597,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 0,
+          "lookups": 2,
+          "hydrateMs": 260,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": false,
+          "preparationWaitMs": 803,
+          "adapterMs": 1462,
+          "uploadToVisibleMs": 1508.9674,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 20,
+            "requestBytes": 11376,
+            "responseBytes": 90069652,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-blur",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 2,
+          "captureToCandidateMs": 366,
+          "processingAndHydrationMs": 366,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 115,
+            "dewarpMs": 5,
+            "embedMs": 174,
+            "searchMs": 39,
+            "totalMs": 333
+          },
+          "evidence": {
+            "sharpness": 0.06697207689285278,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9174050883903879,
+            "differentIdentityMargin": 0.46927546426204625,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 365,
+          "uploadToVisibleMs": 395.21500000000015,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-small",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 3,
+          "captureToCandidateMs": 385,
+          "processingAndHydrationMs": 385,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 115,
+            "dewarpMs": 4,
+            "embedMs": 173,
+            "searchMs": 52,
+            "totalMs": 344
+          },
+          "evidence": {
+            "sharpness": 0.06753475964069366,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9267462888516778,
+            "differentIdentityMargin": 0.46977103741544424,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 385,
+          "uploadToVisibleMs": 402.0478000000003,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-jpeg",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 4,
+          "captureToCandidateMs": 400,
+          "processingAndHydrationMs": 400,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 113,
+            "dewarpMs": 4,
+            "embedMs": 174,
+            "searchMs": 63,
+            "totalMs": 354
+          },
+          "evidence": {
+            "sharpness": 0.067904531955719,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9406164583408483,
+            "differentIdentityMargin": 0.4214610156261571,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 400,
+          "uploadToVisibleMs": 414.1153000000004,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-perspective",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 5,
+          "captureToCandidateMs": 397,
+          "processingAndHydrationMs": 397,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 4,
+            "embedMs": 173,
+            "searchMs": 63,
+            "totalMs": 354
+          },
+          "evidence": {
+            "sharpness": 0.06219250708818436,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9406859062201047,
+            "differentIdentityMargin": 0.48174987058701757,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 397,
+          "uploadToVisibleMs": 413.02940000000035,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-glare",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 6,
+          "captureToCandidateMs": 427,
+          "processingAndHydrationMs": 427,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 115,
+            "dewarpMs": 3,
+            "embedMs": 173,
+            "searchMs": 92,
+            "totalMs": 383
+          },
+          "evidence": {
+            "sharpness": 0.06749720126390457,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.8849809806472564,
+            "differentIdentityMargin": 0.36778808046643974,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 1,
+          "adapterMs": 427,
+          "uploadToVisibleMs": 442.9958999999999,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-footer-hidden",
+          "kind": "ambiguous-printing",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 7,
+          "captureToCandidateMs": 412,
+          "processingAndHydrationMs": 412,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 113,
+            "dewarpMs": 3,
+            "embedMs": 173,
+            "searchMs": 92,
+            "totalMs": 381
+          },
+          "evidence": {
+            "sharpness": 0.0661710575222969,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.8186562336739449,
+            "differentIdentityMargin": 0.34188562405671163,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 412,
+          "uploadToVisibleMs": 432.08910000000014,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": null,
+          "safeUnresolved": true,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-clean",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 8,
+          "captureToCandidateMs": 1290,
+          "processingAndHydrationMs": 1290,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "a6de74d2-0668-49c6-a385-bf706bfed8f7",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 113,
+            "dewarpMs": 4,
+            "embedMs": 350,
+            "searchMs": 122,
+            "totalMs": 589
+          },
+          "evidence": {
+            "sharpness": 0.06883906573057175,
+            "calibrated": false,
+            "orientation": "rotated_180",
+            "topScore": 0.9421878385843859,
+            "differentIdentityMargin": 0.46278031948228937,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 0,
+          "lookups": 5,
+          "hydrateMs": 659,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 1289,
+          "uploadToVisibleMs": 1305.2964000000002,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 5,
+            "requestBytes": 7130,
+            "responseBytes": 31609,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-blur",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 9,
+          "captureToCandidateMs": 393,
+          "processingAndHydrationMs": 393,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "a6de74d2-0668-49c6-a385-bf706bfed8f7",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 120,
+            "dewarpMs": 5,
+            "embedMs": 179,
+            "searchMs": 54,
+            "totalMs": 358
+          },
+          "evidence": {
+            "sharpness": 0.06761624664068222,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9569057405239302,
+            "differentIdentityMargin": 0.4180808246380049,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 393,
+          "uploadToVisibleMs": 408.6421,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-small",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 10,
+          "captureToCandidateMs": 553,
+          "processingAndHydrationMs": 553,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "77c6fa74-5543-42ac-9ead-0e890b188e99",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 116,
+            "dewarpMs": 4,
+            "embedMs": 174,
+            "searchMs": 93,
+            "totalMs": 387
+          },
+          "evidence": {
+            "sharpness": 0.06813718378543854,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9496891557187268,
+            "differentIdentityMargin": 0.4280604182690808,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 4,
+          "lookups": 1,
+          "hydrateMs": 124,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 553,
+          "uploadToVisibleMs": 571.4810000000007,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 1,
+            "requestBytes": 1426,
+            "responseBytes": 6402,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-jpeg",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 11,
+          "captureToCandidateMs": 427,
+          "processingAndHydrationMs": 427,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "a6de74d2-0668-49c6-a385-bf706bfed8f7",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 113,
+            "dewarpMs": 4,
+            "embedMs": 175,
+            "searchMs": 92,
+            "totalMs": 384
+          },
+          "evidence": {
+            "sharpness": 0.06880469620227814,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9488245160919775,
+            "differentIdentityMargin": 0.4488014490944494,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 427,
+          "uploadToVisibleMs": 458.76800000000003,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-perspective",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 12,
+          "captureToCandidateMs": 397,
+          "processingAndHydrationMs": 397,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "a6de74d2-0668-49c6-a385-bf706bfed8f7",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 113,
+            "dewarpMs": 4,
+            "embedMs": 171,
+            "searchMs": 92,
+            "totalMs": 380
+          },
+          "evidence": {
+            "sharpness": 0.06387660652399063,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9203574814671054,
+            "differentIdentityMargin": 0.41984219931302214,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 397,
+          "uploadToVisibleMs": 430.7630999999983,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-glare",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 13,
+          "captureToCandidateMs": 411,
+          "processingAndHydrationMs": 411,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 4,
+            "embedMs": 175,
+            "searchMs": 91,
+            "totalMs": 384
+          },
+          "evidence": {
+            "sharpness": 0.06868160516023636,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.835477689550113,
+            "differentIdentityMargin": 0.2684166229226106,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 4,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 411,
+          "uploadToVisibleMs": 451.73219999999856,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-footer-hidden",
+          "kind": "ambiguous-printing",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 14,
+          "captureToCandidateMs": 690,
+          "processingAndHydrationMs": 690,
+          "queueMs": 0,
+          "outcome": "unknown",
+          "failure": null,
+          "selected": null,
+          "candidates": [],
+          "processing": {
+            "detectMs": 116,
+            "dewarpMs": 5,
+            "embedMs": 352,
+            "searchMs": 184,
+            "totalMs": 657
+          },
+          "evidence": {
+            "sharpness": 0.06654685735702515,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.7357736176773866,
+            "differentIdentityMargin": 0.23587133949249584,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 0,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 689,
+          "uploadToVisibleMs": 706.6087000000007,
+          "oracleTop1": false,
+          "oracleInCandidates": false,
+          "printingInCandidates": null,
+          "safeUnresolved": true,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-clean",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 15,
+          "captureToCandidateMs": 1408,
+          "processingAndHydrationMs": 1408,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3459b229-7c46-4f70-87d4-bb31c2c17dd9",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "f48f7190-9ee3-477f-8b25-91e8c2916624",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "eca9ae7b-a6d9-43ea-92d4-0110fd6643a7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3917f744-b876-47ae-94ad-f72b215ff1e7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 113,
+            "dewarpMs": 4,
+            "embedMs": 346,
+            "searchMs": 183,
+            "totalMs": 646
+          },
+          "evidence": {
+            "sharpness": 0.06857173889875412,
+            "calibrated": false,
+            "orientation": "rotated_180",
+            "topScore": 0.968825591734858,
+            "differentIdentityMargin": 0.4659050237455087,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 0,
+          "lookups": 5,
+          "hydrateMs": 718,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 1408,
+          "uploadToVisibleMs": 1425.9332000000013,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 5,
+            "requestBytes": 7130,
+            "responseBytes": 26760,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-blur",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 16,
+          "captureToCandidateMs": 531,
+          "processingAndHydrationMs": 531,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3459b229-7c46-4f70-87d4-bb31c2c17dd9",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "f48f7190-9ee3-477f-8b25-91e8c2916624",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3917f744-b876-47ae-94ad-f72b215ff1e7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "46ca0b66-a000-4483-b916-f5b89e710244",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 115,
+            "dewarpMs": 5,
+            "embedMs": 173,
+            "searchMs": 91,
+            "totalMs": 384
+          },
+          "evidence": {
+            "sharpness": 0.06757085025310516,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9751989571553672,
+            "differentIdentityMargin": 0.44605717344107276,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 4,
+          "lookups": 1,
+          "hydrateMs": 122,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 530,
+          "uploadToVisibleMs": 561.5766999999996,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 1,
+            "requestBytes": 1426,
+            "responseBytes": 5356,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-small",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 17,
+          "captureToCandidateMs": 676,
+          "processingAndHydrationMs": 676,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3459b229-7c46-4f70-87d4-bb31c2c17dd9",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "f48f7190-9ee3-477f-8b25-91e8c2916624",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3917f744-b876-47ae-94ad-f72b215ff1e7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "46ca0b66-a000-4483-b916-f5b89e710244",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 118,
+            "dewarpMs": 4,
+            "embedMs": 347,
+            "searchMs": 186,
+            "totalMs": 655
+          },
+          "evidence": {
+            "sharpness": 0.06828825175762177,
+            "calibrated": false,
+            "orientation": "rotated_180",
+            "topScore": 0.9870533260420453,
+            "differentIdentityMargin": 0.46119468537126895,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 676,
+          "uploadToVisibleMs": 705.2945999999993,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-jpeg",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 18,
+          "captureToCandidateMs": 1010,
+          "processingAndHydrationMs": 1010,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3459b229-7c46-4f70-87d4-bb31c2c17dd9",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "f48f7190-9ee3-477f-8b25-91e8c2916624",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "4cbc6901-6a4a-4d0a-83ea-7eefa3b35021",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "38d347b7-dc17-417a-ab07-29fe99b9a101",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 113,
+            "dewarpMs": 4,
+            "embedMs": 347,
+            "searchMs": 144,
+            "totalMs": 608
+          },
+          "evidence": {
+            "sharpness": 0.06945513188838959,
+            "calibrated": false,
+            "orientation": "rotated_180",
+            "topScore": 0.9696017778258119,
+            "differentIdentityMargin": 0.46033188465640884,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 3,
+          "lookups": 2,
+          "hydrateMs": 368,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 1009,
+          "uploadToVisibleMs": 1025.7302,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 2,
+            "requestBytes": 2852,
+            "responseBytes": 10581,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-perspective",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 19,
+          "captureToCandidateMs": 366,
+          "processingAndHydrationMs": 366,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3459b229-7c46-4f70-87d4-bb31c2c17dd9",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3917f744-b876-47ae-94ad-f72b215ff1e7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "f48f7190-9ee3-477f-8b25-91e8c2916624",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "4cbc6901-6a4a-4d0a-83ea-7eefa3b35021",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 113,
+            "dewarpMs": 4,
+            "embedMs": 175,
+            "searchMs": 50,
+            "totalMs": 342
+          },
+          "evidence": {
+            "sharpness": 0.06352818012237549,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9886957185340236,
+            "differentIdentityMargin": 0.4656149523330043,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 365,
+          "uploadToVisibleMs": 397.01630000000114,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-glare",
+          "kind": "positive",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 20,
+          "captureToCandidateMs": 602,
+          "processingAndHydrationMs": 602,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3459b229-7c46-4f70-87d4-bb31c2c17dd9",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3917f744-b876-47ae-94ad-f72b215ff1e7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "46ca0b66-a000-4483-b916-f5b89e710244",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 115,
+            "dewarpMs": 4,
+            "embedMs": 349,
+            "searchMs": 91,
+            "totalMs": 559
+          },
+          "evidence": {
+            "sharpness": 0.06833433359861374,
+            "calibrated": false,
+            "orientation": "rotated_180",
+            "topScore": 0.8616985593270872,
+            "differentIdentityMargin": 0.3016148720216367,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 4,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 601,
+          "uploadToVisibleMs": 617.7921000000006,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-footer-hidden",
+          "kind": "ambiguous-printing",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 21,
+          "captureToCandidateMs": 674,
+          "processingAndHydrationMs": 674,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "eca9ae7b-a6d9-43ea-92d4-0110fd6643a7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "2d47121d-8b90-4d28-9ffa-0a640b9dd611",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "f9a32f17-49c4-4654-a087-1ba474f37377",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3917f744-b876-47ae-94ad-f72b215ff1e7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 112,
+            "dewarpMs": 4,
+            "embedMs": 175,
+            "searchMs": 91,
+            "totalMs": 382
+          },
+          "evidence": {
+            "sharpness": 0.06436968594789505,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.8316671317851068,
+            "differentIdentityMargin": 0.36474577248449336,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 3,
+          "lookups": 2,
+          "hydrateMs": 247,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 674,
+          "uploadToVisibleMs": 692.1562999999987,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": null,
+          "safeUnresolved": true,
+          "negativeRejected": null,
+          "network": {
+            "requests": 2,
+            "requestBytes": 2852,
+            "responseBytes": 10722,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "blank",
+          "kind": "negative",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 22,
+          "captureToCandidateMs": 154,
+          "processingAndHydrationMs": 154,
+          "queueMs": 0,
+          "outcome": "unknown",
+          "failure": null,
+          "selected": null,
+          "candidates": [],
+          "processing": {
+            "detectMs": 112,
+            "totalMs": 112
+          },
+          "evidence": {
+            "sharpness": 0.007658207789063454,
+            "calibrated": false
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 0,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 153,
+          "uploadToVisibleMs": 169.70839999999953,
+          "oracleTop1": null,
+          "oracleInCandidates": null,
+          "printingInCandidates": null,
+          "safeUnresolved": true,
+          "negativeRejected": true,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "noise",
+          "kind": "negative",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 23,
+          "captureToCandidateMs": 150,
+          "processingAndHydrationMs": 150,
+          "queueMs": 0,
+          "outcome": "unknown",
+          "failure": null,
+          "selected": null,
+          "candidates": [],
+          "processing": {
+            "detectMs": 113,
+            "totalMs": 113
+          },
+          "evidence": {
+            "sharpness": 0.010813646949827671,
+            "calibrated": false
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 0,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 150,
+          "uploadToVisibleMs": 167.34840000000077,
+          "oracleTop1": null,
+          "oracleInCandidates": null,
+          "printingInCandidates": null,
+          "safeUnresolved": true,
+          "negativeRejected": true,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "two-cards",
+          "kind": "ambiguous-scene",
+          "round": 0,
+          "mode": "browser-onnx",
+          "attempt": 24,
+          "captureToCandidateMs": 551,
+          "processingAndHydrationMs": 551,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "677da834-7f4a-4f60-9151-de7ddcf29622",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 115,
+            "dewarpMs": 5,
+            "embedMs": 173,
+            "searchMs": 95,
+            "totalMs": 388
+          },
+          "evidence": {
+            "sharpness": 0.04783945530653,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.8733567435820873,
+            "differentIdentityMargin": 0.3885277052005107,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 4,
+          "lookups": 1,
+          "hydrateMs": 123,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 551,
+          "uploadToVisibleMs": 569.0348999999987,
+          "oracleTop1": null,
+          "oracleInCandidates": null,
+          "printingInCandidates": null,
+          "safeUnresolved": true,
+          "negativeRejected": null,
+          "network": {
+            "requests": 1,
+            "requestBytes": 1426,
+            "responseBytes": 6417,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-clean",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 25,
+          "captureToCandidateMs": 428,
+          "processingAndHydrationMs": 428,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 5,
+            "embedMs": 172,
+            "searchMs": 92,
+            "totalMs": 383
+          },
+          "evidence": {
+            "sharpness": 0.06791887432336807,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9303988713384976,
+            "differentIdentityMargin": 0.42543291035903597,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 428,
+          "uploadToVisibleMs": 444.7000999999982,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-blur",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 26,
+          "captureToCandidateMs": 427,
+          "processingAndHydrationMs": 427,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 117,
+            "dewarpMs": 5,
+            "embedMs": 175,
+            "searchMs": 94,
+            "totalMs": 391
+          },
+          "evidence": {
+            "sharpness": 0.06697207689285278,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9174050883903879,
+            "differentIdentityMargin": 0.46927546426204625,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 426,
+          "uploadToVisibleMs": 457.70510000000286,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-small",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 27,
+          "captureToCandidateMs": 432,
+          "processingAndHydrationMs": 432,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 4,
+            "embedMs": 175,
+            "searchMs": 92,
+            "totalMs": 385
+          },
+          "evidence": {
+            "sharpness": 0.06753475964069366,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9267462888516778,
+            "differentIdentityMargin": 0.46977103741544424,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 432,
+          "uploadToVisibleMs": 447.693299999999,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-jpeg",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 28,
+          "captureToCandidateMs": 427,
+          "processingAndHydrationMs": 427,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 4,
+            "embedMs": 173,
+            "searchMs": 91,
+            "totalMs": 382
+          },
+          "evidence": {
+            "sharpness": 0.067904531955719,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9406164583408483,
+            "differentIdentityMargin": 0.4214610156261571,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 426,
+          "uploadToVisibleMs": 444.5082000000002,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-perspective",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 29,
+          "captureToCandidateMs": 428,
+          "processingAndHydrationMs": 428,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 5,
+            "embedMs": 172,
+            "searchMs": 91,
+            "totalMs": 382
+          },
+          "evidence": {
+            "sharpness": 0.06219250708818436,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9406859062201047,
+            "differentIdentityMargin": 0.48174987058701757,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 427,
+          "uploadToVisibleMs": 443.73059999999896,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-glare",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 30,
+          "captureToCandidateMs": 430,
+          "processingAndHydrationMs": 430,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 3,
+            "embedMs": 175,
+            "searchMs": 92,
+            "totalMs": 384
+          },
+          "evidence": {
+            "sharpness": 0.06749720126390457,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.8849809806472564,
+            "differentIdentityMargin": 0.36778808046643974,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 429,
+          "uploadToVisibleMs": 446.942500000001,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "adaptive-footer-hidden",
+          "kind": "ambiguous-printing",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 31,
+          "captureToCandidateMs": 415,
+          "processingAndHydrationMs": 415,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 4,
+            "embedMs": 175,
+            "searchMs": 91,
+            "totalMs": 384
+          },
+          "evidence": {
+            "sharpness": 0.0661710575222969,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.8186562336739449,
+            "differentIdentityMargin": 0.34188562405671163,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 2,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 415,
+          "uploadToVisibleMs": 445.08599999999933,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": null,
+          "safeUnresolved": true,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-clean",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 32,
+          "captureToCandidateMs": 688,
+          "processingAndHydrationMs": 688,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "a6de74d2-0668-49c6-a385-bf706bfed8f7",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 4,
+            "embedMs": 345,
+            "searchMs": 183,
+            "totalMs": 646
+          },
+          "evidence": {
+            "sharpness": 0.06883906573057175,
+            "calibrated": false,
+            "orientation": "rotated_180",
+            "topScore": 0.9421878385843859,
+            "differentIdentityMargin": 0.46278031948228937,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 688,
+          "uploadToVisibleMs": 704.1231000000007,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-blur",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 33,
+          "captureToCandidateMs": 427,
+          "processingAndHydrationMs": 427,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "a6de74d2-0668-49c6-a385-bf706bfed8f7",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 113,
+            "dewarpMs": 4,
+            "embedMs": 173,
+            "searchMs": 91,
+            "totalMs": 381
+          },
+          "evidence": {
+            "sharpness": 0.06761624664068222,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9569057405239302,
+            "differentIdentityMargin": 0.4180808246380049,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 427,
+          "uploadToVisibleMs": 444.604800000001,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-small",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 34,
+          "captureToCandidateMs": 425,
+          "processingAndHydrationMs": 425,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "77c6fa74-5543-42ac-9ead-0e890b188e99",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 115,
+            "dewarpMs": 4,
+            "embedMs": 171,
+            "searchMs": 91,
+            "totalMs": 381
+          },
+          "evidence": {
+            "sharpness": 0.06813718378543854,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9496891557187268,
+            "differentIdentityMargin": 0.4280604182690808,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 425,
+          "uploadToVisibleMs": 442.8221000000012,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-jpeg",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 35,
+          "captureToCandidateMs": 428,
+          "processingAndHydrationMs": 428,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "a6de74d2-0668-49c6-a385-bf706bfed8f7",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 116,
+            "dewarpMs": 5,
+            "embedMs": 171,
+            "searchMs": 94,
+            "totalMs": 386
+          },
+          "evidence": {
+            "sharpness": 0.06880469620227814,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9488245160919775,
+            "differentIdentityMargin": 0.4488014490944494,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 1,
+          "adapterMs": 427,
+          "uploadToVisibleMs": 443.01620000000185,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-perspective",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 36,
+          "captureToCandidateMs": 426,
+          "processingAndHydrationMs": 426,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "a6de74d2-0668-49c6-a385-bf706bfed8f7",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 3,
+            "embedMs": 173,
+            "searchMs": 91,
+            "totalMs": 381
+          },
+          "evidence": {
+            "sharpness": 0.06387660652399063,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9203574814671054,
+            "differentIdentityMargin": 0.41984219931302214,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 426,
+          "uploadToVisibleMs": 443.1905999999981,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-glare",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 37,
+          "captureToCandidateMs": 426,
+          "processingAndHydrationMs": 426,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 4,
+            "embedMs": 174,
+            "searchMs": 93,
+            "totalMs": 385
+          },
+          "evidence": {
+            "sharpness": 0.06868160516023636,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.835477689550113,
+            "differentIdentityMargin": 0.2684166229226106,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 4,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 425,
+          "uploadToVisibleMs": 443.2407000000021,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "bolt-footer-hidden",
+          "kind": "ambiguous-printing",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 38,
+          "captureToCandidateMs": 697,
+          "processingAndHydrationMs": 697,
+          "queueMs": 0,
+          "outcome": "unknown",
+          "failure": null,
+          "selected": null,
+          "candidates": [],
+          "processing": {
+            "detectMs": 122,
+            "dewarpMs": 3,
+            "embedMs": 354,
+            "searchMs": 187,
+            "totalMs": 666
+          },
+          "evidence": {
+            "sharpness": 0.06654685735702515,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.7357736176773866,
+            "differentIdentityMargin": 0.23587133949249584,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 0,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 697,
+          "uploadToVisibleMs": 742.6830000000009,
+          "oracleTop1": false,
+          "oracleInCandidates": false,
+          "printingInCandidates": null,
+          "safeUnresolved": true,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-clean",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 39,
+          "captureToCandidateMs": 692,
+          "processingAndHydrationMs": 692,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3459b229-7c46-4f70-87d4-bb31c2c17dd9",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "f48f7190-9ee3-477f-8b25-91e8c2916624",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "eca9ae7b-a6d9-43ea-92d4-0110fd6643a7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3917f744-b876-47ae-94ad-f72b215ff1e7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 115,
+            "dewarpMs": 5,
+            "embedMs": 356,
+            "searchMs": 188,
+            "totalMs": 664
+          },
+          "evidence": {
+            "sharpness": 0.06857173889875412,
+            "calibrated": false,
+            "orientation": "rotated_180",
+            "topScore": 0.968825591734858,
+            "differentIdentityMargin": 0.4659050237455087,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 692,
+          "uploadToVisibleMs": 723.2119999999995,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-blur",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 40,
+          "captureToCandidateMs": 427,
+          "processingAndHydrationMs": 427,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3459b229-7c46-4f70-87d4-bb31c2c17dd9",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "f48f7190-9ee3-477f-8b25-91e8c2916624",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3917f744-b876-47ae-94ad-f72b215ff1e7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "46ca0b66-a000-4483-b916-f5b89e710244",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 118,
+            "dewarpMs": 4,
+            "embedMs": 179,
+            "searchMs": 97,
+            "totalMs": 398
+          },
+          "evidence": {
+            "sharpness": 0.06757085025310516,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9751989571553672,
+            "differentIdentityMargin": 0.44605717344107276,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 427,
+          "uploadToVisibleMs": 461.22420000000056,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-small",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 41,
+          "captureToCandidateMs": 687,
+          "processingAndHydrationMs": 687,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3459b229-7c46-4f70-87d4-bb31c2c17dd9",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "f48f7190-9ee3-477f-8b25-91e8c2916624",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3917f744-b876-47ae-94ad-f72b215ff1e7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "46ca0b66-a000-4483-b916-f5b89e710244",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 115,
+            "dewarpMs": 4,
+            "embedMs": 356,
+            "searchMs": 186,
+            "totalMs": 661
+          },
+          "evidence": {
+            "sharpness": 0.06828825175762177,
+            "calibrated": false,
+            "orientation": "rotated_180",
+            "topScore": 0.9870533260420453,
+            "differentIdentityMargin": 0.46119468537126895,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 687,
+          "uploadToVisibleMs": 717.0830999999998,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-jpeg",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 42,
+          "captureToCandidateMs": 690,
+          "processingAndHydrationMs": 690,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3459b229-7c46-4f70-87d4-bb31c2c17dd9",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "f48f7190-9ee3-477f-8b25-91e8c2916624",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "4cbc6901-6a4a-4d0a-83ea-7eefa3b35021",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "38d347b7-dc17-417a-ab07-29fe99b9a101",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 115,
+            "dewarpMs": 4,
+            "embedMs": 356,
+            "searchMs": 190,
+            "totalMs": 665
+          },
+          "evidence": {
+            "sharpness": 0.06945513188838959,
+            "calibrated": false,
+            "orientation": "rotated_180",
+            "topScore": 0.9696017778258119,
+            "differentIdentityMargin": 0.46033188465640884,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 690,
+          "uploadToVisibleMs": 720.7662999999993,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-perspective",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 43,
+          "captureToCandidateMs": 416,
+          "processingAndHydrationMs": 416,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3459b229-7c46-4f70-87d4-bb31c2c17dd9",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3917f744-b876-47ae-94ad-f72b215ff1e7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "f48f7190-9ee3-477f-8b25-91e8c2916624",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "4cbc6901-6a4a-4d0a-83ea-7eefa3b35021",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 118,
+            "dewarpMs": 4,
+            "embedMs": 175,
+            "searchMs": 93,
+            "totalMs": 390
+          },
+          "evidence": {
+            "sharpness": 0.06352818012237549,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9886957185340236,
+            "differentIdentityMargin": 0.4656149523330043,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 415,
+          "uploadToVisibleMs": 447.3817999999992,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-glare",
+          "kind": "positive",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 44,
+          "captureToCandidateMs": 675,
+          "processingAndHydrationMs": 675,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3459b229-7c46-4f70-87d4-bb31c2c17dd9",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3917f744-b876-47ae-94ad-f72b215ff1e7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "46ca0b66-a000-4483-b916-f5b89e710244",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 4,
+            "embedMs": 346,
+            "searchMs": 183,
+            "totalMs": 647
+          },
+          "evidence": {
+            "sharpness": 0.06833433359861374,
+            "calibrated": false,
+            "orientation": "rotated_180",
+            "topScore": 0.8616985593270872,
+            "differentIdentityMargin": 0.3016148720216367,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 4,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 675,
+          "uploadToVisibleMs": 704.4129999999968,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": true,
+          "safeUnresolved": null,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "ring-footer-hidden",
+          "kind": "ambiguous-printing",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 45,
+          "captureToCandidateMs": 416,
+          "processingAndHydrationMs": 416,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "b79cb394-eb91-4b3b-91d4-c6a0f723feb1",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "eca9ae7b-a6d9-43ea-92d4-0110fd6643a7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "2d47121d-8b90-4d28-9ffa-0a640b9dd611",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "f9a32f17-49c4-4654-a087-1ba474f37377",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            },
+            {
+              "id": "3917f744-b876-47ae-94ad-f72b215ff1e7",
+              "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487"
+            }
+          ],
+          "processing": {
+            "detectMs": 113,
+            "dewarpMs": 4,
+            "embedMs": 173,
+            "searchMs": 94,
+            "totalMs": 384
+          },
+          "evidence": {
+            "sharpness": 0.06436968594789505,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.8316671317851068,
+            "differentIdentityMargin": 0.36474577248449336,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 416,
+          "uploadToVisibleMs": 433.2826000000023,
+          "oracleTop1": true,
+          "oracleInCandidates": true,
+          "printingInCandidates": null,
+          "safeUnresolved": true,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "blank",
+          "kind": "negative",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 46,
+          "captureToCandidateMs": 155,
+          "processingAndHydrationMs": 155,
+          "queueMs": 0,
+          "outcome": "unknown",
+          "failure": null,
+          "selected": null,
+          "candidates": [],
+          "processing": {
+            "detectMs": 114,
+            "totalMs": 114
+          },
+          "evidence": {
+            "sharpness": 0.007658207789063454,
+            "calibrated": false
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 0,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 154,
+          "uploadToVisibleMs": 169.74319999999716,
+          "oracleTop1": null,
+          "oracleInCandidates": null,
+          "printingInCandidates": null,
+          "safeUnresolved": true,
+          "negativeRejected": true,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "noise",
+          "kind": "negative",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 47,
+          "captureToCandidateMs": 138,
+          "processingAndHydrationMs": 138,
+          "queueMs": 0,
+          "outcome": "unknown",
+          "failure": null,
+          "selected": null,
+          "candidates": [],
+          "processing": {
+            "detectMs": 113,
+            "totalMs": 113
+          },
+          "evidence": {
+            "sharpness": 0.010813646949827671,
+            "calibrated": false
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 0,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 137,
+          "uploadToVisibleMs": 166.2386000000006,
+          "oracleTop1": null,
+          "oracleInCandidates": null,
+          "printingInCandidates": null,
+          "safeUnresolved": true,
+          "negativeRejected": true,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        },
+        {
+          "fixture": "two-cards",
+          "kind": "ambiguous-scene",
+          "round": 1,
+          "mode": "browser-onnx",
+          "attempt": 48,
+          "captureToCandidateMs": 415,
+          "processingAndHydrationMs": 415,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "e768c957-3a1f-42f5-853a-96942f645df5",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "b539a9de-037a-4b7a-80a5-0514680af095",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "435589bb-27c6-4a6d-9d63-394d5092b9d8",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "677da834-7f4a-4f60-9151-de7ddcf29622",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            },
+            {
+              "id": "6773a3cf-707f-4bc0-b64d-2a96b70f7975",
+              "oracle_id": "4457ed35-7c10-48c8-9776-456485fdf070"
+            }
+          ],
+          "processing": {
+            "detectMs": 114,
+            "dewarpMs": 4,
+            "embedMs": 171,
+            "searchMs": 92,
+            "totalMs": 381
+          },
+          "evidence": {
+            "sharpness": 0.04783945530653,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.8733567435820873,
+            "differentIdentityMargin": 0.3885277052005107,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 5,
+          "lookups": 0,
+          "hydrateMs": 0,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 459,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 76,
+            "prepareMs": 781,
+            "sessionInitMs": 315,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": true,
+          "preparationWaitMs": 0,
+          "adapterMs": 415,
+          "uploadToVisibleMs": 432.6903999999995,
+          "oracleTop1": null,
+          "oracleInCandidates": null,
+          "printingInCandidates": null,
+          "safeUnresolved": true,
+          "negativeRejected": null,
+          "network": {
+            "requests": 0,
+            "requestBytes": 0,
+            "responseBytes": 0,
+            "failed": 0
+          }
+        }
+      ],
+      "startup": [
+        {
+          "phase": "new-worker-retained-asset-cache",
+          "mode": "browser-onnx",
+          "attempt": 1,
+          "captureToCandidateMs": 1810,
+          "processingAndHydrationMs": 1810,
+          "queueMs": 0,
+          "outcome": "possible",
+          "failure": null,
+          "selected": null,
+          "candidates": [
+            {
+              "id": "4796e5e4-515c-4d89-92da-b2d5b5b39557",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            },
+            {
+              "id": "654a1564-0356-44ad-b1ab-8c1a556fc244",
+              "oracle_id": "a6657fcf-f08c-4b03-8ec8-cb0b194eb553"
+            }
+          ],
+          "processing": {
+            "detectMs": 153,
+            "dewarpMs": 10,
+            "embedMs": 197,
+            "searchMs": 23,
+            "totalMs": 383
+          },
+          "evidence": {
+            "sharpness": 0.06791887432336807,
+            "calibrated": false,
+            "orientation": "upright",
+            "topScore": 0.9303988713384976,
+            "differentIdentityMargin": 0.42543291035903597,
+            "isProbability": false,
+            "scoreKind": "cosine_similarity"
+          },
+          "versions": {
+            "visual": {
+              "adapter": "collectorvision-browser",
+              "processing": "keeper-visual-v3-portable-pixels",
+              "code": "fa7aa3ed896bcb326d7ea218c61ea7289d06803b",
+              "catalog": {
+                "key": "milo1/scryfall/mtg",
+                "version": 27,
+                "rows": 112049,
+                "embedding": "collectorvision@9d45a37ebfe40f22ece70507015645de134dc3ec:milo-1.0.0@sha256:bd13d8d60383c69da04dce261f32e93fdaeaa8fd618fbc991e7385f71b3d45df"
+              }
+            }
+          },
+          "cacheHits": 0,
+          "lookups": 2,
+          "hydrateMs": 351,
+          "prepare": {
+            "downloadBytes": 42794938,
+            "cacheBytes": 0,
+            "assetMs": 476,
+            "runtimeDownloadBytes": 13961845,
+            "runtimeCacheBytes": 0,
+            "runtimeLoadMs": 82,
+            "prepareMs": 1039,
+            "sessionInitMs": 556,
+            "provider": "wasm",
+            "gpuChecked": false,
+            "gpuAdvertised": false,
+            "gpuAvailable": null,
+            "fallback": null,
+            "catalogRows": 112049,
+            "catalogPackedBytes": 28684544,
+            "workerMemoryAvailable": false,
+            "ortVersion": "1.29.0"
+          },
+          "modelsReused": false,
+          "preparationWaitMs": 1059,
+          "adapterMs": 1810
+        }
+      ],
+      "environment": {
+        "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Mobile/15E148 Safari/604.1",
+        "cores": 8,
+        "crossOriginIsolated": false,
+        "webgpuAdvertised": false,
+        "memory": null
+      },
+      "inventoryUnchanged": true,
+      "summary": {
+        "attempts": 48,
+        "p50Ms": 445.08599999999933,
+        "p95Ms": 1305.2964000000002,
+        "correctCandidateP50Ms": 446.942500000001,
+        "correctCandidateP95Ms": 1305.2964000000002,
+        "unknown": 6,
+        "failures": 0,
+        "oracleTop1Correct": 40,
+        "oracleTrials": 42,
+        "negativesRejected": 4,
+        "negativeTrials": 4,
+        "unsafeUnresolved": 0
+      }
+    }
+  ]
+}

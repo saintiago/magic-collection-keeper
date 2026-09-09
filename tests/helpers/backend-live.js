@@ -77,8 +77,13 @@ export async function exerciseBackendScanner({ page }, test) {
   try {
     await page.locator("#scan").click();
     await expect(
-      page.getByText("Card crops are sent securely", { exact: false }),
+      page.getByText("Recognition runs on this device", { exact: false }),
     ).toBeVisible();
+    expect(process.env.RECOGNITION_SOURCE_SHA256).toMatch(/^[a-f0-9]{64}$/);
+    await expect(page.locator("#scan-preparation")).toHaveText(
+      "Scanner ready.",
+      { timeout: 90000 },
+    );
     const downloading = page.waitForEvent("download");
     await page
       .getByRole("button", { name: "Recognition source (AGPL-3.0)" })
@@ -92,9 +97,7 @@ export async function exerciseBackendScanner({ page }, test) {
       bytes += chunk.length;
     }
     expect(bytes).toBeGreaterThan(100000);
-    expect(hash.digest("hex")).toBe(
-      "6796edc865fb6563e06208b7d6e05fd0527a2c42fd5d4ef820624de7449219f9",
-    );
+    expect(hash.digest("hex")).toBe(process.env.RECOGNITION_SOURCE_SHA256);
     await upload("blank");
     await expect(page.locator("#scan-status")).toContainText(
       "No copy counted",
