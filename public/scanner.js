@@ -337,6 +337,7 @@ export function createScanner({
                     new CustomEvent("keeper-card-geometry-measurement", {
                       detail: {
                         state: geometry.state,
+                        capturedAt,
                         workerMs: geometry.elapsedMs,
                         frameAgeMs: performance.now() - capturedAt,
                         sameScene: gate.matches(sampled, capturedAt),
@@ -397,7 +398,7 @@ export function createScanner({
     prepareRecognition();
     update();
     const current = session;
-    gate = createScanAdmission();
+    gate ||= createScanAdmission();
     burst = createFrameBurst();
     el("camera-start").disabled = true;
     status("Waiting for camera permission…");
@@ -437,6 +438,7 @@ export function createScanner({
   }
   return {
     open() {
+      gate = createScanAdmission();
       rows = [];
       queue = [];
       attempt = 0;

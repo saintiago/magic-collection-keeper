@@ -43,6 +43,11 @@ async function fixture(page, { failFirst = false, slow = false } = {}) {
     failFirst,
   });
   await page.addInitScript(() => {
+    window.scanGeometry = [];
+    window.addEventListener("keeper-card-geometry-measurement", (event) => {
+      window.scanGeometry.push(event.detail);
+      if (window.scanGeometry.length > 100) window.scanGeometry.shift();
+    });
     const ActualAudio = window.AudioContext;
     window.cueNotes = [];
     window.AudioContext = class extends ActualAudio {
@@ -70,6 +75,14 @@ async function fixture(page, { failFirst = false, slow = false } = {}) {
             if (mode === "other") context.fillRect(0, i * 50, 800, 50);
             else context.fillRect(i * 40, 0, 40, 1000);
           }
+        if (mode === "glare") {
+          context.fillStyle = "rgba(255,255,255,.9)";
+          context.fillRect(0, 0, 380, 1000);
+        }
+        if (mode === "contrast") {
+          context.fillStyle = "rgba(128,128,128,.65)";
+          context.fillRect(0, 0, 800, 1000);
+        }
       };
       window.paintCard("first");
       window.testStream = canvas.captureStream(15);
@@ -83,11 +96,91 @@ async function fixture(page, { failFirst = false, slow = false } = {}) {
 }
 async function nextIdentical(page) {
   const expected = (await page.locator(".scan-option").count()) + 1;
-  await page.evaluate(() => window.paintCard("blank"));
-  await page.waitForTimeout(500);
+  await page.evaluate(() => {
+    window.scanGeometry = [];
+    window.paintCard("blank");
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const frames = window.scanGeometry.filter(
+          (frame) => frame.state === "none" && frame.sameScene,
+        );
+        return (
+          frames.length >= 3 &&
+          frames.at(-1).capturedAt - frames[0].capturedAt >= 600
+        );
+      }),
+    )
+    .toBe(true);
   await page.evaluate(() => window.paintCard("first"));
   await choosePossible(page, expected);
 }
+test("SCAN-03/04 a stationary capture survives appearance changes and transient loss with one copy/cue, then an observed removal admits the next identical copy", async ({
+  page,
+}) => {
+  await fixture(page);
+  for (const kind of ["glare", "contrast", "other", "first"]) {
+    await page.evaluate((kind) => window.paintCard(kind), kind);
+    await page.waitForTimeout(1200);
+    await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
+  }
+  await page.evaluate(() => {
+    window.testCardState = "none";
+    window.paintCard("glare");
+  });
+  await page.waitForTimeout(280);
+  await page.evaluate(() => {
+    window.testCardState = "single";
+    window.paintCard("first");
+  });
+  await page.waitForTimeout(1300);
+  expect(await page.evaluate(() => window.cueNotes)).toEqual([440, 660, 880]);
+  await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
+  await page.evaluate(() => {
+    delete window.testCardState;
+  });
+  await nextIdentical(page);
+  await expect(page.locator("#scan-count")).toHaveText("2 queued · 2 copies");
+  expect(await page.evaluate(() => window.cueNotes)).toEqual([
+    440, 660, 880, 660, 880,
+  ]);
+  await page.locator("#scan-back").click();
+  await expect(page.locator(".draft-row")).toHaveCount(2);
+  await page.reload();
+  await expect(page.locator(".draft-row")).toHaveCount(2);
+});
+test("SCAN-03 background/resume keeps the stationary-card latch until observed removal", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.locator("#scan-status")).toContainText("background");
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: false,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.locator("#camera-start").click();
+  await page.waitForTimeout(1800);
+  await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
+  expect(
+    await page.evaluate(() =>
+      window.cueNotes.filter((note) => note === 660 || note === 880),
+    ),
+  ).toEqual([660, 880]);
+  await nextIdentical(page);
+  await expect(page.locator("#scan-count")).toHaveText("2 queued · 2 copies");
+});
+
 test("UC-14 hands-free identical copies, stationary suppression, error cue recovery and safe review", async ({
   page,
 }) => {

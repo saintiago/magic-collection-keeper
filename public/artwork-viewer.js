@@ -7,6 +7,7 @@ import {
   enlargedArtwork,
 } from "./card-action-layout.js";
 import { upgradeArtwork } from "./artwork-images.js";
+import { returnArtwork } from "./artwork-return.js";
 
 export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
   const dialog = document.createElement("dialog");
@@ -32,7 +33,10 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     state = null,
     rect = null,
     suppressUntil = 0,
-    glass = null;
+    glass = null,
+    closing = false,
+    returningSource = null,
+    stopReturn = null;
 
   function hidePreview() {
     if (preview.hidden) return;
@@ -75,7 +79,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
   }
   function draw() {
     frame = 0;
-    if (!dialog.open || !state) return;
+    if (!dialog.open || !state || closing) return;
     if (glass?.dirty) {
       glass.element.style.setProperty("--glass-x", glass.x + "%");
       glass.element.style.setProperty("--glass-y", glass.y + "%");
@@ -95,12 +99,18 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     if (!frame) frame = requestAnimationFrame(draw);
   }
   function finish() {
+    stopReturn?.();
+    stopReturn = null;
+    closing = false;
+    delete dialog.dataset.closing;
     cancelAnimationFrame(frame);
     frame = 0;
     points.clear();
     gesture = null;
     glass = null;
     origin?.classList.remove("artwork-source-lifted");
+    returningSource?.classList.remove("artwork-source-lifted");
+    returningSource = null;
     if (dialog.open) dialog.close();
     dialog.replaceChildren();
     rect = null;
@@ -118,17 +128,69 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     afterClose = null;
     next?.();
   }
+  function sourceElement() {
+    return origin?.isConnected
+      ? origin
+      : originKey
+        ? document.querySelector(
+            `[data-card-key="${CSS.escape(originKey)}"] button`,
+          )
+        : null;
+  }
+  function animateClose() {
+    if (!dialog.open || stopReturn) return;
+    closing = true;
+    cancelAnimationFrame(frame);
+    frame = 0;
+    points.clear();
+    gesture = null;
+    dialog.dataset.closing = "";
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return finish();
+    stopReturn = returnArtwork({
+      dialog,
+      zoom: state.initialZoom,
+      source: () => {
+        const target = sourceElement();
+        if (returningSource !== target) {
+          returningSource?.classList.remove("artwork-source-lifted");
+          returningSource = target;
+          returningSource?.classList.add("artwork-source-lifted");
+        }
+        const bounds = target?.getBoundingClientRect();
+        return bounds?.width && bounds?.height ? bounds : null;
+      },
+      complete: finish,
+    });
+  }
   function close(next) {
-    if (!dialog.open) return;
+    if (!dialog.open || closing) return;
+    closing = true;
     afterClose = next || null;
     if (history.state?.keeperArtwork === historyKey) history.back();
-    else finish();
+    else animateClose();
   }
   window.addEventListener("popstate", () => {
-    if (dialog.open && history.state?.keeperArtwork !== historyKey) finish();
+    if (dialog.open && history.state?.keeperArtwork !== historyKey)
+      animateClose();
   });
+  for (const type of ["click", "pointerdown", "wheel", "submit"])
+    dialog.addEventListener(
+      type,
+      (event) => {
+        if (!closing) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      },
+      { capture: true, passive: false },
+    );
   dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
+    close();
+  });
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
     close();
   });
   dialog.addEventListener(
@@ -274,7 +336,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       glass.dirty = true;
       schedule();
     }
-    if (!state || !rect) return;
+    if (!state || !rect || closing) return;
     if (points.has(event.pointerId)) {
       event.preventDefault();
       points.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -360,6 +422,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       dialog.style.height = (viewport?.height || innerHeight) + "px";
       dialog.style.left = (viewport?.offsetLeft || 0) + "px";
       dialog.style.top = (viewport?.offsetTop || 0) + "px";
+      if (closing) return;
       const safe = getComputedStyle(dialog.querySelector(".artwork-safe-area"));
       const source = origin?.isConnected
         ? origin.getBoundingClientRect()

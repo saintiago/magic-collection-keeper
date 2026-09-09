@@ -109,15 +109,18 @@ test("UC-ONE-CARD actual geometry waits quietly through overlap and preserves ou
   await expect
     .poll(
       () =>
-        page.evaluate(
-          () =>
-            window.geometryMeasurements.filter(
-              (frame) => frame.state === "none" && frame.sameScene,
-            ).length,
-        ),
+        page.evaluate(() => {
+          const frames = window.geometryMeasurements.filter(
+            (frame) => frame.state === "none" && frame.sameScene,
+          );
+          return (
+            frames.length >= 3 &&
+            frames.at(-1).capturedAt - frames[0].capturedAt >= 600
+          );
+        }),
       { timeout: 10000 },
     )
-    .toBeGreaterThanOrEqual(3);
+    .toBe(true);
   await page.evaluate(() => window.paintScene("single"));
   await expect(page.locator("#scan-count")).toHaveText("2 queued · 2 copies", {
     timeout: 10000,

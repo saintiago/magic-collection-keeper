@@ -489,6 +489,9 @@
   -webkit-touch-callout: none;
   will-change: transform;
 }
+.artwork-viewer[data-closing] .artwork-viewport {
+  overflow: visible;
+}
 .artwork-viewer output {
   min-width: 48px;
   text-align: center;
