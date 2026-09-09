@@ -46,7 +46,7 @@ test("backend browser adapter rejects canceled, late and unapproved acceptance r
   });
   await assert.rejects(wrong.recognize(canvas, { attempt: 2 }), /not approved/);
 });
-test("possible recognition is never an automatic selected printing", async () => {
+test("possible response without a canonical identity cannot suggest a printing", async () => {
   const port = createBackendRecognition({
     request: async () => ({
       attempt: 1,
@@ -59,8 +59,12 @@ test("possible recognition is never an automatic selected printing", async () =>
   assert.ok(measurement.hydrateMs >= 0);
   assert.deepEqual(row, {
     status: "possible",
+    waitingForSingleCard: false,
     candidates: [],
     selected: null,
+    suggested: false,
+    query: "",
+    note: "Suggested printing. Check set, collector number and language; use Find to see other printings.",
     name: "Unclear reading",
     finish: "nonfoil",
     condition: "NM",

@@ -1,3 +1,4 @@
+import { createSqliteBatches } from "./sqlite-batches.js";
 import { collection, addInventory, savePrinting } from "../db.js";
 import { ApplicationError } from "../domain/inventory.js";
 export function createSqliteAdapters(db) {
@@ -12,6 +13,7 @@ export function createSqliteAdapters(db) {
   };
   return {
     repository: {
+      ...createSqliteBatches(db),
       list: () => collection(db),
       getPrinting: (id) => {
         const row = db

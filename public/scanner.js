@@ -1,48 +1,63 @@
-import { scannerShell, possibleMatches } from "./scan-view.js";
+import { scannerShell } from "./scan-view.js";
 import { startCamera, stopCamera, capture, signature } from "./camera.js";
-import { createTransitionGate } from "./scan-transition.js";
+import { createScanAdmission } from "./scan-admission.js";
+import { createFrameBurst, captureQuality } from "./camera-quality.js";
 import { createScanAudio } from "./scan-audio.js";
 import { createScanWheel } from "./scan-wheel.js";
+import { createCardPresence } from "./card-presence.js";
+import { createScanOverlay } from "./scan-overlay.js";
 
-export function createScanner({ api, onReview, recognition = null }) {
+export function createScanner({
+  api,
+  onReview,
+  onRows = () => {},
+  recognition = null,
+}) {
   const mode = recognition?.kind || "hybrid";
+  const presence = createCardPresence();
   let requestController = new AbortController();
   const dialog = document.createElement("dialog");
   dialog.className = "scanner-dialog";
   dialog.setAttribute("aria-label", "Continuous card scanner");
   document.body.append(dialog);
   let rows,
-    possible,
     queue,
     wheel,
     audio,
     stream,
     timer,
     gate,
+    burst,
+    overlay,
     running = false,
     processing = false,
     session = 0,
     attempt = 0,
     muted = false,
     preparationAttempt = 0;
+  let presenceTask = null;
+  let checkedFrame = null;
   const el = (id) => dialog.querySelector(`#${id}`);
   const status = (text) => {
-    if (dialog.open) el("scan-status").textContent = text;
+    if (dialog.open && el("scan-status").textContent !== text)
+      el("scan-status").textContent = text;
   };
   function prepareRecognition() {
+    const geometryReady = presence.prepare();
+    void geometryReady.catch(() => {});
     if (recognition?.kind !== "hybrid") return;
     const id = ++preparationAttempt;
     let label = el("scan-preparation");
     if (!label) {
       label = document.createElement("p");
       label.id = "scan-preparation";
-      label.className = "recognition-notice";
+      label.className = "scan-ready-state";
       label.setAttribute("aria-live", "polite");
       el("scan-status").before(label);
     }
     label.textContent =
       "Preparing faster recognition… You can start the camera.";
-    recognition.prepare().then(
+    Promise.all([geometryReady, recognition.prepare()]).then(
       () => {
         if (dialog.open && id === preparationAttempt)
           label.textContent = "Scanner ready.";
@@ -57,10 +72,10 @@ export function createScanner({ api, onReview, recognition = null }) {
   function update(newest = false) {
     wheel.update(rows, newest);
     el("scan-count").textContent =
-      `${rows.length} matched · ${rows.reduce((n, r) => n + r.quantity, 0)} copies`;
+      `${rows.length} queued · ${rows.reduce((n, r) => n + r.quantity, 0)} copies`;
     el("scan-empty").hidden = rows.length > 0;
     el("scan-review").disabled = rows.length === 0;
-    renderPossible();
+    onRows(rows);
   }
   function soundState(state) {
     if (!el("scan-sound-state")) return;
@@ -75,18 +90,14 @@ export function createScanner({ api, onReview, recognition = null }) {
         unavailable: "Sound unavailable · follow visual status",
       }[state] || "Sound unavailable · follow visual status";
   }
-  function renderPossible() {
-    const panel = el("scan-possible");
-    panel.hidden = !possible.length;
-    panel.querySelector("summary").textContent =
-      `Possible matches (${possible.length})`;
-    panel.querySelector(".scan-possible-list").innerHTML =
-      possibleMatches(possible);
-  }
-  function stop() {
+  function stop({ preservePresence = false } = {}) {
     session++;
     requestController.abort();
     requestController = new AbortController();
+    if (!preservePresence) presence.dispose();
+    presenceTask = null;
+    checkedFrame = null;
+    overlay?.clear();
     running = false;
     dialog.dataset.running = "false";
     processing = false;
@@ -96,6 +107,7 @@ export function createScanner({ api, onReview, recognition = null }) {
     const video = el("camera-video");
     if (video) video.srcObject = null;
     queue = [];
+    burst?.clear();
     void audio?.close();
     if (el("camera-start")) {
       el("camera-start").hidden = false;
@@ -105,6 +117,13 @@ export function createScanner({ api, onReview, recognition = null }) {
   function leave() {
     stop();
     recognition?.dispose?.();
+    const overlayMetrics = overlay?.destroy();
+    if (overlayMetrics)
+      window.dispatchEvent(
+        new CustomEvent("keeper-overlay-measurement", {
+          detail: overlayMetrics,
+        }),
+      );
     wheel.destroy();
     dialog.close();
     document.documentElement.classList.remove("scanning");
@@ -122,25 +141,29 @@ export function createScanner({ api, onReview, recognition = null }) {
       status("Camera paused in the background. Tap Start camera to resume.");
     }
   });
-  window.addEventListener("pagehide", stop);
+  window.addEventListener("pagehide", () => {
+    stop();
+    recognition?.dispose?.();
+    overlay?.destroy();
+    overlay = null;
+  });
   window.addEventListener("keeper-sign-out", () => {
     stop();
     recognition?.dispose?.();
+    overlay?.destroy();
     dialog.close();
     document.documentElement.classList.remove("scanning");
   });
   function enqueue(canvas) {
-    if (
-      rows.length + possible.length + queue.length + Number(processing) >=
-      50
-    ) {
+    if (rows.length + queue.length + Number(processing) >= 50) {
       stop();
       update();
-      status("Batch full. Review matched cards or dismiss possible matches.");
+      status("Batch full. Open Review to check and save these cards.");
       return;
     }
     const row = {
       scanId: ++attempt,
+      captureId: crypto.randomUUID(),
       name: "Reading card",
       quantity: 1,
       candidates: [],
@@ -158,6 +181,7 @@ export function createScanner({ api, onReview, recognition = null }) {
       return;
     }
     queue.push({ row, canvas, capturedAt: performance.now() });
+    overlay?.capture(row.captureId, signature(canvas), canvas.cardGeometry);
     void drain(session);
   }
   async function drain(current) {
@@ -176,6 +200,33 @@ export function createScanner({ api, onReview, recognition = null }) {
         );
         result = await recognition.recognize(canvas, {
           attempt: row.scanId,
+          onStage: (stage) => {
+            if (current === session && dialog.open)
+              overlay?.stage(row.captureId, stage);
+          },
+          onUpdate: (verified) => {
+            if (current !== session || !dialog.open || !verified.selected)
+              return;
+            if (row.processing) {
+              row.latestRecognition = verified;
+              return;
+            }
+            if (!rows.includes(row)) return;
+            const chosen = row.selected,
+              quantity = row.quantity;
+            const edited = row.userEdited
+              ? {
+                  selected: chosen,
+                  name: chosen.name,
+                  finish: row.finish,
+                  condition: row.condition,
+                  query: row.query,
+                }
+              : {};
+            Object.assign(row, verified, { quantity, ...edited });
+            overlay?.recognized(row.captureId, row.name);
+            update();
+          },
           signal: AbortSignal.any([
             requestController.signal,
             AbortSignal.timeout(35000),
@@ -196,20 +247,25 @@ export function createScanner({ api, onReview, recognition = null }) {
       }
       if (current !== session || !dialog.open) return;
       const quantity = row.quantity;
-      Object.assign(row, result, { quantity, processing: false });
+      Object.assign(row, row.latestRecognition || result, {
+        quantity,
+        processing: false,
+      });
+      delete row.latestRecognition;
       if (row.selected) rows.push(row);
-      else if (row.candidates?.length) {
-        possible.push(row);
-        if (possible.length > 10) possible.shift();
-      }
-      audio.cue(row.selected ? "success" : "error", row.scanId);
+      if (row.selected) overlay?.recognized(row.captureId, row.name);
+
+      if (!row.waitingForSingleCard)
+        audio.cue(row.selected ? "success" : "error", row.scanId);
       update(Boolean(row.selected));
       status(
-        row.selected
-          ? `${row.name} matched. ${running ? "Slide in the next card." : "Upload another photo or start the camera."}`
-          : row.candidates?.length
-            ? "Printing uncertain. Move the card out and retry, or open Possible matches. No copy counted."
-            : `${row.error || "No match. Move the card out, then try again."} No copy counted.`,
+        row.waitingForSingleCard
+          ? "Wait until only one card is visible."
+          : row.selected
+            ? `${row.name} queued · check suggested printing in Review. ${running ? "Slide in the next card." : "Upload another photo or start the camera."}`
+            : row.candidates?.length
+              ? "Identity uncertain. Move the card out and retry. No copy counted."
+              : `${row.error || "No match. Move the card out, then try again."} No copy counted.`,
       );
       window.dispatchEvent(
         new CustomEvent("keeper-scan-measurement", {
@@ -242,37 +298,130 @@ export function createScanner({ api, onReview, recognition = null }) {
   }
   function tick(current) {
     if (!running || current !== session) return;
+    const tickStarted = performance.now();
     try {
       const video = el("camera-video");
       if (video.readyState >= 2) {
         const canvas = capture(video, el("scan-guide"));
-        if (gate.observe(signature(canvas), performance.now())) enqueue(canvas);
+        const frame = signature(canvas),
+          now = performance.now();
+        canvas.capturedAt = now;
+        gate.track(frame, now);
+        overlay?.track(frame);
+        burst.observe(canvas, frame, now, captureQuality(canvas));
+        if (
+          checkedFrame &&
+          gate.validate(
+            checkedFrame.frame,
+            checkedFrame.at,
+            checkedFrame.geometry.state,
+          )
+        )
+          enqueue(checkedFrame.canvas);
+        if (!presenceTask) {
+          const sample = burst.take() || canvas;
+          const sampled = signature(sample),
+            capturedAt = sample.capturedAt;
+          const task = presence.inspect(sample, {
+            signal: AbortSignal.any([
+              requestController.signal,
+              AbortSignal.timeout(35000),
+            ]),
+          });
+          presenceTask = task;
+          task
+            .then(
+              (geometry) => {
+                if (current === session)
+                  window.dispatchEvent(
+                    new CustomEvent("keeper-card-geometry-measurement", {
+                      detail: {
+                        state: geometry.state,
+                        workerMs: geometry.elapsedMs,
+                        frameAgeMs: performance.now() - capturedAt,
+                        sameScene: gate.matches(sampled, capturedAt),
+                      },
+                    }),
+                  );
+                if (
+                  !running ||
+                  current !== session ||
+                  !dialog.open ||
+                  !gate.matches(sampled, capturedAt)
+                )
+                  return;
+                sample.cardGeometry = geometry;
+                checkedFrame = {
+                  canvas: sample,
+                  frame: sampled,
+                  at: capturedAt,
+                  geometry,
+                };
+                overlay?.observe(geometry, sampled);
+                if (geometry.state !== "single") {
+                  status(
+                    geometry.state === "none"
+                      ? "Place one card inside the guide."
+                      : "Wait until only one card is visible.",
+                  );
+                }
+                if (gate.validate(sampled, capturedAt, geometry.state))
+                  enqueue(sample);
+              },
+              (error) => {
+                if (current !== session || error.name === "AbortError") return;
+                stop();
+                update();
+                status(`Camera paused: ${error.message}`);
+              },
+            )
+            .finally(() => {
+              if (presenceTask === task) presenceTask = null;
+            });
+        }
       }
     } catch (error) {
+      if (current !== session || error.name === "AbortError") return;
       stop();
       update();
       status(`Camera paused: ${error.message}`);
     }
     if (running && current === session)
-      timer = setTimeout(() => tick(current), 120);
+      timer = setTimeout(
+        () => tick(current),
+        Math.max(0, 120 - (performance.now() - tickStarted)),
+      );
   }
   async function start() {
+    stop({ preservePresence: true });
     prepareRecognition();
-    stop();
     update();
     const current = session;
-    gate = createTransitionGate();
+    gate = createScanAdmission();
+    burst = createFrameBurst();
     el("camera-start").disabled = true;
     status("Waiting for camera permission…");
     // Called directly from the initial tap, before awaiting camera permission.
     void audio.activate({ test: true });
     try {
-      const candidate = await startCamera(el("camera-video"));
+      const candidate = await startCamera(el("camera-video"), {
+        signal: requestController.signal,
+        onDiagnostics: (detail) =>
+          window.dispatchEvent(
+            new CustomEvent("keeper-camera-measurement", { detail }),
+          ),
+      });
       if (current !== session || !dialog.open || document.hidden) {
         stopCamera(candidate);
         return;
       }
       stream = candidate;
+      if (!overlay)
+        overlay = createScanOverlay({
+          canvas: el("scan-overlay"),
+          video: el("camera-video"),
+          guide: el("scan-guide"),
+        });
       running = true;
       dialog.dataset.running = "true";
       el("camera-start").hidden = true;
@@ -289,43 +438,16 @@ export function createScanner({ api, onReview, recognition = null }) {
   return {
     open() {
       rows = [];
-      possible = [];
       queue = [];
       attempt = 0;
       dialog.innerHTML = scannerShell(muted);
+      overlay?.destroy();
+      overlay = createScanOverlay({
+        canvas: el("scan-overlay"),
+        video: el("camera-video"),
+        guide: el("scan-guide"),
+      });
       dialog.dataset.recognition = recognition ? "backend" : "local";
-      if (recognition) {
-        const notice = document.createElement("p");
-        notice.className = "recognition-notice";
-        notice.textContent =
-          "Recognition runs on this device when ready. If needed, card crops are sent securely for temporary cloud processing and are not saved. ";
-        const source = document.createElement("button");
-        source.textContent = "Recognition source (AGPL-3.0)";
-        source.onclick = async () => {
-          const current = session;
-          source.disabled = true;
-          try {
-            const blob = await api("/api/recognition/source", {
-              responseType: "blob",
-              signal: requestController.signal,
-            });
-            if (current !== session || !dialog.open) return;
-            const url = URL.createObjectURL(blob),
-              link = document.createElement("a");
-            link.href = url;
-            link.download = "keeper-recognition-source.zip";
-            link.click();
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-          } catch {
-            if (current === session)
-              status("Source download unavailable. Please retry.");
-          } finally {
-            source.disabled = false;
-          }
-        };
-        notice.append(source);
-        el("scan-status").before(notice);
-      }
       audio = createScanAudio({ onState: soundState });
       audio.setMuted(muted);
       wheel = createScanWheel({
@@ -343,28 +465,6 @@ export function createScanner({ api, onReview, recognition = null }) {
         el("scan-mute").textContent = "Mute sound";
         void audio.activate({ test: true });
       };
-      el("scan-possible").onclick = (event) => {
-        const button = event.target.closest("button");
-        if (!button) return;
-        const id = Number(button.dataset.attempt || button.dataset.dismiss);
-        const index = possible.findIndex((row) => row.scanId === id);
-        if (index < 0) return;
-        const row = possible[index];
-        if (button.dataset.candidate !== undefined) {
-          row.selected = row.candidates[Number(button.dataset.candidate)];
-          row.name = row.selected.name;
-          row.error = null;
-          if (!row.selected.finishes.includes(row.finish))
-            row.finish = row.selected.finishes[0];
-          rows.push(row);
-          rows.sort((a, b) => a.scanId - b.scanId);
-          status(
-            `${row.name} selected for final printing and ownership review.`,
-          );
-        }
-        possible.splice(index, 1);
-        update(true);
-      };
       el("scan-mute").onclick = async () => {
         muted = !muted;
         audio.setMuted(muted);
@@ -375,7 +475,7 @@ export function createScanner({ api, onReview, recognition = null }) {
       el("photo").onchange = async (event) => {
         const file = event.target.files[0];
         if (!file) return;
-        stop();
+        stop({ preservePresence: true });
         update();
         const current = session;
         void audio.activate();
@@ -393,12 +493,30 @@ export function createScanner({ api, onReview, recognition = null }) {
             .getContext("2d")
             .drawImage(bitmap, 0, 0, canvas.width, canvas.height);
           bitmap.close();
+          const geometry = await presence.inspect(canvas, {
+            signal: AbortSignal.any([
+              requestController.signal,
+              AbortSignal.timeout(35000),
+            ]),
+          });
+          if (current !== session || !dialog.open) return;
+          if (geometry.state !== "single") {
+            status(
+              geometry.state === "none"
+                ? "No clear card found. Choose a photo of one card."
+                : "Wait until only one card is visible.",
+            );
+            return;
+          }
           enqueue(canvas);
         } catch (error) {
-          status(`Could not read that image: ${error.message}`);
-          audio.cue("error", ++attempt);
+          if (current === session && dialog.open) {
+            status(`Could not read that image: ${error.message}`);
+            audio.cue("error", ++attempt);
+          }
+        } finally {
+          event.target.value = "";
         }
-        event.target.value = "";
       };
       document.documentElement.classList.add("scanning");
       dialog.showModal();

@@ -35,6 +35,7 @@ STAGES = frozenset(
         "visual.detect",
         "visual.detect_inference",
         "visual.geometry",
+        "visual.card_regions",
         "visual.dewarp",
         "visual.embed",
         "visual.embed_inference",

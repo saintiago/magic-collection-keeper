@@ -117,6 +117,6 @@ test("UC-15 phone wheel puts newest beside controls and centers history with new
     )
     .toBeLessThan(2);
   await page.locator("#scan-back").click();
-  await expect(page.locator(".review-row")).toHaveCount(6);
-  await expect(page.locator("#save-batch")).toBeDisabled();
+  await expect(page.locator(".draft-row")).toHaveCount(6);
+  await expect(page.locator("#draft-add")).toBeEnabled();
 });

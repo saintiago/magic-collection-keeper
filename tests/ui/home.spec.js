@@ -242,7 +242,7 @@ test("UC-32 home errors stay honest and search, import and scanner remain reacha
   await expect(page.locator(".home-card")).toHaveCount(1);
   await page.locator("#import-nav").tap();
   await expect(page).toHaveURL(/#import$/);
-  await expect(page.locator("#import-list")).toBeVisible();
+  await expect(page.locator("#draft-show-text")).toBeVisible();
   await page.goBack();
   await expect(page.locator("#home-page")).toBeVisible();
   await page.locator("#scan").tap();

@@ -59,6 +59,33 @@ class BrokenVisual(Visual):
 
 
 class ContractTests(unittest.TestCase):
+    def test_translated_whole_title_and_separated_numeric_mana(self):
+        card = {**CARD, "name": "Translated Example"}
+        visual = {"identity_supported": False, "candidates": [card], "corners": [[0, 0], [1, 0], [1, 1], [0, 1]], "evidence": {"topScore": .68, "differentIdentityMargin": .2}}
+        aliases = [["Ejemplo traducido", "es"]]
+        result = decide(visual, {"title": ["Ejemplo traducido", "3"]}, aliases=aliases)
+        self.assertEqual(result["status"], "possible")
+        self.assertEqual(result["evidence"]["titleLanguage"], "es")
+        for title in ["Ejemplo", "Ejemplo traducida", "Ejemplo traducido other", "Ejemplo traducido3"]:
+            self.assertEqual(decide(visual, {"title": [title]}, aliases=aliases)["status"], "unknown")
+        self.assertEqual(decide(visual, {"title": ["Ejemplo traducido"]})["status"], "unknown")
+
+    def test_title_corroboration_requires_exact_independent_title_and_visual_margin(self):
+        card = {**CARD, "name": "Shaun, Father of Synths", "set": "pip", "collector_number": "119"}
+        visual = {"identity_supported": False, "candidates": [card], "corners": [[0, 0], [1, 0], [1, 1], [0, 1]], "evidence": {"topScore": .67, "differentIdentityMargin": .22}}
+        text = {"title": ["Shaun. Father of Synths"], "footer": ["R0119", "PIP-EN"]}
+        result = decide(visual, text)
+        self.assertEqual(result["status"], "possible")
+        self.assertTrue(result["evidence"]["identityTitleCorroborated"])
+        self.assertEqual(result["evidence"]["exactPrintingId"], card["id"])
+        self.assertIsNone(result["selected"])
+        for wrong in [[], ["Shaun Father of Synth"], ["Sol Ring"], ["Shaun", "Unrelated text"]]:
+            self.assertEqual(decide(visual, {"title": wrong})["status"], "unknown")
+        for field, value in [("topScore", .59), ("differentIdentityMargin", .11)]:
+            weak = {**visual, "evidence": {**visual["evidence"], field: value}}
+            self.assertEqual(decide(weak, text)["status"], "unknown")
+        self.assertEqual(decide({**visual, "corners": None}, text)["status"], "unknown")
+
     def test_interchangeable_visual_score_scales(self):
         for visual in (Visual(), AlternateVisual()):
             r = RecognitionService(visual, Text()).recognize(None)

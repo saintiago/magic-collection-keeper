@@ -199,61 +199,7 @@ test("UC-05 add failure, retry, remove cancellation and remove failure", async (
     "Please retry this change",
   );
 });
-test("UC-07 import limits, unresolved correction, choices, attributes, partial failure and retry", async ({
-  page,
-}) => {
-  let writes = 0,
-    fail = true;
-  await page.route("**/api/collection", (r) => {
-    if (r.request().method() === "POST") {
-      writes++;
-      if (writes === 2 && fail)
-        return r.fulfill({
-          status: 503,
-          json: { error: "Temporary write error" },
-        });
-    }
-    return r.fulfill({ json: [] });
-  });
-  await page.route("**/api/search?*", (r) =>
-    r.fulfill({ json: { cards: [a, b], total: 2, hasMore: false } }),
-  );
-  await page.goto("/#collection");
-  await page.locator("#import-nav").click();
-  await page.locator("#import-list").click();
-  await page.locator("#preview").click();
-  await expect(page.getByText("Paste at least one card line.")).toBeVisible();
-  await page.locator("#import-text").fill(Array(51).fill("1 Alpha").join("\n"));
-  await page.locator("#preview").click();
-  await expect(
-    page.getByText("Please split this list", { exact: false }),
-  ).toBeVisible();
-  await page.locator("#import-text").fill("2 Alpha\nbad line");
-  await page.locator("#preview").click();
-  await expect(
-    page.getByText("Review matches below.", { exact: false }),
-  ).toBeVisible();
-  await page.locator(".candidate").first().selectOption("a");
-  await page.locator(".review-qty").first().fill("3");
-  await page.locator(".review-finish").first().selectOption("foil");
-  await page.locator(".review-condition").first().selectOption("MP");
-  await page.locator(".review-search input").last().fill("Beta");
-  await page.locator(".resolve").last().click();
-  await page.locator(".candidate").last().selectOption("b");
-  await page.locator("#ownership").check();
-  await page.locator("#save-batch").click();
-  await expect(
-    page.getByText("1 entries saved before an error:", { exact: false }),
-  ).toBeVisible();
-  fail = false;
-  await page.locator("#save-batch").click();
-  await expect(
-    page.getByText("1 reviewed entries added.", { exact: false }),
-  ).toBeVisible();
-  expect(writes).toBe(3);
-  await page.locator("#batch-close").click();
-  await expect(page.locator(".batch-dialog")).not.toBeVisible();
-});
+
 test("UC-08 missing camera and uploaded photo recognition failure", async ({
   page,
 }) => {
@@ -278,9 +224,9 @@ test("UC-08 missing camera and uploaded photo recognition failure", async ({
     page.getByText("Recognition failed.", { exact: false }),
   ).toBeVisible();
   await expect(page.locator(".scan-option")).toHaveCount(0);
-  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
   await page.locator("#scan-back").click();
-  await expect(page.locator(".batch-dialog")).not.toBeVisible();
+  await expect(page.locator("#import-page")).not.toBeVisible();
 });
 test("UC-09 mobile layout remains within viewport with working navigation", async ({
   page,

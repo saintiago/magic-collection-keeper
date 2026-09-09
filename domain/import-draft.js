@@ -81,6 +81,11 @@ export function validateDraftRows(draft, rows, tags) {
       );
     used.add(row.id);
     validateQuantity(row.quantity);
+    if (
+      draft.provider === "reviewed-capture" &&
+      !["NM", "LP", "MP", "HP", "DMG", "UNK"].includes(row.condition)
+    )
+      throw new ApplicationError("Choose a supported condition.");
     if (!["nonfoil", "foil", "etched"].includes(row.finish))
       throw new ApplicationError("Choose a supported finish.");
     const assigned = validateAssignments(row, {}, tags);
@@ -88,7 +93,11 @@ export function validateDraftRows(draft, rows, tags) {
       ...previous,
       quantity: row.quantity,
       finish: row.finish,
-      in_deck: row.in_deck !== false,
+      ...(draft.provider === "reviewed-capture"
+        ? { condition: row.condition }
+        : {}),
+      in_deck:
+        draft.provider === "reviewed-capture" ? false : row.in_deck !== false,
       locations: assigned.locations,
       tag_ids: assigned.tag_ids,
     };
@@ -135,7 +144,10 @@ export function draftDeck(draft) {
     source_id: draft.source_id,
     name: draft.name,
     url: draft.url,
-    folder: "Reviewed URL imports",
+    folder:
+      draft.provider === "reviewed-capture"
+        ? "Reviewed captures"
+        : "Reviewed URL imports",
     retrieved_at: draft.retrieved_at,
     excluded: draft.original.excluded,
     pending: [],
@@ -144,6 +156,9 @@ export function draftDeck(draft) {
       finish: row.finish,
       section: row.original.section,
       quantity: row.quantity,
+      ...(draft.provider === "reviewed-capture"
+        ? { condition: row.condition }
+        : {}),
     })),
   };
 }

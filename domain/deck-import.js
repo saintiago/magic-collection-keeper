@@ -2,6 +2,13 @@ import { ApplicationError, validateQuantity } from "./inventory.js";
 
 function deckSource(input) {
   if (
+    input?.provider === "reviewed-capture" &&
+    /^capture:[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+      input.source_id || "",
+    )
+  )
+    return { provider: input.provider, source_id: input.source_id, url: "" };
+  if (
     input?.provider === "moxfield" &&
     /^[A-Za-z0-9_-]{16,80}$/.test(input.source_id || "")
   )
@@ -60,6 +67,11 @@ export function normalizeDeck(input) {
   const entries = input.entries.map((entry) => {
     validateQuantity(entry.quantity);
     if (
+      source.provider === "reviewed-capture" &&
+      !["NM", "LP", "MP", "HP", "DMG", "UNK"].includes(entry.condition)
+    )
+      throw new ApplicationError("A reviewed capture needs a valid condition.");
+    if (
       !/^[a-f0-9-]{36}$/.test(entry.printing_id || "") ||
       !["nonfoil", "foil", "etched"].includes(entry.finish) ||
       !["mainboard", "commanders", "companions"].includes(entry.section)
@@ -72,6 +84,9 @@ export function normalizeDeck(input) {
       finish: entry.finish,
       section: entry.section,
       quantity: entry.quantity,
+      ...(source.provider === "reviewed-capture"
+        ? { condition: entry.condition }
+        : {}),
     };
   });
   const excluded = Array.isArray(input.excluded)
@@ -105,7 +120,9 @@ export function normalizeDeck(input) {
 export function planDeck(previous, input, lineId) {
   const requested = new Map();
   for (const entry of input.entries) {
-    const key = lineId(`${entry.printing_id}|${entry.finish}`);
+    const key = lineId(
+      `${entry.printing_id}|${entry.finish}${input.provider === "reviewed-capture" ? "|" + entry.condition : ""}`,
+    );
     const old = requested.get(key);
     requested.set(key, {
       ...entry,
@@ -158,10 +175,10 @@ export function deckRows(deck, cards, tag) {
       printing_id: lot.printing_id,
       card,
       language: card.lang,
-      condition: "UNK",
+      condition: lot.condition || "UNK",
       finish: lot.finish,
-      created_at: deck.created_at,
-      updated_at: deck.updated_at,
+      created_at: lot.created_at || deck.created_at || null,
+      updated_at: lot.updated_at || deck.updated_at || null,
       provenance: {
         provider: deck.provider,
         source_id: deck.source_id,

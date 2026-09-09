@@ -7,6 +7,7 @@ import {
 } from "../domain/tags.js";
 import { normalizeDeck, planDeck, deckRows } from "../domain/deck-import.js";
 import { isSystemTag } from "../domain/system-tags.js";
+import { cardTimestamps } from "../domain/card-timestamps.js";
 
 export function createTaggedCollection({
   collection,
@@ -67,66 +68,72 @@ export function createTaggedCollection({
         if (row.provenance) previous.provenance_list.push(row.provenance);
       }
     }
-    return [...groups.values()].map((row) => {
-      if (row.provenance_list.length)
-        row.id = `group:${hash([row.printing_id, row.language, row.finish, row.condition].join("|"))}`;
-      row.quantity += overrideMap.get(String(row.id))?.delta ?? 0;
-      const assigned = assignmentMap.get(String(row.id)) ?? {
-        locations: [],
-        tag_ids: [],
-      };
-      const totals = new Map();
-      const uncovered = assigned.locations_override
-        ? row.components.filter(
-            (component) =>
-              component.provenance?.additive_default &&
-              !(assigned.source_ids || []).includes(
-                component.provenance.source_id,
+    return [...groups.values()]
+      .map((row) => {
+        if (row.provenance_list.length)
+          row.id = `group:${hash([row.printing_id, row.language, row.finish, row.condition].join("|"))}`;
+        row.quantity += overrideMap.get(String(row.id))?.delta ?? 0;
+        const assigned = assignmentMap.get(String(row.id)) ?? {
+          locations: [],
+          tag_ids: [],
+        };
+        const totals = new Map();
+        const uncovered = assigned.locations_override
+          ? row.components.filter(
+              (component) =>
+                component.provenance?.additive_default &&
+                !(assigned.source_ids || []).includes(
+                  component.provenance.source_id,
+                ),
+            )
+          : [];
+        for (const allocation of assigned.locations_override
+          ? [
+              ...assigned.locations,
+              ...uncovered.flatMap((component) => component.locations),
+            ]
+          : row.locations)
+          totals.set(
+            allocation.tag_id,
+            (totals.get(allocation.tag_id) || 0) + allocation.quantity,
+          );
+        const locations = [...totals].map(([tag_id, quantity]) => ({
+          tag_id,
+          quantity,
+          tag: tags.get(tag_id)?.value,
+        }));
+        const allocated = locations.reduce((n, a) => n + a.quantity, 0);
+        const { components, ...display } = row;
+        const classificationIds = assignmentMap.has(String(row.id))
+          ? [
+              ...new Set([
+                ...assigned.tag_ids,
+                ...uncovered.flatMap((component) => component.tag_ids || []),
+              ]),
+            ]
+          : [
+              ...new Set(
+                components.flatMap((component) => component.tag_ids || []),
               ),
-          )
-        : [];
-      for (const allocation of assigned.locations_override
-        ? [
-            ...assigned.locations,
-            ...uncovered.flatMap((component) => component.locations),
-          ]
-        : row.locations)
-        totals.set(
-          allocation.tag_id,
-          (totals.get(allocation.tag_id) || 0) + allocation.quantity,
-        );
-      const locations = [...totals].map(([tag_id, quantity]) => ({
-        tag_id,
-        quantity,
-        tag: tags.get(tag_id)?.value,
-      }));
-      const allocated = locations.reduce((n, a) => n + a.quantity, 0);
-      const { components, ...display } = row;
-      const classificationIds = assignmentMap.has(String(row.id))
-        ? [
-            ...new Set([
-              ...assigned.tag_ids,
-              ...uncovered.flatMap((component) => component.tag_ids || []),
-            ]),
-          ]
-        : [
-            ...new Set(
-              components.flatMap((component) => component.tag_ids || []),
-            ),
-          ];
-      return {
-        ...display,
-        locations,
-        tag_ids: classificationIds,
-        tags: classificationIds
-          .map((id) => tags.get(id)?.value)
-          .filter(Boolean),
-        unallocated_quantity: Math.max(0, row.quantity - allocated),
-        allocation_shortfall: Math.max(0, allocated - row.quantity),
-        allocated_quantity: allocated,
-        source_managed: Boolean(row.provenance_list.length),
-      };
-    });
+            ];
+        return {
+          ...display,
+          ...cardTimestamps(components, [
+            assignmentMap.get(String(row.id)),
+            overrideMap.get(String(row.id)),
+          ]),
+          locations,
+          tag_ids: classificationIds,
+          tags: classificationIds
+            .map((id) => tags.get(id)?.value)
+            .filter(Boolean),
+          unallocated_quantity: Math.max(0, row.quantity - allocated),
+          allocation_shortfall: Math.max(0, allocated - row.quantity),
+          allocated_quantity: allocated,
+          source_managed: Boolean(row.provenance_list.length),
+        };
+      })
+      .filter((row) => row.quantity > 0);
   }
   async function existingRow(owner, id) {
     const row = (await list(owner)).find((r) => String(r.id) === String(id));
@@ -193,6 +200,12 @@ export function createTaggedCollection({
           (row.provenance_list || []).map((source) => source.source_id),
         ),
       ];
+      const { created_at, updated_at, ...previousAssignment } =
+        current?.value || {};
+      if (JSON.stringify(previousAssignment) === JSON.stringify(assignment))
+        return list(owner);
+      assignment.created_at = current ? created_at || null : now();
+      assignment.updated_at = now();
       const before = referencedTags(current?.value),
         after = referencedTags(assignment),
         changes = [change("assignments", String(id), current, assignment)];
@@ -282,7 +295,7 @@ export function createTaggedCollection({
         (r) =>
           r.printing_id === lot.printing_id &&
           r.finish === lot.finish &&
-          r.condition === "UNK",
+          r.condition === (lot.condition || "UNK"),
       );
       validateQuantity(
         (row?.quantity ?? 0) +
@@ -339,7 +352,9 @@ export function createTaggedCollection({
       for (const lot of plan.lots) {
         const rows = review.rows.filter(
           (row) =>
-            row.printing_id === lot.printing_id && row.finish === lot.finish,
+            row.printing_id === lot.printing_id &&
+            row.finish === lot.finish &&
+            (row.condition || "UNK") === (lot.condition || "UNK"),
         );
         const allocations = new Map();
         const ids = new Set();
@@ -394,7 +409,7 @@ export function createTaggedCollection({
         );
       }
     }
-    if (!current)
+    if (!current && input.provider !== "reviewed-capture")
       changes.push(
         change("tags", tagId, null, {
           id: tagId,
@@ -406,8 +421,28 @@ export function createTaggedCollection({
           created_at: now(),
         }),
       );
-    else if (!tag)
+    else if (input.provider !== "reviewed-capture" && !tag)
       throw new ApplicationError("The deck location tag is missing.", 500);
+    for (const lot of plan.lots) {
+      const old = previousLots.get(lot.line_id);
+      lot.created_at = old
+        ? old.created_at || current.value.created_at || null
+        : now();
+      const {
+        created_at: oldCreated,
+        updated_at: oldUpdated,
+        ...oldContent
+      } = old || {};
+      const {
+        created_at: newCreated,
+        updated_at: newUpdated,
+        ...newContent
+      } = lot;
+      lot.updated_at =
+        old && JSON.stringify(oldContent) === JSON.stringify(newContent)
+          ? oldUpdated || current.value.updated_at || null
+          : now();
+    }
     const value = {
       ...input,
       entries: undefined,
@@ -483,11 +518,14 @@ export function createTaggedCollection({
       store.withInventoryLock(owner, async () => {
         validateQuantity(quantity);
         const row = await existingRow(owner, id);
+        if (quantity === row.quantity) return list(owner);
         if (row.source_managed) {
           const current = await store.get(owner, "totals", String(id));
           await store.commit(owner, [
             change("totals", String(id), current, {
               delta: (current?.value.delta ?? 0) + quantity - row.quantity,
+              created_at: current ? current.value.created_at || null : now(),
+              updated_at: now(),
             }),
           ]);
         } else await collection.setQuantity(owner, id, quantity);
@@ -496,6 +534,26 @@ export function createTaggedCollection({
     remove: (owner, id) =>
       store.withInventoryLock(owner, async () => {
         const row = await existingRow(owner, id);
+        if (
+          row.source_managed &&
+          row.provenance_list.every(
+            (source) => source.provider === "reviewed-capture",
+          )
+        ) {
+          if (row.locations.length || row.tag_ids.length)
+            throw new ApplicationError(
+              "Clear tag assignments before removing this inventory entry.",
+            );
+          const current = await store.get(owner, "totals", String(id));
+          await store.commit(owner, [
+            change("totals", String(id), current, {
+              delta: (current?.value.delta || 0) - row.quantity,
+              created_at: current ? current.value.created_at || null : now(),
+              updated_at: now(),
+            }),
+          ]);
+          return list(owner);
+        }
         if (row.source_managed)
           throw new ApplicationError(
             "Imported cards retain their ownership provenance and cannot be removed with this control.",

@@ -32,7 +32,7 @@ export function createCardNavigation({
     history[replace ? "replaceState" : "pushState"](
       { keeperCard: true },
       "",
-      cardHref(ref),
+      typeof ref === "string" ? ref : cardHref(ref),
     );
     sync();
   }

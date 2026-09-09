@@ -9,6 +9,7 @@ MAX_BYTES = 524288
 MAX_PIXELS = 4000000
 _lock = threading.Lock()
 _engine = None
+_independent = None
 
 
 def response(code, data):
@@ -106,6 +107,14 @@ def get_engine():
     return _engine
 
 
+def get_independent():
+    global _independent
+    if _independent is None:
+        from composition import create_independent_service
+        _independent = create_independent_service()
+    return _independent
+
+
 def handler(event, context):
     if (
         not event.get("requestContext", {})
@@ -130,4 +139,4 @@ def handler(event, context):
             }
         except OSError:
             return response(503, {"error": "Recognition source download unavailable"})
-    return handle(event, None, get_engine)
+    return handle(event, None, get_independent if event.get("routeKey") == "POST /api/recognize-independent" else get_engine)

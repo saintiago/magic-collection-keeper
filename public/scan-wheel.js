@@ -111,6 +111,7 @@ export function createScanWheel({ viewport, controls, onChange }) {
     const row = rows[selected];
     if (!row) return;
     row.quantity = Math.max(1, Math.min(100000, row.quantity + delta));
+    row.userEdited = true;
     paint();
     onChange();
   }

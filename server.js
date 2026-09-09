@@ -1,3 +1,4 @@
+import { createReviewBatches } from "./application/review-batches.js";
 import { createNameIndex } from "./adapters/name-index.js";
 import { createDiscoveryService } from "./application/discovery.js";
 import { randomUUID, createHash } from "node:crypto";
@@ -35,6 +36,7 @@ const tagged = createTaggedCollection({
 });
 const service = {
   ...tagged,
+  ...createReviewBatches({ repository: adapters.repository, store }),
   ...createDiscoveryService({ names: createNameIndex(), catalog }),
   ...createImportDraftService({
     store,

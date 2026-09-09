@@ -105,9 +105,7 @@ export async function loadVisualAssets(onProgress) {
     onProgress?.({ stage: name, cached: hit, bytes: buffer.byteLength });
     if (spec.file.endsWith(".gz")) {
       buffer = await new Response(
-        new Blob([buffer])
-          .stream()
-          .pipeThrough(new DecompressionStream("gzip")),
+        new Response(buffer).body.pipeThrough(new DecompressionStream("gzip")),
       ).arrayBuffer();
     }
     assets[name] =

@@ -37,9 +37,12 @@ export function createBrowserRecognition({ request }) {
         ready = null;
       }
       if (data.type === "result") {
+        pending?.onStage?.({ stage: "visual", active: false });
         pending?.resolve(data.result);
         pending = null;
       }
+      if (data.type === "stage" && pending?.attempt === data.attempt)
+        pending.onStage?.({ stage: data.stage, active: data.active });
       if (data.type === "error") {
         const error = new Error(data.message);
         pending?.reject(error);
@@ -68,7 +71,7 @@ export function createBrowserRecognition({ request }) {
     kind: "browser-onnx",
     prepare,
     dispose,
-    async recognize(canvas, { attempt, signal }) {
+    async recognize(canvas, { attempt, signal, onStage }) {
       if (active) throw new Error("Scanner busy. Retry this card.");
       signal?.throwIfAborted();
       active = true;
@@ -85,7 +88,7 @@ export function createBrowserRecognition({ request }) {
           .getImageData(0, 0, canvas.width, canvas.height);
         signal?.throwIfAborted();
         const result = await new Promise((resolve, reject) => {
-          pending = { resolve, reject };
+          pending = { resolve, reject, attempt, onStage };
           worker.postMessage(
             {
               type: "frame",

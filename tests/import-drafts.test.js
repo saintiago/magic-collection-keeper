@@ -49,13 +49,19 @@ const source = (count = 1) => ({
     language: "en",
   })),
 });
-function setup({ count = 1, storeWrapper = (s) => s, path = ":memory:" } = {}) {
+function setup({
+  count = 1,
+  storeWrapper = (s) => s,
+  path = ":memory:",
+  now,
+} = {}) {
   const db = openDatabase(path);
   [card, alternate].forEach((c) => savePrinting(db, c));
   const { repository } = createSqliteAdapters(db),
     raw = createSqliteDocumentStore(db),
     store = storeWrapper(raw);
   const collection = createTaggedCollection({
+    now,
     collection: createCollectionService({ repository, catalog: {} }),
     repository,
     store,
@@ -64,6 +70,7 @@ function setup({ count = 1, storeWrapper = (s) => s, path = ":memory:" } = {}) {
   });
   let failing = false;
   const service = createImportDraftService({
+    now,
     store,
     repository,
     collection,
@@ -513,4 +520,234 @@ test("UC-23 batched canonical resolution shares the existing cache and limiter, 
     (e) => e.status === 429,
   );
   assert.equal(paused, 90000);
+});
+
+test("UC-SCAN-IMPORT 50 duplicate captures commit atomically, retain separate conditions and preserve URL and other date-grouped drafts", async () => {
+  let time = "2026-09-09T10:00:00Z",
+    fail = false;
+  const s = setup({
+    now: () => time,
+    storeWrapper: (store) => ({
+      ...store,
+      commit: async (owner, changes) => {
+        if (
+          fail &&
+          changes.some((change) => change.space === "import-receipts")
+        )
+          throw Error("interrupted atomic commit");
+        return store.commit(owner, changes);
+      },
+    }),
+  });
+  const urlDraft = await s.service.fetchDraft("test", { url });
+  const payload = (count) => ({
+    id: randomUUID(),
+    kind: "scan",
+    rows: Array.from({ length: count }, (_, index) => ({
+      id: randomUUID(),
+      name: card.name,
+      printing_id: card.id,
+      quantity: 1,
+      finish: "nonfoil",
+      condition: index % 2 ? "LP" : "NM",
+    })),
+  });
+  const firstInput = payload(50),
+    first = await s.service.stageDraft("test", firstInput);
+  const second = await s.service.stageDraft("test", payload(1));
+  assert.equal((await s.service.getDraft("test")).pending_drafts.length, 3);
+  assert.equal((await s.collection.list("test")).length, 0);
+  assert.equal((await s.collection.tags("test")).length, 0);
+  assert.equal((await s.service.getDraft("other")).pending_drafts.length, 0);
+  const identity = { ...input(first), kind: "capture" };
+  fail = true;
+  await assert.rejects(s.service.addDraft("test", identity), /interrupted/);
+  assert.equal((await s.collection.list("test")).length, 0);
+  assert.equal(
+    (await s.service.getDraft("test", { id: first.draft.id })).draft.rows
+      .length,
+    50,
+  );
+  fail = false;
+  const result = await s.service.addDraft("test", identity);
+  assert.equal(result.additions, 50);
+  let owned = await s.collection.list("test");
+  assert.equal(owned.length, 2);
+  assert.deepEqual(
+    owned.map((row) => row.quantity),
+    [25, 25],
+  );
+  assert.ok(
+    owned.every(
+      (row) =>
+        row.locations.length === 0 &&
+        row.created_at === "2026-09-09T10:00:00.000Z",
+    ),
+  );
+  time = "2026-09-10T10:00:00Z";
+  assert.equal((await s.service.addDraft("test", identity)).replayed, true);
+  assert.equal((await s.service.stageDraft("test", firstInput)).draft, null);
+  assert.deepEqual(await s.collection.list("test"), owned);
+  assert.equal(
+    (await s.service.getDraft("test", { id: urlDraft.draft.id })).draft.id,
+    urlDraft.draft.id,
+  );
+  assert.equal(
+    (await s.service.getDraft("test", { id: second.draft.id })).draft.id,
+    second.draft.id,
+  );
+  await assert.rejects(
+    s.service.stageDraft("test", { ...firstInput, owner: "other" }),
+    /Stage/,
+  );
+  const before = second.draft.rows[0];
+  const edited = await s.service.saveDraft("test", {
+    ...input(second),
+    kind: "capture",
+    rows: [{ ...before, quantity: 3, condition: "HP" }],
+  });
+  assert.equal(edited.draft.rows[0].created_at, before.created_at);
+  assert.equal(edited.draft.rows[0].updated_at, time);
+  const noOp = await s.service.saveDraft("test", {
+    ...input(edited),
+    kind: "capture",
+    rows: edited.draft.rows,
+  });
+  assert.equal(noOp.draft.version, edited.draft.version);
+  await s.service.clearDraft("test", { ...input(noOp), kind: "capture" });
+  assert.equal((await s.service.getDraft("test")).pending_drafts.length, 1);
+  s.db.close();
+});
+
+test("UC-CARD-DATES creation stays immutable while meaningful quantities and assignments update modification time", async () => {
+  let time = "2026-09-09T10:00:00Z";
+  const s = setup({ now: () => time });
+  const staged = await s.service.stageDraft("test", {
+    id: randomUUID(),
+    kind: "scan",
+    rows: [
+      {
+        id: randomUUID(),
+        name: card.name,
+        printing_id: card.id,
+        quantity: 2,
+        finish: "nonfoil",
+        condition: "NM",
+      },
+    ],
+  });
+  await s.service.addDraft("test", { ...input(staged), kind: "capture" });
+  const [before] = await s.collection.list("test");
+  time = "2026-09-10T11:00:00Z";
+  let [row] = await s.collection.setQuantity("test", before.id, 3);
+  assert.equal(row.created_at, before.created_at);
+  assert.equal(row.updated_at, "2026-09-10T11:00:00.000Z");
+  time = "2026-09-11T11:00:00Z";
+  assert.equal(
+    (await s.collection.setQuantity("test", before.id, 3))[0].updated_at,
+    row.updated_at,
+  );
+  const [tag] = await s.collection.createTag("test", {
+    type: "location",
+    kind: "binder",
+    label: "Test location",
+  });
+  [row] = await s.collection.assign("test", before.id, {
+    locations: [{ tag_id: tag.id, quantity: 2 }],
+    tag_ids: [],
+  });
+  assert.equal(row.created_at, before.created_at);
+  assert.equal(row.updated_at, "2026-09-11T11:00:00.000Z");
+  time = "2026-09-12T11:00:00Z";
+  assert.equal(
+    (
+      await s.collection.assign("test", before.id, {
+        locations: [{ tag_id: tag.id, quantity: 2 }],
+        tag_ids: [],
+      })
+    )[0].updated_at,
+    row.updated_at,
+  );
+  s.db.close();
+});
+
+test("UC-SCAN-IMPORT canonical alternatives survive review and removing captures cannot resurrect a receipt", async () => {
+  const s = setup();
+  const other = {
+    ...alternate,
+    oracle_id: randomUUID(),
+    name: "Another Identified Card",
+  };
+  savePrinting(s.db, other);
+  const raw = {
+    id: randomUUID(),
+    kind: "scan",
+    rows: [
+      {
+        id: randomUUID(),
+        name: card.name,
+        printing_id: card.id,
+        quantity: 2,
+        finish: "nonfoil",
+        condition: "NM",
+        recognition: [
+          {
+            printing_id: card.id,
+            provider: "browser-onnx",
+            evidence: "visual",
+          },
+          {
+            printing_id: other.id,
+            provider: "lambda",
+            evidence: "visible-title-model",
+          },
+        ],
+      },
+    ],
+  };
+  const staged = await s.service.stageDraft("test", raw);
+  assert.equal(
+    staged.draft.rows[0].recognition_candidates[1].card.name,
+    other.name,
+  );
+  const chosen = await s.service.saveDraft("test", {
+    ...input(staged),
+    kind: "capture",
+    rows: staged.draft.rows.map((row) => ({ ...row, printing_id: other.id })),
+  });
+  await s.service.addDraft("test", { ...input(chosen), kind: "capture" });
+  const [owned] = await s.collection.list("test");
+  assert.equal(owned.card.oracle_id, other.oracle_id);
+  await s.collection.remove("test", owned.id);
+  assert.deepEqual(await s.collection.list("test"), []);
+  assert.equal(
+    (await s.service.addDraft("test", { ...input(chosen), kind: "capture" }))
+      .replayed,
+    true,
+  );
+  assert.deepEqual(await s.collection.list("test"), []);
+  const overflow = await s.service.stageDraft("test", {
+    id: randomUUID(),
+    kind: "scan",
+    rows: Array.from({ length: 50 }, () => ({
+      id: randomUUID(),
+      name: card.name,
+      printing_id: card.id,
+      quantity: 5000,
+      finish: "nonfoil",
+      condition: "NM",
+    })),
+  });
+  assert.equal(overflow.summary.can_add, false);
+  assert.equal(
+    (await s.service.getDraft("test", { id: overflow.draft.id })).draft.rows
+      .length,
+    50,
+  );
+  await assert.rejects(
+    s.service.addDraft("test", { ...input(overflow), kind: "capture" }),
+    /100,000/,
+  );
+  assert.deepEqual(await s.collection.list("test"), []);
+  s.db.close();
 });

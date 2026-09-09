@@ -837,30 +837,6 @@ dialog::backdrop {
     padding-right: 14px;
   }
 }
-.batch-dialog {
-  max-width: 850px;
-}
-.batch-dialog h2 {
-  font:
-    30px Georgia,
-    serif;
-  margin: 13px 0;
-}
-.batch-dialog textarea {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 13px;
-  font: 12px/1.8 monospace;
-  margin-bottom: 13px;
-  resize: vertical;
-}
-.batch-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 13px;
-}
 .upload {
   cursor: pointer;
 }
@@ -890,87 +866,6 @@ dialog::backdrop {
   border-radius: 10px;
   pointer-events: none;
 }
-#batch-status {
-  font-size: 12px;
-  color: #547348;
-  min-height: 24px;
-}
-.review-row {
-  display: flex;
-  gap: 17px;
-  border-top: 1px solid var(--line);
-  padding: 18px 0;
-}
-.review-row > img,
-.review-placeholder {
-  width: 95px;
-  align-self: flex-start;
-  border-radius: 6px;
-}
-.review-placeholder {
-  height: 130px;
-  display: grid;
-  place-items: center;
-  background: #e5ecdc;
-  color: #829671;
-  font-size: 26px;
-}
-.review-fields {
-  flex: 1;
-  min-width: 0;
-}
-.review-fields > b {
-  font-size: 13px;
-}
-.review-search {
-  display: flex;
-  margin: 10px 0;
-  gap: 7px;
-}
-.review-search input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-}
-.candidate {
-  width: 100%;
-}
-.review-attributes {
-  display: flex;
-  gap: 12px;
-  margin-top: 10px;
-}
-.review-attributes label {
-  font-size: 10px;
-  flex: 1;
-}
-.review-attributes input,
-.review-attributes select {
-  display: block;
-  width: 100%;
-  margin-top: 5px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-}
-.review-attributes input {
-  max-width: 85px;
-}
-.ownership {
-  display: block;
-  font-size: 12px;
-  line-height: 1.7;
-  padding: 15px 0;
-}
-.review-fields details {
-  font-size: 10px;
-}
-.review-fields pre {
-  white-space: pre-wrap;
-  font-size: 10px;
-}
 .actions {
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -980,21 +875,6 @@ dialog::backdrop {
   .actions {
     justify-content: flex-start;
     max-width: none;
-  }
-}
-@media (max-width: 650px) {
-  .review-row > img,
-  .review-placeholder {
-    width: 65px;
-  }
-  .review-row {
-    gap: 10px;
-  }
-  .review-attributes {
-    gap: 6px;
-  }
-  .camera-view {
-    height: 320px;
   }
 }
 .card-tags {
@@ -1192,4 +1072,30 @@ dialog::backdrop {
     width: min(100%, 280px);
     max-width: 280px;
   }
+}
+
+.pending-drafts {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+}
+.draft-date-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.draft-date-group h3 {
+  width: 100%;
+  margin: 0;
+}
+.draft-date-group [aria-current="true"] {
+  border-color: var(--green);
+  font-weight: bold;
+}
+#draft-text-form textarea {
+  width: 100%;
+}
+.printing-suggestion {
+  color: #775020;
+  font-size: 12px;
 }

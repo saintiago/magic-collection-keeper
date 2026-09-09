@@ -82,10 +82,11 @@ async function fixture(page, { failFirst = false, slow = false } = {}) {
   if (!failFirst && !slow) await choosePossible(page);
 }
 async function nextIdentical(page) {
+  const expected = (await page.locator(".scan-option").count()) + 1;
   await page.evaluate(() => window.paintCard("blank"));
   await page.waitForTimeout(500);
   await page.evaluate(() => window.paintCard("first"));
-  await choosePossible(page);
+  await choosePossible(page, expected);
 }
 test("UC-14 hands-free identical copies, stationary suppression, error cue recovery and safe review", async ({
   page,
@@ -95,15 +96,15 @@ test("UC-14 hands-free identical copies, stationary suppression, error cue recov
     "Recognition failed",
   );
   await expect(page.locator(".scan-option")).toHaveCount(0);
-  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
   await page.waitForTimeout(1700);
   await expect(page.locator(".scan-option")).toHaveCount(0);
   expect(await page.evaluate(() => window.cueNotes)).toEqual([440, 230, 170]);
   await nextIdentical(page);
   await expect(page.locator(".scan-option")).toHaveCount(1);
-  await expect(page.locator("#scan-status")).toContainText("selected");
+  await expect(page.locator("#scan-status")).toContainText("queued");
   expect(await page.evaluate(() => window.cueNotes)).toEqual([
-    440, 230, 170, 230, 170,
+    440, 230, 170, 660, 880,
   ]);
   await nextIdentical(page);
   await expect(page.locator(".scan-option")).toHaveCount(2);
@@ -115,9 +116,9 @@ test("UC-14 hands-free identical copies, stationary suppression, error cue recov
     await page.evaluate(() => window.testStream.getTracks()[0].readyState),
   ).toBe("ended");
   await expect(page.locator(".scanner-dialog")).not.toBeVisible();
-  await expect(page.locator(".review-row")).toHaveCount(2);
-  await expect(page.locator(".candidate").first()).toHaveValue("scan-test");
-  await expect(page.locator("#save-batch")).toBeDisabled();
+  await expect(page.locator(".draft-row")).toHaveCount(2);
+  await expect(page.locator(".draft-row").first()).toContainText("Suggested");
+  await expect(page.locator("#draft-add")).toBeEnabled();
 });
 test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove controls and mute", async ({
   page,
@@ -125,11 +126,11 @@ test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove co
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await fixture(page);
-  await expect(page.locator("#scan-status")).toContainText("selected");
+  await expect(page.locator("#scan-status")).toContainText("queued");
   for (let i = 0; i < 4; i++) {
     await nextIdentical(page);
     await expect(page.locator(".scan-option")).toHaveCount(i + 2);
-    await expect(page.locator("#scan-status")).toContainText("selected");
+    await expect(page.locator("#scan-status")).toContainText("queued");
   }
   await expect(
     page.locator('.scan-option[aria-selected="true"]'),
@@ -252,7 +253,7 @@ test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove co
   const notes = await page.evaluate(() => window.cueNotes.length);
   await nextIdentical(page);
   await expect(page.locator(".scan-option")).toHaveCount(5);
-  await expect(page.locator("#scan-status")).toContainText("selected");
+  await expect(page.locator("#scan-status")).toContainText("queued");
   expect(await page.evaluate(() => window.cueNotes.length)).toBe(notes);
   const layout = await page.evaluate(() => ({
     width: document.querySelector(".scanner-dialog").getBoundingClientRect()
@@ -276,9 +277,9 @@ test("UC-14 back cancels in-flight recognition and background shuts down capture
   await expect(page.locator("#scan-status")).toContainText("Reading card");
   await expect(page.locator(".scan-option")).toHaveCount(0);
   await page.locator("#scan-back").click();
-  await expect(page.locator(".batch-dialog")).not.toBeVisible();
+  await expect(page.locator("#import-page")).not.toBeVisible();
   await page.waitForTimeout(3200);
-  await expect(page.locator(".review-row")).toHaveCount(0);
+  await expect(page.locator(".draft-row")).toHaveCount(0);
   expect(
     await page.evaluate(() => window.testStream.getTracks()[0].readyState),
   ).toBe("ended");
@@ -303,7 +304,7 @@ test("UC-14 sampling continues during slow recognition and removing the last que
 }) => {
   await fixture(page, { slow: true });
   await expect(page.locator("#scan-status")).toContainText("Reading card");
-  await expect(page.locator("#scan-count")).toHaveText("0 matched · 0 copies");
+  await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
   await nextIdentical(page);
   await choosePossible(page);
   await expect(page.locator(".scan-option")).toHaveCount(2, { timeout: 12000 });
@@ -314,7 +315,7 @@ test("UC-14 sampling continues during slow recognition and removing the last que
   await expect(page.locator("#scan-controls")).not.toBeVisible();
   await expect(page.locator("#scan-empty")).toBeVisible();
   await page.locator("#scan-back").click();
-  await expect(page.locator(".batch-dialog")).not.toBeVisible();
+  await expect(page.locator("#import-page")).not.toBeVisible();
 });
 
 test("UC-14 suspended audio cannot block hands-free capture", async ({
@@ -324,7 +325,7 @@ test("UC-14 suspended audio cannot block hands-free capture", async ({
     AudioContext.prototype.resume = () => new Promise(() => {});
   });
   await fixture(page);
-  await expect(page.locator("#scan-status")).toContainText("selected");
+  await expect(page.locator("#scan-status")).toContainText("queued");
   await expect(page.locator(".scan-option")).toHaveCount(1);
   await page.locator("#scan-back").click();
   expect(
@@ -345,7 +346,7 @@ test("UC-14 audio interruption remains visible and explicit testing resumes with
     };
   });
   await fixture(page);
-  await expect(page.locator("#scan-status")).toContainText("selected");
+  await expect(page.locator("#scan-status")).toContainText("queued");
   await expect(page.locator("#scan-sound-state")).toContainText("Audio ready");
   await page.evaluate(() => window.scanAudioContext.suspend());
   await expect(page.locator("#scan-sound-state")).toContainText("Sound paused");

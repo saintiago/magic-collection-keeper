@@ -25,7 +25,7 @@ import { signIn, collectionIdentity } from "./auth.js";
 import { api as request } from "./api.js";
 import { esc } from "./view.js";
 import { createCardDetail } from "./card-detail.js";
-import { setupBatch } from "./batch.js";
+import { setupScanImport } from "./scan-import.js";
 import { createImportPage } from "./import-page.js";
 const $ = (id) => document.getElementById(id);
 let owned = [],
@@ -221,6 +221,8 @@ function detail(row, options) {
 }
 const importPage = createImportPage({
   root: $("import-page"),
+  back: () => cardNavigation.back(),
+  select: (id) => enterImport(id),
   api: request,
   onAdded: async () => {
     collection.invalidate();
@@ -639,22 +641,17 @@ $("example").onclick = () => {
   $("search").value = "set:blb cn:1";
   search();
 };
-setupReleaseInfo();
+setupReleaseInfo({ api });
 showScreen(mode);
 render();
 await signIn();
-if (location.hash === "#import") switchMode("import");
-setupBatch({
-  api,
-  onSaved: async () => {
-    if (!(await collection.refresh()))
-      throw new Error(
-        collectionState.error ||
-          "Collection refresh was interrupted. Update collection to confirm your saved cards.",
-      );
-    await refreshTags();
-  },
-});
+if (location.hash.startsWith("#import"))
+  switchMode("import", { restore: true });
+function enterImport(id) {
+  cardNavigation.enter(id ? "#import=" + id : "#import");
+  switchMode("import", { restore: true });
+}
+await setupScanImport({ api, enter: enterImport, notify: message });
 async function initializeCollection() {
   try {
     const identity = await collectionIdentity();

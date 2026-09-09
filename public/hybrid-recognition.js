@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { raceReadings } from "./recognition-race.js";
 // Session preparation is demand-driven. There is no timer that keeps a service warm.
 function abortable(promise, signal) {
   signal?.throwIfAborted();
@@ -19,6 +20,7 @@ export function createHybridRecognition({
   onState = () => {},
   prepareDelayMs = 750,
   readyTimeoutMs = 12000,
+  hedgeDelayMs = 0,
 }) {
   let current,
     active = false;
@@ -101,7 +103,38 @@ export function createHybridRecognition({
       scope.controller.signal.throwIfAborted();
       try {
         if (port === cloud) await abortable(cloudReady(scope), options.signal);
-        const result = await port.recognize(canvas, options);
+        let result = await port.recognize(canvas, options);
+        if (
+          port === local &&
+          cloud &&
+          result.status === "unknown" &&
+          result.measurement?.evidence?.topScore >= 0.55 &&
+          result.measurement?.evidence?.differentIdentityMargin >= 0.08
+        ) {
+          // One bounded title corroboration attempt. The service independently
+          // reads the title; a weak visual score alone never selects a card.
+          try {
+            await abortable(cloudReady(scope), options.signal);
+            const corroborated = await cloud.recognize(canvas, options);
+            result = {
+              ...corroborated,
+              measurement: {
+                ...corroborated.measurement,
+                titleFallback: true,
+                originalVisual: result.measurement?.evidence,
+              },
+            };
+            return { result, port: cloud, failedProviders };
+          } catch (error) {
+            options.signal?.throwIfAborted();
+            scope.controller.signal.throwIfAborted();
+            failedProviders.push({
+              provider: cloud.kind,
+              name: error.name,
+              status: error.status || null,
+            });
+          }
+        }
         return { result, port, failedProviders };
       } catch (error) {
         options.signal?.throwIfAborted();
@@ -133,13 +166,18 @@ export function createHybridRecognition({
       local.dispose?.();
       cloud?.dispose?.();
     },
-    async recognize(canvas, { signal, attempt }) {
+    async recognize(canvas, { signal, attempt, onUpdate, onStage }) {
       signal?.throwIfAborted();
       if (active) throw new Error("Scanner busy. Retry this card.");
       active = true;
       const scope = start(),
         started = performance.now();
       try {
+        if (scope.localReadTask)
+          await abortable(
+            scope.localReadTask.catch(() => {}),
+            signal,
+          );
         let first;
         try {
           first = scope.localReady
@@ -154,17 +192,70 @@ export function createHybridRecognition({
           // A user retry may recover a transient preparation failure.
           first = await abortable(cloudReady(scope), signal);
         }
+        if (onUpdate && cloud && first === local && !scope.verificationTask) {
+          const combined = AbortSignal.any([
+            scope.controller.signal,
+            ...(signal ? [signal] : []),
+          ]);
+          return await raceReadings({
+            local: () => {
+              const task = local.recognize(canvas, {
+                signal: combined,
+                attempt,
+                onStage,
+              });
+              scope.localReadTask = task;
+              task
+                .finally(() => {
+                  if (scope.localReadTask === task) scope.localReadTask = null;
+                })
+                .catch(() => {});
+              return task;
+            },
+            remote: () => {
+              const task = (async () => {
+                await abortable(cloudReady(scope), combined);
+                combined.throwIfAborted();
+                return cloud.recognize(canvas, {
+                  signal: combined,
+                  attempt,
+                  onStage,
+                });
+              })();
+              scope.verificationTask = task;
+              task
+                .finally(() => {
+                  if (scope.verificationTask === task)
+                    scope.verificationTask = null;
+                })
+                .catch(() => {});
+              return task;
+            },
+            delayMs: hedgeDelayMs,
+            signal: combined,
+            onUpdate: (result) => {
+              if (current === scope && !combined.aborted) onUpdate(result);
+            },
+          });
+        }
+        if (onUpdate && scope.verificationTask && first === local)
+          return await local.recognize(canvas, { signal, attempt, onStage });
         const { result, port, failedProviders } = await readWithFallback(
           scope,
           first,
           canvas,
-          { signal, attempt },
+          { signal, attempt, onStage },
         );
         signal?.throwIfAborted();
         scope.controller.signal.throwIfAborted();
         return {
           ...result,
-          selected: null,
+          selected:
+            result.status === "possible" &&
+            result.suggested === true &&
+            result.candidates?.some((c) => c.id === result.selected?.id)
+              ? result.selected
+              : null,
           measurement: {
             ...result.measurement,
             provider: port.kind,

@@ -1,3 +1,15 @@
+# Current phone recognition behavior — September 9, 2026
+
+The current release also applies a masked second-region geometry check before primary and independent recognition. Multiple/ambiguous cards quietly wait. A separate Nova Pro image identity service has no visual-candidate/title priming and validates exact canonical/native-title lookup. It complements the existing Nova Lite OCR corroboration. The browser races validated paths, preserves conflicting alternatives on one capture and requires final Import Add. See [guard, overlay and model measurements](../tests/performance/SCANNER-GUARDS.md); later historical sections describe prior versions.
+
+The application queues supported identities with a suggested, editable canonical printing and requires explicit final ownership confirmation. It does not require a printing chooser during normal capture. The footer's Recognition & source provides the transient-processing explanation and matching AGPL source outside the camera. Historical verification below describes earlier versions and is not the current UI contract.
+
+Visual admission remains cosine ≥.80 with ≥.08 competing-identity margin. A geometrically valid plausible visual result ≥.60 with ≥.12 margin can additionally be admitted when independent OCR reads the exact full English or translated title. Case, punctuation, accents and a separated terminal numeric mana cost are normalized; there is no fuzzy-word, per-card or unconditional lower-threshold rule. Short titles under eight normalized characters cannot rescue a weak visual result. The full translated alias catalog is an independently injected, offline public snapshot with a pinned digest. Footer set/collector/language evidence refines printing suggestions but is not required to queue a supported identity.
+
+Original pixels are tried first. At most two bounded exposure/highlight-balance variants and their orientations are considered only for a plausible unsupported identity; correction cannot switch identity or bypass admission. One opposite title orientation is checked when needed. Original score, selected processing, corroboration and stage timing are exposed as metadata; text/images are not logged. An admitted identity still does not prove printing, finish, physical copy distinction or ownership.
+
+[Phone and public regression evidence](../tests/performance/PHONE-EVIDENCE.md) distinguishes 24 private original photographs, separate recorded video, synthetic public artwork, browser replay and actual deployed-provider checks. Private media remains outside source/deployment artifacts.
+
 # Recognition service
 
 The current scanner uses browser ONNX and this Lambda; browser OCR and SageMaker runtime code were removed after the measured comparison. See [final evidence](../tests/performance/EVIDENCE.md) and [completed scoped cleanup](SAGEMAKER-CLEANUP.md). Historical sections below retain earlier failures and rollout states.

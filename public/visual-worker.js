@@ -9,6 +9,7 @@ import {
 import { loadVisualAssets, loadVisualRuntime } from "./visual-assets.js";
 import { searchVisualCatalog } from "./visual-search.js";
 import { normalizedPixels, warpPixels } from "./visual-pixels.js";
+import { lightingVariants } from "./visual-lighting.js";
 let ort,
   detector,
   embedder,
@@ -94,7 +95,7 @@ async function recognize(frame, attempt) {
     versions: {
       visual: {
         adapter: "collectorvision-browser",
-        processing: "keeper-visual-v3-portable-pixels",
+        processing: "keeper-visual-v4-bounded-lighting",
         code: manifest.upstream.code,
         catalog: manifest.upstream.catalog,
       },
@@ -110,6 +111,7 @@ async function recognize(frame, attempt) {
     base.timings.totalMs = performance.now() - started;
     return base;
   }
+  self.postMessage({ type: "stage", attempt, stage: "visual", active: true });
   const crop = warpPixels(frame, corners),
     t2 = performance.now(),
     embedded = normalizeEmbedding((await run(embedder, tensor(crop, 448)))[0]),
@@ -135,6 +137,38 @@ async function recognize(frame, attempt) {
       orientation = "rotated_180";
     }
   }
+  const originalTopScore = found.matches[0].score;
+  let preprocessing = "original";
+  if (
+    originalTopScore < 0.8 &&
+    originalTopScore >= 0.6 &&
+    originalTopScore - found.differentIdentityScore >= 0.12
+  ) {
+    const identity = records[found.matches[0].row].oracle_id;
+    for (const variant of lightingVariants(crop)) {
+      for (const rotated of [false, true]) {
+        const began = performance.now();
+        const embedding = normalizeEmbedding(
+          (await run(embedder, tensor(variant.frame, 448, rotated)))[0],
+        );
+        extraEmbedMs += performance.now() - began;
+        const alternative = searchVisualCatalog(embedding, embeddings, records);
+        if (
+          records[alternative.matches[0].row].oracle_id === identity &&
+          alternative.matches[0].score > found.matches[0].score
+        ) {
+          found = alternative;
+          orientation = rotated ? "rotated_180" : "upright";
+          preprocessing = variant.name;
+        }
+      }
+      if (
+        found.matches[0].score >= 0.8 &&
+        found.matches[0].score - found.differentIdentityScore >= 0.08
+      )
+        break;
+    }
+  }
   const { matches, differentIdentityScore: other } = found,
     first = matches[0];
   const supported = first.score >= 0.8 && first.score - other >= 0.08;
@@ -145,6 +179,8 @@ async function recognize(frame, attempt) {
     evidence: {
       ...base.evidence,
       orientation,
+      preprocessing,
+      originalTopScore,
       topScore: first.score,
       differentIdentityMargin: first.score - other,
       isProbability: false,
@@ -178,6 +214,13 @@ self.onmessage = async ({ data }) => {
       message: "Browser visual recognition unavailable",
     });
   } finally {
+    if (data.type === "frame")
+      self.postMessage({
+        type: "stage",
+        attempt: data.attempt,
+        stage: "visual",
+        active: false,
+      });
     busy = false;
   }
 };
