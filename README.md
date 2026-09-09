@@ -10,7 +10,7 @@ A private Magic collection app with Scryfall printing lookup, persistent invento
 - [Architecture and adapter contracts](docs/ARCHITECTURE.md)
 - [Development, deployment, recovery](docs/OPERATIONS.md)
 
-Deployment classifies changes against the published application. Supported presentation changes use a separate frontend workflow that reuses the verified API and browser model assets; other runtime changes use the full workflow. About shows the frontend and API identities independently, and the authenticated source download includes the matching frontend and backend source. See operations for compatibility checks, rollback and the current verification evidence.
+Deployment classifies changes against the published application. Supported presentation changes use a separate frontend workflow that reuses the verified API and browser model assets; other runtime changes use the full workflow. About shows the frontend and API identities independently, and the authenticated source download includes the matching frontend and backend source. The first controlled production comparison took 13 minutes for the frontend path versus 18m 18s for the full path, with the API and model assets unchanged. [Evidence and limits](tests/performance/FRONTEND-DEPLOYMENT.md); see operations for compatibility checks and rollback.
 
 ## Use it
 
