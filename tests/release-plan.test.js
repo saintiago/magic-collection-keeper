@@ -12,7 +12,8 @@ const base = {
     codeSha256: "a".repeat(43) + "=",
   },
   assets: { id: "r80-a1", manifestSha256: "c".repeat(64) },
-  recognition: { sourceSha256: "d".repeat(64) },
+  recognition: { sourceSha256: "d".repeat(64), version: "14" },
+  configSha256: "e".repeat(64),
 };
 
 test("DEPLOY-01/02 presentation-only changes reuse an independently identified backend", () => {
@@ -90,4 +91,20 @@ test("DEPLOY-01 saved requirements and tests alone do not republish application 
   ]) {
     assert.equal(planRelease({ changedPaths }).mode, "checks");
   }
+});
+
+test("DEPLOY-05 explicit frontend redeploy keeps compatibility and unknown-input guards", () => {
+  assert.equal(
+    planRelease({ base, changedPaths: [], redeployFrontend: true }).mode,
+    "frontend",
+  );
+  assert.equal(
+    planRelease({ changedPaths: [], redeployFrontend: true }).mode,
+    "full",
+  );
+  assert.equal(
+    planRelease({ base, changedPaths: ["cloud.mjs"], redeployFrontend: true })
+      .mode,
+    "full",
+  );
 });

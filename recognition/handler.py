@@ -1,6 +1,6 @@
 """API Gateway HTTP API adapter, isolated evaluation deployment only."""
 
-import base64, binascii, io, json, threading
+import base64, binascii, hashlib, io, json, os, threading
 from pathlib import Path
 from PIL import Image, UnidentifiedImageError
 from timing import measured
@@ -133,6 +133,8 @@ def handler(event, context):
                     "content-type": "application/zip",
                     "content-disposition": 'attachment; filename="keeper-recognition-source.zip"',
                     "cache-control": "no-store",
+                    "x-keeper-source-sha256": hashlib.sha256(source).hexdigest(),
+                    "x-keeper-recognition-version": os.environ.get("AWS_LAMBDA_FUNCTION_VERSION", "$LATEST"),
                 },
                 "isBase64Encoded": True,
                 "body": base64.b64encode(source).decode(),

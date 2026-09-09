@@ -39,11 +39,13 @@ export function reusableRelease(base) {
     /^[A-Za-z0-9+/]{43}=$/.test(base.api?.codeSha256 || "") &&
     /^r[1-9]\d*-a[1-9]\d*$/.test(base.assets?.id || "") &&
     digest(base.assets?.manifestSha256) &&
-    digest(base.recognition?.sourceSha256),
+    digest(base.configSha256) &&
+    digest(base.recognition?.sourceSha256) &&
+    /^[1-9]\d*$/.test(base.recognition?.version || ""),
   );
 }
 
-export function planRelease({ changedPaths, base }) {
+export function planRelease({ changedPaths, base, redeployFrontend = false }) {
   if (
     !Array.isArray(changedPaths) ||
     changedPaths.some(
@@ -59,7 +61,7 @@ export function planRelease({ changedPaths, base }) {
   }
   const changes = [...new Set(changedPaths)].sort();
   const runtime = changes.filter((path) => !documentationOrTest(path));
-  if (!runtime.length)
+  if (!runtime.length && !redeployFrontend)
     return {
       mode: "checks",
       reason: "Only documentation or tests changed",

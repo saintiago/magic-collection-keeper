@@ -1,4 +1,4 @@
-import unittest, json, base64, io, sys
+import unittest, json, base64, hashlib, io, sys
 from pathlib import Path
 from PIL import Image
 from unittest.mock import patch
@@ -44,11 +44,13 @@ class Tests(unittest.TestCase):
     def test_source_offer_requires_auth_and_does_not_initialize_models(self):
         event = self.event()
         event["routeKey"] = "GET /api/recognition/source"
-        with patch.object(handler.Path, "read_bytes", return_value=b"PK-test-source"):
+        with patch.object(handler.Path, "read_bytes", return_value=b"PK-test-source"), patch.dict(handler.os.environ, {"AWS_LAMBDA_FUNCTION_VERSION": "15"}):
             result = handler.handler(event, None)
         self.assertEqual(result["statusCode"], 200)
         self.assertEqual(base64.b64decode(result["body"]), b"PK-test-source")
         self.assertEqual(result["headers"]["content-type"], "application/zip")
+        self.assertEqual(result["headers"]["x-keeper-recognition-version"], "15")
+        self.assertEqual(result["headers"]["x-keeper-source-sha256"], hashlib.sha256(b"PK-test-source").hexdigest())
         event["requestContext"] = {}
         self.assertEqual(handler.handler(event, None)["statusCode"], 401)
 

@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures.js";
+import { publicCardFrame } from "../helpers/public-frame.js";
 const card = {
   id: "11111111-1111-1111-1111-111111111111",
   oracle_id: "22222222-2222-2222-2222-222222222222",
@@ -105,9 +106,14 @@ test("real browser ONNX recognizes the frozen public fixture without selecting o
   );
   await page.goto("/#collection");
   await page.locator("#scan").click();
+  const frame = await publicCardFrame(page);
   await page
     .locator("#photo")
-    .setInputFiles("recognition/artifacts/public-card-frame.jpg");
+    .setInputFiles({
+      name: "verified-public-fixture.jpg",
+      mimeType: "image/jpeg",
+      buffer: Buffer.from(frame.split(",")[1], "base64"),
+    });
   await expect(page.locator("#scan-wheel")).toContainText(
     "Adaptive Training Post",
     { timeout: 30000 },
