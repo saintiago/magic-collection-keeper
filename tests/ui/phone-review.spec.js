@@ -16,6 +16,43 @@ const payload = (count) => ({
   })),
 });
 
+test("UC-SCAN-IMPORT Home Scan waits for saved captures before accepting the first tap", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.route("**/review-cache.js", async (route) => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const marker = "read: async (key) => {";
+    expect(source).toContain(marker);
+    await route.fulfill({
+      response,
+      body: source.replace(
+        marker,
+        marker +
+          " await new Promise(resolve => { window.releaseCaptureRead = resolve; });",
+      ),
+    });
+  });
+  try {
+    await page.goto("/", { waitUntil: "commit" });
+    await expect
+      .poll(() => page.evaluate(() => typeof window.releaseCaptureRead))
+      .toBe("function");
+    await expect(page.locator("#scan")).toBeVisible();
+    await expect(page.locator("#scan")).toBeDisabled();
+    await expect(page.locator("#scan")).toHaveAttribute("aria-busy", "true");
+    await page.evaluate(() => window.releaseCaptureRead());
+    await expect(page.locator("#scan")).toBeEnabled();
+    await page.locator("#scan").click();
+    await expect(page.locator(".scanner-dialog")).toBeVisible();
+    await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
+    expect(await f.tagged.list("test")).toEqual([]);
+  } finally {
+    f.db.close();
+  }
+});
+
 test("UC-SCAN-IMPORT mobile fifty-line shared Import survives lost Add response, double tap and reload without duplicates", async ({
   page,
 }) => {

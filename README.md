@@ -10,6 +10,8 @@ A private Magic collection app with Scryfall printing lookup, persistent invento
 
 ## Use it
 
+Scan stays briefly disabled while your account and saved captures load after sign-in; it becomes available as soon as that recovery finishes.
+
 Home opens with a compact symbol/account bar, Scan, Import, Tags & locations, and the shared search field. It shows up to six recently opened cards and four recent decks or other tags. Card opens, tag visits, and tag creation/renaming count as activity; unfinished typing and background loading do not. Earlier selected search cards can appear too. If no deck/tag activity has been recorded on this browser, the sections are honestly labeled **Your decks** and **Your tags**. Nothing is added to ownership by appearing on Home.
 
 **View collection** opens the complete inventory with its filters, quantities, tags and **Update collection**. The small ✦ Home link returns to the dashboard; browser Back and reload preserve the active collection, tag, search or import view. **Import** opens the saved URL-import page, with **Import list** available there for pasted text. Home activity stays on this browser under your verified account. Signing out hides it; **Clear activity** removes this account's Home activity and recent searches on this browser. Deleted tags disappear and renamed tags use their current label.

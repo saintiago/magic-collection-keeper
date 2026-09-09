@@ -1,5 +1,7 @@
 # Use cases and E2E coverage
 
+**UC-SCAN-START:** Home Scan remains disabled and marked busy while the verified account and saved captures load. Once initialized, the first tap opens the scanner. `tests/ui/phone-review.spec.js` delays capture recovery deterministically; LIVE-13 starts at Home immediately after sign-in against the deployed app. No test changes that origin to bypass startup.
+
 ## Loading, device cache and release identity
 
 UC-19: every displayed tag kind links to its exact-ID collection filter from cards, details, management, assignment labels and source headings. Navigation clears conflicting search/color/set/finish filters, keeps location-copy counting, closes dialogs without saving unsaved edits, and focuses the library heading. Active tag/clear, keyboard Enter, browser Back, reload/cache, same-label different IDs, rename and deletion are covered. Rename/remove/checkbox controls remain separate. Evidence: `tests/tag-navigation.test.js`, `tests/ui/tag-navigation.spec.js`, existing assignment-control tests and deployed LIVE-03.
