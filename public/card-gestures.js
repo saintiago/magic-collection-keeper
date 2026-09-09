@@ -8,6 +8,7 @@ import {
 import { pointerTilt, approachTilt, tiltTransform } from "./card-tilt.js";
 import { image } from "./view.js";
 import { createWheelSectors, wheelLabel } from "./card-wheel-view.js";
+import { relevantCardTags, assignedTagIds } from "./card-tag-state.js";
 
 export function createCardGestures({
   resolve,
@@ -43,7 +44,7 @@ export function createCardGestures({
   document.body.append(more);
 
   const source = (target) =>
-    target.closest("a[data-tag-id]")
+    target.closest("a[data-tag-id],.card-tag-toggle,.card-tags-retry")
       ? null
       : viewer.hoverSource(target) || resolve(target);
   function clearHover() {
@@ -81,10 +82,16 @@ export function createCardGestures({
     if (held) setTimeout(onSettled, 0);
   }
   function choices(item) {
-    const ranked = rankActionTags(tags(), recent(), [
-      ...(item.row?.tag_ids || []),
-      ...(item.row?.locations || []).map((a) => a.tag_id),
-    ]);
+    const assigned = assignedTagIds(item);
+    const ranked = relevantCardTags(item, tags(), recent()).map((tag) => ({
+      ...tag,
+      selected: !assigned.has(tag.id),
+      label: (assigned.has(tag.id) ? "Remove " : "Add ") + tag.label,
+      tagLabel: tag.label,
+      quantity:
+        item.row?.locations?.find((entry) => entry.tag_id === tag.id)
+          ?.quantity || 1,
+    }));
     return [
       ...ranked,
       {
@@ -112,7 +119,8 @@ export function createCardGestures({
         ?.contains(selection.anchorNode)
     )
       selection.removeAllRanges();
-    const bounds = element.getBoundingClientRect();
+    const bounds =
+      viewer.previewBounds?.(element) || element.getBoundingClientRect();
     cancel({ focus: false });
     clearHover();
     const all = choices(item),
@@ -446,7 +454,9 @@ export function createCardGestures({
         event.button !== 0 ||
         active ||
         viewer.isOpen ||
-        event.target.closest("dialog[open],.card-action-layer,a[data-tag-id]")
+        event.target.closest(
+          "dialog[open],.card-action-layer,a[data-tag-id],.card-tag-toggle,.card-tags-retry",
+        )
       )
         return;
       const found = source(event.target);

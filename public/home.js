@@ -11,6 +11,9 @@ export function createHome({ root, onCard, onClearSearches, onRetry }) {
     cards = [];
   const history = createHomeHistory({ onChange: render });
   function render() {
+    if (root.querySelector(".artwork-source-lifted,.card-wheel-source")) return;
+    const focused =
+      document.activeElement?.closest(".home-card")?.dataset.cardKey;
     if (root.hidden) {
       root.replaceChildren();
       return;
@@ -18,7 +21,12 @@ export function createHome({ root, onCard, onClearSearches, onRetry }) {
     const view = homeContent({ ...inputs, activity: history.state });
     cards = view.cards;
     root.innerHTML = view.html;
+    if (focused)
+      root
+        .querySelector(`[data-card-key="${CSS.escape(focused)}"] button`)
+        ?.focus({ preventScroll: true });
   }
+  window.addEventListener("keeper-artwork-closed", render);
   root.addEventListener("click", (event) => {
     const button = event.target.closest("[data-home-card]");
     if (button) onCard(cards[Number(button.dataset.homeCard)]);

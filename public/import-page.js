@@ -443,6 +443,18 @@ export function createImportPage({ root, api, onAdded, back, select }) {
   });
   draw();
   return {
+    receiveDraft(result) {
+      if (
+        visible &&
+        !busy &&
+        !editingRows &&
+        result.draft?.id === data?.draft?.id
+      ) {
+        generation++;
+        accept(result);
+        draw();
+      }
+    },
     cardAction(target) {
       if (!visible || busy || editingRows || !target.closest(".draft-artwork"))
         return null;
@@ -456,6 +468,9 @@ export function createImportPage({ root, api, onAdded, back, select }) {
           row,
           card: { ...row.card, image_uris: { normal: row.card.image } },
           draftId: data.draft.id,
+          draftKind:
+            data.draft.provider === "reviewed-capture" ? "capture" : "url",
+          sourceId: data.draft.source_id,
           generation,
         },
       };

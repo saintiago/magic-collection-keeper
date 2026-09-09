@@ -93,6 +93,103 @@ function setup({
   };
 }
 const input = (view) => ({ id: view.draft.id, version: view.draft.version });
+test("CARD-13 pending tag actions are atomic targeted edits with permanent receipts, without ownership or source changes", async () => {
+  const { db, raw, collection, service } = setup();
+  try {
+    const [role] = await collection.createTag("a", {
+      label: "Draw",
+      type: "role",
+      kind: "role",
+    });
+    const box = (
+      await collection.createTag("a", {
+        label: "Box",
+        type: "location",
+        kind: "box",
+      })
+    ).find((tag) => tag.type === "location");
+    const staged = await service.stageDraft("a", {
+      id: randomUUID(),
+      kind: "catalog",
+      rows: [
+        {
+          id: randomUUID(),
+          name: card.name,
+          printing_id: card.id,
+          quantity: 3,
+          finish: "nonfoil",
+          condition: "NM",
+        },
+      ],
+    });
+    const draft = staged.draft,
+      original = structuredClone(draft.original);
+    const action = (tag, selected, quantity = 1) => ({
+      id: draft.id,
+      kind: "capture",
+      row_id: draft.rows[0].id,
+      tag_id: tag.id,
+      selected,
+      quantity,
+      operation_id: randomUUID(),
+    });
+    const add = action(box, true, 2);
+    let result = await service.tagDraft("a", add);
+    assert.equal(result.draft.rows[0].locations[0].quantity, 2);
+    assert.equal(result.draft.rows[0].quantity, 3);
+    const created = result.draft.rows[0].created_at;
+    await service.tagDraft("a", action(role, true));
+    result = await service.tagDraft("a", action(box, true));
+    assert.equal(result.draft.rows[0].locations[0].quantity, 2);
+    await service.tagDraft("a", action(box, false));
+    result = await service.tagDraft("a", add);
+    assert.deepEqual(
+      result.draft.rows[0].locations,
+      [],
+      "old add cannot resurrect a removed assignment",
+    );
+    assert.deepEqual(result.draft.rows[0].tag_ids, [role.id]);
+    assert.deepEqual(result.draft.original, original);
+    assert.equal(result.draft.rows[0].created_at, created);
+    assert.deepEqual(await collection.list("a"), []);
+    assert.deepEqual(await raw.list("a", "decks"), []);
+    await assert.rejects(service.tagDraft("b", add), /no longer available/);
+    await assert.rejects(
+      service.tagDraft("a", { ...add, selected: false }),
+      /different input/,
+    );
+    await assert.rejects(
+      service.tagDraft("a", {
+        ...action(role, false),
+        tag_id: "ae07f79b-38cc-44a2-8fc9-56588cf003ab",
+      }),
+      /System tags/,
+    );
+    const fail = action(role, false),
+      commit = raw.commit;
+    raw.commit = async () => {
+      throw Error("Interrupted tag commit");
+    };
+    await assert.rejects(service.tagDraft("a", fail), /Interrupted tag commit/);
+    raw.commit = commit;
+    assert.equal(
+      await raw.get("a", "draft-tag-actions", fail.operation_id),
+      null,
+    );
+    assert.deepEqual(
+      (await service.getDraft("a", { id: draft.id })).draft.rows[0].tag_ids,
+      [role.id],
+    );
+    await service.clearDraft("a", { ...input(result), kind: "capture" });
+    assert.equal(
+      (await service.tagDraft("a", add)).draft,
+      null,
+      "receipt cannot resurrect a cleared draft",
+    );
+  } finally {
+    db.close();
+  }
+});
 function reorderedReads(store) {
   const reorder = (value) =>
     Array.isArray(value)

@@ -3,6 +3,7 @@ export function createCardActionSave({
   api,
   onOwned,
   onPending,
+  onDraft = () => {},
   onUsed,
   notify,
   currentView,
@@ -43,35 +44,43 @@ export function createCardActionSave({
       intent = pending,
       view = currentView();
     busy = true;
-    show("Saving card action…");
+    if (!intent.inline) show("Saving card action…");
     try {
       const result = await api(
         intent.kind === "owned"
           ? "/api/tag-actions"
-          : "/api/import-draft/stage",
+          : intent.kind === "pending"
+            ? "/api/import-draft/tag"
+            : "/api/import-draft/stage",
         { method: "POST", body: JSON.stringify(intent.payload) },
       );
-      if (turn !== generation) return;
+      if (turn !== generation) return { cancelled: true };
       sessionStorage.removeItem(key);
       pending = null;
       try {
         if (intent.kind === "owned") onOwned(result);
-        else if (result.draft && currentView() === view)
-          onPending(result.draft.id);
+        else if (result.draft && currentView() === view) {
+          onDraft(result);
+          if (!intent.inline && intent.kind === "catalog")
+            onPending(result.draft.id);
+        }
         if (intent.tag) onUsed(intent.tag);
       } catch {
         show(
           "Your card action was saved. Refresh to see the updated collection or pending review.",
         );
-        return;
+        return { result, intent };
       }
-      show(
-        intent.kind === "owned"
-          ? "Card tags saved. Owned quantity is unchanged."
-          : result.draft
-            ? "Pending review saved. Check the printing and use Add to confirm ownership."
-            : "This review was already processed. No duplicate copies were added.",
-      );
+      if (!intent.inline)
+        show(
+          intent.kind === "owned"
+            ? "Card tags saved. Owned quantity is unchanged."
+            : result.draft
+              ? "Pending review saved. Check the printing and use Add to confirm ownership."
+              : "This review was already processed. No duplicate copies were added.",
+        );
+      else status.hidden = true;
+      return { result, intent };
     } catch (error) {
       if (
         turn === generation &&
@@ -94,6 +103,11 @@ export function createCardActionSave({
           `${error.message} Retry this same action to confirm it safely.`,
           true,
         );
+      return {
+        error: error.message,
+        pending: Boolean(pending),
+        cancelled: turn !== generation,
+      };
     } finally {
       if (turn === generation) {
         busy = false;
@@ -114,7 +128,10 @@ export function createCardActionSave({
         const saved = sessionStorage.getItem(key);
         if (saved) {
           pending = JSON.parse(saved);
-          if (!["owned", "catalog"].includes(pending?.kind) || !pending.payload)
+          if (
+            !["owned", "catalog", "pending"].includes(pending?.kind) ||
+            !pending.payload
+          )
             throw Error("Saved card action is invalid.");
           show(
             "A card action still needs confirmation. Retry before starting another.",
@@ -141,11 +158,24 @@ export function createCardActionSave({
         notify(
           "Your account and retry storage must be ready before changing tags.",
         );
-        return;
+        return {
+          error:
+            "Your account and retry storage must be ready before changing tags.",
+        };
       }
       if (pending) {
+        if (
+          !busy &&
+          intent.inline &&
+          pending.inline &&
+          intent.itemKey === pending.itemKey &&
+          intent.tag === pending.tag
+        )
+          return run();
         show("Finish the previous card action before starting another.", true);
-        return;
+        return {
+          error: "Finish the previous card action before starting another.",
+        };
       }
       try {
         sessionStorage.setItem(key, JSON.stringify(intent));
@@ -154,7 +184,10 @@ export function createCardActionSave({
         show(
           "This browser could not protect the retry. No request was sent; reload and try again.",
         );
-        return;
+        return {
+          error:
+            "This browser could not protect the retry. No request was sent.",
+        };
       }
       return run();
     },
