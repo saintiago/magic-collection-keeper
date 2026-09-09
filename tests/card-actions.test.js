@@ -13,9 +13,11 @@ test("UC-CARD-ACTIONS fixed wheel geometry stays inside phone edges and every vi
     label: `Tag ${i}`,
   }));
   for (const viewport of [
+    { width: 320, height: 568 },
     { width: 390, height: 844 },
     { width: 844, height: 390 },
     { width: 1280, height: 720 },
+    { width: 768, height: 1024 },
   ])
     for (const point of [
       { x: 0, y: 0 },
@@ -40,6 +42,57 @@ test("UC-CARD-ACTIONS fixed wheel geometry stays inside phone edges and every vi
       assert.equal(actionWheelHit(layout, { x: -100, y: -100 }), null);
       assert.equal(JSON.stringify(layout), before);
     }
+});
+
+test("UC-CARD-WHEEL annular sectors select throughout their wedge, preserve an open center and cancel outside", () => {
+  const tags = Array.from({ length: 8 }, (_, i) => ({
+    id: String(i),
+    label: `Tag ${i}`,
+  }));
+  const layout = actionWheelLayout(
+    tags,
+    { x: 540, y: 400 },
+    { width: 1080, height: 800, cardHeight: 354 },
+  );
+  assert.ok(layout.innerRadius * 2 > 354);
+  for (const target of layout.targets) {
+    for (const fraction of [-0.85, 0, 0.85]) {
+      const angle = target.angle + (Math.PI / target.count) * fraction;
+      const radius =
+        layout.innerRadius + (layout.radius - layout.innerRadius) * 0.8;
+      assert.equal(
+        actionWheelHit(layout, {
+          x: layout.center.x + Math.cos(angle) * radius,
+          y: layout.center.y + Math.sin(angle) * radius,
+        }),
+        target,
+      );
+    }
+  }
+  assert.equal(actionWheelHit(layout, layout.center), null);
+  assert.equal(
+    actionWheelHit(layout, {
+      x: layout.center.x + layout.radius + 1,
+      y: layout.center.y,
+    }),
+    null,
+  );
+  const small = actionWheelLayout(
+    tags,
+    { x: 160, y: 250 },
+    { width: 320, height: 568, cardHeight: 202 },
+  );
+  const phone = actionWheelLayout(
+    tags,
+    { x: 195, y: 270 },
+    { width: 390, height: 844, cardHeight: 251 },
+  );
+  assert.ok(
+    small.innerRadius / small.radius < phone.innerRadius / phone.radius,
+  );
+  assert.ok(
+    phone.innerRadius / phone.radius < layout.innerRadius / layout.radius,
+  );
 });
 test("UC-CARD-ACTIONS recency and relevance affect the next wheel only; artwork pan remains bounded across zoom changes", () => {
   const tags = [

@@ -1,6 +1,23 @@
 export const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 export const actionTargetWidth = (width) =>
-  Math.min(128, Math.max(84, (width - 48) / 3));
+  Math.min(112, Math.max(64, ((width - 36) / 2) * 0.48));
+
+// Scale the rendered, untransformed source tile exactly. Edges affect position,
+// never the requested scale; oversized artwork may extend past the viewport.
+export function enlargedArtwork(bounds, scale, viewport) {
+  const width = bounds.width * scale,
+    height = bounds.height * scale;
+  const place = (start, source, size, available) =>
+    size > available - 24
+      ? (available - size) / 2
+      : clamp(start + (source - size) / 2, 12, available - size - 12);
+  return {
+    width,
+    height,
+    x: place(bounds.x, bounds.width, width, viewport.width),
+    y: place(bounds.y, bounds.height, height, viewport.height),
+  };
+}
 
 export function rankActionTags(tags, recent = [], assigned = []) {
   const recency = new Map(recent.map((id, index) => [id, index]));
@@ -16,120 +33,111 @@ export function rankActionTags(tags, recent = [], assigned = []) {
     );
 }
 
-// Geometry is captured once per gesture. Emphasis never changes these targets.
+// True annular hit sectors and label geometry are frozen for the whole gesture.
 export function actionWheelLayout(tags, point, viewport) {
-  const margin = 18,
-    width = actionTargetWidth(viewport.width);
+  const available = Math.min(viewport.width, viewport.height);
+  const radius = Math.max(
+    36,
+    Math.min(
+      350,
+      Math.max(292, (viewport.cardHeight || 240) * 1.04),
+      (available - 36) / 2,
+    ),
+  );
+  const innerRadius =
+    radius * (0.42 + 0.16 * clamp((available - 320) / 480, 0, 1));
+  const labelRadius = innerRadius + (radius - innerRadius) * 0.52;
+  const width = actionTargetWidth(available);
   const measure = viewport.measure || (() => 52);
-  // Fit actual wrapped labels, reducing to a bounded More list when needed.
-  let result;
+  // A label that cannot fit the glass band stays fully readable in More tags.
+  const eligible = tags.filter(
+    (tag) =>
+      measure(tag.label, width) <= Math.max(44, (radius - innerRadius) * 0.92),
+  );
+  const center = {
+    x: clamp(point.x, radius + 18, viewport.width - radius - 18),
+    y: clamp(point.y, radius + 18, viewport.height - radius - 18),
+  };
+  let targets = [];
   for (
     let count = Math.min(
-      tags.length,
-      viewport.width >= 850 && viewport.height >= 650 ? 10 : 6,
+      eligible.length + Number(eligible.length < tags.length),
+      available >= 650 ? 10 : 6,
     );
-    count >= 3 || count === tags.length;
+    count >= Math.min(3, eligible.length);
     count--
   ) {
-    const choices = tags.slice(0, count);
+    const choices = eligible.slice(0, count);
     if (tags.length > count)
-      choices[count - 1] = { id: "more", label: "More tags…", more: true };
-    const dimensions = choices.map((tag) => ({
-      width,
-      height: Math.max(44, measure(tag.label, width)),
-    }));
-    for (
-      let radius = Math.max(132, (viewport.cardHeight || 220) / 2 + 48);
-      radius <= Math.max(viewport.width, viewport.height);
-      radius += 4
-    ) {
-      const targets = choices.map((tag, i) => {
-        const angle = -Math.PI / 2 + (i * Math.PI * 2) / choices.length;
-        return {
-          tag,
-          ring: 0,
-          angle,
-          count: choices.length,
-          x:
-            Math.cos(angle) *
-            Math.min(radius, (viewport.width - width * 1.08 - margin * 2) / 2),
-          y: Math.sin(angle) * radius,
-          ...dimensions[i],
-        };
-      });
-      const left = Math.min(...targets.map((t) => t.x - t.width * 0.54)),
-        right = Math.max(...targets.map((t) => t.x + t.width * 0.54)),
-        top = Math.min(...targets.map((t) => t.y - t.height * 0.54)),
-        bottom = Math.max(...targets.map((t) => t.y + t.height * 0.54));
-      if (
-        right - left > viewport.width - margin * 2 ||
-        bottom - top > viewport.height - margin * 2 - 20
-      )
-        break;
-      const overlap = targets.some((a, i) =>
-        targets
-          .slice(i + 1)
-          .some(
-            (b) =>
-              Math.abs(a.x - b.x) < (a.width + b.width) * 0.54 + 4 &&
-              Math.abs(a.y - b.y) < (a.height + b.height) * 0.54 + 4,
-          ),
-      );
-      if (overlap) continue;
-      const center = {
-        x: clamp(point.x, margin - left, viewport.width - margin - right),
-        y: clamp(point.y, margin - top, viewport.height - margin - 20 - bottom),
+      choices[Math.min(count - 1, choices.length)] = {
+        id: "more",
+        label: "More tags…",
+        more: true,
       };
-      result = {
-        center,
-        radius: radius + 32,
-        width: right - left,
-        height: bottom - top,
-        targets: targets.map((t) => ({
-          ...t,
-          x: t.x + center.x,
-          y: t.y + center.y,
-        })),
-      };
-      break;
-    }
-    if (result || count <= 3) break;
-  }
-  // Extremely small zoomed viewports retain two core actions and a scrollable tag list.
-  if (!result) {
-    const choices = [
-      tags[0],
-      tags[1],
-      { id: "more", label: "More tags…", more: true },
-    ].filter(Boolean);
-    const center = { x: viewport.width / 2, y: viewport.height / 2 };
-    result = {
-      center,
-      radius: 0,
-      targets: choices.map((tag, i) => ({
+    targets = choices.map((tag, i) => {
+      const angle = -Math.PI / 2 + (i * Math.PI * 2) / count;
+      return {
         tag,
         ring: 0,
-        angle: 0,
-        x: center.x,
-        y: 36 + i * 56,
-        width: Math.max(80, viewport.width - 36),
-        height: 48,
-      })),
-    };
+        angle,
+        count,
+        width,
+        height: Math.max(44, measure(tag.label, width)),
+        x: center.x + Math.cos(angle) * labelRadius,
+        y: center.y + Math.sin(angle) * labelRadius,
+      };
+    });
+    const fits = targets.every((target) => {
+      for (const dx of [-target.width / 2, target.width / 2]) {
+        for (const dy of [-target.height / 2, target.height / 2]) {
+          const x = target.x - center.x + dx,
+            y = target.y - center.y + dy;
+          const distance = Math.hypot(x, y);
+          const angle = Math.atan2(
+            Math.sin(Math.atan2(y, x) - target.angle),
+            Math.cos(Math.atan2(y, x) - target.angle),
+          );
+          if (
+            distance > radius - 3 ||
+            distance < innerRadius + 3 ||
+            Math.abs(angle) > Math.PI / count - 0.035
+          )
+            return false;
+        }
+      }
+      return true;
+    });
+    if (fits) break;
   }
-  return result;
+  return {
+    center,
+    radius,
+    innerRadius,
+    width: radius * 2,
+    height: radius * 2,
+    targets,
+  };
 }
 
 export function actionWheelHit(layout, point) {
+  const x = point.x - layout.center.x,
+    y = point.y - layout.center.y;
+  const distance = Math.hypot(x, y);
+  if (distance < layout.innerRadius || distance > layout.radius) return null;
+  const angle = Math.atan2(y, x);
   return (
     layout.targets.find(
       (target) =>
-        Math.abs(target.x - point.x) <= target.width / 2 &&
-        Math.abs(target.y - point.y) <= target.height / 2,
+        Math.abs(
+          Math.atan2(
+            Math.sin(angle - target.angle),
+            Math.cos(angle - target.angle),
+          ),
+        ) <=
+        Math.PI / target.count,
     ) || null
   );
 }
-
 export function boundedArtwork({
   width,
   height,
