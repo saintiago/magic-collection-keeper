@@ -727,6 +727,41 @@ test("UC-CARD-ACTIONS keyboard overflow is bounded, searchable and promotes the 
   }
 });
 
+test("UC-CARD-ACTIONS phone overflow keeps catalogue review reachable without claiming ownership", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const f = await setup(page);
+  try {
+    for (const label of ["Action Source 12345678", "Action Target 12345678"])
+      await f.tagged.createTag("test", {
+        label,
+        type: "location",
+        kind: "box",
+      });
+    await catalogue(page);
+    await page.locator("#grid .card-open").press("Shift+F10");
+    await expect(
+      page.locator('.card-action-target[data-tag-id="edit"]'),
+    ).toHaveCount(0);
+    await page
+      .getByRole("menuitem", { name: "More tags…", exact: true })
+      .click();
+    await page
+      .locator(".card-action-more")
+      .getByRole("button", { name: "Review & add", exact: true })
+      .click();
+    await expect(page.locator(".draft-row")).toHaveCount(1);
+    expect(await f.tagged.list("test")).toEqual([]);
+    await page.reload();
+    await expect(page.locator(".draft-row")).toHaveCount(1);
+    await page.locator("#draft-clear").click();
+    await expect(page.locator(".draft-row")).toHaveCount(0);
+  } finally {
+    f.db.close();
+  }
+});
+
 test("UC-CARD-ACTIONS definite rejection permits a new choice; a late pending save cannot reopen a departed view", async ({
   page,
 }) => {
