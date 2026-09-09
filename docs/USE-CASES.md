@@ -33,7 +33,7 @@ All currently visible interactive controls are grouped below. The names identify
 
 ## Manual acceptance workflow
 
-`tests/live/capture-import.spec.js` (LIVE-02) additionally exercises real pasted-text resolution and the deployed photo-upload/recognition/review/save path using the shipped model and a generated clear title image. Permission timeout and invalid-image upload errors are covered in `scan-review.spec.js`.
+`tests/live/capture-import.spec.js` (LIVE-02) exercises real pasted-text resolution and durable reviewed ownership. LIVE-14 exercises the deployed photo-upload/model/review/save path using public catalog artwork. Permission timeout and invalid-image upload errors are covered in `scan-review.spec.js`.
 
 Use the dedicated `keeper-e2e` profile, never the owner's `saint282` account. Open the CloudFront URL, sign in, search an exact printing, inspect its image and details, add a test quantity, return to the collection, refresh, reload, edit and delete. Try the scan screen, permission/fallback flow and a pasted import. End with an empty test collection and sign out. The separate `keeper-isolation` identity proves that another owner's row ID cannot be edited. No test invitation emails are sent.
 

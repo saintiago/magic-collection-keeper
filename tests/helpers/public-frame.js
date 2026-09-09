@@ -6,8 +6,15 @@ export async function publicCardFrame(page) {
   const [source] = JSON.parse(
     await readFile(new URL("../performance/sources.json", import.meta.url)),
   );
-  const response = await fetch(source.url);
-  if (!response.ok) throw Error("Public fixture unavailable");
+  const response = await fetch(source.url, {
+    headers: {
+      "User-Agent":
+        "MagicCollectionKeeper/0.1 (+https://github.com/saintiago/magic-collection-keeper)",
+      Accept: "image/jpeg",
+    },
+  });
+  if (!response.ok)
+    throw Error(`Public fixture unavailable (${response.status})`);
   const bytes = Buffer.from(await response.arrayBuffer());
   if (createHash("sha256").update(bytes).digest("hex") !== source.sha256)
     throw Error("Public fixture changed");
