@@ -42,12 +42,15 @@ export async function exerciseCardActions(
         page.locator(`#tag-filter option[value="${tagId}"]`),
       ).toHaveCount(1);
     const button = page.locator("#grid .card-open");
+    await expect(page.locator("#card")).toBeHidden();
+    let b;
     await expect(async () => {
       await button.scrollIntoViewIfNeeded();
       await expect(button).toBeInViewport({ ratio: 0.9 });
+      b = await button.boundingBox();
+      expect(b).not.toBeNull();
     }).toPass({ timeout: 5000 });
-    const b = await button.boundingBox(),
-      x = b.x + b.width / 2,
+    const x = b.x + b.width / 2,
       y = b.y + b.height / 2;
     const pointer = (x, y) => ({
       pointerId: 71,
