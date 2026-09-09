@@ -839,6 +839,18 @@
 .card-wheel-tag {
   touch-action: manipulation;
 }
+.artwork-touch-drag-copy {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 9;
+  max-width: none;
+  object-fit: contain;
+  border-radius: 12px;
+  opacity: 0.3;
+  pointer-events: none;
+  will-change: transform;
+}
 .card-wheel-tag[aria-pressed="true"] {
   color: #fff7c2;
   text-decoration: underline;

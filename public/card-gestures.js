@@ -643,7 +643,9 @@ export function createCardGestures({
           ?.closest("a[data-tag-id]");
         const direct =
           !target && link
-            ? tags().find((tag) => tag.id === link.dataset.tagId)
+            ? active.all.find(
+                (tag) => !tag.action && tag.id === link.dataset.tagId,
+              )
             : null;
         if (target || direct) choose(target || direct);
         else cancel();

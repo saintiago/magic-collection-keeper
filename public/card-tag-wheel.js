@@ -1,4 +1,8 @@
-import { actionWheelLayout, actionTargetWidth } from "./card-action-layout.js";
+import {
+  actionWheelLayout,
+  actionTargetWidth,
+  actionWheelHit,
+} from "./card-action-layout.js";
 import { createWheelSectors } from "./card-wheel-view.js";
 import { mountCardTags } from "./card-tag-view.js";
 
@@ -27,7 +31,8 @@ export function mountCardTagWheel(root, state) {
     layout = null,
     surface = null;
   const buttons = new Map();
-  let pressed = null;
+  let pressed = null,
+    drag = null;
   const assigned = (id) =>
     state.view.desired.has(id)
       ? state.view.desired.get(id)
@@ -73,6 +78,7 @@ export function mountCardTagWheel(root, state) {
     const width = actionTargetWidth(Math.min(viewport.width, viewport.height));
     const choices = state.view.tags.map((tag) => ({
       ...tag,
+      tagLabel: tag.label,
       label: "Remove " + tag.label,
     }));
     const probes = document.createElement("div"),
@@ -139,7 +145,7 @@ export function mountCardTagWheel(root, state) {
         .map((tag) => [tag.id, tag.label])
         .sort(([a], [b]) => a.localeCompare(b)),
     );
-    if (next !== signature) {
+    if (next !== signature && !drag) {
       signature = next;
       rebuild();
     }
@@ -167,9 +173,11 @@ export function mountCardTagWheel(root, state) {
         button.textContent = tag.label;
         continue;
       }
-      const selected = assigned(tag.id),
+      const selected = drag?.assigned.get(tag.id) ?? assigned(tag.id),
         current = view.tags.find((entry) => entry.id === tag.id);
-      button.textContent = (selected ? "Remove " : "Add ") + current.label;
+      button.textContent =
+        (selected ? "Remove " : "Add ") +
+        (drag ? tag.tagLabel : current?.label || tag.tagLabel);
       button.setAttribute("aria-pressed", String(selected));
       button.setAttribute(
         "aria-busy",
@@ -181,6 +189,41 @@ export function mountCardTagWheel(root, state) {
   }
   const unsubscribe = state.subscribe(render);
   return {
+    beginDrag() {
+      if (
+        !layout ||
+        state.view.loading ||
+        state.view.loadError ||
+        !overflow.hidden
+      )
+        return false;
+      drag = {
+        layout,
+        assigned: new Map(
+          state.view.tags.map((tag) => [tag.id, assigned(tag.id)]),
+        ),
+      };
+      return true;
+    },
+    highlightDrag(point) {
+      if (!drag) return;
+      const target = actionWheelHit(drag.layout, point);
+      surface.paint(
+        drag.layout.targets.map((entry) => (entry === target ? 1 : 0)),
+      );
+    },
+    drop(point) {
+      if (!drag) return;
+      const target = actionWheelHit(drag.layout, point)?.tag;
+      if (target?.more) choose(target);
+      else if (target) state.set(target.id, !drag.assigned.get(target.id));
+    },
+    cancelDrag() {
+      if (!drag) return;
+      drag = null;
+      surface?.paint([]);
+      render();
+    },
     resize(next) {
       geometry = next;
       rebuild();

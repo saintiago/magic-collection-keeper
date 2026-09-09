@@ -3,6 +3,7 @@ import { inspectorView } from "./artwork-inspector.js";
 import { createCardTagState } from "./card-tag-state.js";
 import { mountCardTags } from "./card-tag-view.js";
 import { mountCardTagWheel } from "./card-tag-wheel.js";
+import { createArtworkTagDrag } from "./artwork-tag-drag.js";
 import {
   artworkOpening,
   boundedArtwork,
@@ -49,6 +50,7 @@ export function createArtworkViewer({
     unmountTags = null,
     unmountPreviewTags = null,
     tagWheel = null;
+  const touchDrag = createArtworkTagDrag({ dialog, wheel: () => tagWheel });
 
   function tagState(item) {
     item.tagState ||= createCardTagState(item, {
@@ -131,6 +133,7 @@ export function createArtworkViewer({
     if (!frame) frame = requestAnimationFrame(draw);
   }
   function finish() {
+    touchDrag.cancel();
     tagWheel?.destroy();
     tagWheel = null;
     unmountTags?.();
@@ -171,6 +174,7 @@ export function createArtworkViewer({
   function animateClose() {
     if (!dialog.open || stopReturn) return;
     closing = true;
+    touchDrag.cancel();
     cancelAnimationFrame(frame);
     frame = 0;
     points.clear();
@@ -245,6 +249,13 @@ export function createArtworkViewer({
       /* A canceled pointer can already have ended. */
     }
     const all = [...points.values()];
+    if (
+      all.length === 1 &&
+      event.pointerType === "touch" &&
+      event.target.matches(".artwork-full-image")
+    )
+      touchDrag.start(event);
+    else touchDrag.cancel();
     gesture = {
       start: { x: event.clientX, y: event.clientY },
       x: state.x,
@@ -304,6 +315,7 @@ export function createArtworkViewer({
       event.preventDefault();
       points.set(event.pointerId, { x: event.clientX, y: event.clientY });
       const all = [...points.values()];
+      if (all.length === 1 && touchDrag.move(event)) return;
       if (all.length === 2 && gesture.distance) {
         state.zoom =
           (gesture.zoom *
@@ -331,6 +343,11 @@ export function createArtworkViewer({
   });
   const up = (event) => {
     if (!points.has(event.pointerId)) return;
+    if (touchDrag.end(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      suppressUntil = performance.now() + 400;
+    }
     const outside =
       gesture?.outside &&
       points.size === 1 &&
@@ -349,7 +366,7 @@ export function createArtworkViewer({
         outside: false,
         distance: 0,
       };
-    if (outside && event.type !== "pointercancel") {
+    if (outside && event.type === "pointerup") {
       event.preventDefault();
       event.stopPropagation();
       suppressUntil = performance.now() + 400;
@@ -358,6 +375,7 @@ export function createArtworkViewer({
   };
   dialog.addEventListener("pointerup", up);
   dialog.addEventListener("pointercancel", up);
+  dialog.addEventListener("lostpointercapture", up);
   document.addEventListener(
     "pointerdown",
     () => {
@@ -377,6 +395,11 @@ export function createArtworkViewer({
     true,
   );
   function resize() {
+    if (touchDrag.active) {
+      touchDrag.cancel();
+      points.clear();
+      gesture = null;
+    }
     hidePreview();
     rect = null;
     if (dialog.open) {

@@ -227,6 +227,56 @@ test("UC-SHARED-CARD-TAGS drag from hover freezes Remove intent and never increm
   f.db.close();
 });
 
+test("UC-SHARED-CARD-TAGS dropping on a tag link preserves the frozen Remove action and location quantity", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const f = await setup(page);
+  const writes = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/tag-actions"))
+      writes.push(request.postDataJSON());
+  });
+  // An ordinary tag-navigation link outside the wheel exercises the legacy
+  // direct-drop route without relying on a particular grid's tag placement.
+  await page.evaluate((id) => {
+    const link = document.createElement("a");
+    link.href = "#tag=" + id;
+    link.dataset.tagId = id;
+    link.textContent = "Draft Box";
+    link.style.cssText =
+      "position:fixed;right:8px;bottom:8px;z-index:1000;padding:12px";
+    link.id = "outside-tag-link";
+    document.body.append(link);
+  }, f.box.id);
+  const source = page.locator("#grid .card-open");
+  await source.scrollIntoViewIfNeeded();
+  const bounds = await source.boundingBox();
+  await page.mouse.move(bounds.x + 30, bounds.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 50, bounds.y + 50);
+  await expect(
+    page.getByRole("menuitem", { name: "Remove Draft Box", exact: true }),
+  ).toBeVisible();
+  const [before] = await f.tagged.list("test");
+  await f.tagged.assign("test", before.id, { locations: [], tag_ids: [] });
+  const link = await page.locator("#outside-tag-link").boundingBox();
+  await page.mouse.move(link.x + link.width / 2, link.y + link.height / 2);
+  await page.mouse.up();
+  await expect(page.locator(".card-action-layer")).not.toBeVisible();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0]).toMatchObject({
+    selected: false,
+    quantity: 5,
+    tag_id: f.box.id,
+  });
+  const [after] = await f.tagged.list("test");
+  expect(after.quantity).toBe(9);
+  expect(after.locations).toEqual([]);
+  expect(page.url()).not.toContain("#tag=");
+  f.db.close();
+});
+
 test.describe("actual touch and hybrid input", () => {
   test.use({ hasTouch: true });
   for (const width of [320, 390, 1280]) {
@@ -356,6 +406,190 @@ test.describe("actual touch and hybrid input", () => {
       "data-input",
       "touch",
     );
+    f.db.close();
+  });
+
+  for (const interruption of [
+    "lost capture",
+    "resize",
+    "second finger",
+    "sign out",
+  ]) {
+    test(`UC-CARD-INPUT-MODES ${interruption} cancels an enlarged touch drag without applying the target`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const f = await setup(page);
+      const writes = [];
+      page.on("request", (request) => {
+        if (request.url().endsWith("/api/tag-actions"))
+          writes.push(request.postDataJSON());
+      });
+      await page.locator("#grid .card-open").tap();
+      const viewer = page.locator(".artwork-viewer"),
+        photo = viewer.locator(".artwork-full-image");
+      await expect(
+        viewer.getByRole("button", { name: "Add Draw", exact: true }),
+      ).toBeEnabled();
+      await viewer
+        .locator(".artwork-open-reveal")
+        .evaluate((element) =>
+          Promise.all(
+            element.getAnimations().map((animation) => animation.finished),
+          ),
+        );
+      const bounds = await photo.boundingBox(),
+        target = await viewer
+          .getByRole("button", { name: "Add Draw", exact: true })
+          .boundingBox();
+      const start = {
+        pointerId: 71,
+        pointerType: "touch",
+        isPrimary: true,
+        buttons: 1,
+        clientX: bounds.x + bounds.width / 2,
+        clientY: bounds.y + bounds.height / 2,
+      };
+      const end = {
+        ...start,
+        clientX: target.x + target.width / 2,
+        clientY: target.y + target.height / 2,
+      };
+      await photo.dispatchEvent("pointerdown", start);
+      await photo.dispatchEvent("pointermove", end);
+      await expect(viewer.locator(".artwork-touch-drag-copy")).toBeVisible();
+      if (interruption === "lost capture")
+        await photo.dispatchEvent("lostpointercapture", end);
+      if (interruption === "resize")
+        await page.setViewportSize({ width: 420, height: 844 });
+      if (interruption === "sign out")
+        await page.evaluate(() =>
+          window.dispatchEvent(new Event("keeper-sign-out")),
+        );
+      if (interruption === "second finger") {
+        const zoom = Number(await viewer.getAttribute("data-zoom"));
+        const second = {
+          ...end,
+          pointerId: 72,
+          isPrimary: false,
+          clientX: end.clientX + 30,
+        };
+        await photo.dispatchEvent("pointerdown", second);
+        await photo.dispatchEvent("pointermove", {
+          ...second,
+          clientX: second.clientX + 60,
+        });
+        await expect
+          .poll(async () => Number(await viewer.getAttribute("data-zoom")))
+          .toBeGreaterThan(zoom);
+        await photo.dispatchEvent("pointerup", { ...second, buttons: 0 });
+      }
+      await expect(viewer.locator(".artwork-touch-drag-copy")).toHaveCount(0);
+      await viewer.dispatchEvent("pointerup", { ...end, buttons: 0 });
+      // Allow a queued frame or late release to run before checking for writes.
+      await page.evaluate(
+        () =>
+          new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve)),
+          ),
+      );
+      expect(writes).toEqual([]);
+      const [row] = await f.tagged.list("test");
+      expect(row.quantity).toBe(9);
+      expect(row.locations[0].quantity).toBe(5);
+      const role = (await f.tagged.tags("test")).find(
+        (tag) => tag.label === "Draw",
+      );
+      expect((row.tags || []).map((tag) => tag.id)).not.toContain(role.id);
+      if (interruption === "sign out") await expect(viewer).not.toBeVisible();
+      else await expect(viewer).toBeVisible();
+      f.db.close();
+    });
+  }
+
+  test("UC-CARD-INPUT-MODES dragging the enlarged touch card applies its frozen tag once; cancellation leaves ownership and tags unchanged", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const f = await setup(page);
+    const writes = [];
+    page.on("request", (request) => {
+      if (request.url().endsWith("/api/tag-actions"))
+        writes.push(request.postDataJSON());
+    });
+    await page.locator("#grid .card-open").tap();
+    const viewer = page.locator(".artwork-viewer"),
+      photo = viewer.locator(".artwork-full-image");
+    await viewer
+      .locator(".artwork-open-reveal")
+      .evaluate((element) =>
+        Promise.all(
+          element.getAnimations().map((animation) => animation.finished),
+        ),
+      );
+    const bounds = await photo.boundingBox();
+    const target = viewer.getByRole("button", {
+      name: "Remove Draft Box",
+      exact: true,
+    });
+    await expect(target).toBeEnabled();
+    const end = await target.boundingBox();
+    const pointer = (x, y) => ({
+      pointerId: 51,
+      pointerType: "touch",
+      isPrimary: true,
+      button: 0,
+      buttons: 1,
+      clientX: x,
+      clientY: y,
+    });
+    const start = pointer(
+      bounds.x + bounds.width / 2,
+      bounds.y + bounds.height / 2,
+    );
+    await photo.dispatchEvent("pointerdown", start);
+    await photo.dispatchEvent(
+      "pointermove",
+      pointer(end.x + end.width / 2, end.y + end.height / 2),
+    );
+    const ghost = viewer.locator(".artwork-touch-drag-copy");
+    await expect(ghost).toBeVisible();
+    expect((await ghost.boundingBox()).width).toBeCloseTo(bounds.width, 1);
+    expect(await photo.boundingBox()).toEqual(bounds);
+    await photo.dispatchEvent("pointerup", {
+      ...pointer(end.x + end.width / 2, end.y + end.height / 2),
+      buttons: 0,
+    });
+    await expect(ghost).toHaveCount(0);
+    await expect(
+      viewer.getByRole("button", { name: "Add Draft Box", exact: true }),
+    ).toHaveAttribute("aria-busy", "false");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({
+      selected: false,
+      tag_id: f.box.id,
+      quantity: 5,
+    });
+    expect((await f.tagged.list("test"))[0].quantity).toBe(9);
+    const addRole = await viewer
+      .getByRole("button", { name: "Add Draw", exact: true })
+      .boundingBox();
+    await photo.dispatchEvent("pointerdown", start);
+    await photo.dispatchEvent(
+      "pointermove",
+      pointer(addRole.x + addRole.width / 2, addRole.y + addRole.height / 2),
+    );
+    await expect(ghost).toBeVisible();
+    await photo.dispatchEvent(
+      "pointercancel",
+      pointer(addRole.x + addRole.width / 2, addRole.y + addRole.height / 2),
+    );
+    await expect(ghost).toHaveCount(0);
+    await expect(
+      viewer.getByRole("button", { name: "Add Draw", exact: true }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(writes).toHaveLength(1);
+    await expect(viewer).toBeVisible();
     f.db.close();
   });
 });
