@@ -39,6 +39,12 @@ test("LIVE-08 Discover opens owned printings and persists tag add/remove without
       row.source_managed,
   );
   expect(target).toBeTruthy();
+  const ownership = (rows) =>
+    rows.map((row) => {
+      if (row.id !== target.id) return row;
+      const { updated_at, ...unchanged } = row;
+      return unchanged;
+    });
   const original = {
     inventory_id: target.id,
     locations: target.locations.map(({ tag_id, quantity }) => ({
@@ -109,12 +115,19 @@ test("LIVE-08 Discover opens owned printings and persists tag add/remove without
     await expect(ownedRow().locator(`a[data-tag-id="${tag.id}"]`)).toHaveCount(
       0,
     );
-    expect(await api("collection")).toEqual(before);
+    const after = await api("collection");
+    expect(ownership(after)).toEqual(ownership(before));
+    expect(
+      Date.parse(after.find((row) => row.id === target.id).updated_at),
+    ).toBeGreaterThan(Date.parse(target.updated_at || "1970-01-01"));
   } finally {
     await api("tag-assignments", "PUT", original);
     await api(`tags/${tag.id}`, "DELETE");
   }
-  expect(await api("collection")).toEqual(before);
+  const restored = await api("collection");
+  expect(ownership(restored)).toEqual(ownership(before));
+  await api("tag-assignments", "PUT", original);
+  expect(await api("collection")).toEqual(restored);
   await expect(page.locator("#inventory-form")).toBeVisible({ timeout: 30000 });
   await page.locator("#close").click();
   await page.locator("#sign-out").click();

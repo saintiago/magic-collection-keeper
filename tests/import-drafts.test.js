@@ -93,6 +93,80 @@ function setup({
   };
 }
 const input = (view) => ({ id: view.draft.id, version: view.draft.version });
+function reorderedReads(store) {
+  const reorder = (value) =>
+    Array.isArray(value)
+      ? value.map(reorder)
+      : value && typeof value === "object"
+        ? Object.fromEntries(
+            Object.entries(value)
+              .reverse()
+              .map(([key, item]) => [key, reorder(item)]),
+          )
+        : value;
+  return {
+    ...store,
+    get: async (...args) => reorder(await store.get(...args)),
+    list: async (...args) => reorder(await store.list(...args)),
+  };
+}
+
+test("UC-SCAN-IMPORT persisted map order cannot reject an identical receipt or turn a no-op into an edit", async () => {
+  let time = "2026-09-09T10:00:00Z";
+  const s = setup({ now: () => time, storeWrapper: reorderedReads });
+  try {
+    const raw = {
+      id: randomUUID(),
+      kind: "scan",
+      rows: [1, 2].map(() => ({
+        id: randomUUID(),
+        name: card.name,
+        printing_id: card.id,
+        quantity: 1,
+        finish: "nonfoil",
+        condition: "NM",
+        recognition: [
+          {
+            printing_id: card.id,
+            provider: "browser-onnx",
+            evidence: "visual",
+          },
+        ],
+      })),
+    };
+    const saved = await s.service.stageDraft("test", raw);
+    time = "2026-09-10T11:00:00Z";
+    assert.deepEqual(
+      (await s.service.stageDraft("test", raw)).draft,
+      saved.draft,
+    );
+    const unchanged = await s.service.saveDraft("test", {
+      ...input(saved),
+      kind: "capture",
+      rows: saved.draft.rows,
+    });
+    assert.deepEqual(unchanged.draft, saved.draft);
+    await assert.rejects(
+      s.service.stageDraft("test", {
+        ...raw,
+        rows: [...raw.rows].reverse(),
+      }),
+      /different lines/,
+    );
+    await assert.rejects(
+      s.service.stageDraft("test", {
+        ...raw,
+        rows: raw.rows.map((row) => ({ ...row, quantity: 2 })),
+      }),
+      /different lines/,
+    );
+    await s.service.clearDraft("test", { ...input(saved), kind: "capture" });
+    assert.equal((await s.service.stageDraft("test", raw)).draft, null);
+    assert.deepEqual(await s.collection.list("test"), []);
+  } finally {
+    s.db.close();
+  }
+});
 test("UC-22 Clear winning during Add rolls back every ownership write; draft revisions survive a database restart", async () => {
   const directory = mkdtempSync(join(tmpdir(), "keeper-draft-"));
   const path = join(directory, "test.sqlite");
@@ -621,7 +695,7 @@ test("UC-SCAN-IMPORT 50 duplicate captures commit atomically, retain separate co
 
 test("UC-CARD-DATES creation stays immutable while meaningful quantities and assignments update modification time", async () => {
   let time = "2026-09-09T10:00:00Z";
-  const s = setup({ now: () => time });
+  const s = setup({ now: () => time, storeWrapper: reorderedReads });
   const staged = await s.service.stageDraft("test", {
     id: randomUUID(),
     kind: "scan",

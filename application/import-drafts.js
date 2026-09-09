@@ -1,5 +1,6 @@
 import { ApplicationError } from "../domain/inventory.js";
 import { captureInput, draftSlot } from "../domain/capture-draft.js";
+import { sameStoredValue } from "../domain/stored-value.js";
 import {
   IMPORT_PENDING_TAG,
   moxfieldSource,
@@ -116,7 +117,7 @@ export function createImportDraftService({
       const slot = draftSlot({ kind: "capture", id: input.id });
       const previous = await store.get(owner, "import-drafts", slot);
       if (staged) {
-        if (JSON.stringify(staged.value.input) !== JSON.stringify(input))
+        if (!sameStoredValue(staged.value.input, input))
           throw new ApplicationError(
             "This capture was already staged with different lines.",
             409,
@@ -330,11 +331,9 @@ export function createImportDraftService({
       }
       for (const row of rows) {
         const previous = record.value.rows.find((old) => old.id === row.id);
-        if (JSON.stringify(row) !== JSON.stringify(previous))
-          row.updated_at = now();
+        if (!sameStoredValue(row, previous)) row.updated_at = now();
       }
-      if (JSON.stringify(rows) === JSON.stringify(record.value.rows))
-        return view(owner, record);
+      if (sameStoredValue(rows, record.value.rows)) return view(owner, record);
       const draft = { ...record.value, rows, updated_at: now() };
       await store.commit(owner, [
         change("import-drafts", draftSlot(input), record, draft),

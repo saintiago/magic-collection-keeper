@@ -71,6 +71,16 @@ test("LIVE-15 account-saved fifty-line Import, atomic Add, permanent retries, ti
     ).toBe(true);
     expect(await liveApi(page, "/api/collection")).toEqual([]);
     expect((await stage(input)).draft.version).toBe(saved.draft.version);
+    const unchanged = await liveApi(page, "/api/import-draft", {
+      method: "PATCH",
+      body: JSON.stringify({
+        id: saved.draft.id,
+        kind: "capture",
+        version: saved.draft.version,
+        rows: saved.draft.rows,
+      }),
+    });
+    expect(unchanged.draft).toEqual(saved.draft);
     await expect(
       stage({ ...input, owner: "unverified-body-owner" }),
     ).rejects.toThrow();

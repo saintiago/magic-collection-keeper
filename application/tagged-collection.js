@@ -8,6 +8,7 @@ import {
 import { normalizeDeck, planDeck, deckRows } from "../domain/deck-import.js";
 import { isSystemTag } from "../domain/system-tags.js";
 import { cardTimestamps } from "../domain/card-timestamps.js";
+import { sameStoredValue } from "../domain/stored-value.js";
 
 export function createTaggedCollection({
   collection,
@@ -202,8 +203,7 @@ export function createTaggedCollection({
       ];
       const { created_at, updated_at, ...previousAssignment } =
         current?.value || {};
-      if (JSON.stringify(previousAssignment) === JSON.stringify(assignment))
-        return list(owner);
+      if (sameStoredValue(previousAssignment, assignment)) return list(owner);
       assignment.created_at = current ? created_at || null : now();
       assignment.updated_at = now();
       const before = referencedTags(current?.value),
