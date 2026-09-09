@@ -260,6 +260,11 @@ test("UC-CARD-WHEEL direct pickup fits full labels and translucent card at all v
       kind: "deck",
     });
     await page.goto("/#collection");
+    await expect(
+      page.locator("#tag-filter option").filter({
+        hasText: "A very long deck name with readable wrapped words",
+      }),
+    ).toHaveCount(1);
     for (const size of [
       { width: 1280, height: 720 },
       { width: 390, height: 844 },
@@ -274,12 +279,22 @@ test("UC-CARD-WHEEL direct pickup fits full labels and translucent card at all v
         ["bottom-right", size.width - 178, size.height - 248],
       ]) {
         // Place a real shared tile at the viewport edge; use native pointer pickup/release.
-        await page.locator("#grid .card").evaluate(
-          (el, { x, y }) => {
-            el.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:176px;z-index:20`;
-          },
-          { x, y },
-        );
+        await expect(async () => {
+          const ready = await page.locator("#grid .card").evaluate(
+            (el, { x, y }) => {
+              el.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:176px;z-index:20`;
+              const rect = el.getBoundingClientRect();
+              return (
+                rect.x === x &&
+                rect.y === y &&
+                rect.width === 176 &&
+                el.contains(document.elementFromPoint(x + 88, y + 122))
+              );
+            },
+            { x, y },
+          );
+          expect(ready).toBe(true);
+        }).toPass({ timeout: 5000 });
         await page.mouse.move(x + 88, y + 122);
         await page.mouse.down();
         await page.mouse.move(x + 100, y + 122);
