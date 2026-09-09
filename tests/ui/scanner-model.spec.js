@@ -53,6 +53,14 @@ test("UC-14 guide crop feeds real browser ONNX without manual capture", async ({
     { timeout: 45000 },
   );
   await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
+  expect(
+    await page.evaluate(
+      () =>
+        window.geometryWorkerEvents.filter((event) => event.type === "ready")
+          .length,
+    ),
+    "Scan entry preparation is reused by camera/photo startup",
+  ).toBe(1);
   await page.screenshot({ path: "test-results/scanner-desktop-synthetic.png" });
   await page.locator("#scan-back").click();
   const [metrics] = await page.evaluate(() => window.overlayMetrics);

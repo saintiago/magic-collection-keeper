@@ -43,7 +43,8 @@ export function createScanner({
       el("scan-status").textContent = text;
   };
   function prepareRecognition() {
-    void presence.prepare().catch(() => {});
+    const geometryReady = presence.prepare();
+    void geometryReady.catch(() => {});
     if (recognition?.kind !== "hybrid") return;
     const id = ++preparationAttempt;
     let label = el("scan-preparation");
@@ -56,7 +57,7 @@ export function createScanner({
     }
     label.textContent =
       "Preparing faster recognition… You can start the camera.";
-    recognition.prepare().then(
+    Promise.all([geometryReady, recognition.prepare()]).then(
       () => {
         if (dialog.open && id === preparationAttempt)
           label.textContent = "Scanner ready.";
@@ -89,11 +90,11 @@ export function createScanner({
         unavailable: "Sound unavailable · follow visual status",
       }[state] || "Sound unavailable · follow visual status";
   }
-  function stop() {
+  function stop({ preservePresence = false } = {}) {
     session++;
     requestController.abort();
     requestController = new AbortController();
-    presence.dispose();
+    if (!preservePresence) presence.dispose();
     presenceTask = null;
     checkedFrame = null;
     overlay?.clear();
@@ -324,7 +325,7 @@ export function createScanner({
           const task = presence.inspect(sample, {
             signal: AbortSignal.any([
               requestController.signal,
-              AbortSignal.timeout(12000),
+              AbortSignal.timeout(35000),
             ]),
           });
           presenceTask = task;
@@ -392,8 +393,8 @@ export function createScanner({
       );
   }
   async function start() {
+    stop({ preservePresence: true });
     prepareRecognition();
-    stop();
     update();
     const current = session;
     gate = createScanAdmission();
@@ -474,7 +475,7 @@ export function createScanner({
       el("photo").onchange = async (event) => {
         const file = event.target.files[0];
         if (!file) return;
-        stop();
+        stop({ preservePresence: true });
         update();
         const current = session;
         void audio.activate();
@@ -495,7 +496,7 @@ export function createScanner({
           const geometry = await presence.inspect(canvas, {
             signal: AbortSignal.any([
               requestController.signal,
-              AbortSignal.timeout(12000),
+              AbortSignal.timeout(35000),
             ]),
           });
           if (current !== session || !dialog.open) return;

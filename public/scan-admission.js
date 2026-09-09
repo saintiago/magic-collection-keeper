@@ -16,19 +16,23 @@ export function createScanAdmission({
   function matches(frame, capturedAt) {
     return (
       capturedAt >= stableSince &&
-      latestAt - capturedAt <= 2000 &&
+      latestAt - capturedAt <= 12000 &&
       visualDifference(latest, frame) <= 5
     );
   }
   return {
     track(frame, now) {
       latest = frame;
-      latestAt = now;
-      if (!candidate || visualDifference(candidate, frame) > 5) {
+      if (
+        !candidate ||
+        now - latestAt > 500 ||
+        visualDifference(candidate, frame) > 5
+      ) {
         candidate = frame;
         stableSince = now;
         emptySince = undefined;
       }
+      latestAt = now;
     },
     matches,
     validate(frame, capturedAt, presence) {
