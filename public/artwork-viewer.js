@@ -2,6 +2,7 @@ import { image, esc } from "./view.js";
 import { inspectorView } from "./artwork-inspector.js";
 import { createCardTagState } from "./card-tag-state.js";
 import { mountCardTags } from "./card-tag-view.js";
+import { mountCardTagWheel } from "./card-tag-wheel.js";
 import {
   artworkOpening,
   boundedArtwork,
@@ -46,7 +47,8 @@ export function createArtworkViewer({
     returningSource = null,
     stopReturn = null,
     unmountTags = null,
-    unmountPreviewTags = null;
+    unmountPreviewTags = null,
+    tagWheel = null;
 
   function tagState(item) {
     item.tagState ||= createCardTagState(item, {
@@ -73,7 +75,7 @@ export function createArtworkViewer({
       width: innerWidth,
       height: innerHeight,
     });
-    preview.innerHTML = `<div class="artwork-hover-reveal"><div class="artwork-hover-visual"><img src="${esc(image(found.item.card))}" alt="${esc(found.item.card.name)}"></div></div><aside class="artwork-preview-tags" aria-label="Card tags"></aside>`;
+    preview.innerHTML = `<div class="artwork-hover-reveal"><div class="artwork-hover-visual"><img src="${esc(image(found.item.card))}" alt="${esc(found.item.card.name)}" draggable="false"></div></div><aside class="artwork-preview-tags" aria-label="Card tags"></aside>`;
     preview.style.cssText = `width:${width}px;height:${height}px;left:${x}px;top:${y}px`;
     preview.style.setProperty(
       "--artwork-lift-x",
@@ -129,6 +131,8 @@ export function createArtworkViewer({
     if (!frame) frame = requestAnimationFrame(draw);
   }
   function finish() {
+    tagWheel?.destroy();
+    tagWheel = null;
     unmountTags?.();
     unmountTags = null;
     stopReturn?.();
@@ -407,6 +411,7 @@ export function createArtworkViewer({
           safeTop: parseFloat(safe.paddingTop),
           safeBottom: parseFloat(safe.paddingBottom),
         },
+        state.requestedZoom,
       );
       const atOpening =
         state.initialZoom === undefined ||
@@ -427,6 +432,17 @@ export function createArtworkViewer({
       reveal.style.top = opening.y - opening.gutterY + "px";
       reveal.style.width = opening.width + "px";
       reveal.style.height = opening.height + "px";
+      if (tagWheel) {
+        tagWheel.resize({
+          opening,
+          viewport: {
+            width: viewport?.width || innerWidth,
+            height: viewport?.height || innerHeight,
+          },
+        });
+        schedule();
+        return;
+      }
       const tagPanel = dialog.querySelector(".artwork-tags");
       const availableWidth = viewport?.width || innerWidth,
         availableHeight = viewport?.height || innerHeight;
@@ -551,7 +567,7 @@ export function createArtworkViewer({
     get isOpen() {
       return dialog.open;
     },
-    open(item, element) {
+    open(item, element, { inputType = "mouse" } = {}) {
       const card = item.card,
         src =
           previewSource?.element === element
@@ -579,7 +595,8 @@ export function createArtworkViewer({
         sourceBounds: bounds.toJSON(),
         baseWidth: bounds.width,
         baseHeight: bounds.height,
-        zoom: 3,
+        zoom: inputType === "touch" ? 2 : 3,
+        requestedZoom: inputType === "touch" ? 2 : 3,
         x: 0,
         y: 0,
       };
@@ -590,10 +607,17 @@ export function createArtworkViewer({
         location.href,
       );
       dialog.innerHTML = inspectorView(item, src);
-      unmountTags = mountCardTags(
-        dialog.querySelector(".artwork-tags"),
-        tagState(item),
-      );
+      dialog.dataset.input = inputType;
+      if (inputType === "touch")
+        tagWheel = mountCardTagWheel(
+          dialog.querySelector(".artwork-tags"),
+          tagState(item),
+        );
+      else
+        unmountTags = mountCardTags(
+          dialog.querySelector(".artwork-tags"),
+          tagState(item),
+        );
       const artwork = dialog.querySelector(".artwork-full-image");
       artwork.style.width = state.baseWidth + "px";
       artwork.style.height = state.baseHeight + "px";

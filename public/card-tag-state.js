@@ -114,6 +114,15 @@ export function createCardTagState(item, { available, recent, load, toggle }) {
     }
   }
   void prepare();
+  function set(id, selected) {
+    if (loading || loadError || !tags.some((tag) => tag.id === id)) return;
+    revisions.set(id, (revisions.get(id) || 0) + 1);
+    if (busy !== id && confirmed.has(id) === selected) desired.delete(id);
+    else desired.set(id, selected);
+    errors.delete(id);
+    publish();
+    void drain();
+  }
   return {
     subscribe(listener) {
       listeners.add(listener);
@@ -123,22 +132,21 @@ export function createCardTagState(item, { available, recent, load, toggle }) {
     get view() {
       return { tags, confirmed, desired, errors, busy, loading, loadError };
     },
-    reconcile(tagId) {
+    reconcile(tagId, availableTags = available()) {
+      loadGeneration++;
+      loading = false;
+      loadError = "";
       confirmed = assignedTagIds(item);
-      tags = relevantCardTags(item, available(), recent());
+      tags = relevantCardTags(item, availableTags, recent());
       for (const entry of item.row?.locations || [])
         quantities.set(entry.tag_id, entry.quantity);
       if (tagId) errors.delete(tagId);
       publish();
     },
     select(id) {
-      if (loading || loadError || !tags.some((tag) => tag.id === id)) return;
-      revisions.set(id, (revisions.get(id) || 0) + 1);
-      desired.set(id, !(desired.has(id) ? desired.get(id) : confirmed.has(id)));
-      errors.delete(id);
-      publish();
-      void drain();
+      set(id, !(desired.has(id) ? desired.get(id) : confirmed.has(id)));
     },
+    set,
     retry: prepare,
   };
 }

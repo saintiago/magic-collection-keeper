@@ -1,6 +1,7 @@
 // Concrete browser tag I/O. Owned and pending mutations use separate targeted,
 // idempotent ports; catalogue tags stage one durable review, never ownership.
 export function createCardTagActions({ api, save, tags }) {
+  const loads = new WeakMap();
   let key = null,
     generation = 0,
     refs = [],
@@ -29,12 +30,6 @@ export function createCardTagActions({ api, save, tags }) {
     item.draftId = draft.id;
     item.draftKind = draft.provider === "reviewed-capture" ? "capture" : "url";
     item.sourceId = draft.source_id;
-    return item;
-  }
-  function decorate(item) {
-    if (!["catalog", "reference"].includes(item.kind)) return item;
-    // Stored references locate a server review; cached row contents are never
-    // rendered or treated as evidence that the review is still pending.
     return item;
   }
   return {
@@ -76,11 +71,12 @@ export function createCardTagActions({ api, save, tags }) {
       key = null;
       refs = [];
     },
-    decorate,
     async load(item) {
       const turn = generation;
+      const loadTurn = (loads.get(item) || 0) + 1;
+      loads.set(item, loadTurn);
       const available = await api("/api/tags");
-      if (turn !== generation)
+      if (turn !== generation || loads.get(item) !== loadTurn)
         throw new DOMException("Account changed", "AbortError");
       const ref = refs.find((ref) => ref.printingId === item.card.id);
       if (ref && (!item.draftId || item.draftId === ref.draftId)) {
@@ -93,7 +89,7 @@ export function createCardTagActions({ api, save, tags }) {
           if (error.status !== 404) throw error;
           result = { draft: null };
         }
-        if (turn !== generation)
+        if (turn !== generation || loads.get(item) !== loadTurn)
           throw new DOMException("Account changed", "AbortError");
         const row = result.draft?.rows.find((row) => row.id === ref.rowId);
         if (row) pendingItem(item, result.draft, row);
@@ -118,6 +114,7 @@ export function createCardTagActions({ api, save, tags }) {
     async toggle(item, tag, selected, quantity = 1) {
       const turn = generation;
       if (["catalog", "reference"].includes(item.kind)) await this.load(item);
+      loads.set(item, (loads.get(item) || 0) + 1);
       let intent;
       if (item.kind === "owned")
         intent = {
@@ -204,6 +201,7 @@ export function createCardTagActions({ api, save, tags }) {
             "The tag could not be confirmed. Retry the same action.",
         );
       const { result } = outcome;
+      loads.set(item, (loads.get(item) || 0) + 1);
       if (intent.kind === "owned") {
         const row = result.find(
           (row) => String(row.id) === String(item.row.id),

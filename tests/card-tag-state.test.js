@@ -12,6 +12,18 @@ const location = {
   type: "location",
 };
 const role = { id: "role-b", label: "Commander", type: "classification" };
+
+test("DRAG-04 a frozen explicit Remove already satisfied by fresh state sends no inverse write", async () => {
+  const calls = [],
+    item = { row: { quantity: 9, tags: [] } };
+  const state = create(item, async (...args) => calls.push(args));
+  await tick();
+  state.set(location.id, false);
+  await tick();
+  assert.deepEqual(calls, []);
+  assert.equal(state.view.desired.size, 0);
+  assert.equal(item.row.quantity, 9);
+});
 function create(item, toggle, load = async () => [location, role]) {
   return createCardTagState(item, {
     available: () => [location, role],

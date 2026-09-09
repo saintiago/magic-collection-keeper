@@ -68,7 +68,7 @@ export function actionWheelLayout(tags, point, viewport) {
   const radius = Math.max(
     36,
     Math.min(
-      350,
+      viewport.maxRadius || 350,
       Math.max(292, (viewport.cardHeight || 240) * 1.04),
       (available - 36) / 2,
     ),
@@ -97,7 +97,7 @@ export function actionWheelLayout(tags, point, viewport) {
     count--
   ) {
     const choices = eligible.slice(0, count);
-    if (tags.length > count)
+    if (choices.length < tags.length)
       choices[Math.min(count - 1, choices.length)] = {
         id: "more",
         label: "More tags…",

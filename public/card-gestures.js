@@ -17,6 +17,8 @@ export function createCardGestures({
   viewer,
   onAction,
   onSettled,
+  prepare = async () => undefined,
+  onError = () => {},
   createWheelSurface = createWheelSectors,
 }) {
   let candidate = null,
@@ -27,9 +29,10 @@ export function createCardGestures({
     lastPoint = null,
     hoverTarget = null,
     hoverDirty = false,
-    suppress = null;
-  const finePointer = matchMedia("(hover: hover) and (pointer: fine)"),
-    reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+    suppress = null,
+    preparing = null,
+    openingGeneration = 0;
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const layer = document.createElement("div");
   layer.className = "card-action-layer";
   layer.hidden = true;
@@ -62,7 +65,10 @@ export function createCardGestures({
     hover = null;
   }
   function cancel({ focus = true } = {}) {
-    const held = Boolean(active || candidate);
+    const held = Boolean(active || candidate || preparing);
+    openingGeneration++;
+    preparing?.element.removeAttribute("aria-busy");
+    preparing = null;
     clearTimeout(timer);
     timer = 0;
     cancelAnimationFrame(frame);
@@ -83,7 +89,15 @@ export function createCardGestures({
   }
   function choices(item) {
     const assigned = assignedTagIds(item);
-    const ranked = relevantCardTags(item, tags(), recent()).map((tag) => ({
+    for (const [id, selected] of item.tagState?.view.desired || []) {
+      if (selected) assigned.add(id);
+      else assigned.delete(id);
+    }
+    const ranked = relevantCardTags(
+      item,
+      item.actionTags || tags(),
+      recent(),
+    ).map((tag) => ({
       ...tag,
       selected: !assigned.has(tag.id),
       label: (assigned.has(tag.id) ? "Remove " : "Add ") + tag.label,
@@ -110,6 +124,34 @@ export function createCardGestures({
     ];
   }
   function open(item, element, point, keyboard = false) {
+    if (preparing) return;
+    const turn = ++openingGeneration,
+      held = candidate;
+    if (held && !keyboard) held.dragStarted = true;
+    preparing = { turn, element };
+    element.setAttribute("aria-busy", "true");
+    void Promise.resolve(prepare(item))
+      .then((available) => {
+        if (turn !== openingGeneration || (!keyboard && candidate !== held))
+          return;
+        if (available) item.actionTags = available;
+        item.tagState?.reconcile(null, available);
+        openReady(item, element, point, keyboard);
+        if (!keyboard) candidate = held;
+      })
+      .catch((error) => {
+        if (turn !== openingGeneration) return;
+        cancel();
+        if (error.name !== "AbortError") onError(error);
+      })
+      .finally(() => {
+        if (preparing?.turn === turn) {
+          element.removeAttribute("aria-busy");
+          preparing = null;
+        }
+      });
+  }
+  function openReady(item, element, point, keyboard = false) {
     const selection = getSelection();
     if (
       candidate?.selectionWasEmpty &&
@@ -167,7 +209,10 @@ export function createCardGestures({
       );
     probes.remove();
     const layout = actionWheelLayout(
-      all,
+      [
+        ...all.filter((tag) => !tag.action),
+        { id: "more", label: "More tags…", more: true },
+      ],
       { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
       {
         width: innerWidth,
@@ -236,15 +281,6 @@ export function createCardGestures({
       element.classList.add("card-wheel-source");
       layer.append(anchor);
     }
-    const caption = document.createElement("span");
-    caption.className = "card-action-caption";
-    caption.textContent =
-      item.kind === "owned"
-        ? "1 copy"
-        : item.kind === "pending"
-          ? "Pending"
-          : "Review first";
-    layer.append(caption);
     layer.append(ghost);
     layout.targets.forEach((target, index) => {
       const button = document.createElement("button");
@@ -507,6 +543,7 @@ export function createCardGestures({
         );
         if (distance > 8) {
           if (candidate.type === "mouse") {
+            event.preventDefault();
             const c = candidate;
             open(c.item, c.element, { x: c.x, y: c.y });
             candidate = c;
@@ -525,12 +562,7 @@ export function createCardGestures({
         }
         return;
       }
-      if (
-        event.pointerType !== "mouse" ||
-        !finePointer.matches ||
-        viewer.isOpen ||
-        event.buttons
-      )
+      if (event.pointerType !== "mouse" || viewer.isOpen || event.buttons)
         return;
       // Cancel a departing dwell immediately, even if its deadline falls before
       // the next frame. Resolve geometry and update visuals in that frame.
@@ -587,6 +619,26 @@ export function createCardGestures({
         if (target || direct) choose(target || direct);
         else cancel();
       }
+      if (candidate?.dragStarted && !active) {
+        suppress = {
+          element: candidate.element,
+          until: performance.now() + 800,
+        };
+        cancel({ focus: false });
+      }
+      if (
+        candidate?.type === "touch" &&
+        !active &&
+        !suppress &&
+        !viewer.isOpen
+      ) {
+        const { item, element } = candidate;
+        event.preventDefault();
+        event.stopPropagation();
+        viewer.open(item, element, { inputType: "touch" });
+        suppress = { element, until: performance.now() + 800 };
+        clearHover();
+      }
       const held = Boolean(candidate);
       candidate?.element.classList.remove("card-pickup");
       candidate = null;
@@ -606,6 +658,9 @@ export function createCardGestures({
   document.addEventListener(
     "pointercancel",
     () => {
+      const element =
+        candidate?.element || active?.element || preparing?.element;
+      if (element) suppress = { element, until: performance.now() + 800 };
       clearHover();
       cancel({ focus: false });
     },
@@ -653,11 +708,11 @@ export function createCardGestures({
     (event) => {
       if (!active && (event.key === "Enter" || event.key === " "))
         suppress = null;
-      if (event.key === "Escape" && (active || candidate)) {
+      if (event.key === "Escape" && (active || candidate || preparing)) {
         event.preventDefault();
         event.stopImmediatePropagation();
         suppress = {
-          element: active?.element || candidate.element,
+          element: active?.element || candidate?.element || preparing.element,
           until: performance.now() + 800,
         };
         cancel();
@@ -721,7 +776,13 @@ export function createCardGestures({
       )
         return;
       clearHover();
-      if (!active && candidate) cancel({ focus: false });
+      if (!active && candidate) {
+        suppress = {
+          element: candidate.element,
+          until: performance.now() + 800,
+        };
+        cancel({ focus: false });
+      }
     },
     true,
   );

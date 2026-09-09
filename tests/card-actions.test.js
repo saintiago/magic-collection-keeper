@@ -10,6 +10,20 @@ import {
   wheelPickupSize,
 } from "../public/card-action-layout.js";
 
+test("CARD-15 a sole oversized wheel label is reachable through More tags", () => {
+  const layout = actionWheelLayout(
+    [{ id: "long", label: "Long tag" }],
+    { x: 160, y: 350 },
+    {
+      width: 320,
+      height: 740,
+      measure: (label) => (label === "More tags…" ? 44 : 180),
+    },
+  );
+  assert.equal(layout.targets.length, 1);
+  assert.equal(layout.targets[0].tag.more, true);
+});
+
 test("UC-CARD-ART source center stays in place unless a viewport gutter forces a shift", () => {
   const viewport = { width: 3799, height: 1905 };
   const middle = artworkOpening(

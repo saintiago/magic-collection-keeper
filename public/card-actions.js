@@ -37,11 +37,6 @@ export function createCardActions({
     tags: () => getState().filterTags,
   });
   function cardActionSource(target) {
-    const found = rawCardActionSource(target);
-    if (found) tagActions.decorate(found.item);
-    return found;
-  }
-  function rawCardActionSource(target) {
     const { visibleCards, mode, filterTags, activeTagId } = getState();
     if (target.closest("#grid")) {
       const card = target.closest(".card"),
@@ -80,6 +75,10 @@ export function createCardActions({
   async function handleCardAction(item, tag, element) {
     const { mode } = getState();
     if (typeof tag.selected === "boolean") {
+      if (item.tagState) {
+        item.tagState.set(tag.id, tag.selected);
+        return;
+      }
       try {
         await tagActions.toggle(item, tag, tag.selected, tag.quantity || 1);
       } catch (error) {
@@ -172,6 +171,8 @@ export function createCardActions({
     tags: () => getState().filterTags,
     recent: () => home.recentTags,
     viewer: artworkViewer,
+    prepare: (item) => tagActions.load(item),
+    onError: (error) => notify(error.message, true),
     onAction: handleCardAction,
     onSettled,
   });

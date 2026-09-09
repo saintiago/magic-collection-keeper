@@ -829,6 +829,52 @@
   padding: 4px;
   pointer-events: auto;
 }
+.artwork-touch-wheel,
+.card-tag-ring {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+}
+.card-wheel-tag {
+  touch-action: manipulation;
+}
+.card-wheel-tag[aria-pressed="true"] {
+  color: #fff7c2;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.card-wheel-tag[aria-busy="true"] {
+  text-decoration: underline dotted;
+}
+.card-wheel-tag.has-error {
+  color: #ffd5bb;
+}
+.card-wheel-status,
+.card-wheel-overflow {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: max(32px, env(safe-area-inset-bottom));
+  max-height: 35%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12px;
+  border-radius: 16px;
+  background: #193a2ba8;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  pointer-events: auto;
+  font-size: 13px;
+}
+.card-wheel-overflow > button {
+  margin-bottom: 12px;
+}
+.card-wheel-overflow[hidden],
+.card-tag-ring[hidden],
+.card-wheel-status[hidden] {
+  display: none;
+}
 .artwork-preview-tags {
   left: max(0px, calc(100% - 220px));
   bottom: 8px;
