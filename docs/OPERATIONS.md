@@ -45,6 +45,8 @@ Use a new CodeKey for infrastructure deployments; do not accidentally reapply an
 
 The private GitHub repository runs `.github/workflows/deploy.yml`. Pull requests run unit/UI/build checks. Pushes to `main` run the same checks, obtain temporary AWS credentials through OIDC, update the Lambda bundle, sync the site, invalidate CloudFront, then run the live protected-collection test. The GitHub role is scoped to this repo's `main` OIDC subject and the exact app resources; the workflow has no static AWS key.
 
+Browser setup moves the disposable runner's Google Chrome apt source aside before installing Playwright's pinned Chromium/WebKit and their Ubuntu dependencies. This avoids an unrelated Google package-index checksum mismatch observed on September 9; dependency signatures, checksum validation and all browser tests remain enabled. This changes only the CI runner, with no application or AWS permission change.
+
 Repository variables are public resource configuration: `AWS_ROLE_ARN`, `WEBSITE_BUCKET`, `DISTRIBUTION_ID`, `API_URL`, `COGNITO_CLIENT_ID`, `WEBSITE_URL`. Eight encrypted GitHub secrets contain only the four dedicated test identities. They are not the owner's credentials. `scripts/configure-deployment.mjs` creates/updates the scoped deployment role and variables from completed stack outputs. It is an administrator bootstrap script, not invoked by CI and not a general cross-account provisioner.
 
 New GitHub repositories use an immutable OIDC subject containing owner/repository numeric IDs. The bootstrap reads the actual `sub_claim_prefix` from GitHub and restricts it to `refs/heads/main`; it does not assume the older name-only format. See [GitHub's OIDC reference](https://docs.github.com/en/actions/reference/security/oidc).
@@ -172,7 +174,6 @@ The private photo/video evidence stays outside git, deploy assets and the source
 Camera API guidance checked September 9, 2026: [W3C Image Capture](https://www.w3.org/TR/image-capture/), [track constraints](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrack/applyConstraints), and [WebKit Safari 18.4](https://webkit.org/blog/16574/webkit-features-in-safari-18-4/). Safari 18.4 added Image Capture; support must still be detected per browser/track. `takePhoto` may use different still-photo resolution and disrupt the ongoing stream; the continuous scanner retains canvas capture from actual video pixels. `grabFrame` derives dimensions from the track and cannot guarantee extra detail. Rear-facing preference does not identify a particular physical lens, and zoom can be digital; neither a lens label nor forced zoom establishes better close focus. No torch is forced because it can worsen reflections.
 
 The camera quality controls and recorded-video test are not live iPhone capability, autofocus, exposure, audio or thermal verification. Inspect the allowlisted `keeper-camera-measurement` event on a physical session when available. Never log stream images, camera labels, deviceId or groupId.
-
 
 ## Card-action release checks
 

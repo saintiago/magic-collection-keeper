@@ -1,11 +1,13 @@
 import { image, esc } from "./view.js";
 import { cardHoverInfo } from "./card-tile-view.js";
-import { inspectorDetails, inspectorControls } from "./artwork-inspector.js";
-import { boundedArtwork } from "./card-action-layout.js";
+import { inspectorDetails, inspectorView } from "./artwork-inspector.js";
+import { boundedArtwork, enlargedArtwork } from "./card-action-layout.js";
+import { upgradeArtwork } from "./artwork-images.js";
 
 export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
   const dialog = document.createElement("dialog");
   dialog.className = "artwork-viewer";
+  dialog.setAttribute("aria-label", "Card artwork and information");
   document.body.append(dialog);
   const preview = document.createElement("div");
   preview.className = "artwork-hover";
@@ -27,6 +29,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
 
   function hidePreview() {
     if (preview.hidden) return;
+    previewSource?.element.classList.remove("artwork-source-lifted");
     preview.hidden = true;
     previewSource = null;
     previewVisual = null;
@@ -34,31 +37,25 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
   }
   function hover(found, bounds, transform) {
     if (dialog.open || !image(found.item.card)) return;
-    const width = Math.min(
-        bounds.width * 2,
-        innerWidth - 24,
-        ((innerHeight - 24) * 488) / 680,
-      ),
-      height = (width * 680) / 488,
-      x = Math.max(
-        12,
-        Math.min(
-          innerWidth - width - 12,
-          bounds.x + (bounds.width - width) / 2,
-        ),
-      ),
-      y = Math.max(
-        12,
-        Math.min(
-          innerHeight - height - 12,
-          bounds.y + (bounds.height - height) / 2,
-        ),
-      );
+    const { width, height, x, y } = enlargedArtwork(bounds, 2, {
+      width: innerWidth,
+      height: innerHeight,
+    });
     preview.innerHTML = `<div class="artwork-hover-reveal"><div class="artwork-hover-visual"><img src="${esc(image(found.item.card))}" alt="${esc(found.item.card.name)}">${cardHoverInfo(found.item.row || { card: found.item.card }, null, { pending: found.item.kind === "pending" })}</div></div>`;
     preview.style.cssText = `width:${width}px;height:${height}px;left:${x}px;top:${y}px`;
+    preview.style.setProperty(
+      "--artwork-lift-x",
+      bounds.x + bounds.width / 2 - x - width / 2 + "px",
+    );
+    preview.style.setProperty(
+      "--artwork-lift-y",
+      bounds.y + bounds.height / 2 - y - height / 2 + "px",
+    );
     preview.hidden = false;
+    found.element.classList.add("artwork-source-lifted");
     previewSource = found;
     previewVisual = preview.querySelector(".artwork-hover-visual");
+    upgradeArtwork(previewVisual.querySelector("img"), found.item.card);
     setHoverTilt(transform);
     return { x, y, width, height };
   }
@@ -68,8 +65,8 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
   function draw() {
     frame = 0;
     if (!dialog.open || !state) return;
-    const area = dialog.querySelector(".artwork-viewport");
-    rect = area.getBoundingClientRect();
+    if (!rect)
+      rect = dialog.querySelector(".artwork-viewport").getBoundingClientRect();
     state = {
       ...state,
       ...boundedArtwork({ ...state, width: rect.width, height: rect.height }),
@@ -86,8 +83,10 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     frame = 0;
     points.clear();
     gesture = null;
+    origin?.classList.remove("artwork-source-lifted");
     if (dialog.open) dialog.close();
     dialog.replaceChildren();
+    rect = null;
     selection = null;
     historyKey = null;
     const focus = origin?.isConnected
@@ -192,7 +191,8 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     { passive: false },
   );
   dialog.addEventListener("pointerdown", (event) => {
-    if (!event.target.closest(".artwork-stage")) return;
+    if (!event.target.closest(".artwork-stage") && event.target !== dialog)
+      return;
     event.preventDefault();
     points.set(event.pointerId, { x: event.clientX, y: event.clientY });
     try {
@@ -207,8 +207,10 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       y: state.y,
       zoom: state.zoom,
       outside:
+        event.target === dialog ||
         event.target.classList.contains("artwork-stage") ||
         event.target.classList.contains("artwork-viewport") ||
+        event.target.classList.contains("artwork-open-orientation") ||
         event.target.classList.contains("artwork-open-reveal"),
       distance:
         all.length === 2
@@ -296,10 +298,21 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     },
     true,
   );
-  window.addEventListener("resize", () => {
+  function resize() {
     hidePreview();
-    if (dialog.open) schedule();
-  });
+    rect = null;
+    if (dialog.open) {
+      const viewport = window.visualViewport;
+      dialog.style.width = (viewport?.width || innerWidth) + "px";
+      dialog.style.height = (viewport?.height || innerHeight) + "px";
+      dialog.style.left = (viewport?.offsetLeft || 0) + "px";
+      dialog.style.top = (viewport?.offsetTop || 0) + "px";
+      schedule();
+    }
+  }
+  window.addEventListener("resize", resize);
+  window.visualViewport?.addEventListener("resize", resize);
+  window.visualViewport?.addEventListener("scroll", resize);
   window.addEventListener("pagehide", () => {
     hidePreview();
     afterClose = null;
@@ -322,16 +335,28 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     },
     open(item, element) {
       const card = item.card,
-        src = image(card);
+        src =
+          previewSource?.element === element
+            ? previewVisual?.querySelector("img")?.src || image(card)
+            : image(card);
       if (dialog.open) return;
+      const bounds = element.getBoundingClientRect();
+      const visual =
+        previewSource?.element === element && !preview.hidden
+          ? preview.firstElementChild.getBoundingClientRect()
+          : bounds;
+      const tilt =
+        previewVisual?.style.transform ||
+        element.querySelector(".card-image")?.style.transform ||
+        "none";
       hidePreview();
       selection = item;
       origin = element;
+      origin.classList.add("artwork-source-lifted");
       originKey = element.closest("[data-card-key]")?.dataset.cardKey || null;
-      const bounds = element.getBoundingClientRect();
       state = {
-        baseWidth: Math.max(80, bounds.width),
-        baseHeight: (Math.max(80, bounds.width) * 680) / 488,
+        baseWidth: bounds.width,
+        baseHeight: bounds.height,
         zoom: 3,
         x: 0,
         y: 0,
@@ -342,9 +367,37 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
         "",
         location.href,
       );
-      dialog.innerHTML = `<header><h2>${esc(card.name)}</h2><button data-artwork="close" aria-label="Close artwork">×</button></header><div class="artwork-inspector"><aside class="artwork-details" aria-label="Card information">${inspectorDetails(item)}</aside><div class="artwork-stage"><div class="artwork-viewport"><div class="artwork-open-reveal">${src ? `<img class="artwork-full-image" src="${esc(src)}" alt="${esc(card.name)}" draggable="false" style="width:${state.baseWidth}px;height:${state.baseHeight}px">` : `<div class="artwork-full-image artwork-placeholder" style="width:${state.baseWidth}px;height:${state.baseHeight}px">Artwork unavailable</div>`}</div></div></div><aside class="artwork-controls" aria-label="Card controls">${inspectorControls(item)}</aside></div><footer><button data-artwork="out" aria-label="Zoom out">−</button><output aria-label="Artwork zoom">300%</output><button data-artwork="in" aria-label="Zoom in">+</button><button data-artwork="reset">Reset</button></footer>`;
+      dialog.innerHTML = inspectorView(item, src);
+      const artwork = dialog.querySelector(".artwork-full-image");
+      artwork.style.width = state.baseWidth + "px";
+      artwork.style.height = state.baseHeight + "px";
+      const viewport = window.visualViewport;
+      const reveal = dialog.querySelector(".artwork-open-reveal");
+      dialog.style.setProperty("--artwork-start-tilt", tilt);
+      reveal.style.setProperty(
+        "--artwork-start-x",
+        visual.x +
+          visual.width / 2 -
+          (viewport?.offsetLeft || 0) -
+          (viewport?.width || innerWidth) / 2 +
+          "px",
+      );
+      reveal.style.setProperty(
+        "--artwork-start-y",
+        visual.y +
+          visual.height / 2 -
+          (viewport?.offsetTop || 0) -
+          (viewport?.height || innerHeight) / 2 +
+          "px",
+      );
+      reveal.style.setProperty(
+        "--artwork-start-scale",
+        String(visual.width / (state.baseWidth * 3)),
+      );
       dialog.showModal();
-      draw();
+      resize();
+      if (src)
+        upgradeArtwork(dialog.querySelector(".artwork-full-image"), card);
       dialog.querySelector('[data-artwork="close"]').focus();
     },
   };

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <title>Card motion · local prototype</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/home.css" />
+    <link rel="stylesheet" href="/card-actions.css" />
+    <link rel="stylesheet" href="/prototype.css" />
+  </head>
+  <body>
+    <header class="prototype-header">
+      <strong>Card motion</strong><span>LOCAL PROTOTYPE · SAMPLE CARDS</span>
+    </header>
+    <main class="prototype-main">
+      <div class="prototype-tools">
+        <label
+          >Surface<select id="surface">
+            <option value="deck">Deck</option>
+            <option value="owned">Owned collection</option>
+            <option value="catalog">Catalogue</option>
+            <option value="home">Home</option>
+          </select></label
+        ><label
+          >Cards<select id="density">
+            <option>12</option>
+            <option>1000</option>
+          </select></label
+        >
+        <p>Hover · tap · drag</p>
+        <label
+          >Surface effect<select id="renderer">
+            <option value="svg">SVG glass</option>
+            <option value="webgl">WebGL lighting</option>
+          </select></label
+        >
+      </div>
+      <p class="prototype-note">
+        2× hover after 200ms · 3× tap · information left, actions right
+      </p>
+      <div id="home-page" hidden></div>
+      <div id="grid" class="card-grid"></div>
+      <p id="prototype-status" role="status">
+        Changes stay in this sample session.
+      </p>
+      <p id="renderer-status" class="prototype-note" role="status">SVG glass</p>
+    </main>
+    <script type="module" src="/prototype.js"></script>
+  </body>
+</html>

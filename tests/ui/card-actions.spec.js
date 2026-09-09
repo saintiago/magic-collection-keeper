@@ -256,8 +256,21 @@ test("UC-CARD-TILES owned deck tiles are image-only; visible 200% preview tilts 
     const details = await page.locator(".artwork-details").boundingBox(),
       stage = await page.locator(".artwork-stage").boundingBox(),
       controls = await page.locator(".artwork-controls").boundingBox();
-    expect(details.x + details.width).toBeLessThanOrEqual(stage.x + 1);
-    expect(controls.x).toBeGreaterThanOrEqual(stage.x + stage.width - 1);
+    expect(details.x + details.width).toBeLessThan(stage.width / 2);
+    expect(controls.x).toBeGreaterThan(stage.width / 2);
+    expect(stage).toMatchObject({ x: 0, y: 0, width: 1280, height: 720 });
+    const enlarged = await page.locator(".artwork-full-image").boundingBox();
+    expect(enlarged.width).toBeCloseTo(
+      (await button.boundingBox()).width * 3,
+      1,
+    );
+    expect(enlarged.height).toBeCloseTo(
+      (await button.boundingBox()).height * 3,
+      1,
+    );
+    await expect(
+      page.locator(".artwork-viewer header,.artwork-viewer footer"),
+    ).toHaveCount(0);
     await page.screenshot({
       path: test.info().outputPath("owned-inspector.png"),
     });
@@ -395,7 +408,11 @@ test("UC-CARD-WHEEL direct pickup fits full labels and translucent card at all v
                 y: r.y,
                 right: r.right,
                 bottom: r.bottom,
-                clipped: el.scrollHeight > el.clientHeight + 1,
+                clipped:
+                  (
+                    el.querySelector(".card-action-label") || el
+                  ).getBoundingClientRect().bottom >
+                  r.bottom + 1,
                 text: el.textContent,
               };
             }),
@@ -700,8 +717,8 @@ test("UC-CARD-ACTIONS keyboard overflow is bounded, searchable and promotes the 
     );
     await page.locator("#grid .card-open").press("Shift+F10");
     await expect(
-      page.locator('.card-action-target[data-target="2"]'),
-    ).toHaveText("Bulk 24");
+      page.locator('.card-action-target[data-target="0"]'),
+    ).toHaveAccessibleName("Bulk 24");
     await page.keyboard.press("Escape");
     await expect(page.locator("#grid .card-open")).toBeFocused();
     expect((await f.tagged.list("test"))[0].quantity).toBe(3);

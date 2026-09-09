@@ -82,7 +82,11 @@ export async function exerciseCardActions(
             bottom: r.bottom,
             width: innerWidth,
             height: innerHeight,
-            clipped: el.scrollHeight > el.clientHeight + 1,
+            clipped:
+              (
+                el.querySelector(".card-action-label") || el
+              ).getBoundingClientRect().bottom >
+              r.bottom + 1,
           };
         }),
       );

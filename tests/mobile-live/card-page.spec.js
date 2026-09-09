@@ -113,6 +113,7 @@ test("LIVE-12 direct card pages show immediately, reuse details, preserve Back/s
   await expect(page.locator("#grid .card")).toHaveCount(count);
   await page.locator("#grid .card-open").first().tap();
   await page.getByRole("button", { name: "Card details", exact: true }).tap();
+  await expect(page).toHaveURL(/#card=/);
   const url = page.url();
   await page.reload();
   await expect(page.locator("#inventory-form")).toBeVisible({ timeout: 30000 });

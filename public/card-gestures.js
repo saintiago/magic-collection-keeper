@@ -6,6 +6,7 @@ import {
 } from "./card-action-layout.js";
 import { pointerTilt, approachTilt, tiltTransform } from "./card-tilt.js";
 import { image } from "./view.js";
+import { createWheelSectors, wheelLabel } from "./card-wheel-view.js";
 
 export function createCardGestures({
   resolve,
@@ -14,6 +15,7 @@ export function createCardGestures({
   viewer,
   onAction,
   onSettled,
+  createWheelSurface = createWheelSectors,
 }) {
   let candidate = null,
     active = null,
@@ -64,6 +66,7 @@ export function createCardGestures({
     cancelAnimationFrame(frame);
     frame = 0;
     const origin = active?.element;
+    active?.surface.destroy?.();
     candidate?.element.classList.remove("card-pickup");
     active?.element.classList.remove("card-pickup");
     active = null;
@@ -82,6 +85,7 @@ export function createCardGestures({
       ...(item.row?.locations || []).map((a) => a.tag_id),
     ]);
     return [
+      ...ranked,
       {
         id: "details",
         label: item.kind === "pending" ? "Review line" : "Card details",
@@ -95,7 +99,6 @@ export function createCardGestures({
             : "Edit tags",
         action: "edit",
       },
-      ...ranked,
     ];
   }
   function open(item, element, point, keyboard = false) {
@@ -112,7 +115,7 @@ export function createCardGestures({
     cancel({ focus: false });
     clearHover();
     const all = choices(item),
-      width = actionTargetWidth(innerWidth),
+      width = actionTargetWidth(Math.min(innerWidth, innerHeight)),
       probes = document.createElement("div"),
       heights = new Map();
     // Batch writes before reads: one layout flush for all bounded wrapped labels.
@@ -123,13 +126,14 @@ export function createCardGestures({
       const probe = document.createElement("button");
       probe.className = "card-action-target";
       probe.style.cssText = `position:fixed;visibility:hidden;transform:none;height:auto;left:0;top:0;width:${width}px`;
-      probe.textContent = label;
+      probe.dataset.label = label;
+      wheelLabel(probe, { label });
       probes.append(probe);
     }
     document.body.append(probes);
     for (const probe of probes.children)
       heights.set(
-        probe.textContent,
+        probe.dataset.label,
         Math.ceil(probe.getBoundingClientRect().height),
       );
     probes.remove();
@@ -151,7 +155,7 @@ export function createCardGestures({
       keyboard,
       selected: null,
       ghostWidth: bounds.width,
-      ghostHeight: (bounds.width * 680) / 488,
+      ghostHeight: bounds.height,
       grabX: Math.max(0, Math.min(bounds.width, point.x - bounds.x)),
       grabY: Math.max(0, Math.min(bounds.height, point.y - bounds.y)),
     };
@@ -165,9 +169,19 @@ export function createCardGestures({
     layer.style.setProperty("--wheel-radius", layout.radius + "px");
     layer.style.setProperty("--wheel-width", (layout.width || 100) + "px");
     layer.style.setProperty("--wheel-height", (layout.height || 100) + "px");
-    const ring = document.createElement("div");
-    ring.className = "card-action-rings";
-    layer.append(ring);
+    const wheel = createWheelSurface(layout, choose);
+    layer.append(wheel.svg);
+    active.sectors = wheel.sectors;
+    active.surface = wheel;
+    const sourceImage = image(item.card);
+    if (sourceImage) {
+      const anchor = document.createElement("img");
+      anchor.className = "card-action-origin";
+      anchor.src = sourceImage;
+      anchor.alt = "";
+      anchor.style.cssText = `left:${bounds.x}px;top:${bounds.y}px;width:${bounds.width}px;height:${bounds.height}px`;
+      layer.append(anchor);
+    }
     const caption = document.createElement("span");
     caption.className = "card-action-caption";
     caption.textContent =
@@ -184,13 +198,18 @@ export function createCardGestures({
       button.dataset.target = String(index);
       button.dataset.tagId = target.tag.id;
       button.setAttribute("role", "menuitem");
-      button.textContent = target.tag.label;
+      wheelLabel(button, target.tag);
       button.title = target.tag.label;
       button.style.left = target.x + "px";
       button.style.top = target.y + "px";
       button.style.width = target.width + "px";
       button.style.height = target.height + "px";
       button.onclick = () => choose(target.tag);
+      button.onfocus = () => emphasize(index);
+      button.onblur = () => emphasize(-1);
+      wheel.sectors[index].group.onpointerenter = () => {
+        if (active?.keyboard) emphasize(index);
+      };
       layer.append(button);
     });
     const close = document.createElement("button");
@@ -214,6 +233,10 @@ export function createCardGestures({
       schedule();
     }
   }
+  function emphasize(index) {
+    if (!active) return;
+    active.surface.paint(active.sectors.map((_, i) => (i === index ? 1 : 0)));
+  }
   function choose(tag) {
     if (!active) return;
     const { item, element, all } = active;
@@ -222,12 +245,7 @@ export function createCardGestures({
       return;
     }
     cancel();
-    if (tag.more)
-      return openMore(
-        item,
-        element,
-        all.filter((tag) => !tag.action),
-      );
+    if (tag.more) return openMore(item, element, all);
     onAction(item, tag, element);
   }
   function openMore(item, element, all) {
@@ -244,8 +262,12 @@ export function createCardGestures({
     close.textContent = "Cancel";
     let offset = 0;
     const draw = () => {
-      const filtered = all.filter((tag) =>
-        tag.label.toLocaleLowerCase().includes(input.value.toLocaleLowerCase()),
+      const filtered = all.filter(
+        (tag) =>
+          !tag.action &&
+          tag.label
+            .toLocaleLowerCase()
+            .includes(input.value.toLocaleLowerCase()),
       );
       list.replaceChildren();
       for (const tag of filtered.slice(offset, offset + 20)) {
@@ -268,7 +290,19 @@ export function createCardGestures({
       draw();
     };
     close.onclick = () => more.close();
-    more.append(title, input, list, next, close);
+    const actions = document.createElement("nav");
+    actions.className = "card-more-actions";
+    actions.setAttribute("aria-label", "Other card actions");
+    for (const tag of all.filter((tag) => tag.action)) {
+      const button = document.createElement("button");
+      button.textContent = tag.label;
+      button.onclick = () => {
+        more.close();
+        if (element.isConnected) onAction(item, tag, element);
+      };
+      actions.append(button);
+    }
+    more.append(title, actions, input, list, next, close);
     draw();
     more.showModal();
     input.focus();
@@ -297,14 +331,14 @@ export function createCardGestures({
     const target = actionWheelHit(active.layout, point);
     active.selected = target?.tag || null;
     ghost.style.opacity = target ? "0.16" : "0.32";
-    active.buttons.forEach((button, index) => {
+    const strengths = active.buttons.map((button, index) => {
       const item = active.layout.targets[index],
         distance = Math.hypot(point.x - item.x, point.y - item.y),
-        strength = Math.max(0, 1 - distance / 95);
-      button.style.transform = `translate(-50%,-50%) scale(${1 + strength * 0.04})`;
-      button.style.opacity = String(0.9 + strength * 0.1);
+        strength = Math.max(0, 1 - distance / (active.layout.radius * 0.7));
       button.classList.toggle("selected", target === item);
+      return target === item ? Math.max(0.65, strength) : strength * 0.55;
     });
+    active.surface.paint(strengths, point);
   }
   function schedule() {
     if (!frame) frame = requestAnimationFrame(draw);
@@ -536,8 +570,8 @@ export function createCardGestures({
       if (!found || viewer.isOpen) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      clearHover();
       viewer.open(found.item, found.element);
+      clearHover();
     },
     true,
   );

@@ -29,7 +29,8 @@ jobs:
           pip install -r recognition/requirements-visual.txt
           python recognition/scripts/prepare.py --visual-only
       - run: npm run build
-      - run: npx playwright install --with-deps chromium webkit
+      - name: Install verified Playwright browsers and dependencies
+        run: bash scripts/install-ci-browsers.sh
       - run: npm run test:ui
       - name: Verify WebKit touch, imports and actual recognition models
         run: npx playwright test tests/ui/discovery.spec.js tests/ui/home.spec.js tests/ui/hybrid-search.spec.js tests/ui/card-page.spec.js tests/ui/scan-wheel-photo.spec.js tests/ui/backend-scanner.spec.js tests/ui/scanner-model.spec.js tests/ui/app.spec.js tests/ui/phone-review.spec.js tests/ui/one-card.spec.js tests/ui/card-actions.spec.js --browser=webkit --workers=1
@@ -97,7 +98,8 @@ jobs:
           aws s3 cp build/site/index.html "s3://$BUCKET/index.html" --cache-control 'no-cache,no-store,must-revalidate' --content-type text/html --no-progress
           INVALIDATION=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths '/*' --query Invalidation.Id --output text)
           aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION" --id "$INVALIDATION"
-      - run: npx playwright install --with-deps chromium webkit
+      - name: Install verified Playwright browsers and dependencies
+        run: bash scripts/install-ci-browsers.sh
       - name: Verify protected deployed app
         env:
           RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
