@@ -2,6 +2,7 @@ import {
   actionWheelLayout,
   actionWheelHit,
   rankActionTags,
+  actionTargetWidth,
 } from "./card-action-layout.js";
 import { pointerTilt, approachTilt, tiltTransform } from "./card-tilt.js";
 import { image } from "./view.js";
@@ -20,7 +21,11 @@ export function createCardGestures({
     timer = 0,
     frame = 0,
     lastPoint = null,
+    hoverTarget = null,
+    hoverDirty = false,
     suppress = null;
+  const finePointer = matchMedia("(hover: hover) and (pointer: fine)"),
+    reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const layer = document.createElement("div");
   layer.className = "card-action-layer";
   layer.hidden = true;
@@ -39,6 +44,8 @@ export function createCardGestures({
       ? null
       : viewer.hoverSource(target) || resolve(target);
   function clearHover() {
+    hoverTarget = null;
+    hoverDirty = false;
     if (!active) {
       cancelAnimationFrame(frame);
       frame = 0;
@@ -101,30 +108,41 @@ export function createCardGestures({
         ?.contains(selection.anchorNode)
     )
       selection.removeAllRanges();
+    const bounds = element.getBoundingClientRect();
     cancel({ focus: false });
     clearHover();
-    const bounds = element.getBoundingClientRect();
-    const probe = document.createElement("button");
-    probe.className = "card-action-target";
-    probe.style.cssText =
-      "position:fixed;visibility:hidden;transform:none;height:auto;left:0;top:0";
-    document.body.append(probe);
     const all = choices(item),
-      layout = actionWheelLayout(
-        all,
-        { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
-        {
-          width: innerWidth,
-          height: innerHeight,
-          cardHeight: bounds.height,
-          measure(label, width) {
-            probe.style.width = width + "px";
-            probe.textContent = label;
-            return Math.ceil(probe.getBoundingClientRect().height);
-          },
-        },
+      width = actionTargetWidth(innerWidth),
+      probes = document.createElement("div"),
+      heights = new Map();
+    // Batch writes before reads: one layout flush for all bounded wrapped labels.
+    for (const label of new Set([
+      ...all.slice(0, 10).map((tag) => tag.label),
+      "More tags…",
+    ])) {
+      const probe = document.createElement("button");
+      probe.className = "card-action-target";
+      probe.style.cssText = `position:fixed;visibility:hidden;transform:none;height:auto;left:0;top:0;width:${width}px`;
+      probe.textContent = label;
+      probes.append(probe);
+    }
+    document.body.append(probes);
+    for (const probe of probes.children)
+      heights.set(
+        probe.textContent,
+        Math.ceil(probe.getBoundingClientRect().height),
       );
-    probe.remove();
+    probes.remove();
+    const layout = actionWheelLayout(
+      all,
+      { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
+      {
+        width: innerWidth,
+        height: innerHeight,
+        cardHeight: bounds.height,
+        measure: (label) => heights.get(label) || 44,
+      },
+    );
     active = {
       item,
       element,
@@ -182,8 +200,10 @@ export function createCardGestures({
     close.setAttribute("role", "menuitem");
     close.onclick = () => cancel();
     layer.append(close);
+    active.buttons = [...layer.querySelectorAll("[data-target]")];
     if (keyboard) layer.querySelector("button").focus();
     else {
+      element.classList.add("card-pickup");
       document.body.classList.add("card-dragging");
       const src = image(item.card);
       if (src) {
@@ -255,12 +275,8 @@ export function createCardGestures({
   }
   function draw(time) {
     frame = 0;
-    if (
-      !active &&
-      hover?.image &&
-      lastPoint &&
-      !matchMedia("(prefers-reduced-motion: reduce)").matches
-    ) {
+    if (!active && hoverDirty) updateHover();
+    if (!active && hover?.image && lastPoint && !reducedMotion.matches) {
       const target = pointerTilt(hover.bounds, lastPoint);
       const next = approachTilt(
         hover.tilt,
@@ -281,7 +297,7 @@ export function createCardGestures({
     const target = actionWheelHit(active.layout, point);
     active.selected = target?.tag || null;
     ghost.style.opacity = target ? "0.16" : "0.32";
-    layer.querySelectorAll("[data-target]").forEach((button, index) => {
+    active.buttons.forEach((button, index) => {
       const item = active.layout.targets[index],
         distance = Math.hypot(point.x - item.x, point.y - item.y),
         strength = Math.max(0, 1 - distance / 95);
@@ -292,6 +308,38 @@ export function createCardGestures({
   }
   function schedule() {
     if (!frame) frame = requestAnimationFrame(draw);
+  }
+  function updateHover() {
+    const target = hoverTarget;
+    hoverDirty = false;
+    if (!target?.isConnected) return clearHover();
+    const found =
+      viewer.hoverSource(target) ||
+      resolve(
+        target.closest("a[data-tag-id]")?.closest(".card-tile") || target,
+      );
+    if (!found) return clearHover();
+    if (hover?.element === found.element) return;
+    // Read the stable input plane before changing either visual's styles.
+    const bounds = found.element.getBoundingClientRect();
+    clearHover();
+    hoverTarget = target;
+    const img = found.element.matches("img")
+      ? found.element
+      : found.element.querySelector(".card-image") ||
+        found.element.querySelector("img");
+    hover = { ...found, image: img, bounds, tilt: { x: 0, y: 0 }, time: 0 };
+    found.element.closest(".card-tile")?.classList.add("card-hovered");
+    timer = setTimeout(() => {
+      if (!hover) return;
+      const bounds = viewer.hover(
+        hover,
+        hover.bounds,
+        tiltTransform(hover.tilt),
+      );
+      if (bounds) hover.bounds = bounds;
+      schedule();
+    }, 200);
   }
   document.addEventListener(
     "pointerdown",
@@ -388,46 +436,13 @@ export function createCardGestures({
       }
       if (
         event.pointerType !== "mouse" ||
-        !matchMedia("(hover: hover) and (pointer: fine)").matches ||
+        !finePointer.matches ||
         viewer.isOpen ||
         event.buttons
       )
         return;
-      const found =
-        viewer.hoverSource(event.target) ||
-        resolve(
-          event.target.closest("a[data-tag-id]")?.closest(".card-tile") ||
-            event.target,
-        );
-      if (!found) {
-        clearHover();
-        return;
-      }
-      if (hover?.element !== found.element) {
-        clearHover();
-        const img = found.element.matches("img")
-          ? found.element
-          : found.element.querySelector(".card-image") ||
-            found.element.querySelector("img");
-        hover = {
-          ...found,
-          image: img,
-          bounds: found.element.getBoundingClientRect(),
-          tilt: { x: 0, y: 0 },
-          time: 0,
-        };
-        found.element.closest(".card-tile")?.classList.add("card-hovered");
-        timer = setTimeout(() => {
-          if (!hover) return;
-          const bounds = viewer.hover(
-            hover,
-            hover.bounds,
-            tiltTransform(hover.tilt),
-          );
-          if (bounds) hover.bounds = bounds;
-          schedule();
-        }, 200);
-      }
+      hoverTarget = event.target;
+      hoverDirty = true;
       lastPoint = { x: event.clientX, y: event.clientY };
       schedule();
     },
@@ -487,6 +502,13 @@ export function createCardGestures({
   document.addEventListener(
     "pointercancel",
     () => cancel({ focus: false }),
+    true,
+  );
+  document.addEventListener(
+    "selectstart",
+    (event) => {
+      if (candidate || (active && !active.keyboard)) event.preventDefault();
+    },
     true,
   );
   document.addEventListener(

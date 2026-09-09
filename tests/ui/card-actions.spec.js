@@ -89,6 +89,91 @@ async function catalogue(page) {
   ).toHaveCount(1);
 }
 
+test("UC-CARD-POINTER burst input coalesces, keeps layout out of hover handlers and stops after cancellation", async ({
+  page,
+}) => {
+  const f = await setup(page, 1);
+  try {
+    await page.addInitScript(() => {
+      const raf = requestAnimationFrame.bind(window),
+        cancel = cancelAnimationFrame.bind(window),
+        pending = new Set();
+      const rect = Element.prototype.getBoundingClientRect;
+      window.pointerWork = {
+        synchronousReads: 0,
+        dispatching: false,
+        peak: 0,
+        pending: 0,
+      };
+      Element.prototype.getBoundingClientRect = function () {
+        if (window.pointerWork.dispatching)
+          window.pointerWork.synchronousReads++;
+        return rect.call(this);
+      };
+      window.requestAnimationFrame = (callback) => {
+        const id = raf((time) => {
+          pending.delete(id);
+          window.pointerWork.pending = pending.size;
+          callback(time);
+        });
+        pending.add(id);
+        window.pointerWork.pending = pending.size;
+        window.pointerWork.peak = Math.max(
+          window.pointerWork.peak,
+          pending.size,
+        );
+        return id;
+      };
+      window.cancelAnimationFrame = (id) => {
+        pending.delete(id);
+        window.pointerWork.pending = pending.size;
+        cancel(id);
+      };
+    });
+    await page.goto("/#collection");
+    await expect(
+      page.locator("#tag-filter option").filter({ hasText: "Draft Box" }),
+    ).toHaveCount(1);
+    const button = page.locator("#grid .card-open");
+    await button.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      window.pointerWork.dispatching = true;
+      for (let i = 0; i < 100; i++)
+        el.dispatchEvent(
+          new PointerEvent("pointermove", {
+            bubbles: true,
+            pointerType: "mouse",
+            clientX: r.x + r.width * (0.2 + i / 200),
+            clientY: r.y + r.height / 2,
+          }),
+        );
+      window.pointerWork.dispatching = false;
+    });
+    expect(await page.evaluate(() => window.pointerWork.synchronousReads)).toBe(
+      0,
+    );
+    await expect(page.locator(".artwork-hover")).toBeVisible();
+    await page.mouse.move(2, 2);
+    await expect(page.locator(".artwork-hover")).not.toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => window.pointerWork.pending))
+      .toBe(0);
+    expect(
+      await page.evaluate(() => window.pointerWork.peak),
+    ).toBeLessThanOrEqual(1);
+    await button.focus();
+    await page.keyboard.press("Shift+F10");
+    await expect(page.locator(".card-action-layer")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect
+      .poll(() => page.evaluate(() => window.pointerWork.pending))
+      .toBe(0);
+    expect((await f.tagged.list("test"))[0].quantity).toBe(1);
+  } finally {
+    f.db.close();
+  }
+});
+
 test("UC-CARD-TILES owned deck tiles are image-only; visible 200% preview tilts continuously and 300% inspector preserves the route, tags and quantity", async ({
   page,
 }) => {
@@ -424,7 +509,16 @@ test("UC-CARD-ACTIONS drag keeps a full-size translucent copy, frozen targets an
       b.width,
     );
     await expect(img).toBeVisible();
-    await expect(page.locator("body")).toHaveCSS("user-select", "none");
+    await expect(page.locator(".card-pickup")).toHaveCSS("user-select", "none");
+    expect(
+      await page.evaluate(() => {
+        const event = new Event("selectstart", {
+          bubbles: true,
+          cancelable: true,
+        });
+        return document.body.dispatchEvent(event);
+      }),
+    ).toBe(false);
     const refreshedTags = page.waitForResponse(
       (response) =>
         response.url().endsWith("/api/tags") &&
@@ -450,6 +544,13 @@ test("UC-CARD-ACTIONS drag keeps a full-size translucent copy, frozen targets an
         .evaluate((el) => getComputedStyle(el).userSelect),
     ).not.toBe("none");
     await expect(page.locator(".card-pickup")).toHaveCount(0);
+    expect(
+      await page.evaluate(() =>
+        document.body.dispatchEvent(
+          new Event("selectstart", { bubbles: true, cancelable: true }),
+        ),
+      ),
+    ).toBe(true);
     await expect(page.locator("#detail")).not.toBeVisible();
     expect((await f.tagged.list("test"))[0].locations[0].quantity).toBe(2);
     await page.mouse.move(start.x, start.y);

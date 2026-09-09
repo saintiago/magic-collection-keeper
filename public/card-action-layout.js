@@ -1,4 +1,6 @@
 export const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+export const actionTargetWidth = (width) =>
+  Math.min(128, Math.max(84, (width - 48) / 3));
 
 export function rankActionTags(tags, recent = [], assigned = []) {
   const recency = new Map(recent.map((id, index) => [id, index]));
@@ -17,7 +19,7 @@ export function rankActionTags(tags, recent = [], assigned = []) {
 // Geometry is captured once per gesture. Emphasis never changes these targets.
 export function actionWheelLayout(tags, point, viewport) {
   const margin = 18,
-    width = Math.min(128, Math.max(84, (viewport.width - 48) / 3));
+    width = actionTargetWidth(viewport.width);
   const measure = viewport.measure || (() => 52);
   // Fit actual wrapped labels, reducing to a bounded More list when needed.
   let result;

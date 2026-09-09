@@ -12,6 +12,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
   preview.hidden = true;
   document.body.append(preview);
   let previewSource = null,
+    previewVisual = null,
     selection = null,
     origin = null,
     originKey = null,
@@ -25,8 +26,10 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     suppressUntil = 0;
 
   function hidePreview() {
+    if (preview.hidden) return;
     preview.hidden = true;
     previewSource = null;
+    previewVisual = null;
     preview.replaceChildren();
   }
   function hover(found, bounds, transform) {
@@ -36,18 +39,31 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
         innerWidth - 24,
         ((innerHeight - 24) * 488) / 680,
       ),
-      height = (width * 680) / 488;
+      height = (width * 680) / 488,
+      x = Math.max(
+        12,
+        Math.min(
+          innerWidth - width - 12,
+          bounds.x + (bounds.width - width) / 2,
+        ),
+      ),
+      y = Math.max(
+        12,
+        Math.min(
+          innerHeight - height - 12,
+          bounds.y + (bounds.height - height) / 2,
+        ),
+      );
     preview.innerHTML = `<div class="artwork-hover-reveal"><div class="artwork-hover-visual"><img src="${esc(image(found.item.card))}" alt="${esc(found.item.card.name)}">${cardHoverInfo(found.item.row || { card: found.item.card }, null, { pending: found.item.kind === "pending" })}</div></div>`;
-    preview.style.cssText = `width:${width}px;height:${height}px;left:${Math.max(12, Math.min(innerWidth - width - 12, bounds.x + (bounds.width - width) / 2))}px;top:${Math.max(12, Math.min(innerHeight - height - 12, bounds.y + (bounds.height - height) / 2))}px`;
+    preview.style.cssText = `width:${width}px;height:${height}px;left:${x}px;top:${y}px`;
     preview.hidden = false;
     previewSource = found;
+    previewVisual = preview.querySelector(".artwork-hover-visual");
     setHoverTilt(transform);
-    return preview.getBoundingClientRect();
+    return { x, y, width, height };
   }
   function setHoverTilt(transform) {
-    if (!preview.hidden)
-      preview.querySelector(".artwork-hover-visual").style.transform =
-        transform;
+    if (previewVisual) previewVisual.style.transform = transform;
   }
   function draw() {
     frame = 0;

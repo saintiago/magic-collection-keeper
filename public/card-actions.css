@@ -217,7 +217,8 @@
   position: fixed;
   z-index: 30;
   pointer-events: auto;
-  filter: drop-shadow(0 16px 22px #0006);
+  border-radius: 12px;
+  box-shadow: 0 16px 22px #0006;
 }
 .artwork-hover-reveal {
   width: 100%;
@@ -418,6 +419,9 @@
   color: #14231e;
   outline: 2px solid #fff;
 }
+.card-dragging .card-action-target {
+  transition: none;
+}
 .card-action-caption {
   z-index: 2;
   position: absolute;
@@ -451,10 +455,11 @@
   pointer-events: none;
   z-index: 1;
   border-radius: 4px;
-  filter: drop-shadow(0 3px 5px #0008);
+  box-shadow: 0 3px 5px #0008;
   will-change: transform;
 }
-.card-dragging {
+.card-action-layer,
+.card-pickup {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -522,10 +527,4 @@
   border: 0;
   background: transparent;
   touch-action: manipulation;
-}
-
-.card-pickup {
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
 }

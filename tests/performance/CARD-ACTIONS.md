@@ -1,5 +1,24 @@
 # Catalogue interaction observations
 
+## Actual-app pointer profile, September 9
+
+`node tests/performance/profile-card-pointer.mjs data/card-pointer [baseline-commit-sha]` loads the actual app with 1,000 isolated synthetic printing rows, fourteen location tags and twenty-four cached local SVG artwork URLs. It runs three 270-move horizontal sweeps: traversal, crossing the 200ms dwell boundary, then active direct pickup/drag with an 8ms pause between automated moves. The baseline commit is `3969ed3`. Results and Chromium trace aggregates are in `card-pointer-results.json`; the command also saves a raw Chromium performance trace. No account credentials or live writes are used.
+
+| Engine / phase | Frame p95 before → after (ms) | Event → rAF p95 before → after (ms) | Pointer handler max before → after (ms) |
+| --- | --- | --- | --- |
+| Chromium traversal | 16.7 → 16.7 | 0.3 → 0.2 | 1.3 → 0.1 |
+| Chromium dwell boundaries | 16.7 → 16.8 | 0.2 → 0.2 | 1.4 → 0.1 |
+| Chromium paced drag | 16.7 → 16.7 | 0.2 → 0.2 | 4.3 → 2.7 |
+| WebKit traversal | 30 → 16 | 28 → 14 | 2 → 1 |
+| WebKit dwell boundaries | 30 → 17 | 28 → 15 | 2 → 1 |
+| WebKit paced drag | 16 → 16 | 15 → 15 | 5 → 5 |
+
+The WebKit drag maximum frame interval fell from 108ms to 30ms after removing body-wide inherited cursor/selection styles; the intermediate run still applying those styles peaked at 110ms. Chromium's worst style-update trace event fell from 12.65ms to 0.43ms, with total layout time 63.8ms → 48.6ms across all phases. Maximum drawing layers fell from seven to six during hover and sixteen to thirteen during drag. No phase replaced the grid; at most one application frame was pending and none remained after idle. Chromium's final Long Tasks observer recorded zero tasks above 50ms; WebKit does not expose that observer here.
+
+The implementation coalesces hover resolution into rAF, reads the stable source plane before style changes, computes preview bounds without a write/read layout round trip, batches wrapped-label measurement at pickup, caches wheel/preview nodes, avoids restarting drag target transitions, and uses box shadows instead of filtering transformed subtrees. Selection remains blocked during pickup through active-source styles and a temporary gesture guard. Finite spring reveals, smoothed tilt, touch scrolling, frozen wheel targets and explicit ownership confirmation remain covered by E2E tests.
+
+These are individual desktop runs with automated browser pointer input, not physical mouse input-to-photon measurements or proof of an OS cursor fix. Timing quantization and browser-driver scheduling differ; shorter event-to-rAF values do not rank hardware. Repeated SVG fixtures exclude real image-download/decode pressure, and GPU memory is unavailable. The grid still renders all returned rows. The regression gate checks bounded work and cleanup rather than flaky hardware timing thresholds.
+
 September 9, 2026. `tests/ui/card-actions.spec.js` renders 1,000 controlled catalogue cards with local SVG artwork. Desktop-host observations were 84 ms in Chromium and 199 ms in WebKit from search submission to the expected DOM count; these are individual fixture samples, not percentile estimates or provider/image-download timings. Subsequent regression samples vary.
 
 The test counts requestAnimationFrame callbacks during idle windows and after hover departure: no continuing callbacks. Computed styles confirm no per-card `will-change`. Hover and active drag use a single preview/ghost; the artwork viewer promotes only its active image. The grid itself still renders all returned cards and is not virtualized.
