@@ -1,4 +1,121 @@
 import { test, expect } from "./fixtures.js";
+import { randomUUID } from "node:crypto";
+import {
+  fixture as importFixture,
+  card as importedCard,
+  alt as importedAlt,
+} from "../helpers/import-page-fixture.js";
+import { moxfieldSource } from "../../domain/import-draft.js";
+
+test("RECENT-01 Import records receipt-confirmed additions after a lost response; unchanged reimport leaves cleared history empty", async ({
+  page,
+}) => {
+  const f = await importFixture(page, { lines: 1 });
+  try {
+    const staged = await f.drafts.stageDraft("test", {
+      id: randomUUID(),
+      kind: "scan",
+      rows: [importedCard, importedAlt, importedCard].map((card) => ({
+        id: randomUUID(),
+        name: card.name,
+        printing_id: card.id,
+        quantity: 1,
+        finish: "nonfoil",
+        condition: "UNK",
+      })),
+    });
+    await page.goto("/#import=" + staged.draft.id);
+    await expect(page.locator("#draft-add")).toBeEnabled();
+    expect(await historyPrintings(page)).toEqual([]);
+    f.loseAddResponse();
+    await page.locator("#draft-add").click();
+    await expect(page.locator("#import-page")).toContainText(
+      "Response interrupted after commit",
+    );
+    expect(await historyPrintings(page)).toEqual([]);
+    await page.locator("#draft-add").click();
+    await expect
+      .poll(() => historyPrintings(page))
+      .toEqual([importedCard.id, importedAlt.id]);
+    const owned = await f.tagged.list("test");
+    expect(
+      owned.find((row) => row.printing_id === importedCard.id).quantity,
+    ).toBe(2);
+    expect(
+      owned.find((row) => row.printing_id === importedAlt.id).quantity,
+    ).toBe(1);
+    await page.locator("#home-nav").click();
+    await expect(page.locator(".home-card")).toHaveCount(2);
+    await page.locator("#clear-home-history").click();
+    const url = "https://moxfield.com/decks/keeper_import_ui_0001";
+    await f.tagged.importDeck("test", {
+      ...moxfieldSource(url),
+      name: "Existing source",
+      expected_version: 0,
+      entries: [
+        {
+          printing_id: importedCard.id,
+          quantity: 1,
+          finish: "nonfoil",
+          condition: "UNK",
+          section: "mainboard",
+        },
+      ],
+    });
+    const pending = await f.drafts.fetchDraft("test", { url });
+    await page.goto("/#import=" + pending.draft.id);
+    await expect(page.locator("#draft-add")).toBeEnabled();
+    await page.locator("#draft-add").click();
+    await expect(page.locator("#import-page")).toContainText(
+      "Added 0 new copies",
+    );
+    expect(await historyPrintings(page)).toEqual([]);
+    await page.locator("#home-nav").click();
+    await expect(page.locator(".home-card")).toHaveCount(0);
+  } finally {
+    f.db.close();
+  }
+});
+
+test("RECENT-01 an older import receipt without printing metadata never guesses activity from its aggregate count", async ({
+  page,
+}) => {
+  const f = await importFixture(page, { lines: 1 });
+  try {
+    const staged = await f.drafts.stageDraft("test", {
+      id: randomUUID(),
+      kind: "catalog",
+      rows: [
+        {
+          id: randomUUID(),
+          name: importedCard.name,
+          printing_id: importedCard.id,
+          quantity: 1,
+          finish: "nonfoil",
+          condition: "UNK",
+        },
+      ],
+    });
+    await page.route("**/api/import-draft/add", async (route) => {
+      const result = await f.drafts.addDraft(
+        "test",
+        route.request().postDataJSON(),
+      );
+      delete result.added_printings;
+      return route.fulfill({ json: result });
+    });
+    await page.goto("/#import=" + staged.draft.id);
+    await expect(page.locator("#draft-add")).toBeEnabled();
+    await page.locator("#draft-add").click();
+    await expect(page.locator("#import-page")).toContainText(
+      "Added 1 new copies",
+    );
+    expect((await f.tagged.list("test"))[0].quantity).toBe(1);
+    expect(await historyPrintings(page)).toEqual([]);
+  } finally {
+    f.db.close();
+  }
+});
 
 async function selectionFixture(page) {
   const cards = [1, 2, 3].map((index) => ({

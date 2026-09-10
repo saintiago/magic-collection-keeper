@@ -77,7 +77,7 @@ DEPLOY-01–04 status: production delivery verified in `r91-a1` following the fu
 
 CARD-10 verification remains in progress: PR run 34420482350 passed the application Chromium and required WebKit checks twice, but each attempt missed intermediate shrinking frames in one desktop WebKit prototype case. Ten unchanged local repeats of the first failing edge case passed. The return test now records frame times, layer transforms and bounds on assertion failure; the visible-shrink and exact-landing criteria are unchanged. The application revision is not production delivered.
 
-## Recent cards — queued
+## Recent cards — in progress, production verification pending
 
 - **RECENT-01:** Populate Recent cards from both cards clicked/tapped to open in any card list and cards successfully added to the collection. Opening the in-page zoom counts; hover, background recognition and merely loading a list do not. Include catalogue, collection, tag/deck-filtered and pending-import lists wherever cards can be opened.
 - **RECENT-02:** Order by the most recent qualifying open or successful addition, newest first. Opening or adding an already-listed printing moves its existing entry to the front rather than duplicating it. Retain exact-printing identity; this history does not change owned quantities, source provenance or pending-import status. Failed/cancelled additions do not count as additions.
@@ -90,6 +90,10 @@ Local evidence: three Home unit cases and five Home/Recent browser cases pass in
 - **RECENT-04:** Selecting a card from search autocomplete, by click/tap or keyboard confirmation, is a qualifying Recent event even when that selection follows a different path from opening a list tile. Move the selected card to the front using the same identity/deduplication rules. Merely typing a query, receiving suggestions or highlighting a suggestion does not add every suggested card. Verify mouse, touch and keyboard selection and avoid recording the same selection twice through overlapping handlers.
 
 Further local follow-up evidence: 130 unit tests and nine Home/Recent browser cases pass in each of Chromium and WebKit. Confirmed mouse/touch/keyboard suggestions now record immediately; later detail loading enriches an existing entry without moving it or inserting an unchosen card. Reload/deep-link restoration does not create activity. A successful explicit Add on the dedicated card page records the exact printing; a failed Add does not. Import-batch successful-add events and complete shared-list/event coverage remain pending. No follow-up feature is deployed.
+
+Import-batch addition acceptance: the atomic import result/receipt must identify only printings whose owned quantity actually increased. Home must record those exact reviewed cards after confirmed success, preserving stable batch order and deduplication. An unchanged reimport or an allocation-only change creates no addition activity; failed/stale/account-changed responses create none. A replay returns the original confirmed printing IDs without adding copies again. Older receipts without this metadata must not cause the browser to guess from aggregate counts. Implementation and tests are in progress in the separate follow-up revision.
+
+The follow-up now returns `added_printings` from actual source-lot quantity increases and stores that list atomically in the import receipt. Confirmed Import success records only matching reviewed cards before the independent collection refresh. All 131 unit cases pass, including exact additions, retained other printings, unchanged reimport, replay and owner isolation. Two new Chromium and WebKit cases pass for a lost response/retry followed by unchanged reimport, and for an older receipt with missing metadata. Broad application checks, source publication and deployed verification remain pending; these changes require a matching new backend source release.
 
 ## Tags-only inspector — in progress, supersedes CARD-04/05 overlay content
 

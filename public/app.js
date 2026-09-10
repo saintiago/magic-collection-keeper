@@ -234,7 +234,9 @@ const importPage = createImportPage({
   back: () => cardNavigation.back(),
   select: (id) => enterImport(id),
   api: request,
-  onAdded: async () => {
+  onAdded: async (cards) => {
+    // Record only receipt-confirmed additions before independent refresh I/O.
+    for (const card of cards) home.card(card);
     collection.invalidate();
     await refresh();
   },

@@ -49,6 +49,46 @@ const source = (count = 1) => ({
     language: "en",
   })),
 });
+
+test("RECENT-01 an atomic import receipt identifies only actual printing additions and preserves them on replay", async () => {
+  const s = setup({ count: 2 });
+  try {
+    await s.collection.importDeck("a", {
+      ...moxfieldSource(url),
+      name: "Existing source",
+      expected_version: 0,
+      entries: [card, alternate].map((card) => ({
+        printing_id: card.id,
+        finish: "nonfoil",
+        condition: "UNK",
+        quantity: 1,
+        section: "mainboard",
+      })),
+    });
+    const draft = await s.service.fetchDraft("a", { url });
+    const request = input(draft);
+    const result = await s.service.addDraft("a", request);
+    assert.equal(result.additions, 1);
+    assert.deepEqual(result.added_printings, [card.id]);
+    const beforeReplay = await s.collection.list("a");
+    assert.equal(
+      beforeReplay.find((row) => row.printing_id === alternate.id).quantity,
+      1,
+    );
+    const replay = await s.service.addDraft("a", request);
+    assert.equal(replay.replayed, true);
+    assert.deepEqual(replay.added_printings, [card.id]);
+    assert.deepEqual(await s.collection.list("a"), beforeReplay);
+    const repeated = await s.service.fetchDraft("a", { url });
+    const unchanged = await s.service.addDraft("a", input(repeated));
+    assert.equal(unchanged.additions, 0);
+    assert.deepEqual(unchanged.added_printings, []);
+    await assert.rejects(s.service.addDraft("b", request));
+    assert.deepEqual(await s.collection.list("b"), []);
+  } finally {
+    s.db.close();
+  }
+});
 function setup({
   count = 1,
   storeWrapper = (s) => s,

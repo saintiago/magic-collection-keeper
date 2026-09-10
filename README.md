@@ -14,7 +14,7 @@ Deployment classifies changes against the published application. Supported prese
 
 ## Use it
 
-A separate, unreleased Recent cards revision preserves different printings of the same card and keeps each Home artwork/tag action on its exact printing. It records confirmed autocomplete choices and successful dedicated-page additions, without treating reloads, highlighting or failed additions as new activity. Local Chromium/WebKit checks pass; Import-batch addition events and production verification remain pending.
+A separate, unreleased Recent cards revision preserves different printings of the same card and keeps each Home artwork/tag action on its exact printing. It records confirmed autocomplete choices and successful dedicated-page additions, without treating reloads, highlighting or failed additions as new activity. Import activity uses exact additions from the server's saved receipt and excludes unchanged reimports. Local Chromium/WebKit checks pass; broad application checks, matching backend source publication and production verification remain pending.
 
 Scan stays briefly disabled while your account and saved captures load after sign-in; it becomes available as soon as that recovery finishes.
 
