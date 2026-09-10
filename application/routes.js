@@ -22,6 +22,8 @@ export async function routeCollection(
     return service.getDraft(owner, query);
   if (path === "/api/import-draft/stage" && method === "POST")
     return service.stageDraft(owner, input);
+  if (path === "/api/import-draft/tag" && method === "POST")
+    return service.tagDraft(owner, input);
   if (path === "/api/import-draft" && method === "PATCH")
     return service.saveDraft(owner, input);
   if (path === "/api/import-draft/fetch" && method === "POST")

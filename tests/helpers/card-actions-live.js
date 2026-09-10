@@ -1,4 +1,5 @@
 import { expectInspectorFit } from "./artwork-fit.js";
+import { openArtworkDetails } from "./artwork-actions.js";
 import { expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { liveApi, clearCaptureTestData } from "./backend-live.js";
@@ -37,7 +38,7 @@ export async function exerciseCardActions(
   const post = (path, body, method = "POST") =>
     liveApi(page, path, { method, body: JSON.stringify(body) });
   const activate = (locator) => (mobile ? locator.tap() : locator.click());
-  async function directDrop(tagId) {
+  async function directDrop(tagId, selected = true) {
     if (!["edit", "details"].includes(tagId))
       await expect(
         page.locator(`#tag-filter option[value="${tagId}"]`),
@@ -131,7 +132,8 @@ export async function exerciseCardActions(
           ? "Review & add"
           : tagId === "details"
             ? "Card details"
-            : created.find((tag) => tag.id === tagId)?.label;
+            : (selected ? "Add " : "Remove ") +
+              created.find((tag) => tag.id === tagId)?.label;
       expect(label).toBeTruthy();
       if (!["edit", "details"].includes(tagId))
         await page.locator(".card-action-more input").fill(label);
@@ -191,35 +193,41 @@ export async function exerciseCardActions(
     await activate(cardButton);
     await expect(page).toHaveURL(new RegExp("#tag=" + source.id + "$"));
     await expectInspectorFit(page);
-    await expect(page.locator(".artwork-details")).toContainText("3 owned");
-    await expect(page.getByLabel("Owned quantity")).toHaveValue("3");
+    const viewer = page.locator(".artwork-viewer");
+    const assignedTag = viewer.getByRole("button", {
+      name: mobile ? "Remove " + source.label : source.label,
+      exact: true,
+    });
+    if (mobile && (await assignedTag.count()) === 0) {
+      await viewer
+        .getByRole("button", { name: "More tags…", exact: true })
+        .tap();
+      await expect(
+        viewer.getByRole("button", { name: source.label, exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+    } else await expect(assignedTag).toHaveAttribute("aria-pressed", "true");
     await page.screenshot({
       path: test
         .info()
         .outputPath(`live-owned-inspector-${mobile ? "phone" : "desktop"}.png`),
     });
-    await page.getByLabel("Owned quantity").fill("4");
+    await openArtworkDetails(page, { mobile });
+    await expect(page.locator("#quantity")).toHaveValue("3");
+    await page.locator("#quantity").fill("4");
     await activate(
       page.getByRole("button", { name: "Save quantity", exact: true }),
     );
-    await expect(page.locator(".artwork-quantity [role=status]")).toHaveText(
-      "Quantity saved.",
-    );
+    await expect(page.locator("#detail")).not.toBeVisible();
     expect((await liveApi(page, "/api/collection"))[0].quantity).toBe(4);
-    await activate(page.getByLabel("Close artwork"));
-    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
     await page.reload();
     await activate(page.locator("#grid .card-open"));
-    await expect(page.getByLabel("Owned quantity")).toHaveValue("4");
-    await page.getByLabel("Owned quantity").fill("3");
+    await openArtworkDetails(page, { mobile });
+    await expect(page.locator("#quantity")).toHaveValue("4");
+    await page.locator("#quantity").fill("3");
     await activate(
       page.getByRole("button", { name: "Save quantity", exact: true }),
     );
-    await expect(page.locator(".artwork-quantity [role=status]")).toHaveText(
-      "Quantity saved.",
-    );
-    await activate(page.getByLabel("Close artwork"));
-    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+    await expect(page.locator("#detail")).not.toBeVisible();
     let loseResponse = true;
     await page.route("**/api/tag-actions", async (route) => {
       operations.push(route.request().postDataJSON());
@@ -241,21 +249,24 @@ export async function exerciseCardActions(
     );
     await page.reload();
     await activate(page.getByRole("button", { name: "Retry card action" }));
-    await expect(page.locator(".card-action-status")).toContainText(
-      "Card tags saved",
-    );
+    await expect(page.locator(".card-action-status")).not.toBeVisible();
     expect(operations).toHaveLength(2);
     expect(operations[0]).toEqual(operations[1]);
+    expect(operations[0]).toMatchObject({ selected: true, quantity: 1 });
     await page.unroute("**/api/tag-actions");
     let [saved] = await liveApi(page, "/api/collection");
     expect(saved.quantity).toBe(3);
     expect(saved.locations.find((a) => a.tag_id === source.id).quantity).toBe(
-      1,
+      2,
     );
     expect(saved.locations.find((a) => a.tag_id === target.id).quantity).toBe(
       1,
     );
-    const later = { ...operations[0], operation_id: randomUUID() };
+    const later = {
+      ...operations[0],
+      selected: false,
+      operation_id: randomUUID(),
+    };
     await post("/api/tag-actions", later);
     const beforeReplay = await liveApi(page, "/api/collection");
     expect(await post("/api/tag-actions", operations[0])).toEqual(beforeReplay);
@@ -305,20 +316,26 @@ export async function exerciseCardActions(
     await expect(page.locator("#grid .card")).toHaveCount(1);
     await activate(page.locator(".card-open"));
     await expectInspectorFit(page);
-    await activate(
-      page.getByRole("button", { name: "Card details", exact: true }),
-    );
+    await openArtworkDetails(page, { mobile });
     await expect(page.locator("#inventory-form")).toBeVisible();
     await activate(page.locator("#close"));
     await expect(page.locator("#search")).toHaveValue(query);
     await directDrop(target.id);
-    await expect(page.locator(".draft-row")).toHaveCount(1);
-    await page.reload();
-    await expect(page.locator(".draft-row")).toHaveCount(1);
+    await expect
+      .poll(
+        async () =>
+          (await liveApi(page, "/api/import-draft")).pending_drafts.filter(
+            (d) => !beforeDrafts.has(d.id),
+          ).length,
+      )
+      .toBe(1);
     const descriptor = (
       await liveApi(page, "/api/import-draft")
     ).pending_drafts.find((d) => !beforeDrafts.has(d.id));
     expect(descriptor).toBeTruthy();
+    await page.goto("/#import=" + descriptor.id);
+    await page.reload();
+    await expect(page.locator(".draft-row")).toHaveCount(1);
     const { draft } = await liveApi(
       page,
       "/api/import-draft?id=" + descriptor.id,
@@ -327,6 +344,28 @@ export async function exerciseCardActions(
     expect(draft.rows[0].locations).toEqual([
       { tag_id: target.id, quantity: 1 },
     ]);
+    expect(await liveApi(page, "/api/collection")).toEqual([]);
+    // Verify the new targeted draft route against actual JWT/Dynamo state,
+    // including replay after a later opposite operation. Pending is never owned.
+    const pendingRemove = {
+      operation_id: randomUUID(),
+      id: draft.id,
+      kind: "capture",
+      row_id: draft.rows[0].id,
+      tag_id: target.id,
+      selected: false,
+      quantity: 1,
+    };
+    const removed = await post("/api/import-draft/tag", pendingRemove);
+    expect(removed.draft.rows[0].locations).toEqual([]);
+    const restored = await post("/api/import-draft/tag", {
+      ...pendingRemove,
+      operation_id: randomUUID(),
+      selected: true,
+    });
+    const replayed = await post("/api/import-draft/tag", pendingRemove);
+    expect(replayed.draft.rows[0]).toEqual(restored.draft.rows[0]);
+    expect(replayed.draft.rows[0].quantity).toBe(1);
     expect(await liveApi(page, "/api/collection")).toEqual([]);
     await activate(page.locator("#draft-clear"));
     await expect(page.locator(".draft-row")).toHaveCount(0);

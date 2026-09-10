@@ -93,6 +93,14 @@ async function catalogue(page) {
     page.locator("#tag-filter option").filter({ hasText: "Draft Box" }),
   ).toHaveCount(1);
 }
+async function openSavedReview(page, f) {
+  await expect
+    .poll(async () => (await f.drafts.getDraft("test")).draft?.rows.length || 0)
+    .toBe(1);
+  const { draft } = await f.drafts.getDraft("test");
+  await page.goto("/#import=" + draft.id);
+  await expect(page.locator(".draft-row")).toHaveCount(1);
+}
 
 test("UC-CARD-POINTER burst input coalesces, keeps layout out of hover handlers and stops after cancellation", async ({
   page,
@@ -250,17 +258,14 @@ test("UC-CARD-TILES owned deck tiles are image-only; visible 200% preview tilts 
     await page.mouse.click(r.x + r.width / 2, r.y + r.height / 2);
     await expect(page).toHaveURL(new RegExp("#tag=" + box.id + "$"));
     await expectInspectorFit(page);
-    await expect(page.locator(".artwork-details")).toContainText(
-      "2 assigned · 1 owned",
-    );
+    const tag = page.locator(`.artwork-tags [data-inspector-tag="${box.id}"]`);
+    await expect(tag).toHaveAttribute("aria-pressed", "true");
     await page.waitForTimeout(400);
     await expect(page.locator(".artwork-open-reveal")).toHaveCSS(
       "transform",
       "none",
     );
-    const details = await page.locator(".artwork-details").boundingBox(),
-      stage = await page.locator(".artwork-stage").boundingBox(),
-      controls = await page.locator(".artwork-controls").boundingBox();
+    const stage = await page.locator(".artwork-stage").boundingBox();
     await expectInspectorSides(page, (await expectInspectorFit(page)).image);
     expect(stage).toMatchObject({ x: 0, y: 0, width: 1280, height: 720 });
     await expectInspectorFit(page);
@@ -270,38 +275,23 @@ test("UC-CARD-TILES owned deck tiles are image-only; visible 200% preview tilts 
     await page.screenshot({
       path: test.info().outputPath("owned-inspector.png"),
     });
-    let failQuantity = true;
-    await page.route("**/api/collection/*", async (route) => {
-      if (route.request().method() === "PATCH" && failQuantity) {
-        failQuantity = false;
-        return route.fulfill({
-          status: 503,
-          json: { error: "Quantity save interrupted" },
-        });
-      }
-      await route.fallback();
-    });
-    await page.getByLabel("Owned quantity").fill("3");
-    await page
-      .getByRole("button", { name: "Save quantity", exact: true })
-      .click();
-    await expect(page.locator(".artwork-quantity [role=status]")).toContainText(
-      "Quantity save interrupted",
-    );
-    expect((await f.tagged.list("test"))[0].quantity).toBe(1);
-    await page
-      .getByRole("button", { name: "Save quantity", exact: true })
-      .click();
-    await expect(page.locator(".artwork-quantity [role=status]")).toHaveText(
-      "Quantity saved.",
-    );
-    expect((await f.tagged.list("test"))[0].quantity).toBe(3);
-    await page.locator(`.artwork-details a[data-tag-id="${box.id}"]`).click();
+    await expect(page.getByLabel("Owned quantity")).toHaveCount(0);
+    const role = page
+      .locator(".artwork-tags")
+      .getByRole("button", { name: "Draw", exact: true });
+    await role.click();
+    await expect(role).toHaveAttribute("aria-pressed", "true");
+    await expect(role).toHaveAttribute("aria-busy", "false");
+    const [saved] = await f.tagged.list("test");
+    expect(saved.quantity).toBe(1);
+    expect(saved.locations[0].quantity).toBe(2);
+    expect(saved.allocation_shortfall).toBe(1);
+    await page.keyboard.press("Escape");
     await expect(page.locator(".artwork-viewer")).not.toBeVisible();
     await expect(page.locator("#tag-filter")).toHaveValue(box.id);
     await page.reload();
     await button.click();
-    await expect(page.getByLabel("Owned quantity")).toHaveValue("3");
+    await expect(role).toHaveAttribute("aria-pressed", "true");
     await page.goBack();
     await expect(page.locator(".artwork-viewer")).not.toBeVisible();
   } finally {
@@ -375,7 +365,7 @@ test("UC-CARD-TILES ultrawide natural and physical-edge anchors preserve grid, s
       });
       // Dismiss over an actual neighboring card, not only a blank gutter.
       const occupied = await page
-        .locator(".artwork-full-image,.artwork-details,.artwork-controls")
+        .locator(".artwork-full-image,.artwork-tags")
         .evaluateAll((nodes) =>
           nodes.map((node) => node.getBoundingClientRect().toJSON()),
         );
@@ -566,26 +556,33 @@ test("UC-CARD-ART catalogue is artwork-only; hover, zoom, outside dismissal and 
     await expect(page.locator(".artwork-viewer")).toBeVisible();
     await expectInspectorFit(page);
     const openingPercent = await page
-      .locator(".artwork-viewer output")
-      .textContent();
+      .locator(".artwork-viewer")
+      .getAttribute("data-zoom");
     await page.locator(".artwork-full-image").hover();
     await page.mouse.wheel(0, -400);
-    await expect(page.locator(".artwork-viewer output")).not.toHaveText(
+    await expect(page.locator(".artwork-viewer")).not.toHaveAttribute(
+      "data-zoom",
       openingPercent,
     );
     await page.keyboard.press("Escape");
     await expect(page.locator(".artwork-viewer")).not.toBeVisible();
     await expect(button).toBeFocused();
-    await button.click();
-    await page.locator('[data-artwork="details"]').click();
+    await button.press("Shift+F10");
+    await page
+      .getByRole("menuitem", { name: "More tags…", exact: true })
+      .click();
+    await page
+      .locator(".card-action-more")
+      .getByRole("button", { name: "Card details", exact: true })
+      .click();
     await expect(page.locator("#detail")).toBeVisible();
     await page.locator("#close").click();
     await expect(page).toHaveURL(/#catalog$/);
     await expect(page.locator("#search")).toHaveValue(card.name);
     await expect(button).toBeVisible();
     await button.click();
-    for (let i = 0; i < 6; i++)
-      await page.locator('[data-artwork="out"]').click();
+    await page.locator(".artwork-full-image").hover();
+    await page.mouse.wheel(0, 1200);
     const area = await page.locator(".artwork-stage").boundingBox();
     await page.mouse.click(area.x + 3, area.y + 3);
     await expect(page.locator(".artwork-viewer")).not.toBeVisible();
@@ -696,10 +693,11 @@ test("UC-CARD-ACTIONS drag keeps a full-size translucent copy, frozen targets an
     expect(
       await targetButton.evaluate((el) => [el.style.left, el.style.top]),
     ).toEqual(fixed);
-    await page.mouse.up();
-    await expect(page.locator(".card-action-status")).toContainText(
-      "Card tags saved",
+    const savedResponse = page.waitForResponse((response) =>
+      response.url().endsWith("/api/tag-actions"),
     );
+    await page.mouse.up();
+    expect((await savedResponse).ok()).toBe(true);
     const [saved] = await f.tagged.list("test");
     expect(saved.quantity).toBe(3);
     await page.locator("#grid .card-open").press("Shift+F10");
@@ -717,7 +715,7 @@ test("UC-CARD-ACTIONS drag keeps a full-size translucent copy, frozen targets an
         .click();
     }
     await expect(page.locator(".tag-dialog #save-tags")).toBeVisible();
-    expect(saved.locations.find((a) => a.tag_id === box.id).quantity).toBe(1);
+    expect(saved.locations.find((a) => a.tag_id === box.id).quantity).toBe(2);
     expect(saved.locations.find((a) => a.tag_id === target.id).quantity).toBe(
       1,
     );
@@ -748,16 +746,14 @@ test("UC-CARD-ACTIONS ambiguous save survives reload and retries the same operat
     await page.goto("/#collection");
     await page.locator("#grid .card-open").press("Shift+F10");
     await page
-      .getByRole("menuitem", { name: "Draft Box", exact: true })
+      .getByRole("menuitem", { name: "Add Draft Box", exact: true })
       .click();
     await expect(page.locator(".card-action-status")).toContainText(
       "Response lost",
     );
     await page.reload();
     await page.getByRole("button", { name: "Retry card action" }).click();
-    await expect(page.locator(".card-action-status")).toContainText(
-      "Card tags saved",
-    );
+    await expect(page.locator(".card-action-status")).not.toBeVisible();
     expect(ids).toHaveLength(2);
     expect(ids[0]).toBe(ids[1]);
     const [saved] = await f.tagged.list("test");
@@ -776,22 +772,25 @@ test("UC-CARD-ACTIONS catalogue tags enter pending Import; pending tag changes n
     await catalogue(page);
     await page.locator("#grid .card-open").press("Shift+F10");
     await page
-      .getByRole("menuitem", { name: "Draft Box", exact: true })
+      .getByRole("menuitem", { name: "Add Draft Box", exact: true })
       .click();
-    await expect(page).toHaveURL(/#import=/);
+    await expect(page).toHaveURL(/#catalog$/);
+    await openSavedReview(page, f);
     await expect(page.locator(".draft-row")).toHaveCount(1);
     expect(await f.tagged.list("test")).toEqual([]);
     const pendingUrl = page.url();
     await page.locator(".draft-artwork").click();
     await expectInspectorFit(page);
-    await expect(page.locator(".artwork-details")).toContainText(
-      "pending · review before Add",
-    );
+    await expect(
+      page
+        .locator(".artwork-tags")
+        .getByRole("button", { name: "Draft Box", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
     expect(page.url()).toBe(pendingUrl);
     await page.keyboard.press("Escape");
     await expect(page.locator(".artwork-viewer")).not.toBeVisible();
     await page.locator(".draft-artwork").press("Shift+F10");
-    await page.getByRole("menuitem", { name: "Draw", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Add Draw", exact: true }).click();
     await expect(page.locator(".draft-tag-summary")).toContainText(
       "1 classifications",
     );
@@ -822,6 +821,7 @@ test("UC-CARD-ACTIONS keyboard overflow is bounded, searchable and promotes the 
     const button = page.locator("#grid .card-open");
     await button.focus();
     await page.keyboard.press("Shift+F10");
+    await expect(page.locator(".card-action-layer")).toBeVisible();
     expect(
       await page.locator(".card-action-target").count(),
     ).toBeLessThanOrEqual(10);
@@ -835,15 +835,19 @@ test("UC-CARD-ACTIONS keyboard overflow is bounded, searchable and promotes the 
     await page.getByLabel("Find a tag", { exact: true }).fill("Bulk 24");
     await page
       .locator(".card-action-more")
-      .getByRole("button", { name: "Bulk 24", exact: true })
+      .getByRole("button", { name: "Add Bulk 24", exact: true })
       .click();
-    await expect(page.locator(".card-action-status")).toContainText(
-      "Card tags saved",
-    );
+    await expect
+      .poll(async () =>
+        (await f.tagged.list("test"))[0].tags.some(
+          (tag) => tag.label === "Bulk 24",
+        ),
+      )
+      .toBe(true);
     await page.locator("#grid .card-open").press("Shift+F10");
     await expect(
       page.locator('.card-action-target[data-target="0"]'),
-    ).toHaveAccessibleName("Bulk 24");
+    ).toHaveAccessibleName("Remove Bulk 24");
     await page.keyboard.press("Escape");
     await expect(page.locator("#grid .card-open")).toBeFocused();
     expect((await f.tagged.list("test"))[0].quantity).toBe(3);
@@ -905,14 +909,18 @@ test("UC-CARD-ACTIONS definite rejection permits a new choice; a late pending sa
     await catalogue(page);
     await page.locator("#grid .card-open").press("Shift+F10");
     await page
-      .getByRole("menuitem", { name: "Draft Box", exact: true })
+      .getByRole("menuitem", { name: "Add Draft Box", exact: true })
       .click();
     await expect(page.locator(".card-action-status")).toContainText(
       "action was rejected",
     );
     await page.locator("#grid .card-open").press("Shift+F10");
     await page
-      .getByRole("menuitem", { name: "Review & add", exact: true })
+      .getByRole("menuitem", { name: "More tags…", exact: true })
+      .click();
+    await page
+      .locator(".card-action-more")
+      .getByRole("button", { name: "Review & add", exact: true })
       .click();
     await expect(page.locator(".card-action-status")).toContainText(
       "Saving card action",
@@ -946,7 +954,8 @@ test.describe("phone card actions", () => {
       await page.locator(".card-open").tap();
       await expect(page).toHaveURL(/#collection$/);
       await expectInspectorFit(page);
-      await expect(page.getByLabel("Owned quantity")).toHaveValue("2");
+      await expect(page.getByLabel("Owned quantity")).toHaveCount(0);
+      await expect(page.locator(".artwork-touch-wheel")).toBeVisible();
       await page.waitForTimeout(240);
       const panels = await page
         .locator(".artwork-inspector>aside")
@@ -962,13 +971,22 @@ test.describe("phone card actions", () => {
       await page.screenshot({
         path: test.info().outputPath("phone-owned-inspector.png"),
       });
-      await page.locator('[data-artwork="details"]').tap();
+      await page.touchscreen.tap(5, 5);
+      await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+      await page.locator(".card-open").press("Shift+F10");
+      await page
+        .getByRole("menuitem", { name: "More tags…", exact: true })
+        .tap();
+      await page
+        .locator(".card-action-more")
+        .getByRole("button", { name: "Card details", exact: true })
+        .tap();
       await expect(page.locator("#detail")).toBeVisible();
       const detailUrl = page.url();
       await page.locator(".detail-image img").tap();
       await expect(page.locator(".artwork-viewer")).toBeVisible();
       expect(page.url()).toBe(detailUrl);
-      await page.getByLabel("Close artwork").tap();
+      await page.touchscreen.tap(5, 5);
       await expect(page.locator(".artwork-viewer")).not.toBeVisible();
       await page.locator("#close").tap();
       await page.locator("#home-nav").tap();
@@ -991,8 +1009,8 @@ test.describe("phone card actions", () => {
       await catalogue(page);
       await page.locator("#grid .card-open").tap();
       await expectInspectorFit(page);
-      const openingPercent = parseInt(
-        await page.locator(".artwork-viewer output").textContent(),
+      const openingPercent = Number(
+        await page.locator(".artwork-viewer").getAttribute("data-zoom"),
       );
       const photo = page.locator(".artwork-full-image"),
         pointer = (id, x, y) => ({
@@ -1009,7 +1027,9 @@ test.describe("phone card actions", () => {
       await photo.dispatchEvent("pointermove", pointer(42, 320, 300));
       await expect
         .poll(async () =>
-          parseInt(await page.locator(".artwork-viewer output").textContent()),
+          Number(
+            await page.locator(".artwork-viewer").getAttribute("data-zoom"),
+          ),
         )
         .toBeGreaterThan(openingPercent);
       await photo.dispatchEvent("pointerup", pointer(41, 120, 300));
@@ -1018,7 +1038,7 @@ test.describe("phone card actions", () => {
       expect(
         await photo.evaluate((el) => getComputedStyle(el).transform),
       ).not.toContain("NaN");
-      await page.locator('[data-artwork="close"]').tap();
+      await page.touchscreen.tap(5, 5);
       await expect(page.locator(".artwork-viewer")).not.toBeVisible();
       const img = page.locator("#grid .card-open img");
       await expect(async () => {
@@ -1052,14 +1072,14 @@ test.describe("phone card actions", () => {
         path: test.info().outputPath("phone-card-wheel.png"),
       });
       const target = await page
-        .getByRole("menuitem", { name: "Draft Box", exact: true })
+        .getByRole("menuitem", { name: "Add Draft Box", exact: true })
         .evaluate((el) => ({
           x: parseFloat(el.style.left),
           y: parseFloat(el.style.top),
         }));
       await img.dispatchEvent("pointermove", pointer(44, target.x, target.y));
       await img.dispatchEvent("pointerup", pointer(44, target.x, target.y));
-      await expect(page).toHaveURL(/#import=/);
+      await openSavedReview(page, f);
       expect(await f.tagged.list("test")).toEqual([]);
     } finally {
       f.db.close();
@@ -1276,7 +1296,7 @@ test("UC-CARD-ACTIONS unavailable retry storage sends no write and corrupt journ
   expect(result.corrupt).toBe("{");
 });
 
-test("UC-CARD-TILES an inspector quantity reply cannot replace another account's collection", async ({
+test("UC-CARD-TAG-TOGGLE a late tag reply cannot replace another account's collection", async ({
   page,
 }) => {
   await page.route("**/quantity-port-fixture", (route) =>
@@ -1306,18 +1326,22 @@ test("UC-CARD-TILES an inspector quantity reply cannot replace another account's
     document.body.innerHTML = `<div id="grid">${collectionCard(row, 0)}</div>`;
     let resolve;
     const updates = [];
+    const tag = { id: "tag-a", label: "Role A", type: "role" };
     const actions = createCardActions({
-      request: () => new Promise((r) => (resolve = r)),
+      request: (path) =>
+        path === "/api/tags"
+          ? Promise.resolve([tag])
+          : new Promise((r) => (resolve = r)),
       currentView: () => 1,
       onOwned: (rows) => updates.push(rows),
       onPending() {},
       getState: () => ({
         visibleCards: [row],
         mode: "collection",
-        filterTags: [],
+        filterTags: [tag],
         activeTagId: "",
       }),
-      home: { tag() {}, recentTags: [], cardAction() {} },
+      home: { tag() {}, card() {}, recentTags: [], cardAction() {} },
       importPage: { cardAction() {} },
       cardPage: {},
       detail() {},
@@ -1329,12 +1353,12 @@ test("UC-CARD-TILES an inspector quantity reply cannot replace another account's
     });
     actions.start("account-a");
     document.querySelector(".card-open").click();
-    document.querySelector(".artwork-quantity input").value = "3";
-    document.querySelector(".artwork-quantity").requestSubmit();
+    await new Promise((r) => setTimeout(r, 0));
+    document.querySelector(".card-tag-toggle").click();
     actions.stop();
     window.dispatchEvent(new Event("keeper-sign-out"));
     actions.start("account-b");
-    resolve([{ ...row, quantity: 3 }]);
+    resolve([{ ...row, tag_ids: [tag.id], tags: [tag] }]);
     await new Promise((r) => setTimeout(r, 0));
     return { updates, open: document.querySelector(".artwork-viewer").open };
   });

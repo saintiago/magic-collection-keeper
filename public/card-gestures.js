@@ -8,6 +8,7 @@ import {
 import { pointerTilt, approachTilt, tiltTransform } from "./card-tilt.js";
 import { image } from "./view.js";
 import { createWheelSectors, wheelLabel } from "./card-wheel-view.js";
+import { relevantCardTags, assignedTagIds } from "./card-tag-state.js";
 
 export function createCardGestures({
   resolve,
@@ -16,6 +17,8 @@ export function createCardGestures({
   viewer,
   onAction,
   onSettled,
+  prepare = async () => undefined,
+  onError = () => {},
   createWheelSurface = createWheelSectors,
 }) {
   let candidate = null,
@@ -26,9 +29,10 @@ export function createCardGestures({
     lastPoint = null,
     hoverTarget = null,
     hoverDirty = false,
-    suppress = null;
-  const finePointer = matchMedia("(hover: hover) and (pointer: fine)"),
-    reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+    suppress = null,
+    preparing = null,
+    openingGeneration = 0;
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const layer = document.createElement("div");
   layer.className = "card-action-layer";
   layer.hidden = true;
@@ -43,7 +47,7 @@ export function createCardGestures({
   document.body.append(more);
 
   const source = (target) =>
-    target.closest("a[data-tag-id]")
+    target.closest("a[data-tag-id],.card-tag-toggle,.card-tags-retry")
       ? null
       : viewer.hoverSource(target) || resolve(target);
   function clearHover() {
@@ -61,12 +65,17 @@ export function createCardGestures({
     hover = null;
   }
   function cancel({ focus = true } = {}) {
-    const held = Boolean(active || candidate);
+    const held = Boolean(active || candidate || preparing);
+    const origin = active?.element || preparing?.element || candidate?.element;
+    const originKey = origin?.closest("[data-card-key]")?.dataset.cardKey;
+    const originContainer = origin?.closest("[data-card-key]")?.parentElement;
+    openingGeneration++;
+    preparing?.element.removeAttribute("aria-busy");
+    preparing = null;
     clearTimeout(timer);
     timer = 0;
     cancelAnimationFrame(frame);
     frame = 0;
-    const origin = active?.element;
     active?.surface.destroy?.();
     candidate?.element.classList.remove("card-pickup");
     active?.element.classList.remove("card-pickup", "card-wheel-source");
@@ -78,13 +87,41 @@ export function createCardGestures({
     ghost.removeAttribute("src");
     document.body.classList.remove("card-dragging");
     if (focus && origin?.isConnected) origin.focus({ preventScroll: true });
-    if (held) setTimeout(onSettled, 0);
+    if (held)
+      setTimeout(() => {
+        onSettled();
+        if (
+          !focus ||
+          !originKey ||
+          origin?.isConnected ||
+          document.activeElement !== document.body ||
+          document.querySelector("dialog[open]")
+        )
+          return;
+        originContainer
+          ?.querySelector(`[data-card-key="${CSS.escape(originKey)}"] button`)
+          ?.focus({ preventScroll: true });
+      }, 0);
   }
   function choices(item) {
-    const ranked = rankActionTags(tags(), recent(), [
-      ...(item.row?.tag_ids || []),
-      ...(item.row?.locations || []).map((a) => a.tag_id),
-    ]);
+    const assigned = assignedTagIds(item);
+    for (const [id, selected] of item.tagState?.view.desired || []) {
+      if (selected) assigned.add(id);
+      else assigned.delete(id);
+    }
+    const ranked = relevantCardTags(
+      item,
+      item.actionTags || tags(),
+      recent(),
+    ).map((tag) => ({
+      ...tag,
+      selected: !assigned.has(tag.id),
+      label: (assigned.has(tag.id) ? "Remove " : "Add ") + tag.label,
+      tagLabel: tag.label,
+      quantity:
+        item.row?.locations?.find((entry) => entry.tag_id === tag.id)
+          ?.quantity || 1,
+    }));
     return [
       ...ranked,
       {
@@ -103,6 +140,34 @@ export function createCardGestures({
     ];
   }
   function open(item, element, point, keyboard = false) {
+    if (preparing) return;
+    const turn = ++openingGeneration,
+      held = candidate;
+    if (held && !keyboard) held.dragStarted = true;
+    preparing = { turn, element };
+    element.setAttribute("aria-busy", "true");
+    void Promise.resolve(prepare(item))
+      .then((available) => {
+        if (turn !== openingGeneration || (!keyboard && candidate !== held))
+          return;
+        if (available) item.actionTags = available;
+        item.tagState?.reconcile(null, available);
+        openReady(item, element, point, keyboard);
+        if (!keyboard) candidate = held;
+      })
+      .catch((error) => {
+        if (turn !== openingGeneration) return;
+        cancel();
+        if (error.name !== "AbortError") onError(error);
+      })
+      .finally(() => {
+        if (preparing?.turn === turn) {
+          element.removeAttribute("aria-busy");
+          preparing = null;
+        }
+      });
+  }
+  function openReady(item, element, point, keyboard = false) {
     const selection = getSelection();
     if (
       candidate?.selectionWasEmpty &&
@@ -112,7 +177,8 @@ export function createCardGestures({
         ?.contains(selection.anchorNode)
     )
       selection.removeAllRanges();
-    const bounds = element.getBoundingClientRect();
+    const bounds =
+      viewer.previewBounds?.(element) || element.getBoundingClientRect();
     cancel({ focus: false });
     clearHover();
     const all = choices(item),
@@ -159,7 +225,10 @@ export function createCardGestures({
       );
     probes.remove();
     const layout = actionWheelLayout(
-      all,
+      [
+        ...all.filter((tag) => !tag.action),
+        { id: "more", label: "More tags…", more: true },
+      ],
       { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
       {
         width: innerWidth,
@@ -228,15 +297,6 @@ export function createCardGestures({
       element.classList.add("card-wheel-source");
       layer.append(anchor);
     }
-    const caption = document.createElement("span");
-    caption.className = "card-action-caption";
-    caption.textContent =
-      item.kind === "owned"
-        ? "1 copy"
-        : item.kind === "pending"
-          ? "Pending"
-          : "Review first";
-    layer.append(caption);
     layer.append(ghost);
     layout.targets.forEach((target, index) => {
       const button = document.createElement("button");
@@ -295,6 +355,25 @@ export function createCardGestures({
     onAction(item, tag, element);
   }
   function openMore(item, element, all) {
+    const key = element.closest("[data-card-key]")?.dataset.cardKey;
+    const container = element.closest("[data-card-key]")?.parentElement;
+    const currentSource = () =>
+      element.isConnected
+        ? element
+        : key
+          ? container?.querySelector(
+              `[data-card-key="${CSS.escape(key)}"] button`,
+            )
+          : null;
+    function apply(tag) {
+      const target = currentSource();
+      more.close();
+      if (target) onAction(item, tag, target);
+    }
+    more.onclose = () => {
+      if (!document.querySelector("dialog[open]"))
+        currentSource()?.focus({ preventScroll: true });
+    };
     more.replaceChildren();
     const title = document.createElement("h2");
     title.textContent = "Choose a tag";
@@ -319,10 +398,7 @@ export function createCardGestures({
       for (const tag of filtered.slice(offset, offset + 20)) {
         const button = document.createElement("button");
         button.textContent = tag.label;
-        button.onclick = () => {
-          more.close();
-          if (element.isConnected) onAction(item, tag, element);
-        };
+        button.onclick = () => apply(tag);
         list.append(button);
       }
       next.hidden = offset + 20 >= filtered.length;
@@ -342,10 +418,7 @@ export function createCardGestures({
     for (const tag of all.filter((tag) => tag.action)) {
       const button = document.createElement("button");
       button.textContent = tag.label;
-      button.onclick = () => {
-        more.close();
-        if (element.isConnected) onAction(item, tag, element);
-      };
+      button.onclick = () => apply(tag);
       actions.append(button);
     }
     more.append(title, actions, input, list, next, close);
@@ -446,7 +519,9 @@ export function createCardGestures({
         event.button !== 0 ||
         active ||
         viewer.isOpen ||
-        event.target.closest("dialog[open],.card-action-layer,a[data-tag-id]")
+        event.target.closest(
+          "dialog[open],.card-action-layer,a[data-tag-id],.card-tag-toggle,.card-tags-retry",
+        )
       )
         return;
       const found = source(event.target);
@@ -497,6 +572,7 @@ export function createCardGestures({
         );
         if (distance > 8) {
           if (candidate.type === "mouse") {
+            event.preventDefault();
             const c = candidate;
             open(c.item, c.element, { x: c.x, y: c.y });
             candidate = c;
@@ -515,12 +591,7 @@ export function createCardGestures({
         }
         return;
       }
-      if (
-        event.pointerType !== "mouse" ||
-        !finePointer.matches ||
-        viewer.isOpen ||
-        event.buttons
-      )
+      if (event.pointerType !== "mouse" || viewer.isOpen || event.buttons)
         return;
       // Cancel a departing dwell immediately, even if its deadline falls before
       // the next frame. Resolve geometry and update visuals in that frame.
@@ -572,10 +643,32 @@ export function createCardGestures({
           ?.closest("a[data-tag-id]");
         const direct =
           !target && link
-            ? tags().find((tag) => tag.id === link.dataset.tagId)
+            ? active.all.find(
+                (tag) => !tag.action && tag.id === link.dataset.tagId,
+              )
             : null;
         if (target || direct) choose(target || direct);
         else cancel();
+      }
+      if (candidate?.dragStarted && !active) {
+        suppress = {
+          element: candidate.element,
+          until: performance.now() + 800,
+        };
+        cancel({ focus: false });
+      }
+      if (
+        candidate?.type === "touch" &&
+        !active &&
+        !suppress &&
+        !viewer.isOpen
+      ) {
+        const { item, element } = candidate;
+        event.preventDefault();
+        event.stopPropagation();
+        viewer.open(item, element, { inputType: "touch" });
+        suppress = { element, until: performance.now() + 800 };
+        clearHover();
       }
       const held = Boolean(candidate);
       candidate?.element.classList.remove("card-pickup");
@@ -596,6 +689,9 @@ export function createCardGestures({
   document.addEventListener(
     "pointercancel",
     () => {
+      const element =
+        candidate?.element || active?.element || preparing?.element;
+      if (element) suppress = { element, until: performance.now() + 800 };
       clearHover();
       cancel({ focus: false });
     },
@@ -643,11 +739,11 @@ export function createCardGestures({
     (event) => {
       if (!active && (event.key === "Enter" || event.key === " "))
         suppress = null;
-      if (event.key === "Escape" && (active || candidate)) {
+      if (event.key === "Escape" && (active || candidate || preparing)) {
         event.preventDefault();
         event.stopImmediatePropagation();
         suppress = {
-          element: active?.element || candidate.element,
+          element: active?.element || candidate?.element || preparing.element,
           until: performance.now() + 800,
         };
         cancel();
@@ -704,9 +800,20 @@ export function createCardGestures({
   window.addEventListener(
     "scroll",
     (event) => {
-      if (event.target.closest?.(".card-hover-info")) return;
+      if (
+        event.target.closest?.(
+          ".card-hover-info,.artwork-preview-tags,.artwork-tags,.card-action-more",
+        )
+      )
+        return;
       clearHover();
-      if (!active && candidate) cancel({ focus: false });
+      if (!active && candidate) {
+        suppress = {
+          element: candidate.element,
+          until: performance.now() + 800,
+        };
+        cancel({ focus: false });
+      }
     },
     true,
   );
@@ -724,7 +831,7 @@ export function createCardGestures({
   });
   return {
     get holding() {
-      return Boolean(active || candidate);
+      return Boolean(active || candidate || preparing);
     },
     cancel: leave,
     open: (item, element) => {

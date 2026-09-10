@@ -19,6 +19,11 @@ else:
 # Application source is included conservatively alongside the covered service.
 # This does not change repository visibility or assert HTTP separation decides licensing.
 excluded = ("data/", ".local-secrets/", "test-results/", "public/vendor/")
+public_fixtures = {
+    "recognition/fixtures/adaptive.jpg",
+    "recognition/fixtures/bolt.jpg",
+    "recognition/fixtures/ring.jpg",
+}
 with zipfile.ZipFile(
     root / "recognition/source.zip", "w", zipfile.ZIP_DEFLATED
 ) as archive:
@@ -26,7 +31,7 @@ with zipfile.ZipFile(
         if (
             not name
             or name.startswith(excluded)
-            or name.endswith((".png", ".jpg", ".jpeg", ".zip"))
+            or (name.endswith((".png", ".jpg", ".jpeg", ".zip")) and name not in public_fixtures)
         ):
             continue
         path = root / name

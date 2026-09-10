@@ -1,3 +1,4 @@
+import { openArtworkDetails } from "../helpers/artwork-actions.js";
 import { test, expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { expectInspectorFit } from "../helpers/artwork-fit.js";
@@ -49,7 +50,7 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
     await expect(page.locator(".card")).toHaveCount(before.length);
     await page.locator(".card-open").first().tap();
     await expectInspectorFit(page);
-    await page.locator('[data-artwork="details"]').tap();
+    await openArtworkDetails(page, { mobile: true });
     await expect(page.locator("#detail")).toBeVisible();
     await expect(page.locator("#inventory-form")).toBeVisible({
       timeout: 30000,
@@ -98,7 +99,7 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
     ).toContainText(label);
     await page.locator(".home-card").tap();
     await expectInspectorFit(page);
-    await page.locator('[data-artwork="details"]').tap();
+    await openArtworkDetails(page, { mobile: true });
     await expect(page.locator("#detail")).toBeVisible();
     await expect(page.locator("#inventory-form")).toBeVisible({
       timeout: 30000,

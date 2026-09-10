@@ -1,19 +1,29 @@
 import { image, esc } from "./view.js";
-import { cardHoverInfo } from "./card-tile-view.js";
-import { inspectorDetails, inspectorView } from "./artwork-inspector.js";
+import { inspectorView } from "./artwork-inspector.js";
+import { createCardTagState } from "./card-tag-state.js";
+import { mountCardTags } from "./card-tag-view.js";
+import { mountCardTagWheel } from "./card-tag-wheel.js";
+import { createArtworkTagDrag } from "./artwork-tag-drag.js";
 import {
   artworkOpening,
   boundedArtwork,
   enlargedArtwork,
 } from "./card-action-layout.js";
 import { upgradeArtwork } from "./artwork-images.js";
+import { returnArtwork } from "./artwork-return.js";
 
-export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
+export function createArtworkViewer({
+  tags = () => [],
+  recent = () => [],
+  loadTags = async () => tags(),
+  onToggle,
+  onOpened = () => {},
+}) {
   const dialog = document.createElement("dialog");
   dialog.className = "artwork-viewer";
   dialog.tabIndex = -1;
   dialog.autofocus = true;
-  dialog.setAttribute("aria-label", "Card artwork and information");
+  dialog.setAttribute("aria-label", "Card artwork and tags");
   document.body.append(dialog);
   const preview = document.createElement("div");
   preview.className = "artwork-hover";
@@ -24,6 +34,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     selection = null,
     origin = null,
     originKey = null,
+    originContainer = null,
     historyKey = null,
     afterClose = null,
     frame = 0,
@@ -32,11 +43,29 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     state = null,
     rect = null,
     suppressUntil = 0,
-    glass = null;
+    glass = null,
+    closing = false,
+    returningSource = null,
+    stopReturn = null,
+    unmountTags = null,
+    unmountPreviewTags = null,
+    tagWheel = null;
+  const touchDrag = createArtworkTagDrag({ dialog, wheel: () => tagWheel });
 
+  function tagState(item) {
+    item.tagState ||= createCardTagState(item, {
+      available: tags,
+      recent,
+      load: loadTags,
+      toggle: onToggle,
+    });
+    return item.tagState;
+  }
   function hidePreview() {
     if (preview.hidden) return;
     previewSource?.element.classList.remove("artwork-source-lifted");
+    unmountPreviewTags?.();
+    unmountPreviewTags = null;
     preview.hidden = true;
     previewSource = null;
     previewVisual = null;
@@ -48,7 +77,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       width: innerWidth,
       height: innerHeight,
     });
-    preview.innerHTML = `<div class="artwork-hover-reveal"><div class="artwork-hover-visual"><img src="${esc(image(found.item.card))}" alt="${esc(found.item.card.name)}">${cardHoverInfo(found.item.row || { card: found.item.card }, null, { pending: found.item.kind === "pending" })}</div></div>`;
+    preview.innerHTML = `<div class="artwork-hover-reveal"><div class="artwork-hover-visual"><img src="${esc(image(found.item.card))}" alt="${esc(found.item.card.name)}" draggable="false"></div></div><aside class="artwork-preview-tags" aria-label="Card tags"></aside>`;
     preview.style.cssText = `width:${width}px;height:${height}px;left:${x}px;top:${y}px`;
     preview.style.setProperty(
       "--artwork-lift-x",
@@ -65,6 +94,15 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     preview.hidden = false;
     found.element.classList.add("artwork-source-lifted");
     previewSource = found;
+    previewSource.container = found.element.closest(
+      "#grid,#home-page,#import-page,.detail-artwork",
+    );
+    previewSource.sourceKey =
+      found.element.closest("[data-card-key]")?.dataset.cardKey;
+    unmountPreviewTags = mountCardTags(
+      preview.querySelector(".artwork-preview-tags"),
+      tagState(found.item),
+    );
     previewVisual = preview.querySelector(".artwork-hover-visual");
     upgradeArtwork(previewVisual.querySelector("img"), found.item.card);
     setHoverTilt(transform);
@@ -75,7 +113,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
   }
   function draw() {
     frame = 0;
-    if (!dialog.open || !state) return;
+    if (!dialog.open || !state || closing) return;
     if (glass?.dirty) {
       glass.element.style.setProperty("--glass-x", glass.x + "%");
       glass.element.style.setProperty("--glass-y", glass.y + "%");
@@ -89,114 +127,106 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     };
     dialog.querySelector(".artwork-full-image").style.transform =
       `translate(${state.x}px,${state.y}px) scale(${state.zoom})`;
-    dialog.querySelector("output").value = `${Math.round(state.zoom * 100)}%`;
+    dialog.dataset.zoom = String(state.zoom);
   }
   function schedule() {
     if (!frame) frame = requestAnimationFrame(draw);
   }
   function finish() {
+    touchDrag.cancel();
+    tagWheel?.destroy();
+    tagWheel = null;
+    unmountTags?.();
+    unmountTags = null;
+    stopReturn?.();
+    stopReturn = null;
+    closing = false;
+    delete dialog.dataset.closing;
     cancelAnimationFrame(frame);
     frame = 0;
     points.clear();
     gesture = null;
     glass = null;
     origin?.classList.remove("artwork-source-lifted");
+    returningSource?.classList.remove("artwork-source-lifted");
+    returningSource = null;
     if (dialog.open) dialog.close();
     dialog.replaceChildren();
     rect = null;
     selection = null;
     historyKey = null;
-    const focus = origin?.isConnected
-      ? origin
-      : originKey
-        ? document.querySelector(
-            `[data-card-key="${CSS.escape(originKey)}"] button`,
-          )
-        : null;
+    const focus = sourceElement();
     focus?.focus({ preventScroll: true });
     const next = afterClose;
     afterClose = null;
     next?.();
+    window.dispatchEvent(new Event("keeper-artwork-closed"));
+  }
+  function sourceElement() {
+    return origin?.isConnected
+      ? origin
+      : originKey
+        ? originContainer?.querySelector(
+            `[data-card-key="${CSS.escape(originKey)}"] button`,
+          )
+        : null;
+  }
+  function animateClose() {
+    if (!dialog.open || stopReturn) return;
+    closing = true;
+    touchDrag.cancel();
+    cancelAnimationFrame(frame);
+    frame = 0;
+    points.clear();
+    gesture = null;
+    dialog.dataset.closing = "";
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return finish();
+    stopReturn = returnArtwork({
+      dialog,
+      zoom: state.initialZoom,
+      source: () => {
+        const target = sourceElement();
+        if (returningSource !== target) {
+          returningSource?.classList.remove("artwork-source-lifted");
+          returningSource = target;
+          returningSource?.classList.add("artwork-source-lifted");
+        }
+        const bounds = target?.getBoundingClientRect();
+        return bounds?.width && bounds?.height ? bounds : null;
+      },
+      complete: finish,
+    });
   }
   function close(next) {
-    if (!dialog.open) return;
+    if (!dialog.open || closing) return;
+    closing = true;
     afterClose = next || null;
     if (history.state?.keeperArtwork === historyKey) history.back();
-    else finish();
+    else animateClose();
   }
   window.addEventListener("popstate", () => {
-    if (dialog.open && history.state?.keeperArtwork !== historyKey) finish();
+    if (dialog.open && history.state?.keeperArtwork !== historyKey)
+      animateClose();
   });
+  for (const type of ["click", "pointerdown", "wheel", "submit"])
+    dialog.addEventListener(
+      type,
+      (event) => {
+        if (!closing) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      },
+      { capture: true, passive: false },
+    );
   dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
     close();
   });
-  dialog.addEventListener(
-    "click",
-    (event) => {
-      const link = event.target.closest("a[data-tag-id]");
-      if (
-        !link ||
-        event.button ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey ||
-        event.altKey
-      )
-        return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      const tag = {
-        id: link.dataset.tagId,
-        label: link.dataset.tagLabel,
-        type: link.dataset.tagType,
-        kind: link.dataset.tagKind,
-      };
-      close(() => onTag(tag));
-    },
-    true,
-  );
-  dialog.addEventListener("submit", async (event) => {
-    if (!event.target.matches(".artwork-quantity")) return;
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
     event.preventDefault();
-    const form = event.target,
-      item = selection,
-      button = form.querySelector("button"),
-      status = form.querySelector('[role="status"]');
-    button.disabled = true;
-    status.textContent = "Saving…";
-    try {
-      const row = await onQuantity(item, Number(form.elements.quantity.value));
-      if (!form.isConnected || selection !== item || !row) return;
-      item.row = row;
-      dialog.querySelector(".artwork-details").innerHTML =
-        inspectorDetails(item);
-      status.textContent = "Quantity saved.";
-      resize();
-    } catch (error) {
-      if (form.isConnected) status.textContent = error.message;
-    } finally {
-      if (form.isConnected) button.disabled = false;
-    }
-  });
-  dialog.addEventListener("click", (event) => {
-    const action = event.target.closest("[data-artwork]")?.dataset.artwork;
-    if (!action) return;
-    if (action === "close") return close();
-    if (action === "details" || action === "edit") {
-      const item = selection,
-        element = origin;
-      return close(() =>
-        action === "details" ? onDetails(item, element) : onEdit(item, element),
-      );
-    }
-    if (action === "in") state.zoom *= 1.25;
-    if (action === "out") state.zoom /= 1.25;
-    if (action === "reset") {
-      state.zoom = state.initialZoom;
-      state.x = state.y = 0;
-    }
-    schedule();
+    event.stopPropagation();
+    close();
   });
   dialog.addEventListener(
     "wheel",
@@ -219,6 +249,13 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       /* A canceled pointer can already have ended. */
     }
     const all = [...points.values()];
+    if (
+      all.length === 1 &&
+      event.pointerType === "touch" &&
+      event.target.matches(".artwork-full-image")
+    )
+      touchDrag.start(event);
+    else touchDrag.cancel();
     gesture = {
       start: { x: event.clientX, y: event.clientY },
       x: state.x,
@@ -240,8 +277,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
           : null,
     };
   });
-  const glassSelector =
-    '.artwork-controls > button:not([data-artwork="close"]), .artwork-quantity, .artwork-zoom';
+  const glassSelector = ".card-tag-toggle";
   dialog.addEventListener("pointerover", (event) => {
     const surface = event.target.closest(glassSelector);
     if (glass?.element === surface) return;
@@ -274,11 +310,12 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       glass.dirty = true;
       schedule();
     }
-    if (!state || !rect) return;
+    if (!state || !rect || closing) return;
     if (points.has(event.pointerId)) {
       event.preventDefault();
       points.set(event.pointerId, { x: event.clientX, y: event.clientY });
       const all = [...points.values()];
+      if (all.length === 1 && touchDrag.move(event)) return;
       if (all.length === 2 && gesture.distance) {
         state.zoom =
           (gesture.zoom *
@@ -306,6 +343,11 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
   });
   const up = (event) => {
     if (!points.has(event.pointerId)) return;
+    if (touchDrag.end(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      suppressUntil = performance.now() + 400;
+    }
     const outside =
       gesture?.outside &&
       points.size === 1 &&
@@ -324,7 +366,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
         outside: false,
         distance: 0,
       };
-    if (outside && event.type !== "pointercancel") {
+    if (outside && event.type === "pointerup") {
       event.preventDefault();
       event.stopPropagation();
       suppressUntil = performance.now() + 400;
@@ -333,6 +375,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
   };
   dialog.addEventListener("pointerup", up);
   dialog.addEventListener("pointercancel", up);
+  dialog.addEventListener("lostpointercapture", up);
   document.addEventListener(
     "pointerdown",
     () => {
@@ -352,6 +395,11 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     true,
   );
   function resize() {
+    if (touchDrag.active) {
+      touchDrag.cancel();
+      points.clear();
+      gesture = null;
+    }
     hidePreview();
     rect = null;
     if (dialog.open) {
@@ -360,6 +408,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       dialog.style.height = (viewport?.height || innerHeight) + "px";
       dialog.style.left = (viewport?.offsetLeft || 0) + "px";
       dialog.style.top = (viewport?.offsetTop || 0) + "px";
+      if (closing) return;
       const safe = getComputedStyle(dialog.querySelector(".artwork-safe-area"));
       const source = origin?.isConnected
         ? origin.getBoundingClientRect()
@@ -385,6 +434,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
           safeTop: parseFloat(safe.paddingTop),
           safeBottom: parseFloat(safe.paddingBottom),
         },
+        state.requestedZoom,
       );
       const atOpening =
         state.initialZoom === undefined ||
@@ -405,42 +455,51 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       reveal.style.top = opening.y - opening.gutterY + "px";
       reveal.style.width = opening.width + "px";
       reveal.style.height = opening.height + "px";
-      const details = dialog.querySelector(".artwork-details");
-      const controls = dialog.querySelector(".artwork-controls");
-      const infoWidth = details.offsetWidth,
-        infoHeight = details.offsetHeight;
-      const controlsWidth = controls.offsetWidth,
-        controlsHeight = controls.offsetHeight;
+      if (tagWheel) {
+        tagWheel.resize({
+          opening,
+          viewport: {
+            width: viewport?.width || innerWidth,
+            height: viewport?.height || innerHeight,
+          },
+        });
+        schedule();
+        return;
+      }
+      const tagPanel = dialog.querySelector(".artwork-tags");
       const availableWidth = viewport?.width || innerWidth,
         availableHeight = viewport?.height || innerHeight;
-      const leftSpace = opening.x - infoWidth - 16;
-      const rightSpace = opening.x + opening.width + 16;
-      details.style.left =
-        (leftSpace >= opening.gutterX ? leftSpace : opening.x + 8) + "px";
-      controls.style.left =
-        (rightSpace + controlsWidth <= availableWidth - opening.gutterX
-          ? rightSpace
-          : opening.x + opening.width - controlsWidth - 8) + "px";
-      const above = opening.y - infoHeight - 12;
-      const infoTop =
-        leftSpace >= opening.gutterX
-          ? opening.y + 24
-          : above >= opening.gutterY
-            ? above
-            : opening.y + 48;
-      details.style.top =
-        Math.max(
-          opening.gutterY,
-          Math.min(infoTop, availableHeight - opening.gutterY - infoHeight),
-        ) + "px";
-      controls.style.top =
-        Math.max(
-          opening.gutterY,
-          Math.min(
-            opening.y + opening.height / 2 - controlsHeight / 2,
-            availableHeight - opening.gutterY - controlsHeight,
-          ),
-        ) + "px";
+      const panelWidth = Math.min(260, availableWidth - opening.gutterX * 2);
+      const right = opening.x + opening.width + 12,
+        left = opening.x - panelWidth - 12;
+      const beside =
+        right + panelWidth <= availableWidth - opening.gutterX ||
+        left >= opening.gutterX;
+      tagPanel.style.width = panelWidth + "px";
+      tagPanel.style.maxHeight =
+        (beside ? opening.height : Math.min(180, availableHeight * 0.27)) +
+        "px";
+      tagPanel.style.left =
+        (beside
+          ? right + panelWidth <= availableWidth - opening.gutterX
+            ? right
+            : left
+          : Math.max(
+              opening.gutterX,
+              Math.min(
+                opening.x,
+                availableWidth - opening.gutterX - panelWidth,
+              ),
+            )) + "px";
+      tagPanel.style.top =
+        (beside
+          ? opening.y
+          : Math.max(
+              opening.gutterY,
+              opening.y +
+                opening.height -
+                Math.min(180, availableHeight * 0.27),
+            )) + "px";
       glass?.element.removeAttribute("data-lit");
       glass = null;
       schedule();
@@ -460,8 +519,70 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     finish();
   });
   return {
+    reconcile(result, intent) {
+      for (const item of new Set([selection, previewSource?.item])) {
+        if (!item) continue;
+        if (intent.kind === "owned") {
+          if (
+            item.kind !== "owned" ||
+            String(item.row.id) !== intent.payload.inventory_id
+          )
+            continue;
+          const row = result.find(
+            (row) => String(row.id) === intent.payload.inventory_id,
+          );
+          if (!row) continue;
+          item.row = row;
+        } else {
+          const draft = result.draft;
+          if (!draft || (item.draftId && item.draftId !== draft.id)) continue;
+          const rowId =
+            intent.kind === "catalog"
+              ? intent.payload.rows?.[0]?.id
+              : intent.payload.row_id;
+          const row = draft.rows.find(
+            (row) => row.id === rowId && row.printing_id === item.card.id,
+          );
+          if (!row || item.kind === "owned") continue;
+          item.kind = "pending";
+          item.row = row;
+          item.draftId = draft.id;
+          item.draftKind =
+            draft.provider === "reviewed-capture" ? "capture" : "url";
+          item.sourceId = draft.source_id;
+        }
+        item.tagState?.reconcile(intent.tag);
+      }
+      // Collection replacement can replace the hidden tile during a save.
+      // Keep the replacement hidden until the lifted image returns to it.
+      if (dialog.open) {
+        const target = sourceElement();
+        if (returningSource !== target) {
+          returningSource?.classList.remove("artwork-source-lifted");
+          returningSource = target;
+          target?.classList.add("artwork-source-lifted");
+        }
+      }
+      if (
+        previewSource &&
+        !previewSource.element.isConnected &&
+        previewSource.sourceKey
+      ) {
+        const target = previewSource.container?.querySelector(
+          `[data-card-key="${CSS.escape(previewSource.sourceKey)}"] button`,
+        );
+        if (target) {
+          previewSource.element = target;
+          target.classList.add("artwork-source-lifted");
+        } else hidePreview();
+      }
+    },
     hover,
     setHoverTilt,
+    previewBounds: (element) =>
+      previewSource?.element === element && !preview.hidden
+        ? preview.firstElementChild.getBoundingClientRect()
+        : null,
     hoverSource: (target) =>
       !preview.hidden && preview.contains(target) ? previewSource : null,
     hidePreview,
@@ -469,7 +590,7 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
     get isOpen() {
       return dialog.open;
     },
-    open(item, element) {
+    open(item, element, { inputType = "mouse" } = {}) {
       const card = item.card,
         src =
           previewSource?.element === element
@@ -490,11 +611,15 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
       origin = element;
       origin.classList.add("artwork-source-lifted");
       originKey = element.closest("[data-card-key]")?.dataset.cardKey || null;
+      originContainer = element.closest(
+        "#grid,#home-page,#import-page,.detail-artwork",
+      );
       state = {
         sourceBounds: bounds.toJSON(),
         baseWidth: bounds.width,
         baseHeight: bounds.height,
-        zoom: 3,
+        zoom: inputType === "touch" ? 2 : 3,
+        requestedZoom: inputType === "touch" ? 2 : 3,
         x: 0,
         y: 0,
       };
@@ -505,6 +630,17 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
         location.href,
       );
       dialog.innerHTML = inspectorView(item, src);
+      dialog.dataset.input = inputType;
+      if (inputType === "touch")
+        tagWheel = mountCardTagWheel(
+          dialog.querySelector(".artwork-tags"),
+          tagState(item),
+        );
+      else
+        unmountTags = mountCardTags(
+          dialog.querySelector(".artwork-tags"),
+          tagState(item),
+        );
       const artwork = dialog.querySelector(".artwork-full-image");
       artwork.style.width = state.baseWidth + "px";
       artwork.style.height = state.baseHeight + "px";
@@ -535,10 +671,11 @@ export function createArtworkViewer({ onDetails, onEdit, onTag, onQuantity }) {
         "--artwork-start-scale",
         String(visual.width / (state.baseWidth * state.zoom)),
       );
-      dialog.querySelector("output").value = `${Math.round(state.zoom * 100)}%`;
+      dialog.dataset.zoom = String(state.zoom);
       if (src)
         upgradeArtwork(dialog.querySelector(".artwork-full-image"), card);
       dialog.focus({ preventScroll: true });
+      onOpened(item.card);
       const openedKey = historyKey;
       document.fonts.ready.then(() => {
         if (dialog.open && historyKey === openedKey) resize();

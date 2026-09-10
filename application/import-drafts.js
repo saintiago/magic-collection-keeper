@@ -1,6 +1,8 @@
 import { ApplicationError } from "../domain/inventory.js";
 import { captureInput, draftSlot } from "../domain/capture-draft.js";
 import { sameStoredValue } from "../domain/stored-value.js";
+import { draftTagActionInput } from "../domain/draft-tag-action.js";
+import { planTagAction } from "../domain/tag-action.js";
 import {
   IMPORT_PENDING_TAG,
   moxfieldSource,
@@ -319,6 +321,73 @@ export function createImportDraftService({
       return view(owner, {
         version: (previous?.version || 0) + 1,
         value: draft,
+      });
+    },
+    async tagDraft(owner, raw) {
+      const input = draftTagActionInput(raw);
+      return store.withInventoryLock(owner, async () => {
+        const receipt = await store.get(
+          owner,
+          "draft-tag-actions",
+          input.operation_id,
+        );
+        const record = await active(owner, input);
+        if (receipt) {
+          if (!sameStoredValue(receipt.value.input, input))
+            throw new ApplicationError(
+              "This pending tag action was already used with different input.",
+              409,
+            );
+          return view(owner, record);
+        }
+        if (
+          !record ||
+          record.value.state !== "pending" ||
+          record.value.id !== input.id
+        )
+          throw new ApplicationError(
+            "This pending import is no longer available. Reload Import.",
+            409,
+          );
+        const draft = record.value,
+          row = draft.rows.find((row) => row.id === input.row_id);
+        const tags = await registry(owner),
+          tag = tags.get(input.tag_id);
+        if (!row || !tag)
+          throw new ApplicationError(
+            "This pending card or tag is no longer available. Reload Import.",
+            409,
+          );
+        const patch =
+          tag.source?.id === draft.source_id &&
+          draft.provider !== "reviewed-capture"
+            ? { in_deck: input.selected }
+            : planTagAction(row, tag, input);
+        const rows = validateDraftRows(
+          draft,
+          draft.rows.map((line) =>
+            line.id === row.id ? { ...line, ...patch } : line,
+          ),
+          tags,
+        );
+        const changes = [
+          change("draft-tag-actions", input.operation_id, null, {
+            input,
+            created_at: now(),
+          }),
+        ];
+        if (sameStoredValue(rows, draft.rows)) {
+          await store.commit(owner, changes);
+          return view(owner, record);
+        }
+        const timestamp = now();
+        rows.find((line) => line.id === row.id).updated_at = timestamp;
+        const updated = { ...draft, rows, updated_at: timestamp };
+        await store.commit(owner, [
+          ...changes,
+          change("import-drafts", draftSlot(input), record, updated),
+        ]);
+        return view(owner, { value: updated, version: record.version + 1 });
       });
     },
     async saveDraft(owner, input) {

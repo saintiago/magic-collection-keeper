@@ -36,7 +36,9 @@ test.describe("touch viewport changes", () => {
     await photo.dispatchEvent("pointercancel", pointer(41, 170, 580));
     await photo.dispatchEvent("pointercancel", pointer(42, 260, 680));
     await expect(page.locator(".artwork-viewer")).toBeVisible();
-    await page.getByRole("button", { name: "Reset zoom" }).tap();
+    await page.touchscreen.tap(5, 5);
+    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+    await tile.tap();
     await expectInspectorFit(page);
     await page.setViewportSize({ width: 844, height: 390 });
     await expect
@@ -48,7 +50,7 @@ test.describe("touch viewport changes", () => {
     expect(
       await photo.evaluate((el) => getComputedStyle(el).transform),
     ).not.toContain("NaN");
-    await page.getByLabel("Close artwork").tap();
+    await page.touchscreen.tap(5, 5);
     await expect(page.locator(".artwork-viewer")).not.toBeVisible();
     await expect(tile).toBeFocused();
   });
@@ -196,12 +198,7 @@ for (const viewport of [
         y: 0,
         ...viewport,
       });
-      const left = await page.locator(".artwork-details").boundingBox();
-      const right = await page.locator(".artwork-controls").boundingBox();
       await expectInspectorSides(page, enlarged);
-      if (left)
-        expect(left.y + left.height).toBeLessThanOrEqual(viewport.height);
-      expect(right.y + right.height).toBeLessThanOrEqual(viewport.height);
       await expect(
         page.locator(".artwork-viewer header,.artwork-viewer footer"),
       ).toHaveCount(0);

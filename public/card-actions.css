@@ -379,6 +379,7 @@
   align-items: center;
   justify-content: center;
   animation: artwork-expand 380ms ease-out;
+  will-change: transform;
 }
 .artwork-open-orientation {
   width: 100%;
@@ -387,6 +388,7 @@
   align-items: center;
   justify-content: center;
   animation: artwork-untilt 380ms ease-out;
+  will-change: transform;
 }
 @keyframes artwork-untilt {
   from {
@@ -488,6 +490,9 @@
   user-select: none;
   -webkit-touch-callout: none;
   will-change: transform;
+}
+.artwork-viewer[data-closing] .artwork-viewport {
+  overflow: visible;
 }
 .artwork-viewer output {
   min-width: 48px;
@@ -810,5 +815,188 @@
   }
   .artwork-controls button:active {
     transform: none;
+  }
+}
+
+/* The same tag choices appear around both zoom presentations. Only individual
+   controls carry glass; their bounded scroll surface does not cover the card. */
+.artwork-tags,
+.artwork-preview-tags {
+  position: absolute;
+  z-index: 8;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #b9d2c2a0 transparent;
+  padding: 4px;
+  pointer-events: auto;
+}
+.artwork-touch-wheel,
+.card-tag-ring {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+}
+.artwork-touch-wheel .card-wheel-tag {
+  touch-action: manipulation;
+  background: radial-gradient(
+    ellipse,
+    #081b12bb 20%,
+    #081b1270 58%,
+    transparent 76%
+  );
+}
+.artwork-touch-drag-copy {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 9;
+  max-width: none;
+  object-fit: contain;
+  border-radius: 12px;
+  opacity: 0.3;
+  pointer-events: none;
+  will-change: transform;
+}
+.card-wheel-tag[aria-pressed="true"] {
+  color: #fff7c2;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.card-wheel-tag[aria-busy="true"] {
+  text-decoration: underline dotted;
+}
+.card-wheel-tag.has-error {
+  color: #ffd5bb;
+}
+.card-wheel-status,
+.card-wheel-overflow {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: max(32px, env(safe-area-inset-bottom));
+  max-height: 35%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12px;
+  border-radius: 16px;
+  background: #193a2ba8;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  pointer-events: auto;
+  font-size: 13px;
+}
+.card-wheel-overflow > button {
+  margin-bottom: 12px;
+}
+.card-wheel-overflow[hidden],
+.card-tag-ring[hidden],
+.card-wheel-status[hidden] {
+  display: none;
+}
+.artwork-preview-tags {
+  left: max(0px, calc(100% - 220px));
+  bottom: 8px;
+  width: min(220px, 100%);
+  max-height: 42%;
+}
+.card-tag-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: flex-start;
+}
+.card-tag-choice {
+  display: inline-flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+}
+.card-tag-toggle,
+.card-tags-retry {
+  position: relative;
+  min-height: 40px;
+  max-width: 100%;
+  padding: 9px 12px;
+  border: 1px dashed #e8f5e7a0;
+  border-radius: 16px;
+  background-color: #193a2b40;
+  background-image: radial-gradient(
+    circle at var(--glass-x, 35%) var(--glass-y, 25%),
+    #e7ffe329,
+    transparent 75%
+  );
+  transition: transform 180ms cubic-bezier(0.2, 1.6, 0.3, 1);
+  color: #fff;
+  backdrop-filter: blur(8px) saturate(1.12);
+  -webkit-backdrop-filter: blur(8px) saturate(1.12);
+  box-shadow:
+    inset 0 1px #ffffff55,
+    0 2px 8px #07170d30;
+  font:
+    500 13px/1.35 Inter,
+    Arial,
+    sans-serif;
+  text-align: left;
+  overflow-wrap: anywhere;
+  text-shadow: 0 1px 3px #031a10;
+  touch-action: manipulation;
+}
+.card-tag-toggle[aria-pressed="true"] {
+  border-style: solid;
+  border-color: #eaffd7;
+  background-color: #afc69b33;
+  font-weight: 700;
+}
+.card-tag-selected {
+  display: none;
+  margin-right: 5px;
+}
+.card-tag-toggle[aria-pressed="true"] .card-tag-selected {
+  display: inline;
+}
+.card-tag-toggle:hover {
+  background-color: #a7c8b347;
+}
+.card-tag-toggle:focus-visible {
+  outline: 2px solid #fff0ab;
+  outline-offset: 2px;
+}
+.card-tag-toggle:active {
+  transform: scale(0.97);
+}
+.card-tag-toggle[aria-busy="true"] {
+  border-bottom: 3px solid #f4d587;
+}
+.card-tag-error,
+.card-tags-status {
+  font:
+    12px/1.4 Inter,
+    Arial,
+    sans-serif;
+  color: white;
+  background: #392119e8;
+  padding: 5px;
+  border-radius: 6px;
+}
+.card-tag-error {
+  max-width: 220px;
+}
+.card-tag-choice.has-error .card-tag-toggle {
+  border-color: #ffb6a0;
+}
+@supports not (backdrop-filter: blur(1px)) {
+  .card-tag-toggle,
+  .card-tags-retry {
+    background: #294435e8;
+  }
+  .card-tag-toggle[aria-pressed="true"] {
+    background: #426b4ce8;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card-tag-toggle {
+    transition: none;
   }
 }

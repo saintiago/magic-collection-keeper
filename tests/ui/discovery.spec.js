@@ -1,3 +1,4 @@
+import { openArtworkDetails } from "../helpers/artwork-actions.js";
 import { test, expect } from "./fixtures.js";
 import { createNameSearch } from "../../domain/card-names.js";
 import { createDiscoveryService } from "../../application/discovery.js";
@@ -580,7 +581,7 @@ test("UC-27 ownership refresh failure never claims unowned and retry recovers; g
   await page.locator("#close").click();
   await page.locator("#search-submit").click();
   await page.locator(".card-open").first().click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   await expect(page.locator(".detail-ownership")).toContainText(
     "No owned copies",
   );
@@ -622,7 +623,7 @@ test("UC-29 one shared search marks ownership across languages without extra inv
   await page.locator("#close").click();
   await page.locator("#collection-nav").click();
   await page.locator(".card-open").first().click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   await page.getByLabel("Quantity", { exact: true }).fill("4");
   await page
     .getByRole("button", { name: "Save quantity", exact: true })
@@ -755,7 +756,7 @@ test("UC-30 result choices enter history and committed queries stay bounded in r
   await input.fill("Piracy");
   await page.locator("#search-submit").click();
   await page.locator(".card-open").first().click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   await expect(page.locator("#detail h2")).toHaveText("Piracy");
   await page.locator("#close").click();
   await input.fill("");

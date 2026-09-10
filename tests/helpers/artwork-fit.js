@@ -23,6 +23,7 @@ export async function expectInspectorFit(page) {
           .toJSON(),
         sourceWidth: parseFloat(image.style.width),
         sourceHeight: parseFloat(image.style.height),
+        requestedZoom: dialog.dataset.input === "touch" ? 2 : 3,
         width: visualViewport.width,
         height: visualViewport.height,
         left: visualViewport.offsetLeft,
@@ -48,6 +49,7 @@ export async function expectInspectorFit(page) {
       safeX,
       safeY,
       source,
+      requestedZoom,
     } = result;
     expect(image.x - left).toBeGreaterThanOrEqual(24 + safeX - 0.5);
     expect(width + left - image.right).toBeGreaterThanOrEqual(24 + safeX - 0.5);
@@ -56,10 +58,10 @@ export async function expectInspectorFit(page) {
       32 + safeY - 0.5,
     );
     const zoom = image.width / sourceWidth;
-    expect(zoom).toBeLessThanOrEqual(3.001);
+    expect(zoom).toBeLessThanOrEqual(requestedZoom + 0.001);
     expect(image.height / sourceHeight).toBeCloseTo(zoom, 3);
     expect(
-      Math.abs(zoom - 3) < 0.001 ||
+      Math.abs(zoom - requestedZoom) < 0.001 ||
         Math.abs(image.width - (width - 48 - safeX * 2)) < 0.6 ||
         Math.abs(image.height - (height - 64 - safeY * 2)) < 0.6,
     ).toBe(true);
@@ -80,31 +82,25 @@ export async function expectInspectorFit(page) {
     );
     expect(Math.abs(image.x - x)).toBeLessThan(0.6);
     expect(Math.abs(image.y - y)).toBeLessThan(0.6);
-    await expect(viewer.locator("output")).toHaveText(
-      `${Math.round(zoom * 100)}%`,
-    );
+    expect(Number(await viewer.getAttribute("data-zoom"))).toBeCloseTo(zoom, 3);
+    await expect(viewer.locator("output")).toHaveCount(0);
   }).toPass({ timeout: 3000 });
   const zoom = result.image.width / result.sourceWidth;
   return { ...result, zoom, percent: `${Math.round(zoom * 100)}%` };
 }
 
 export async function expectInspectorSides(page, image) {
-  const left = await page.locator(".artwork-details").boundingBox();
-  const right = await page.locator(".artwork-controls").boundingBox();
-  const center = image.x + image.width / 2;
-  if (left) {
-    expect(left.x + left.width / 2).toBeLessThan(center);
-    expect(
-      Math.abs(left.x + (left.x < image.x ? left.width : 0) - image.x),
-    ).toBeLessThanOrEqual(17);
-  }
-  expect(right.x + right.width / 2).toBeGreaterThan(center);
-  expect(
-    Math.abs(
-      right.x +
-        (right.x < image.x + image.width ? right.width : 0) -
-        image.x -
-        image.width,
-    ),
-  ).toBeLessThanOrEqual(17);
+  const panel = page.locator(".artwork-viewer .artwork-tags");
+  const bounds = await panel.boundingBox();
+  const viewport = page.viewportSize();
+  expect(bounds.x).toBeGreaterThanOrEqual(23.5);
+  expect(bounds.y).toBeGreaterThanOrEqual(31.5);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width - 23.5);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height - 31.5);
+  const beside = bounds.x >= image.right || bounds.x + bounds.width <= image.x;
+  if (beside) expect(Math.abs(bounds.y - image.y)).toBeLessThan(1);
+  else expect(bounds.y).toBeGreaterThanOrEqual(image.y - 0.6);
+  await expect(page.locator(".artwork-details,.artwork-controls")).toHaveCount(
+    0,
+  );
 }

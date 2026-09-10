@@ -16,6 +16,8 @@ Use Node 24 and Python 3.12, run `npm ci`, build the name index and verified vis
 
 `python recognition/scripts/prepare.py --visual-only` fetches and verifies the frozen visual models and full reference index, without browser OCR dependencies. `npm run build` creates the app Lambda bundle and pinned CPU ONNX Runtime assets with a SHA-256 runtime manifest. Generated assets are ignored by git. Do not commit public config, credentials, collection files or compiled artifacts. Release packaging excludes retired Tesseract and GPU artifacts that may remain in an older local build; existing deployed prefixes remain untouched.
 
+The three public recognition smoke images are checked-in fixtures with their original pinned hashes and source URLs. Preparation reads those exact bytes locally, so an image-host outage cannot stop the model checks. Corresponding source includes these three named files; unrelated photographs and generated screenshots remain excluded. `recognition/tests/test_public_fixtures.py` checks hashes and exported-source contents. No customer camera image is a build fixture.
+
 Checks:
 
 ```sh

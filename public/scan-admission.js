@@ -4,7 +4,7 @@ import { visualDifference, hasDetail } from "./scan-transition.js";
 // captured frame; its processing time never starts another stability interval.
 export function createScanAdmission({
   settleMs = 600,
-  departureMs = 200,
+  departureMs = 600,
 } = {}) {
   let candidate,
     latest,
@@ -12,7 +12,13 @@ export function createScanAdmission({
     stableSince,
     anchor,
     emptySince,
+    emptyAt,
+    emptyChecks = 0,
     checkedAt = -Infinity;
+  function resetDeparture() {
+    emptySince = emptyAt = undefined;
+    emptyChecks = 0;
+  }
   function matches(frame, capturedAt) {
     return (
       capturedAt >= stableSince &&
@@ -30,7 +36,7 @@ export function createScanAdmission({
       ) {
         candidate = frame;
         stableSince = now;
-        emptySince = undefined;
+        resetDeparture();
       }
       latestAt = now;
     },
@@ -46,15 +52,23 @@ export function createScanAdmission({
           visualDifference(anchor, frame) > 16
         ) {
           emptySince ??= capturedAt;
-          if (capturedAt - emptySince >= departureMs) anchor = undefined;
-        } else emptySince = undefined;
+          if (emptyAt === undefined || capturedAt > emptyAt) {
+            emptyAt = capturedAt;
+            emptyChecks++;
+          }
+          if (emptyChecks >= 3 && capturedAt - emptySince >= departureMs)
+            anchor = undefined;
+        } else resetDeparture();
         // Measured overlap/ambiguity requires fresh stable evidence afterward.
         stableSince = capturedAt;
         return false;
       }
-      emptySince = undefined;
+      resetDeparture();
       if (latestAt - stableSince < settleMs || !hasDetail(frame)) return false;
-      if (anchor && visualDifference(anchor, frame) <= 16) return false;
+      // A stable different-looking surface is still the same physical attempt
+      // until sustained checked absence. Glare/contrast/name changes cannot
+      // release this latch, nor can repeated use of one geometry result.
+      if (anchor) return false;
       anchor = frame;
       return true;
     },

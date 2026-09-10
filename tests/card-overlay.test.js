@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { inspectorDetails } from "../public/artwork-inspector.js";
+import { inspectorView } from "../public/artwork-inspector.js";
 import { tagBadges } from "../public/tag-view.js";
 
 test("UC-CARD-ART plain tags preserve identities and quantities while printed metadata stays off overlays", () => {
@@ -29,11 +29,21 @@ test("UC-CARD-ART plain tags preserve identities and quantities while printed me
   assert.match(tags, /data-tag-id="stable-1"/);
   assert.match(tags, />Deck &lt;A&gt;<\/a>/);
   assert.doesNotMatch(tags, /[×▣]/);
-  const details = inspectorDetails({ kind: "owned", row, card: row.card });
-  assert.match(details, /1 owned/);
-  assert.match(details, /2 assigned · 1 owned/);
-  assert.match(details, /Separate source/);
-  assert.doesNotMatch(details, /Hidden printed title|194|Source: Deck/);
+  const details = inspectorView({ kind: "owned", row, card: row.card }, "");
+  assert.match(details, /aria-label="Card tags"/);
+  assert.match(details, /Artwork unavailable/);
+  assert.doesNotMatch(
+    details,
+    /owned|assigned|Separate source|Hidden printed title|194|<button|<input|<select/,
+  );
   assert.equal(JSON.stringify(row), before);
-  assert.equal(inspectorDetails({ kind: "catalog", card: row.card }), "");
+  const escaped = inspectorView(
+    { kind: "catalog", card: { name: '<img onerror="bad">' } },
+    'https://example.test/a" onerror="bad',
+  );
+  assert.match(escaped, /alt="&lt;img onerror=&quot;bad&quot;&gt;"/);
+  assert.match(
+    escaped,
+    /src="https:\/\/example.test\/a&quot; onerror=&quot;bad"/,
+  );
 });

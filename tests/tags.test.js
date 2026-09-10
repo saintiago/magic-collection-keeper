@@ -141,6 +141,88 @@ test("UC-CARD-ACTIONS moves one copy atomically, preserves shortfalls and retrie
   }
 });
 
+test("CARD-13 explicit tag set/unset preserves unrelated quantities, shortfalls and retry intent", async () => {
+  const { db, service: s } = setup();
+  try {
+    await s.add("a", {
+      printing_id: card.id,
+      quantity: 5,
+      finish: "nonfoil",
+      condition: "NM",
+    });
+    const [row] = await s.list("a");
+    const [box] = await s.createTag("a", {
+      label: "Box",
+      type: "location",
+      kind: "box",
+    });
+    const deck = (
+      await s.createTag("a", { label: "Deck", type: "location", kind: "deck" })
+    ).find((tag) => tag.id !== box.id);
+    const role = (
+      await s.createTag("a", { label: "Draw", type: "role", kind: "role" })
+    ).find((tag) => tag.type === "role");
+    await s.assign("a", row.id, {
+      locations: [
+        { tag_id: box.id, quantity: 3 },
+        { tag_id: deck.id, quantity: 4 },
+      ],
+      tag_ids: [role.id],
+    });
+    const intent = (tag, selected, quantity = 1) => ({
+      operation_id: randomUUID(),
+      inventory_id: String(row.id),
+      tag_id: tag.id,
+      selected,
+      quantity,
+    });
+    let [result] = await s.applyTagAction("a", intent(box, true));
+    assert.equal(
+      result.locations.find((a) => a.tag_id === box.id).quantity,
+      3,
+      "Add is a set operation, not increment",
+    );
+    const remove = intent(box, false);
+    [result] = await s.applyTagAction("a", remove);
+    assert.deepEqual(
+      result.locations.map(({ tag_id, quantity }) => ({ tag_id, quantity })),
+      [{ tag_id: deck.id, quantity: 4 }],
+    );
+    assert.equal(result.quantity, 5);
+    await s.applyTagAction("a", intent(box, true, 3));
+    [result] = await s.applyTagAction("a", remove);
+    assert.equal(
+      result.locations.find((a) => a.tag_id === box.id).quantity,
+      3,
+      "old remove receipt cannot undo a later Add",
+    );
+    [result] = await s.applyTagAction("a", intent(role, false));
+    assert.deepEqual(result.tag_ids, []);
+    assert.equal(result.allocation_shortfall, 2);
+    await assert.rejects(
+      s.applyTagAction("a", { ...remove, selected: true }),
+      /different/,
+    );
+    await assert.rejects(
+      s.applyTagAction("b", intent(role, false)),
+      /no longer available/,
+    );
+    await assert.rejects(
+      s.applyTagAction("a", {
+        ...intent(role, true),
+        tag_id: "ae07f79b-38cc-44a2-8fc9-56588cf003ab",
+      }),
+      /System tags/,
+    );
+    await assert.rejects(
+      s.applyTagAction("a", { ...intent(box, true), from_tag_id: deck.id }),
+      /without a move/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
 test("official precon sources preserve provenance, printing finishes, namespace and permanent idempotency", async () => {
   const { db, service: s } = setup();
   const official = {

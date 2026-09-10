@@ -1,3 +1,4 @@
+import { openArtworkDetails } from "../helpers/artwork-actions.js";
 import { test, expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 
@@ -181,7 +182,7 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
     .filter({ has: page.locator(".allocation-warning") })
     .locator(".card-open")
     .click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   await page.locator("#quantity").fill("1");
   await page.getByRole("button", { name: "Save quantity" }).click();
   await expect(page.locator(".card .allocation-warning")).toHaveText(
@@ -196,7 +197,7 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
     .filter({ has: page.locator(".allocation-warning") })
     .locator(".card-open")
     .click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   await page.locator("#edit-card-tags").click();
   await page.getByRole("button", { name: "Remove location 1" }).click();
   await page.getByLabel("Copies at location 1").fill("1");
@@ -290,9 +291,8 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
     (source) => source.source_id === "keeper_test_deck_alpha",
   );
   await page.locator(".card-open").first().click();
-  await page
-    .locator(`.artwork-details a[data-tag-id="${alpha.tag_id}"]`)
-    .click();
+  await openArtworkDetails(page);
+  await page.locator(`#detail a[data-tag-id="${alpha.tag_id}"]`).click();
   await expect(page.locator("#result-count")).toHaveText(
     "2 assigned copies · 1 distinct entry",
   );
@@ -305,7 +305,7 @@ test("LIVE-03 typed tags and source imports persist with soft allocation consist
   await expect(page.locator(".card-bottom")).toHaveCount(0);
   await expect(page.locator("#detail")).not.toBeVisible();
   await page.locator(".card-open").click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   const beta = sources.find(
     (source) => source.source_id === "keeper_test_deck_beta_",
   );

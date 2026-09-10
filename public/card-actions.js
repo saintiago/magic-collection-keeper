@@ -1,6 +1,7 @@
 import { createArtworkViewer } from "./artwork-viewer.js";
 import { createCardGestures } from "./card-gestures.js";
 import { createCardActionSave } from "./card-action-save.js";
+import { createCardTagActions } from "./card-tag-actions.js";
 
 // Browser composition: gestures hold descriptors; only deliberate actions call I/O.
 export function createCardActions({
@@ -25,8 +26,15 @@ export function createCardActions({
     currentView: () => currentView(),
     onOwned: (rows) => onOwned(rows),
     onPending: (id) => onPending(id),
+    onDraft: (result) => importPage.receiveDraft?.(result),
+    onSaved: (result, intent) => artworkViewer.reconcile(result, intent),
     onUsed: (id) => home.tag(id),
     notify,
+  });
+  const tagActions = createCardTagActions({
+    api: request,
+    save: (intent) => cardActionSave.save(intent),
+    tags: () => getState().filterTags,
   });
   function cardActionSource(target) {
     const { visibleCards, mode, filterTags, activeTagId } = getState();
@@ -66,6 +74,18 @@ export function createCardActions({
   }
   async function handleCardAction(item, tag, element) {
     const { mode } = getState();
+    if (typeof tag.selected === "boolean") {
+      if (item.tagState) {
+        item.tagState.set(tag.id, tag.selected);
+        return;
+      }
+      try {
+        await tagActions.toggle(item, tag, tag.selected, tag.quantity || 1);
+      } catch (error) {
+        if (error.name !== "AbortError") notify(error.message, true);
+      }
+      return;
+    }
     if (item.kind === "pending") {
       const saved = await importPage.cardActionApply(item, tag);
       if (saved && !tag.action) home.tag(tag.id);
@@ -140,27 +160,28 @@ export function createCardActions({
     }
   }
   const artworkViewer = createArtworkViewer({
-    onDetails: (item, element) =>
-      handleCardAction(item, { action: "details" }, element),
-    onEdit: (item, element) =>
-      handleCardAction(item, { action: "edit" }, element),
-    onTag: (tag) => navigateTag(tag),
-    onQuantity: async (item, quantity) => {
-      const generation = accountGeneration;
-      const rows = await request(
-        `/api/collection/${encodeURIComponent(item.row.id)}`,
-        { method: "PATCH", body: JSON.stringify({ quantity }) },
-      );
-      if (generation !== accountGeneration) return;
-      onOwned(rows);
-      return rows.find((row) => String(row.id) === String(item.row.id));
-    },
+    tags: () => getState().filterTags,
+    recent: () => home.recentTags,
+    loadTags: (item) => tagActions.load(item),
+    onToggle: (...args) => tagActions.toggle(...args),
+    onOpened: (card) => home.card(card),
   });
   const cardGestures = createCardGestures({
     resolve: cardActionSource,
     tags: () => getState().filterTags,
     recent: () => home.recentTags,
     viewer: artworkViewer,
+    prepare: async (item) => {
+      const settled = await cardActionSave.whenSettled();
+      if (item.kind === "owned" && settled?.intent.kind === "owned") {
+        const row = settled.result.find(
+          (row) => String(row.id) === String(item.row.id),
+        );
+        if (row) item.row = row;
+      }
+      return tagActions.load(item);
+    },
+    onError: (error) => notify(error.message, true),
     onAction: handleCardAction,
     onSettled,
   });
@@ -172,10 +193,12 @@ export function createCardActions({
     start(account) {
       accountGeneration++;
       cardActionSave.start(account);
+      tagActions.start(account);
     },
     stop() {
       accountGeneration++;
       cardActionSave.stop();
+      tagActions.stop();
       cardGestures.cancel();
     },
     cancel: cardGestures.cancel,

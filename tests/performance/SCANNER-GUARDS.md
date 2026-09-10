@@ -1,3 +1,7 @@
+## September 9 follow-up — local, not deployed
+
+SCAN-03/04 regression tests reproduced repeat admission when a stationary signature changed markedly without physical departure, plus insufficient two-frame absence evidence. Admission now latches every attempted card until at least three fresh no-card geometry checks span 600 ms of continuously observed empty appearance. Sampling gaps, ambiguity and repeated/late results do not rearm it; background/resume retains the latch. Unit regressions and controlled Chromium camera checks cover glare-like overlays, contrast, alternate stable appearance, transient detection loss, one success/copy, genuine empty/re-entry of identical artwork, and persisted draft reload. Actual public-image geometry still rejects two-card/overlap scenes. The supplied Elsha screenshot establishes repeated queued rows, not their exact cause or raw camera behavior. Prolonged complete occlusion and invisible swaps cannot prove physical-card identity; physical foil/camera verification remains outstanding. The following historical performance measurements predate this more conservative departure threshold.
+
 # One-card admission, live overlay and independent recognition
 
 September 9, 2026. This report describes recorded-input and desktop browser checks. Deployed checks are recorded separately after release. Private media and raw provider outputs are excluded from this repository.
