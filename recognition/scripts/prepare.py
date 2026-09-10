@@ -81,9 +81,10 @@ CatalogV2Downloader.install(
 for name in ("artifact-manifest.json", "ocr-models.json"):
     shutil.copyfile(root / name, artifacts / name)
 print("Frozen public models and catalog prepared.")
-# A reproducible public-artwork fixture; never a customer camera photograph.
+# Exact public artwork is checked in so provider downtime cannot invalidate
+# an otherwise reproducible model build. The original digest remains enforced.
 fetch(
-    "https://cards.scryfall.io/normal/front/4/7/4796e5e4-515c-4d89-92da-b2d5b5b39557.jpg?1783907159",
+    (root / "fixtures/adaptive.jpg").as_uri(),
     artifacts / "public-card.jpg",
     "03a53910a88381e2e1e3320d8039b7cc25527c9b4caa1a9f16743b44421c04c4",
 )
@@ -110,7 +111,7 @@ for source in json.loads((root.parent / "tests/performance/sources.json").read_t
     if source["key"] not in ("bolt", "ring"):
         continue
     path = artifacts / ("public-" + source["key"] + ".jpg")
-    fetch(source["url"], path, source["sha256"])
+    fetch((root / "fixtures" / (source["key"] + ".jpg")).as_uri(), path, source["sha256"])
     with Image.open(path) as card:
         card = ImageOps.contain(card.convert("RGB"), (480, 670))
         frame = Image.new("RGB", (700, 980), (28, 60, 40))
