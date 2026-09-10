@@ -1,61 +1,10 @@
-name: Test and deploy Keeper
+name: Diagnose rendered return frames
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-    inputs:
-      force_full:
-        description: Force the full backend/model release path
-        type: boolean
-        default: false
-      redeploy_frontend:
-        description: Redeploy the compatible frontend, preserving all reuse guards
-        type: boolean
-        default: false
 permissions:
   contents: read
-concurrency:
-  group: keeper-${{ github.ref }}
-  cancel-in-progress: false
 jobs:
-  plan:
-    runs-on: ubuntu-latest
-    outputs:
-      mode: ${{ steps.plan.outputs.mode }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-      - id: plan
-        name: Classify against the published release
-        env:
-          WEBSITE_URL: ${{ vars.WEBSITE_URL }}
-          API_URL: ${{ vars.API_URL }}
-          CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
-          BACKEND_RECOGNITION: ${{ vars.BACKEND_RECOGNITION }}
-          RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
-          FORCE_FULL: ${{ inputs.force_full || 'false' }}
-          REDEPLOY_FRONTEND: ${{ inputs.redeploy_frontend || 'false' }}
-        run: node scripts/select-release.mjs
-      - uses: actions/upload-artifact@v4
-        with:
-          name: keeper-release-plan
-          path: build/release-plan.json
-  frontend:
-    needs: plan
-    permissions:
-      contents: read
-      id-token: write
-    if: needs.plan.outputs.mode == 'frontend'
-    uses: ./.github/workflows/frontend-deploy.yml
-    secrets: inherit
-  test:
-    needs: plan
-    if: needs.plan.outputs.mode != 'frontend'
+  return-frames:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,121 +12,11 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-      - uses: actions/download-artifact@v4
-        with:
-          name: keeper-release-plan
-          path: build
       - run: npm ci
-      - run: node scripts/build-name-index.mjs
-      - run: npm test
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Build verified browser recognition assets
-        run: |
-          pip install -r recognition/requirements-visual.txt
-          python recognition/scripts/prepare.py --visual-only
-      - run: npm run build
-      - name: Install verified Playwright browsers and dependencies
-        run: bash scripts/install-ci-browsers.sh
-      - run: npm run test:ui
-      - name: Verify WebKit touch, imports and actual recognition models
-        run: npx playwright test tests/ui/discovery.spec.js tests/ui/home.spec.js tests/ui/hybrid-search.spec.js tests/ui/card-page.spec.js tests/ui/scan-wheel-photo.spec.js tests/ui/backend-scanner.spec.js tests/ui/scanner-model.spec.js tests/ui/app.spec.js tests/ui/phone-review.spec.js tests/ui/one-card.spec.js tests/ui/card-actions.spec.js tests/ui/card-tags.spec.js tests/ui/card-tag-retry.spec.js --browser=webkit --workers=1
-      - name: Verify fitted artwork, fonts and glass interactions in both engines
-        run: npx playwright test -c tests/prototype/playwright.config.mjs
+      - run: bash scripts/install-ci-browsers.sh
+      - run: npx playwright test -c tests/prototype/playwright.config.mjs tests/prototype/return.spec.js --project=webkit --repeat-each=5
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: keeper-build
-          path: |
-            public/
-            build/cloud.mjs
-            build/catalog/
-            build/release-plan.json
-  deploy:
-    concurrency:
-      group: keeper-catalog-publication
-      cancel-in-progress: false
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.plan.outputs.mode == 'full'
-    needs: [plan, test]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: keeper-build
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: us-east-1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-      - run: npm ci
-      - name: Write public configuration
-        env:
-          API_URL: ${{ vars.API_URL }}
-          CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
-          BACKEND_RECOGNITION: ${{ vars.BACKEND_RECOGNITION }}
-        run: node -e "require('fs').writeFileSync('public/config.json',JSON.stringify({region:'us-east-1',apiUrl:process.env.API_URL,clientId:process.env.CLIENT_ID,backendRecognition:process.env.BACKEND_RECOGNITION==='true'}))"
-      - name: Prepare unique deployment
-        env:
-          BUCKET: ${{ vars.WEBSITE_BUCKET }}
-          RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
-        run: |
-          aws s3 cp "s3://$BUCKET/index.html" build/previous-index.html --no-progress
-          node scripts/prepare-release.mjs
-      - name: Verify corresponding private source before API publication
-        env:
-          RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
-          KEEPER_TEST_USER: ${{ secrets.KEEPER_TEST_USER }}
-          KEEPER_TEST_PASSWORD: ${{ secrets.KEEPER_TEST_PASSWORD }}
-        run: |
-          aws lambda get-function-configuration --function-name magic-collection-keeper --query '{CodeSha256:CodeSha256,LastUpdateStatus:LastUpdateStatus}' > build/lambda-identity.json
-          node scripts/verify-release-backend.mjs full
-          python scripts/verify-corresponding-source.py build/recognition-source.zip
-      - name: Deploy API
-        run: |
-          cd build
-          zip ../cloud.zip cloud.mjs catalog/current.json catalog/*.server.gz
-          aws lambda update-function-code --function-name magic-collection-keeper --zip-file fileb://../cloud.zip > /dev/null
-          aws lambda wait function-updated --function-name magic-collection-keeper
-      - name: Package frontend with the published API identity
-        run: |
-          aws lambda get-function-configuration --function-name magic-collection-keeper --query '{CodeSha256:CodeSha256,LastUpdateStatus:LastUpdateStatus}' > build/lambda-identity.json
-          node scripts/prepare-release.mjs --package
-      - name: Publish multilingual card names
-        run: node scripts/publish-name-index.mjs
-        env:
-          WEBSITE_BUCKET: ${{ vars.WEBSITE_BUCKET }}
-      - name: Deploy website
-        env:
-          BUCKET: ${{ vars.WEBSITE_BUCKET }}
-          DISTRIBUTION: ${{ vars.DISTRIBUTION_ID }}
-        run: |
-          RELEASE_ID=$(node -p "JSON.parse(require('fs').readFileSync('build/release.json')).id")
-          aws s3 sync "build/site/releases/$RELEASE_ID/" "s3://$BUCKET/releases/$RELEASE_ID/" --cache-control 'public,max-age=31536000,immutable' --no-progress
-          aws s3 cp public/config.json "s3://$BUCKET/config.json" --cache-control 'no-cache,no-store,must-revalidate' --content-type application/json --no-progress
-          aws s3 cp build/site/index.html "s3://$BUCKET/index.html" --cache-control 'no-cache,no-store,must-revalidate' --content-type text/html --no-progress
-          INVALIDATION=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths '/*' --query Invalidation.Id --output text)
-          aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION" --id "$INVALIDATION"
-      - name: Install verified Playwright browsers and dependencies
-        run: bash scripts/install-ci-browsers.sh
-      - name: Verify protected deployed app
-        env:
-          RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
-          LIVE_URL: ${{ vars.WEBSITE_URL }}
-          KEEPER_TEST_USER: ${{ secrets.KEEPER_TEST_USER }}
-          KEEPER_TEST_PASSWORD: ${{ secrets.KEEPER_TEST_PASSWORD }}
-          KEEPER_OTHER_USER: ${{ secrets.KEEPER_OTHER_USER }}
-          KEEPER_OTHER_PASSWORD: ${{ secrets.KEEPER_OTHER_PASSWORD }}
-          KEEPER_TAGS_USER: ${{ secrets.KEEPER_TAGS_USER }}
-          KEEPER_TAGS_PASSWORD: ${{ secrets.KEEPER_TAGS_PASSWORD }}
-          KEEPER_IMPORT_USER: ${{ secrets.KEEPER_IMPORT_USER }}
-          KEEPER_IMPORT_PASSWORD: ${{ secrets.KEEPER_IMPORT_PASSWORD }}
-        run: |
-          npx playwright test --config playwright.live.config.js
-          npx playwright test --config playwright.mobile-live.config.js
+          name: return-frame-diagnostics
+          path: test-results/
