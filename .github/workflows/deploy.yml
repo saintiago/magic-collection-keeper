@@ -43,6 +43,7 @@ jobs:
         run: node scripts/select-release.mjs
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 1
           name: keeper-release-plan
           path: build/release-plan.json
   frontend:
@@ -86,7 +87,9 @@ jobs:
       - name: Verify fitted artwork, fonts and glass interactions in both engines
         run: npx playwright test -c tests/prototype/playwright.config.mjs
       - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.plan.outputs.mode == 'full'
         with:
+          retention-days: 1
           name: keeper-build
           path: |
             public/

@@ -1,5 +1,7 @@
 # Use cases and E2E coverage
 
+UC-DEPLOY-RETENTION (DEPLOY-06): after a main release passes its protected deployment checks, remove only its known disposable Actions handoffs. Failed, PR, checks-only, concurrent or newer attempts retain artifacts until expiry; source/publication handoffs and durable release assets remain protected. Disposable uploads expire after one day; recognition cross-run handoffs have a documented seven-day exception. [Safety tests](../tests/artifact-cleanup.test.js), [consumer audit](OPERATIONS.md#github-artifact-retention). Status: locally implemented; main activation pending.
+
 [Owner requirements, acceptance criteria and queued requests](REQUIREMENTS.md).
 
 **UC-SCAN-START:** Home Scan remains disabled and marked busy while the verified account and saved captures load. Once initialized, the first tap opens the scanner. `tests/ui/phone-review.spec.js` delays capture recovery deterministically; LIVE-13 starts at Home immediately after sign-in against the deployed app. No test changes that origin to bypass startup.
