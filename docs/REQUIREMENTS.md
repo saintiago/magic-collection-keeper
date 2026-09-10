@@ -75,6 +75,8 @@ DEPLOY-01–04 status: production delivery verified in `r91-a1` following the fu
 
 - **CARD-10:** Outside-click/tap dismissal of the enlarged card must visibly shrink and translate the same card back into its original grid frame with smooth overshoot-and-settle motion, rather than abruptly disappearing. Keep the source tile hidden until the returning card reaches it, then restore it without a duplicate image or flash. Preserve the now-approved opening behavior. Consume the dismissing input so it cannot activate another card/control. Resolve the destination from the current source frame; handle scrolling, interrupted/rapid input, missing source tiles and reduced-motion preference safely. Verify intermediate closing frames and final alignment on desktop and phone, including edge cards; do not claim physical-phone verification from emulation.
 
+CARD-10 verification remains in progress: PR run 34420482350 passed the application Chromium and required WebKit checks twice, but each attempt missed intermediate shrinking frames in one desktop WebKit prototype case. Ten unchanged local repeats of the first failing edge case passed. The return test now records frame times, layer transforms and bounds on assertion failure; the visible-shrink and exact-landing criteria are unchanged. The application revision is not production delivered.
+
 ## Recent cards — queued
 
 - **RECENT-01:** Populate Recent cards from both cards clicked/tapped to open in any card list and cards successfully added to the collection. Opening the in-page zoom counts; hover, background recognition and merely loading a list do not. Include catalogue, collection, tag/deck-filtered and pending-import lists wherever cards can be opened.

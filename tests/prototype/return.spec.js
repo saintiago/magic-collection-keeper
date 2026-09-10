@@ -37,10 +37,19 @@ async function recordReturn(
             if (scroll) window.scrollBy(0, 55);
           }
           returnFrames.push({
+            time: performance.now(),
             image: image.getBoundingClientRect().toJSON(),
             source: tile.getBoundingClientRect().toJSON(),
             hidden: getComputedStyle(tile).opacity === "0",
             same: image === document.querySelector(".artwork-full-image"),
+            transforms: [
+              ".artwork-open-reveal",
+              ".artwork-open-orientation",
+              ".artwork-full-image",
+            ].map(
+              (selector) =>
+                getComputedStyle(dialog.querySelector(selector)).transform,
+            ),
           });
         }
         requestAnimationFrame(sample);
@@ -91,6 +100,7 @@ for (const viewport of [
               frame.image.width < opening.width * 0.9 &&
               frame.image.width > frame.source.width * 1.1,
           ),
+          JSON.stringify({ opening, frames }),
         ).toBeTruthy();
         const last = frames.at(-1);
         for (const key of ["x", "y", "width", "height"])
