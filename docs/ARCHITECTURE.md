@@ -62,6 +62,8 @@ Wheel preparation also waits for an in-flight card save and reconciles its settl
 
 ## Modules and contracts
 
+`artwork-return.js` advances its return spring by at most 32 ms per rendered step so a stalled early paint cannot consume the visible shrink. Normal refresh retains the 380 ms spring; a 1200 ms wall-time bound forces the exact destination before handoff. The two moving layers are prepared only while the enlarged artwork exists. Source geometry remains live for scrolling/replacement, and missing-source/reduced-motion/sign-out cleanup remains independent. The bounded-stall regression is in `tests/prototype/return.spec.js`; hardware behavior is unverified.
+
 | Module                                    | Responsibility / replacement contract                                                                                                       |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `domain/inventory.js`                     | Application errors, quantity/condition/finish/search invariants; no I/O.                                                                    |
