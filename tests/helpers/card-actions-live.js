@@ -367,6 +367,10 @@ export async function exerciseCardActions(
     expect(replayed.draft.rows[0]).toEqual(restored.draft.rows[0]);
     expect(replayed.draft.rows[0].quantity).toBe(1);
     expect(await liveApi(page, "/api/collection")).toEqual([]);
+    // The direct API operations advanced the draft revision outside this page.
+    // Refresh its saved revision before asking the UI to clear that draft.
+    await activate(page.locator("#draft-reload"));
+    await expect(page.locator("#draft-clear")).toBeEnabled();
     await activate(page.locator("#draft-clear"));
     await expect(page.locator(".draft-row")).toHaveCount(0);
     // A second untagged selection verifies explicit Add without retaining a
