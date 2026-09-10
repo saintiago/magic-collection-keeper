@@ -3,6 +3,81 @@ import assert from "node:assert/strict";
 import { createHomeHistory, activityEntries } from "../public/home-history.js";
 import { homeContent } from "../public/home-view.js";
 import { routeMode } from "../public/screen.js";
+
+test("RECENT-02 distinct printings survive persistence, reopening moves only that printing and Home never substitutes another owned printing", () => {
+  const saved = new Map();
+  const storage = {
+    read: (key) => saved.get(key),
+    write: (key, value) => saved.set(key, value),
+    remove: (key) => saved.delete(key),
+  };
+  const first = {
+    kind: "card",
+    name: "Same card",
+    oracle_id: "same-oracle",
+    printing_id: "first",
+    image_url: "https://cards.scryfall.io/first.jpg",
+  };
+  const second = {
+    ...first,
+    printing_id: "second",
+    image_url: "https://cards.scryfall.io/second.jpg",
+  };
+  const history = createHomeHistory({ storage });
+  history.start("one");
+  history.remember(first);
+  history.remember(second);
+  assert.deepEqual(
+    history.state.entries.map((item) => item.printing_id),
+    ["second", "first"],
+  );
+  history.remember(first);
+  assert.deepEqual(
+    history.state.entries.map((item) => item.printing_id),
+    ["first", "second"],
+  );
+  history.stop();
+  history.start("two");
+  assert.deepEqual(history.state.entries, []);
+  history.stop();
+  history.start("one");
+  assert.deepEqual(
+    history.state.entries.map((item) => item.printing_id),
+    ["first", "second"],
+  );
+  const view = homeContent({
+    activity: history.state,
+    searches: [],
+    tags: [],
+    tagsReady: true,
+    collection: {
+      status: "ready",
+      rows: [
+        {
+          id: "owned-first",
+          printing_id: "first",
+          quantity: 1,
+          card: {
+            id: "first",
+            name: first.name,
+            oracle_id: first.oracle_id,
+            image_uris: { normal: first.image_url },
+          },
+        },
+      ],
+    },
+  });
+  assert.deepEqual(
+    view.cards.map((item) => item.printing_id),
+    ["first", "second"],
+  );
+  assert.match(view.html, /src="https:\/\/cards.scryfall.io\/second.jpg"/);
+  assert.match(view.html, /data-card-key="second"/);
+  assert.match(
+    view.html,
+    /data-home-card="1" aria-label="Open Same card artwork · Not owned"/,
+  );
+});
 test("UC-32 home activity bounds real card/tag interactions, persists under verified keys and clears only one account", () => {
   const data = new Map();
   let denied = false;

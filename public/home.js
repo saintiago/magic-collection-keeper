@@ -75,13 +75,9 @@ export function createHome({ root, onCard, onClearSearches, onRetry }) {
       if (!button) return null;
       const ref = cards[Number(button.dataset.homeCard)];
       if (!ref) return null;
-      const row =
-        (inputs.collection.rows || []).find(
-          (row) => row.printing_id === ref.printing_id,
-        ) ||
-        (inputs.collection.rows || []).find(
-          (row) => row.card.oracle_id === ref.oracle_id,
-        );
+      const row = (inputs.collection.rows || []).find(
+        (row) => row.printing_id === ref.printing_id,
+      );
       return {
         element: button,
         item: row

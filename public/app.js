@@ -272,11 +272,7 @@ const home = createHome({
   onClearSearches: () => recentSearches.clear(),
   onRetry: () => initializeCollection(),
   onCard: (item) => {
-    const row =
-      owned.find((row) => row.printing_id === item.printing_id) ||
-      owned.find(
-        (row) => item.oracle_id && row.card.oracle_id === item.oracle_id,
-      );
+    const row = owned.find((row) => row.printing_id === item.printing_id);
     if (row) detail(row);
     else cardPage.open(item);
   },

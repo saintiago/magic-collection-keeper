@@ -25,7 +25,7 @@ export function activityEntries(values) {
     .map(activityEntry)
     .filter((item) => {
       if (!item) return false;
-      const key = `${item.kind}:${item.id || item.oracle_id || item.printing_id}`;
+      const key = `${item.kind}:${item.kind === "tag" ? item.id : item.printing_id}`;
       if (seen.has(key) || counts[item.kind] >= 12) return false;
       seen.add(key);
       counts[item.kind]++;

@@ -62,6 +62,8 @@ Wheel preparation also waits for an in-flight card save and reconciles its settl
 
 ## Modules and contracts
 
+The follow-up Recent revision keys Home card activity by exact printing ID. Home's rendered image, owned-row lookup and gesture source resolve that same printing; another owned printing of the oracle identity cannot replace it. Account-isolated bounded persistence is unchanged. Search suggestion ownership remains identity-level. Addition and confirmed-selection event wiring is still in progress, and this revision is not deployed.
+
 | Module                                    | Responsibility / replacement contract                                                                                                       |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `domain/inventory.js`                     | Application errors, quantity/condition/finish/search invariants; no I/O.                                                                    |
