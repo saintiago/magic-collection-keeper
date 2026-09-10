@@ -24,7 +24,7 @@ jobs:
         with:
           name: card-name-index
           path: build/catalog/
-          retention-days: 2
+          retention-days: 1
   publish:
     needs: build
     runs-on: ubuntu-latest

@@ -27,7 +27,9 @@ jobs:
       - name: Verify frontend controls, failure paths and both browser engines
         run: node scripts/frontend-checks.mjs
       - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:
+          retention-days: 1
           name: keeper-frontend-build
           path: |
             public/

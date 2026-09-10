@@ -1,0 +1,32 @@
+name: Remove verified deployment intermediates
+on:
+  workflow_run:
+    workflows: ["Test and deploy Keeper"]
+    types: [completed]
+permissions:
+  contents: read
+jobs:
+  cleanup:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    concurrency:
+      group: keeper-artifact-cleanup-${{ github.event.workflow_run.id }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { cleanupDeployArtifacts } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/cleanup-deploy-artifacts.mjs`);
+            await cleanupDeployArtifacts({
+              github,
+              runId: context.payload.workflow_run.id,
+              attempt: context.payload.workflow_run.run_attempt,
+              log: core.info,
+            });

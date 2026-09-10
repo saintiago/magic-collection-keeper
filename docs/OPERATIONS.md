@@ -12,6 +12,8 @@ For loading failures, read the timestamp/status and retry. Sign-out clears snaps
 
 ## Local setup and checks
 
+See [GitHub artifact retention](#github-artifact-retention) for temporary build handoffs and durable-source exceptions.
+
 Use Node 24 and Python 3.12, run `npm ci`, build the name index and verified visual assets as in README, then `npm run build` and `npm start` (loopback port 3000). `PORT` and `DB_PATH` override the local listener/database. The app has no local account system and cannot be used as a LAN/public server. Use the protected AWS deployment for phones. Local collection data is in ignored `data/collection.sqlite`; stop the server before making a simple file backup so the WAL is checkpointed.
 
 `python recognition/scripts/prepare.py --visual-only` fetches and verifies the frozen visual models and full reference index, without browser OCR dependencies. `npm run build` creates the app Lambda bundle and pinned CPU ONNX Runtime assets with a SHA-256 runtime manifest. Generated assets are ignored by git. Do not commit public config, credentials, collection files or compiled artifacts. Release packaging excludes retired Tesseract and GPU artifacts that may remain in an older local build; existing deployed prefixes remain untouched.
@@ -196,3 +198,23 @@ LIVE-17 (desktop) and LIVE-18 (phone-sized WebKit) use keeper-e2e, begin with an
 Shared card tile regression: idle cards must have no metadata below artwork. Native owned/deck/Home and catalogue taps open a same-route inspector, while explicit Card details and autocomplete retain dedicated-page navigation. On desktop verify the visible 200% hover artwork tilts, not just its original tile. Drag directly to the larger wheel; no ellipsis/action button remains. Edge screenshots and long labels are tested in Chromium/WebKit; physical phone/GPU behavior remains unverified. LIVE-17/18 use only reserved profiles and retain replay/isolation/cleanup assertions.
 
 The normal full release r114-a1 passed all 20 deployed desktop/mobile cases, including exact-printing addition receipts/Recent history and source-refresh return behavior. Its recognition alias is review version 17; the matching source digest and independent API/frontend identities are recorded in [r114 evidence](../tests/performance/R114-RELEASE.md). Its scoped source update changed only Function, Version and Alias; no provisioned/reserved concurrency or model image/text logging was enabled. The verification-only workflow remains available for an exact fixed published release; do not rerun it against old assets to claim a newer runtime fix is delivered.
+
+## GitHub artifact retention
+
+DEPLOY-06 treats Actions artifacts as temporary job handoffs. Explicit one-day retention is the minimum supported by [upload-artifact](https://github.com/actions/upload-artifact); it affects new uploads, not old copies. Failed/cancelled app runs keep available intermediates for that day. No additional failed-run image dump is introduced. App build bundles upload only when a main publication job will consume them; PR/checks-only runs do not upload unused build bundles.
+
+| Artifact | Actual consumer | Retention / deletion |
+| --- | --- | --- |
+| `keeper-release-plan` | Same-run test or frontend-test | One day; delete after verified app deployment |
+| `keeper-build` | Same-run deploy | One day; delete after verified app deployment |
+| `keeper-frontend-build` | Same-run frontend-publish | One day; delete after verified app deployment |
+| `card-name-index` | Same-run catalog publish | One day; expires normally (upload alone is not protected-app verification) |
+| `published-release-verification` | Release investigation/evidence | One day; promote necessary evidence to tracked reports separately |
+| `recognition-verification` | Explicit `verified_run_id` in separate recognition publication, reviewed image and corresponding source | Seven-day handoff exception; excluded from app cleanup |
+| `reviewed-recognition-image` | Manual source/publication audit, source ZIP and ECR digest | Seven-day handoff exception; ECR alone does not prove durable source availability |
+
+Cleanup runs trusted main code after a successful main app workflow. Only its cleanup job receives repository-scoped `actions: write`; it has no AWS credentials or role changes. It inspects the exact originating run/attempt and requires successful full or frontend publication and the existing protected live verification step. Those checks verify immutable served release identities and authenticated corresponding source. Only that run's three named app intermediates can be deleted. Unknown artifacts, recognition handoffs, foreign repositories, PRs, checks-only runs, failures and concurrent runs are preserved. Before each deletion it checks for a queued/new attempt. Rerun and deletion APIs are not transactional: after cleanup/expiry, start a complete new run, not a failed-jobs-only retry depending on deleted handoffs.
+
+Durable S3 release prefixes, vendor references, frontend source overlays, authenticated recognition source, ECR images, Git history and local audit backups are outside this policy. Rollback uses a new main revert/deployment and retained S3 assets, not build ZIPs. Recognition publication remains separately reviewed: verify durable image/source copies before its handoff expires; rebuild/reverify if it expires before publication. Automatic cleanup performs no historical sweep. [Safety tests](../tests/artifact-cleanup.test.js) cover success, failures/missing verification, foreign/same-name artifacts, source preservation and reruns.
+
+September 10: archived recognition copies 10133065718 and 10132600602 were deleted under exact owner authorization after full local image/source hashes matched saved audits; both GitHub IDs then returned 404. Scanner deployment [34458026800 attempt 2](https://github.com/saintiago/magic-collection-keeper/actions/runs/34458026800/attempts/2) still failed at upload with the reported quota-accounting delay of 6–12 hours, before tests/publication. Retention cannot force immediate accounting refresh. Subsequent owner-authorized historical cleanup is coordinated separately.
