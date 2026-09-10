@@ -1,9 +1,14 @@
 // Public artwork in a generated stream, never physical-device verification.
 export function installSyntheticCardCamera(imageData) {
   navigator.mediaDevices.getUserMedia = async () => {
-    const photo = new Image();
-    photo.src = imageData;
-    await photo.decode();
+    const photos = await Promise.all(
+      (Array.isArray(imageData) ? imageData : [imageData]).map(async (data) => {
+        const photo = new Image();
+        photo.src = data;
+        await photo.decode();
+        return photo;
+      }),
+    );
     const video = document
       .querySelector("#camera-video")
       .getBoundingClientRect();
@@ -12,7 +17,7 @@ export function installSyntheticCardCamera(imageData) {
     canvas.width = Math.round(video.width * 2);
     canvas.height = Math.round(video.height * 2);
     const ctx = canvas.getContext("2d");
-    window.paintSyntheticCard = (blank = false) => {
+    window.paintSyntheticCard = (blank = false, index = 0) => {
       ctx.fillStyle = "#384c43";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       if (blank) return;
@@ -20,7 +25,7 @@ export function installSyntheticCardCamera(imageData) {
         y = (guide.top - video.top) * 2,
         w = guide.width * 2,
         h = guide.height * 2;
-      ctx.drawImage(photo, x, y, w, h);
+      ctx.drawImage(photos[index], x, y, w, h);
     };
     window.paintSyntheticCard();
     window.syntheticStream = canvas.captureStream(15);

@@ -30,7 +30,8 @@ test("LIVE-04 continuous synthetic camera with real recognition, real printing r
   );
   try {
     const image = await publicCardFrame(page);
-    await page.addInitScript(installSyntheticCardCamera, image);
+    const nextImage = await publicCardFrame(page, 1);
+    await page.addInitScript(installSyntheticCardCamera, [image, nextImage]);
     await page.addInitScript(() => {
       window.emptyGeometryChecks = [];
       window.addEventListener(
@@ -77,25 +78,34 @@ test("LIVE-04 continuous synthetic camera with real recognition, real printing r
     await expect(page.locator(".scan-option")).toHaveCount(2);
     await page.locator(".scan-plus").click();
     await expect(page.locator("#scan-controls output")).toHaveText("2");
+    // Slide to distinct artwork with no blank frame; the incoming card stays
+    // stationary afterward and must contribute exactly one capture.
+    await page.evaluate(() => window.paintSyntheticCard(false, 1));
+    await choose();
+    await page.waitForTimeout(1800);
+    await expect(page.locator(".scan-option")).toHaveCount(3);
     await page.locator("#scan-back").click();
     expect(
       await page.evaluate(
         () => window.syntheticStream.getTracks()[0].readyState,
       ),
     ).toBe("ended");
-    await expect(page.locator(".draft-row")).toHaveCount(2);
+    await expect(page.locator(".draft-row")).toHaveCount(3);
     const { draft } = await liveApi(page, "/api/import-draft");
-    expect(draft.rows).toHaveLength(2);
-    for (const row of draft.rows)
+    expect(draft.rows).toHaveLength(3);
+    for (const row of draft.rows.slice(0, 2))
       expect(row.card.oracle_id).toBe("a6657fcf-f08c-4b03-8ec8-cb0b194eb553");
+    expect(draft.rows[2].card.oracle_id).toBe(
+      "4457ed35-7c10-48c8-9776-456485fdf070",
+    );
     const reviewed = reviewedOwnership(draft.rows);
     await page.locator("#draft-add").click();
     await expect(page.locator(".import-status")).toContainText(
-      "Added 3 new copies",
+      "Added 4 new copies",
     );
     await page.locator("#draft-back").click();
     await page.reload();
-    await expect(page.locator("#total")).toHaveText("3");
+    await expect(page.locator("#total")).toHaveText("4");
     const saved = await liveApi(page, "/api/collection");
     expect(saved).toHaveLength(reviewed.length);
     expect(reviewedOwnership(saved)).toEqual(reviewed);

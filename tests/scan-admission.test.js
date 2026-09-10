@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createScanAdmission } from "../public/scan-admission.js";
+import {
+  createScanAdmission,
+  differentCardArtwork,
+} from "../public/scan-admission.js";
 const pattern = (shift) =>
   Uint8ClampedArray.from({ length: 768 * 4 }, (_, i) =>
     i % 4 === 3 ? 255 : (Math.floor(i / 4) + shift) % 2 ? 220 : 30,
@@ -164,4 +167,57 @@ test("UC-ONE-CARD rejected overlap never consumes a copy or rearms outgoing card
     false,
     "ambiguity cannot establish departure",
   );
+});
+
+test("SCAN-08 fresh stable different artwork permits the next card without an empty guide, but not glare, contrast or replayed evidence", () => {
+  const nextArtwork = Uint8ClampedArray.from({ length: a.length }, (_, i) =>
+    i % 4 === 3
+      ? 255
+      : ((Math.floor(i / 4) * 97) ^
+          (Math.floor(i / 4) * Math.floor(i / 4) * 13)) &
+        255,
+  );
+  assert.equal(
+    differentCardArtwork(a, b),
+    false,
+    "one-pixel pose shift is the same artwork",
+  );
+  const gate = createScanAdmission();
+  trackUntil(gate, a, 0, 720);
+  assert.equal(gate.validate(a, 720, "single", a), true);
+  const contrast = a.map((v, i) => (i % 4 === 3 ? 255 : v < 100 ? 85 : 160));
+  const glare = a.map((v, i) =>
+    i % 4 === 3 ? 255 : Math.floor(i / 4) % 24 < 12 ? 250 : v,
+  );
+  for (const [frame, start] of [
+    [contrast, 900],
+    [glare, 2700],
+  ]) {
+    trackUntil(gate, frame, start, start + 720);
+    assert.equal(gate.validate(frame, start + 720, "single", frame), false);
+    trackUntil(gate, frame, start + 840, start + 1440);
+    assert.equal(gate.validate(frame, start + 1440, "single", frame), false);
+  }
+  trackUntil(gate, b, 4500, 5220);
+  assert.equal(gate.validate(b, 5220, "single", nextArtwork), false);
+  trackUntil(gate, b, 5340, 5940);
+  for (let n = 0; n < 10; n++)
+    assert.equal(gate.validate(b, 5220, "single", nextArtwork), false);
+  const otherArtwork = nextArtwork.map((v, i) => (i % 4 === 3 ? 255 : 255 - v));
+  assert.equal(gate.validate(b, 5700, "single", otherArtwork), false);
+  assert.equal(
+    gate.validate(b, 5940, "single", nextArtwork),
+    false,
+    "another incoming card resets its evidence",
+  );
+  trackUntil(gate, b, 6060, 6660);
+  assert.equal(gate.validate(b, 6660, "single", nextArtwork), true);
+  trackUntil(gate, b, 6780, 7260);
+  assert.equal(gate.validate(b, 7260, "single", nextArtwork), false);
+  trackUntil(gate, a, 7380, 8100);
+  assert.equal(gate.validate(a, 8100, "single", a), false);
+  trackUntil(gate, a, 8220, 8940);
+  assert.equal(gate.validate(a, 8940, "multiple", a), false);
+  trackUntil(gate, b, 9060, 9900);
+  assert.equal(gate.validate(b, 9900, "single", nextArtwork), false);
 });

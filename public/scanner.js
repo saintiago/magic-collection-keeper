@@ -315,6 +315,7 @@ export function createScanner({
             checkedFrame.frame,
             checkedFrame.at,
             checkedFrame.geometry.state,
+            checkedFrame.artwork,
           )
         )
           enqueue(checkedFrame.canvas);
@@ -352,11 +353,16 @@ export function createScanner({
                 )
                   return;
                 sample.cardGeometry = geometry;
+                const artwork =
+                  geometry.state === "single"
+                    ? signature(sample, geometry.regions?.[0])
+                    : undefined;
                 checkedFrame = {
                   canvas: sample,
                   frame: sampled,
                   at: capturedAt,
                   geometry,
+                  artwork,
                 };
                 overlay?.observe(geometry, sampled);
                 if (geometry.state !== "single") {
@@ -365,8 +371,15 @@ export function createScanner({
                       ? "Place one card inside the guide."
                       : "Wait until only one card is visible.",
                   );
+                } else if (
+                  [
+                    "Wait until only one card is visible.",
+                    "Place one card inside the guide.",
+                  ].includes(el("scan-status").textContent)
+                ) {
+                  status("Hold still.");
                 }
-                if (gate.validate(sampled, capturedAt, geometry.state))
+                if (gate.validate(sampled, capturedAt, geometry.state, artwork))
                   enqueue(sample);
               },
               (error) => {

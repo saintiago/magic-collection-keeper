@@ -17,6 +17,9 @@ test("UC-ONE-CARD actual geometry waits quietly through overlap and preserves ou
     (await readFile("recognition/artifacts/public-card.jpg")).toString(
       "base64",
     );
+  const nextPhoto =
+    "data:image/jpeg;base64," +
+    (await readFile("recognition/fixtures/bolt.jpg")).toString("base64");
   await mockVisualReading(page, {
     card: {
       id: "11111111-1111-4111-8111-111111111111",
@@ -25,57 +28,64 @@ test("UC-ONE-CARD actual geometry waits quietly through overlap and preserves ou
       finishes: ["nonfoil"],
     },
   });
-  await page.addInitScript(async (photo) => {
-    window.captureEvents = [];
-    window.overlayMetrics = [];
-    window.addEventListener("keeper-scan-measurement", (event) =>
-      window.captureEvents.push(event.detail),
-    );
-    window.addEventListener("keeper-overlay-measurement", (event) =>
-      window.overlayMetrics.push(event.detail),
-    );
-    navigator.mediaDevices.getUserMedia = async () => {
-      const image = new Image();
-      image.src = photo;
-      await image.decode();
-      const bounds = document
-          .querySelector("#camera-video")
-          .getBoundingClientRect(),
-        guide = document.querySelector("#scan-guide").getBoundingClientRect();
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(bounds.width * 2);
-      canvas.height = Math.round(bounds.height * 2);
-      const ctx = canvas.getContext("2d");
-      window.paintScene = (kind) => {
-        const sample = document.createElement("canvas");
-        sample.width = 800;
-        sample.height = 1120;
-        const c = sample.getContext("2d");
-        c.fillStyle = "white";
-        c.fillRect(0, 0, 800, 1120);
-        if (kind === "single") c.drawImage(image, 210, 260, 380, 530);
-        if (kind === "two") {
-          c.drawImage(image, 0, 260, 380, 530);
-          c.drawImage(image, 400, 260, 380, 530);
-        }
-        if (kind === "overlap") {
-          c.drawImage(image, 80, 100, 570, 800);
-          c.drawImage(image, 150, 430, 570, 800);
-        }
-        ctx.fillStyle = "#888";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(
-          sample,
-          (guide.left - bounds.left) * 2,
-          (guide.top - bounds.top) * 2,
-          guide.width * 2,
-          guide.height * 2,
-        );
+  await page.addInitScript(
+    async ({ photo, nextPhoto }) => {
+      window.captureEvents = [];
+      window.overlayMetrics = [];
+      window.addEventListener("keeper-scan-measurement", (event) =>
+        window.captureEvents.push(event.detail),
+      );
+      window.addEventListener("keeper-overlay-measurement", (event) =>
+        window.overlayMetrics.push(event.detail),
+      );
+      navigator.mediaDevices.getUserMedia = async () => {
+        const image = new Image();
+        image.src = photo;
+        await image.decode();
+        const next = new Image();
+        next.src = nextPhoto;
+        await next.decode();
+        const bounds = document
+            .querySelector("#camera-video")
+            .getBoundingClientRect(),
+          guide = document.querySelector("#scan-guide").getBoundingClientRect();
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(bounds.width * 2);
+        canvas.height = Math.round(bounds.height * 2);
+        const ctx = canvas.getContext("2d");
+        window.paintScene = (kind) => {
+          const sample = document.createElement("canvas");
+          sample.width = 800;
+          sample.height = 1120;
+          const c = sample.getContext("2d");
+          c.fillStyle = "white";
+          c.fillRect(0, 0, 800, 1120);
+          if (kind === "single") c.drawImage(image, 210, 260, 380, 530);
+          if (kind === "next") c.drawImage(next, 210, 260, 380, 530);
+          if (kind === "two") {
+            c.drawImage(image, 0, 260, 380, 530);
+            c.drawImage(image, 400, 260, 380, 530);
+          }
+          if (kind === "overlap") {
+            c.drawImage(image, 80, 100, 570, 800);
+            c.drawImage(image, 150, 430, 570, 800);
+          }
+          ctx.fillStyle = "#888";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(
+            sample,
+            (guide.left - bounds.left) * 2,
+            (guide.top - bounds.top) * 2,
+            guide.width * 2,
+            guide.height * 2,
+          );
+        };
+        window.paintScene("two");
+        return canvas.captureStream(15);
       };
-      window.paintScene("two");
-      return canvas.captureStream(15);
-    };
-  }, photo);
+    },
+    { photo, nextPhoto },
+  );
   await page.goto("/#collection");
   await page.locator("#scan").click();
   await page.locator("#camera-start").click();
@@ -96,6 +106,9 @@ test("UC-ONE-CARD actual geometry waits quietly through overlap and preserves ou
   await page.evaluate(() => window.paintScene("single"));
   await page.waitForTimeout(1500);
   await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
+  await expect(page.locator("#scan-status")).not.toHaveText(
+    "Wait until only one card is visible.",
+  );
   await page.evaluate(() => {
     window.geometryMeasurements.length = 0;
     window.paintScene("blank");
@@ -125,8 +138,15 @@ test("UC-ONE-CARD actual geometry waits quietly through overlap and preserves ou
   await expect(page.locator("#scan-count")).toHaveText("2 queued · 2 copies", {
     timeout: 10000,
   });
+  await page.evaluate(() => window.paintScene("next"));
+  await expect(page.locator("#scan-count")).toHaveText("3 queued · 3 copies", {
+    timeout: 15000,
+  });
+  await page.waitForTimeout(1800);
+  await expect(page.locator("#scan-count")).toHaveText("3 queued · 3 copies");
+
   const count = await page.evaluate(() => window.captureEvents.length);
-  expect(count).toBe(2);
+  expect(count).toBe(3);
   await expect(page.locator("#scan-overlay")).toHaveAttribute(
     "aria-hidden",
     "true",

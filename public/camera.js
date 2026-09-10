@@ -244,12 +244,28 @@ export function capture(video, guide) {
     );
   return canvas;
 }
-export function signature(canvas) {
+export function signature(canvas, corners) {
   const small = document.createElement("canvas");
   small.width = 24;
   small.height = 32;
   const ctx = small.getContext("2d", { willReadFrequently: true });
-  ctx.drawImage(canvas, 0, 0, 24, 32);
+  if (corners?.length === 4) {
+    const xs = corners.map(([x]) => x * canvas.width);
+    const ys = corners.map(([, y]) => y * canvas.height);
+    const x = Math.max(0, Math.min(...xs)),
+      y = Math.max(0, Math.min(...ys));
+    ctx.drawImage(
+      canvas,
+      x,
+      y,
+      Math.min(canvas.width, Math.max(...xs)) - x,
+      Math.min(canvas.height, Math.max(...ys)) - y,
+      0,
+      0,
+      24,
+      32,
+    );
+  } else ctx.drawImage(canvas, 0, 0, 24, 32);
   return ctx.getImageData(0, 0, 24, 32).data;
 }
 export function frameDifference(a, b) {
