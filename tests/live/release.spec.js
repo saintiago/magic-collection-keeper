@@ -21,14 +21,23 @@ test("LIVE-05 published HTML, loaded assets and API identify the deployment", as
   );
   expect(metadataResponse.headers()["cache-control"]).toContain("immutable");
   const metadata = await metadataResponse.json();
-  if (process.env.GITHUB_SHA)
-    expect(metadata.commit).toBe(process.env.GITHUB_SHA);
+  const expectedCommit =
+    process.env.KEEPER_VERIFY_COMMIT || process.env.GITHUB_SHA;
+  if (expectedCommit) expect(metadata.commit).toBe(expectedCommit);
+  const explicitRelease = process.env.KEEPER_VERIFY_RELEASE;
+  const explicitParts = explicitRelease?.match(/^r([1-9]\d*)-a([1-9]\d*)$/);
+  if (explicitRelease) {
+    expect(explicitParts).not.toBeNull();
+    expect(id).toBe(explicitRelease);
+  }
   const { version: baseVersion } = JSON.parse(
     await readFile("package.json", "utf8"),
   );
-  if (process.env.GITHUB_RUN_NUMBER)
+  const runNumber = explicitParts?.[1] || process.env.GITHUB_RUN_NUMBER;
+  const runAttempt = explicitParts?.[2] || process.env.GITHUB_RUN_ATTEMPT;
+  if (runNumber)
     expect(metadata.version).toBe(
-      `${baseVersion}+deploy.${process.env.GITHUB_RUN_NUMBER}.${process.env.GITHUB_RUN_ATTEMPT}`,
+      `${baseVersion}+deploy.${runNumber}.${runAttempt}`,
     );
   await expect(page.locator("#app-version")).toHaveText(
     "App " + metadata.version,

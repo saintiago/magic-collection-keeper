@@ -6,10 +6,75 @@ import { test, expect } from "./fixtures.js";
 import { fixture, card } from "../helpers/import-page-fixture.js";
 import { savePrinting } from "../../db.js";
 import { randomUUID } from "node:crypto";
+import { checkCardActions } from "../helpers/card-actions-live.js";
 const art = {
   ...card,
   image_uris: { normal: "http://127.0.0.1:3100/fixture-card.svg" },
 };
+
+for (const mobile of [false, true])
+  test.describe(mobile ? "touch live scenario" : "mouse live scenario", () => {
+    test.use({
+      hasTouch: mobile,
+      viewport: mobile
+        ? { width: 390, height: 844 }
+        : { width: 1280, height: 720 },
+    });
+    test("UC-CARD-ACTIONS complete deployed scenario rehearses owned retry, pending replay and catalogue confirmation", async ({
+      page,
+      browser,
+    }) => {
+      const f = await fixture(page);
+      try {
+        for (const tag of await f.tagged.tags("test"))
+          await f.tagged.deleteTag("test", tag.id);
+        savePrinting(f.db, art);
+        await page.route("**/fixture-card.svg", (route) =>
+          route.fulfill({
+            contentType: "image/svg+xml",
+            body: '<svg xmlns="http://www.w3.org/2000/svg" width="488" height="680"><rect width="488" height="680" fill="green"/></svg>',
+          }),
+        );
+        for (const path of ["search", "discover"])
+          await page.route(`**/api/${path}?*`, (route) =>
+            route.fulfill({ json: { cards: [art], total: 1, hasMore: false } }),
+          );
+        await page.route("**/api/card?*", (route) =>
+          route.fulfill({ json: { card: art, source: "fixture" } }),
+        );
+        await page.goto("/#collection");
+        await checkCardActions({ page, browser }, test, mobile, {
+          verifyOtherOwner: false,
+          realCloud: false,
+          commitTagAction: async (route) => ({
+            json: await f.tagged.applyTagAction(
+              "test",
+              route.request().postDataJSON(),
+            ),
+          }),
+          clearData: async (_page, beforeDrafts) => {
+            for (const descriptor of (await f.drafts.getDraft("test"))
+              .pending_drafts) {
+              if (beforeDrafts.has(descriptor.id)) continue;
+              const { draft } = await f.drafts.getDraft("test", {
+                id: descriptor.id,
+              });
+              await f.drafts.clearDraft("test", {
+                id: draft.id,
+                version: draft.version,
+                kind: "capture",
+              });
+            }
+            for (const row of await f.tagged.list("test"))
+              await f.tagged.remove("test", row.id);
+            expect(await f.tagged.list("test")).toEqual([]);
+          },
+        });
+      } finally {
+        f.db.close();
+      }
+    });
+  });
 test.beforeEach(async ({ page }) => {
   page.on("pageerror", (error) =>
     console.log("Card interaction error:", error.message),
