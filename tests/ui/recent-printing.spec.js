@@ -7,6 +7,54 @@ import {
 } from "../helpers/import-page-fixture.js";
 import { moxfieldSource } from "../../domain/import-draft.js";
 import { savePrinting } from "../../db.js";
+import { checkRecentPrintings } from "../helpers/recent-live.js";
+
+test.describe("Recent deployed scenario rehearsal", () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } });
+  test("RECENT-01/03 touch receipt, pending ownership and exact Home artwork use the complete application path", async ({
+    page,
+  }) => {
+    const f = await importFixture(page);
+    const cards = [importedCard, importedAlt].map((card, index) => ({
+      ...card,
+      image_uris: {
+        normal: `https://cards.scryfall.io/recent-live-${index}.jpg`,
+        small: `https://cards.scryfall.io/recent-live-${index}.jpg`,
+      },
+    }));
+    try {
+      cards.forEach((card) => savePrinting(f.db, card));
+      await page.route("https://cards.scryfall.io/**", (route) =>
+        route.fulfill({
+          contentType: "image/svg+xml",
+          body: '<svg xmlns="http://www.w3.org/2000/svg" width="488" height="680"><rect width="488" height="680" fill="green"/></svg>',
+        }),
+      );
+      await page.route("**/api/search?*", (route) =>
+        route.fulfill({
+          json: {
+            cards: [
+              cards[
+                new URL(route.request().url()).searchParams
+                  .get("q")
+                  .includes("set:m11")
+                  ? 0
+                  : 1
+              ],
+            ],
+            total: 1,
+            hasMore: false,
+          },
+        }),
+      );
+      await page.goto("/");
+      await expect(page.locator("#scan")).toBeEnabled();
+      await checkRecentPrintings(page, true);
+    } finally {
+      f.db.close();
+    }
+  });
+});
 
 test("RECENT-01/03 shared catalogue, collection, tag, pending and Home artwork opens update exact activity; hover and pending ownership remain separate", async ({
   page,
