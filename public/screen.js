@@ -29,7 +29,7 @@ export function showScreen(mode) {
   $("search-help").hidden = home || mode === "card";
   document.querySelector(".library").hidden =
     home || importing || mode === "card";
-  $("stats").hidden = !collection;
+  $("stats").hidden = !home;
   $("filters").hidden = !collection;
   $("refresh").hidden = !collection;
   $("add").hidden = !collection;
