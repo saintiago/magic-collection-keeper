@@ -1,5 +1,61 @@
 import { test, expect } from "@playwright/test";
 import { fixture, card } from "../helpers/import-page-fixture.js";
+import { randomUUID } from "node:crypto";
+
+test("UC-CARD-RETRY a stale Import page cannot clear a newer tag revision; reloading permits the explicit clear", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  try {
+    const id = randomUUID();
+    const staged = await f.drafts.stageDraft("test", {
+      id,
+      kind: "catalog",
+      rows: [
+        {
+          id: randomUUID(),
+          name: card.name,
+          printing_id: card.id,
+          quantity: 1,
+          finish: "nonfoil",
+          condition: "UNK",
+        },
+      ],
+    });
+    await page.goto("/#import=" + id);
+    await expect(page.locator(".draft-row")).toHaveCount(1);
+    const tag = (await f.tagged.tags("test")).find((t) => t.type === "role");
+    const updated = await f.drafts.tagDraft("test", {
+      operation_id: randomUUID(),
+      id,
+      kind: "capture",
+      row_id: staged.draft.rows[0].id,
+      tag_id: tag.id,
+      selected: true,
+      quantity: 1,
+    });
+    const clear = page.waitForResponse((r) =>
+      r.url().endsWith("/api/import-draft/clear"),
+    );
+    await page.locator("#draft-clear").click();
+    expect((await clear).status()).toBe(409);
+    await expect(page.locator(".import-status")).toContainText(
+      "changed in another session",
+    );
+    await expect(page.locator(".draft-row")).toHaveCount(1);
+    expect((await f.drafts.getDraft("test", { id })).draft).toEqual(
+      updated.draft,
+    );
+    await page.locator("#draft-reload").click();
+    await expect(page.locator("#draft-clear")).toBeEnabled();
+    await page.locator("#draft-clear").click();
+    await expect(page.locator(".draft-row")).toHaveCount(0);
+    expect((await f.drafts.getDraft("test", { id })).draft).toBeNull();
+    expect(await f.tagged.list("test")).toEqual([]);
+  } finally {
+    f.db.close();
+  }
+});
 
 async function setup(page) {
   const f = await fixture(page);
