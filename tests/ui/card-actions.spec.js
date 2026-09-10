@@ -167,6 +167,47 @@ async function openSavedReview(page, f) {
   await expect(page.locator(".draft-row")).toHaveCount(1);
 }
 
+test("UC-CARD-RETURN a late tag refresh keeps the catalogue source hidden until artwork returns", async ({
+  page,
+}) => {
+  const f = await setup(page);
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  let waiting = false;
+  await page.route("**/api/tags", async (route) => {
+    waiting = true;
+    await held;
+    await route.fulfill({ json: await f.tagged.tags("test") });
+  });
+  try {
+    await page.goto("/#catalog");
+    await page.locator("#search").fill(card.name);
+    await page.locator("#search-submit").click();
+    const source = page.locator("#grid .card-open");
+    await expect(source).toHaveCount(1);
+    await expect.poll(() => waiting).toBe(true);
+    await source.click();
+    await expectInspectorFit(page);
+    release();
+    await expect(
+      page.locator("#tag-filter option").filter({ hasText: "Draft Box" }),
+    ).toHaveCount(1);
+    await expect(source).toHaveClass(/artwork-source-lifted/);
+    await expectInspectorFit(page);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+    await expect(source).not.toHaveClass(/artwork-source-lifted/);
+    await expect(source).toBeFocused();
+    expect(await f.tagged.list("test")).toEqual([]);
+  } finally {
+    release();
+    await page.unroute("**/api/tags");
+    f.db.close();
+  }
+});
+
 test("UC-CARD-POINTER burst input coalesces, keeps layout out of hover handlers and stops after cancellation", async ({
   page,
 }) => {

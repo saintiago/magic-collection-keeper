@@ -5,6 +5,7 @@ const $ = (id) => document.getElementById(id);
 export function createCardDetail({
   api,
   onSaved,
+  onAdded = () => {},
   notify,
   onDone,
   onTags,
@@ -109,6 +110,7 @@ export function createCardDetail({
         );
 
         onSaved(updated);
+        if (!row.id) onAdded(c);
         if (form.isConnected) onDone();
         notify(
           row.id

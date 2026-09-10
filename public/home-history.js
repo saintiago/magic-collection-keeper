@@ -25,7 +25,7 @@ export function activityEntries(values) {
     .map(activityEntry)
     .filter((item) => {
       if (!item) return false;
-      const key = `${item.kind}:${item.id || item.oracle_id || item.printing_id}`;
+      const key = `${item.kind}:${item.kind === "tag" ? item.id : item.printing_id}`;
       if (seen.has(key) || counts[item.kind] >= 12) return false;
       seen.add(key);
       counts[item.kind]++;
@@ -45,6 +45,15 @@ export function createHomeHistory({
   function publish(next) {
     state = { ...state, ...next };
     onChange(state);
+  }
+  function saveEntries(entries) {
+    let error = "";
+    try {
+      storage.write(key, JSON.stringify({ schema: 1, entries }));
+    } catch {
+      error = "Recent activity is saved for this visit only.";
+    }
+    publish({ entries, error });
   }
   return {
     start(account) {
@@ -71,13 +80,26 @@ export function createHomeHistory({
       const item = activityEntry(value);
       if (!item) return;
       const entries = activityEntries([item, ...state.entries]);
-      let error = "";
-      try {
-        storage.write(key, JSON.stringify({ schema: 1, entries }));
-      } catch {
-        error = "Recent activity is saved for this visit only.";
-      }
-      publish({ entries, error });
+      saveEntries(entries);
+    },
+    enrich(value) {
+      if (!key) return;
+      const item = activityEntry(value);
+      if (item?.kind !== "card") return;
+      if (
+        !state.entries.some(
+          (entry) =>
+            entry.kind === "card" && entry.printing_id === item.printing_id,
+        )
+      )
+        return;
+      saveEntries(
+        state.entries.map((entry) =>
+          entry.kind === "card" && entry.printing_id === item.printing_id
+            ? { ...entry, ...item }
+            : entry,
+        ),
+      );
     },
     clear() {
       if (!key) return;

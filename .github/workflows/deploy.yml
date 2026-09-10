@@ -82,7 +82,7 @@ jobs:
         run: bash scripts/install-ci-browsers.sh
       - run: npm run test:ui
       - name: Verify WebKit touch, imports and actual recognition models
-        run: npx playwright test tests/ui/discovery.spec.js tests/ui/home.spec.js tests/ui/hybrid-search.spec.js tests/ui/card-page.spec.js tests/ui/scan-wheel-photo.spec.js tests/ui/backend-scanner.spec.js tests/ui/scanner-model.spec.js tests/ui/app.spec.js tests/ui/phone-review.spec.js tests/ui/one-card.spec.js tests/ui/card-actions.spec.js tests/ui/card-tags.spec.js tests/ui/card-tag-retry.spec.js --browser=webkit --workers=1
+        run: npx playwright test tests/ui/discovery.spec.js tests/ui/home.spec.js tests/ui/hybrid-search.spec.js tests/ui/card-page.spec.js tests/ui/scan-wheel-photo.spec.js tests/ui/backend-scanner.spec.js tests/ui/scanner-model.spec.js tests/ui/app.spec.js tests/ui/phone-review.spec.js tests/ui/one-card.spec.js tests/ui/card-actions.spec.js tests/ui/card-tags.spec.js tests/ui/card-tag-retry.spec.js tests/ui/recent-printing.spec.js --browser=webkit --workers=1
       - name: Verify fitted artwork, fonts and glass interactions in both engines
         run: npx playwright test -c tests/prototype/playwright.config.mjs
       - uses: actions/upload-artifact@v4

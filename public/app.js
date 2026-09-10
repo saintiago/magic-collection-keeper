@@ -91,6 +91,7 @@ const printingPicker = createPrintingPicker({
   onChoose: (card) => detail({ card }, { replace: true }),
 });
 const showDetail = createCardDetail({
+  onAdded: (card) => home.card(card),
   loadOwned: async () => {
     await collectionReady;
     if (!(await collection.refresh()))
@@ -167,7 +168,8 @@ const cardPage = createCardPage({
     render();
   },
   renderDetail: showDetail,
-  onOpened: (card) => home.card(card),
+  onOpened: (card, { record }) =>
+    record ? home.card(card) : home.enrich(card),
   load: async (ref, signal) => {
     if (ref.entry) {
       await collectionReady;
@@ -232,7 +234,9 @@ const importPage = createImportPage({
   back: () => cardNavigation.back(),
   select: (id) => enterImport(id),
   api: request,
-  onAdded: async () => {
+  onAdded: async (cards) => {
+    // Record only receipt-confirmed additions before independent refresh I/O.
+    for (const card of cards) home.card(card);
     collection.invalidate();
     await refresh();
   },
@@ -246,7 +250,8 @@ const autocomplete = setupAutocomplete({
     if (item.kind === "query") search();
     else {
       recentSearches.remember(item);
-      cardPage.open(item);
+      home.card(item);
+      cardPage.open(item, { remember: false });
     }
   },
   onQueryChange: () => {
@@ -272,11 +277,7 @@ const home = createHome({
   onClearSearches: () => recentSearches.clear(),
   onRetry: () => initializeCollection(),
   onCard: (item) => {
-    const row =
-      owned.find((row) => row.printing_id === item.printing_id) ||
-      owned.find(
-        (row) => item.oracle_id && row.card.oracle_id === item.oracle_id,
-      );
+    const row = owned.find((row) => row.printing_id === item.printing_id);
     if (row) detail(row);
     else cardPage.open(item);
   },
@@ -452,6 +453,7 @@ function render() {
   $("grid").innerHTML = rows
     .map((row, index) => collectionCard(row, index, selectedTag))
     .join("");
+  cardActions.refreshSources();
   $("grid")
     .querySelectorAll(".card-open")
     .forEach(

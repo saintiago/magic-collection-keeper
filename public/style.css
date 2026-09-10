@@ -265,7 +265,7 @@ h1 span {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #fff;
-  margin-bottom: 38px;
+  margin: 24px 0 38px;
   padding: 23px 0;
 }
 .stats > div {

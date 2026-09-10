@@ -23,11 +23,7 @@ export function homeContent({
   ]
     .filter(
       (e, i, all) =>
-        all.findIndex(
-          (other) =>
-            (other.oracle_id || other.printing_id) ===
-            (e.oracle_id || e.printing_id),
-        ) === i,
+        all.findIndex((other) => other.printing_id === e.printing_id) === i,
     )
     .slice(0, 6);
   const recentTags = activity.entries
@@ -51,13 +47,12 @@ export function homeContent({
     cards,
     html: `<div class="home-section-heading"><h2>Recent cards</h2><button class="text-button" id="clear-home-history" ${activity.entries.length || searches.length ? "" : "hidden"}>Clear activity</button></div><div class="home-cards">${cards
       .map((item, i) => {
-        const row =
-          own.find((r) => r.printing_id === item.printing_id) ||
-          own.find(
-            (r) => item.oracle_id && r.card.oracle_id === item.oracle_id,
-          );
+        const row = own.find((r) => r.printing_id === item.printing_id);
         const source = row ? image(row.card) : item.image_url;
-        const badge = suggestionOwnership(item, ownership);
+        const badge = suggestionOwnership(
+          { printing_id: item.printing_id },
+          ownership,
+        );
         return `<article class="home-card card-tile" data-card-key="${esc(String(row?.id || item.printing_id || item.oracle_id))}"><button data-home-card="${i}" aria-label="Open ${esc(item.name)} artwork · ${esc(badge.label)}" title="View card · drag to organize · Shift+F10 for keyboard pickup">${source ? `<img src="${esc(source)}" alt="" loading="lazy">` : '<span class="home-card-placeholder" aria-hidden="true">✦</span>'}</button>${cardHoverInfo(row || { card: item })}</article>`;
       })
       .join(

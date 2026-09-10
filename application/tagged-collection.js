@@ -338,7 +338,11 @@ export function createTaggedCollection({
     if (current?.value.fingerprint === fingerprint)
       return {
         changes: [],
-        result: { unchanged: true, ...(await previewDeck(owner, raw)) },
+        result: {
+          unchanged: true,
+          ...(await previewDeck(owner, raw)),
+          added_printings: [],
+        },
       };
     const existing = await list(owner);
     const previousLots = new Map(
@@ -533,6 +537,17 @@ export function createTaggedCollection({
         source_id: input.source_id,
         tag_id: tagId,
         additions: plan.added,
+        added_printings: [
+          ...new Set(
+            plan.lots
+              .filter(
+                (lot) =>
+                  lot.owned_quantity >
+                  (previousLots.get(lot.line_id)?.owned_quantity || 0),
+              )
+              .map((lot) => lot.printing_id),
+          ),
+        ],
         allocated: plan.allocated,
         retained_loose: plan.retained,
         owned_from_source: plan.owned,

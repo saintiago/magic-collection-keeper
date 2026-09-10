@@ -75,7 +75,9 @@ export function createCardPage({
       heading.textContent = resolved.card.name;
       status.textContent = "";
       renderDetail(resolved);
-      onOpened(resolved.card);
+      onOpened(resolved.card, {
+        record: !options.restore && options.remember !== false,
+      });
       metric("details-visible", started, {
         source: row ? "known-card" : resolved.source || "network",
       });

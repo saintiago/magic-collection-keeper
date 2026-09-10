@@ -415,6 +415,16 @@ export function createImportPage({ root, api, onAdded, back, select }) {
             }),
           }),
         async (result) => {
+          const addedIds = new Set(
+            Array.isArray(result.added_printings) ? result.added_printings : [],
+          );
+          const addedCards = data.draft.rows
+            .filter(
+              (row) =>
+                addedIds.has(row.printing_id) &&
+                row.card?.id === row.printing_id,
+            )
+            .map((row) => row.card);
           data = {
             draft: null,
             pending_drafts: (data.pending_drafts || []).filter(
@@ -426,7 +436,7 @@ export function createImportPage({ root, api, onAdded, back, select }) {
           url = "";
           message = `Added ${result.additions} new copies from ${result.reviewed_copies} reviewed copies. This import is saved; retries cannot add duplicates.`;
           try {
-            await onAdded();
+            await onAdded(addedCards);
           } catch {
             message += " Refresh the collection to see its latest totals.";
           }

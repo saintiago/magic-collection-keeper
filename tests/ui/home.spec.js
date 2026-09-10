@@ -100,14 +100,24 @@ async function fixture(page, { cloud = false } = {}) {
 }
 test("UC-32 default mobile home prioritizes search/actions and real deck/tag shortcuts without the full grid", async ({
   page,
-}) => {
+}, testInfo) => {
   await page.setViewportSize({ width: 390, height: 700 });
   const f = await fixture(page);
   await expect(
     page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
   await expect(page.locator("#grid")).toBeEmpty();
-  await expect(page.locator("#stats")).not.toBeVisible();
+  await expect(page.locator("#stats")).toBeVisible();
+  await expect(page.locator("#total")).toHaveText("4");
+  expect(
+    await page
+      .locator("#stats")
+      .evaluate(
+        (element) =>
+          element.getBoundingClientRect().top >=
+          document.getElementById("home-page").getBoundingClientRect().bottom,
+      ),
+  ).toBe(true);
   await expect(page.locator(".brand")).toHaveText("✦");
   for (const id of [
     "search",
@@ -126,6 +136,10 @@ test("UC-32 default mobile home prioritizes search/actions and real deck/tag sho
   await expect(page.locator("#home-page")).toContainText(
     "Cards you open will appear here",
   );
+  await page.screenshot({
+    path: testInfo.outputPath("home-totals-mobile.png"),
+    fullPage: true,
+  });
   await page.locator("#collection-nav").tap();
   await expect(page).toHaveURL(/#collection$/);
   await expect(page.locator(".card")).toHaveCount(2);
@@ -138,6 +152,58 @@ test("UC-32 default mobile home prioritizes search/actions and real deck/tag sho
     ),
   ).toBe(true);
   expect(f.writes).toHaveLength(0);
+});
+
+test("VIEW-04 whole collection totals follow Home content across routes, reload, filtering and failed refresh", async ({
+  page,
+}, testInfo) => {
+  const f = await fixture(page);
+  const stats = page.getByRole("region", { name: "Collection totals" });
+  await expect(stats).toBeVisible();
+  await expect(page.locator("#total")).toHaveText("4");
+  await expect(page.locator("#unique")).toHaveText("2");
+  await page.screenshot({
+    path: testInfo.outputPath("home-totals-desktop.png"),
+    fullPage: true,
+  });
+  for (const route of [
+    "#collection",
+    "#catalog",
+    "#tag=deck-0",
+    "#import",
+    "#card=bolt&oracle=bolt",
+  ]) {
+    await page.goto("/" + route);
+    await expect(page.locator("#stats")).not.toBeVisible();
+    await page.reload();
+    await expect(page.locator("#stats")).not.toBeVisible();
+  }
+  await page.goto("/#collection");
+  await expect(page.locator("#tag-filter option[value=role]")).toHaveCount(1);
+  await page.locator("#tag-filter").selectOption("role");
+  await page.locator("#finish-filter").selectOption("foil");
+  await expect(page.locator("#grid .card")).toHaveCount(0);
+  await page.locator("#home-nav").click();
+  await expect(stats).toBeVisible();
+  await expect(page.locator("#total")).toHaveText("4");
+  await page.goBack();
+  await expect(page.locator("#stats")).not.toBeVisible();
+  await page.goForward();
+  await expect(stats).toBeVisible();
+  f.fail(true);
+  await page.reload();
+  await expect(page.locator("#home-page")).toContainText(
+    "Collection update failed",
+  );
+  await expect(page.locator("#total")).toHaveText("4");
+  expect(
+    await stats.evaluate(
+      (element) =>
+        element.getBoundingClientRect().top >=
+        document.getElementById("home-page").getBoundingClientRect().bottom,
+    ),
+  ).toBe(true);
+  expect(f.writes).toEqual([]);
 });
 test("UC-32 actual card opens and tag visits order recent activity, persist and navigate by stable IDs", async ({
   page,

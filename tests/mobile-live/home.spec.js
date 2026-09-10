@@ -37,6 +37,21 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
   let created;
   try {
     await expect(page.locator("#home-page")).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: "Collection totals" }),
+    ).toBeVisible();
+    await expect(page.locator("#total")).toHaveText(
+      before.reduce((sum, row) => sum + row.quantity, 0).toLocaleString(),
+    );
+    expect(
+      await page
+        .locator("#stats")
+        .evaluate(
+          (element) =>
+            element.getBoundingClientRect().top >=
+            document.getElementById("home-page").getBoundingClientRect().bottom,
+        ),
+    ).toBe(true);
     await expect(page.locator("#grid")).toBeEmpty();
     for (const id of [
       "search",
@@ -47,6 +62,7 @@ test("LIVE-10 home opens real recent cards/decks/tags across reload without chan
     ])
       await expect(page.locator("#" + id)).toBeInViewport();
     await page.locator("#collection-nav").tap();
+    await expect(page.locator("#stats")).not.toBeVisible();
     await expect(page.locator(".card")).toHaveCount(before.length);
     await page.locator(".card-open").first().tap();
     await expectInspectorFit(page);
