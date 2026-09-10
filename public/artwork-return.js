@@ -29,6 +29,8 @@ export function returnArtwork({ dialog, source, zoom, complete }) {
   );
   const started = performance.now();
   let frame = 0,
+    previous = started,
+    elapsed = 0,
     stopped = false,
     landed = false,
     missingAt = null;
@@ -40,6 +42,11 @@ export function returnArtwork({ dialog, source, zoom, complete }) {
   }
   function draw(now) {
     if (stopped) return;
+    // A delayed paint must not spend the whole visible shrink offscreen. Keep
+    // at most two nominal frames of progress per paint, with a wall-time bound
+    // for a severely stalled browser. Normal refresh still takes 380ms.
+    elapsed += Math.min(32, Math.max(0, now - previous));
+    previous = now;
     const destination = source();
     if (!destination) {
       // Navigation/removal has no honest return target. Fade the current image
@@ -52,7 +59,7 @@ export function returnArtwork({ dialog, source, zoom, complete }) {
     } else {
       missingAt = null;
       layers[0].style.opacity = "1";
-      const t = Math.min(1, (now - started) / 380);
+      const t = now - started >= 1200 ? 1 : Math.min(1, elapsed / 380);
       const spring = (time) =>
         1 -
         Math.exp(-8 * time) *

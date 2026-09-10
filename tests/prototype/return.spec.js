@@ -12,10 +12,10 @@ test.beforeEach(async ({ page }) => {
 
 async function recordReturn(
   page,
-  { replace = false, remove = false, scroll = false } = {},
+  { replace = false, remove = false, scroll = false, stall = 0 } = {},
 ) {
   await page.evaluate(
-    ({ replace, remove, scroll }) => {
+    ({ replace, remove, scroll, stall }) => {
       const dialog = document.querySelector(".artwork-viewer");
       let tile = document.querySelector(".artwork-source-lifted");
       const image = dialog.querySelector(".artwork-full-image");
@@ -25,6 +25,12 @@ async function recordReturn(
       function sample() {
         if (!dialog.open) return;
         if (dialog.hasAttribute("data-closing")) {
+          if (stall && !returnFrames.length) {
+            const until = performance.now() + stall;
+            while (performance.now() < until) {
+              /* bounded busy main-thread fixture */
+            }
+          }
           if (!changed && returnFrames.length >= 3) {
             changed = true;
             if (replace) {
@@ -56,7 +62,7 @@ async function recordReturn(
       }
       requestAnimationFrame(sample);
     },
-    { replace, remove, scroll },
+    { replace, remove, scroll, stall },
   );
 }
 
@@ -139,6 +145,36 @@ test("CARD-10 a zoomed card returns to its replaced, scrolled source; repeated c
   await expect(tile).toBeFocused();
   expect(page.url()).toContain("?card=animation-module");
   expect(await page.evaluate(() => history.state?.keeperArtwork)).toBeFalsy();
+});
+
+test("CARD-10 an early stalled frame preserves a visible shrink and bounded exact handoff", async ({
+  page,
+}) => {
+  await page.goto("/?card=animation-module");
+  const tile = page.locator("#grid .card-open").first();
+  await tile.click();
+  await expectInspectorFit(page);
+  const opening = await page.locator(".artwork-full-image").boundingBox();
+  await recordReturn(page, { stall: 180 });
+  await page.mouse.click(4, 4);
+  await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+  const frames = await page.evaluate(() => returnFrames);
+  expect(
+    frames.some(
+      (frame) =>
+        frame.image.width < opening.width * 0.9 &&
+        frame.image.width > frame.source.width * 1.1,
+    ),
+    JSON.stringify({ opening, frames }),
+  ).toBe(true);
+  expect(frames.every((frame) => frame.same && frame.hidden)).toBe(true);
+  expect(frames.at(-1).time - frames[0].time).toBeLessThan(1600);
+  for (const key of ["x", "y", "width", "height"])
+    expect(
+      Math.abs(frames.at(-1).image[key] - frames.at(-1).source[key]),
+    ).toBeLessThan(1);
+  await expect(tile).toBeFocused();
+  await expect(page.locator(".artwork-source-lifted")).toHaveCount(0);
 });
 
 test("CARD-10 early interruption and missing source finish safely; reduced motion and sign-out leave no returning image", async ({
