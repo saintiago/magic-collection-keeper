@@ -77,6 +77,10 @@ DEPLOY-01–04 status: production delivery verified in `r91-a1` following the fu
 
 CARD-10 verification remains in progress: PR run 34420482350 passed the application Chromium and required WebKit checks twice, but each attempt missed intermediate shrinking frames in one desktop WebKit prototype case. Ten unchanged local repeats of the first failing edge case passed. The return test now records frame times, layer transforms and bounds on assertion failure; the visible-shrink and exact-landing criteria are unchanged. The application revision is not production delivered.
 
+Hosted frame diagnostics reproduced early 96–243 ms paint stalls; the repeated Linux baseline failed 14 of 40 return cases, and preparing the moving layers alone still failed five. The correction keeps those two transient layers prepared and limits return progress to 32 ms per rendered step, retaining the normal 380 ms spring with a 1200 ms wall-time bound before exact handoff. The opening transforms are unchanged. A controlled 180 ms main-thread stall now checks visible shrink, same-image/source hiding, bounded completion, final alignment and focus. Eighteen local cross-engine return cases pass; hosted repeated and full-release verification remain pending. These are browser fixtures, not physical-device evidence.
+
+The corrected repeated Linux WebKit run [34424372478](https://github.com/saintiago/magic-collection-keeper/actions/runs/34424372478) passed all 45 return cases, including five stalled-frame repetitions. The 128 unit tests and build pass. Full application release and physical-device verification remain pending.
+
 ## Recent cards — in progress, production verification pending
 
 - **RECENT-01:** Populate Recent cards from both cards clicked/tapped to open in any card list and cards successfully added to the collection. Opening the in-page zoom counts; hover, background recognition and merely loading a list do not. Include catalogue, collection, tag/deck-filtered and pending-import lists wherever cards can be opened.

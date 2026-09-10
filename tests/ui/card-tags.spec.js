@@ -3,6 +3,18 @@ import { fixture, card } from "../helpers/import-page-fixture.js";
 import { savePrinting } from "../../db.js";
 import { openArtworkDetails } from "../helpers/artwork-actions.js";
 
+async function scrollToSource(source) {
+  let bounds;
+  // Initial collection/tag refresh can replace a tile before pickup. Reacquire
+  // only setup geometry; never retry the gesture or any save assertion.
+  await expect(async () => {
+    await source.scrollIntoViewIfNeeded();
+    bounds = await source.boundingBox();
+    expect(bounds?.width).toBeGreaterThan(0);
+  }).toPass({ timeout: 5000 });
+  return bounds;
+}
+
 async function setup(page) {
   page.on("pageerror", (error) => console.log("Tag UI error:", error.message));
   const f = await fixture(page);
@@ -77,7 +89,7 @@ test("UC-SHARED-CARD-TAGS a hover tag save stays open and carries the assigned s
 }) => {
   const f = await setup(page);
   const source = page.locator("#grid .card-open");
-  await source.scrollIntoViewIfNeeded();
+  await scrollToSource(source);
   await expect(source).toBeInViewport({ ratio: 0.9 });
   await page.mouse.move(0, 0);
   await source.hover();
@@ -150,7 +162,7 @@ test("UC-SHARED-CARD-TAGS drag from hover freezes Remove intent and never increm
 }) => {
   const f = await setup(page);
   const source = page.locator("#grid .card-open");
-  await source.scrollIntoViewIfNeeded();
+  await scrollToSource(source);
   await expect(source).toBeInViewport({ ratio: 0.9 });
   await page.mouse.move(0, 0);
   await source.hover();
@@ -251,7 +263,7 @@ test("UC-SHARED-CARD-TAGS dropping on a tag link preserves the frozen Remove act
     document.body.append(link);
   }, f.box.id);
   const source = page.locator("#grid .card-open");
-  await source.scrollIntoViewIfNeeded();
+  await scrollToSource(source);
   const bounds = await source.boundingBox();
   await page.mouse.move(bounds.x + 30, bounds.y + 30);
   await page.mouse.down();
@@ -388,8 +400,7 @@ test.describe("actual touch and hybrid input", () => {
     await page.setViewportSize({ width: 390, height: 740 });
     const f = await setup(page);
     const source = page.locator("#grid .card-open");
-    await source.scrollIntoViewIfNeeded();
-    const bounds = await source.boundingBox();
+    const bounds = await scrollToSource(source);
     const pointer = {
       pointerId: 91,
       pointerType: "touch",
