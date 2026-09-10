@@ -14,6 +14,8 @@ Deployment classifies changes against the published application. Supported prese
 
 ## Use it
 
+A separate, unreleased Recent cards revision preserves different printings of the same card and keeps each Home artwork/tag action on its exact printing. It records confirmed autocomplete choices and successful dedicated-page additions, without treating reloads, highlighting or failed additions as new activity. Local Chromium/WebKit checks pass; Import-batch addition events and production verification remain pending.
+
 Scan stays briefly disabled while your account and saved captures load after sign-in; it becomes available as soon as that recovery finishes.
 
 Home opens with a compact symbol/account bar, Scan, Import, Tags & locations, and the shared search field. It shows up to six recently opened cards and four recent decks or other tags. Card opens, tag visits, and tag creation/renaming count as activity; unfinished typing and background loading do not. Earlier selected search cards can appear too. If no deck/tag activity has been recorded on this browser, the sections are honestly labeled **Your decks** and **Your tags**. Nothing is added to ownership by appearing on Home.

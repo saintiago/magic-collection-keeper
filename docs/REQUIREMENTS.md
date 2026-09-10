@@ -89,6 +89,8 @@ Local evidence: three Home unit cases and five Home/Recent browser cases pass in
 
 - **RECENT-04:** Selecting a card from search autocomplete, by click/tap or keyboard confirmation, is a qualifying Recent event even when that selection follows a different path from opening a list tile. Move the selected card to the front using the same identity/deduplication rules. Merely typing a query, receiving suggestions or highlighting a suggestion does not add every suggested card. Verify mouse, touch and keyboard selection and avoid recording the same selection twice through overlapping handlers.
 
+Further local follow-up evidence: 130 unit tests and nine Home/Recent browser cases pass in each of Chromium and WebKit. Confirmed mouse/touch/keyboard suggestions now record immediately; later detail loading enriches an existing entry without moving it or inserting an unchosen card. Reload/deep-link restoration does not create activity. A successful explicit Add on the dedicated card page records the exact printing; a failed Add does not. Import-batch successful-add events and complete shared-list/event coverage remain pending. No follow-up feature is deployed.
+
 ## Tags-only inspector — in progress, supersedes CARD-04/05 overlay content
 
 - **CARD-11:** Supersede the earlier enlarged-card information/action layout with relevant tags only. Remove displayed quantity/finish/condition summaries and Qty/Save, Edit tags, Details, zoom percentage/plus/minus and close-button controls from this overlay. Preserve in-page enlargement, wheel/pinch zoom and consumed outside dismissal with CARD-10 return animation. Other dedicated workflows remain available; this does not remove their data or capabilities.

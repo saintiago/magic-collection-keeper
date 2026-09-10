@@ -138,6 +138,43 @@ test("UC-32 home activity bounds real card/tag interactions, persists under veri
     undefined,
   );
 });
+
+test("RECENT-04 resolved artwork enriches an existing choice without creating activity or moving it ahead of a later choice", () => {
+  const values = new Map();
+  const history = createHomeHistory({
+    storage: {
+      read: (key) => values.get(key),
+      write: (key, value) => values.set(key, value),
+      remove: (key) => values.delete(key),
+    },
+  });
+  history.start("one");
+  const first = { kind: "card", name: "First", printing_id: "first" };
+  const second = { kind: "card", name: "Second", printing_id: "second" };
+  history.remember(first);
+  history.remember(second);
+  history.enrich({
+    ...first,
+    image_url: "https://cards.scryfall.io/first.jpg",
+  });
+  assert.deepEqual(
+    history.state.entries.map((item) => item.printing_id),
+    ["second", "first"],
+  );
+  assert.equal(
+    history.state.entries[1].image_url,
+    "https://cards.scryfall.io/first.jpg",
+  );
+  history.enrich({ name: "Unchosen", printing_id: "unchosen" });
+  assert.equal(history.state.entries.length, 2);
+  history.clear();
+  history.enrich(first);
+  assert.deepEqual(history.state.entries, []);
+  history.stop();
+  history.start("two");
+  history.enrich(first);
+  assert.deepEqual(history.state.entries, []);
+});
 test("UC-32 home uses stable current tag metadata, separates decks by kind, and never invents recent activity or ownership", () => {
   const base = {
     activity: { status: "ready", entries: [], error: "" },

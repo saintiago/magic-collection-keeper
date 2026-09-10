@@ -10,6 +10,15 @@ export function createHome({ root, onCard, onClearSearches, onRetry }) {
     },
     cards = [];
   const history = createHomeHistory({ onChange: render });
+  function cardEntry(card) {
+    return {
+      kind: "card",
+      name: card.name,
+      printing_id: card.id || card.printing_id,
+      oracle_id: card.oracle_id,
+      image_url: image(card) || card.image_url,
+    };
+  }
   function render() {
     if (root.querySelector(".artwork-source-lifted,.card-wheel-source")) return;
     const focused =
@@ -53,14 +62,9 @@ export function createHome({ root, onCard, onClearSearches, onRetry }) {
     },
     unavailable: () => history.unavailable(),
     card(card) {
-      history.remember({
-        kind: "card",
-        name: card.name,
-        printing_id: card.id,
-        oracle_id: card.oracle_id,
-        image_url: image(card),
-      });
+      history.remember(cardEntry(card));
     },
+    enrich: (card) => history.enrich(cardEntry(card)),
     tag: (id) => history.remember({ kind: "tag", id }),
     get recentTags() {
       return history.state.entries

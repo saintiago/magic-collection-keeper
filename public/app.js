@@ -91,6 +91,7 @@ const printingPicker = createPrintingPicker({
   onChoose: (card) => detail({ card }, { replace: true }),
 });
 const showDetail = createCardDetail({
+  onAdded: (card) => home.card(card),
   loadOwned: async () => {
     await collectionReady;
     if (!(await collection.refresh()))
@@ -167,7 +168,8 @@ const cardPage = createCardPage({
     render();
   },
   renderDetail: showDetail,
-  onOpened: (card) => home.card(card),
+  onOpened: (card, { record }) =>
+    record ? home.card(card) : home.enrich(card),
   load: async (ref, signal) => {
     if (ref.entry) {
       await collectionReady;
@@ -246,7 +248,8 @@ const autocomplete = setupAutocomplete({
     if (item.kind === "query") search();
     else {
       recentSearches.remember(item);
-      cardPage.open(item);
+      home.card(item);
+      cardPage.open(item, { remember: false });
     }
   },
   onQueryChange: () => {

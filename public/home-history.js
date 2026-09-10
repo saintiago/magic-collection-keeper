@@ -46,6 +46,15 @@ export function createHomeHistory({
     state = { ...state, ...next };
     onChange(state);
   }
+  function saveEntries(entries) {
+    let error = "";
+    try {
+      storage.write(key, JSON.stringify({ schema: 1, entries }));
+    } catch {
+      error = "Recent activity is saved for this visit only.";
+    }
+    publish({ entries, error });
+  }
   return {
     start(account) {
       if (!account) throw Error("Verified account required for home activity.");
@@ -71,13 +80,26 @@ export function createHomeHistory({
       const item = activityEntry(value);
       if (!item) return;
       const entries = activityEntries([item, ...state.entries]);
-      let error = "";
-      try {
-        storage.write(key, JSON.stringify({ schema: 1, entries }));
-      } catch {
-        error = "Recent activity is saved for this visit only.";
-      }
-      publish({ entries, error });
+      saveEntries(entries);
+    },
+    enrich(value) {
+      if (!key) return;
+      const item = activityEntry(value);
+      if (item?.kind !== "card") return;
+      if (
+        !state.entries.some(
+          (entry) =>
+            entry.kind === "card" && entry.printing_id === item.printing_id,
+        )
+      )
+        return;
+      saveEntries(
+        state.entries.map((entry) =>
+          entry.kind === "card" && entry.printing_id === item.printing_id
+            ? { ...entry, ...item }
+            : entry,
+        ),
+      );
     },
     clear() {
       if (!key) return;
