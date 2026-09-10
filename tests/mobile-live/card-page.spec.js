@@ -1,3 +1,4 @@
+import { openArtworkDetails } from "../helpers/artwork-actions.js";
 import { test, expect } from "@playwright/test";
 test("LIVE-12 direct card pages show immediately, reuse details, preserve Back/search and reload exact identity without ownership writes", async ({
   page,
@@ -107,12 +108,12 @@ test("LIVE-12 direct card pages show immediately, reuse details, preserve Back/s
   );
   const count = await page.locator("#grid .card").count();
   await page.locator("#grid .card-open").first().tap();
-  await page.getByRole("button", { name: "Card details", exact: true }).tap();
+  await openArtworkDetails(page, { mobile: true });
   await expect(page.locator("#inventory-form")).toBeVisible();
   await page.locator("#close").click();
   await expect(page.locator("#grid .card")).toHaveCount(count);
   await page.locator("#grid .card-open").first().tap();
-  await page.getByRole("button", { name: "Card details", exact: true }).tap();
+  await openArtworkDetails(page, { mobile: true });
   await expect(page).toHaveURL(/#card=/);
   const url = page.url();
   await page.reload();

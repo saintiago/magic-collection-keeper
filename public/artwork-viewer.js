@@ -61,6 +61,30 @@ export function createArtworkViewer({
     });
     return item.tagState;
   }
+  function refreshSources() {
+    // Reconnect lifted artwork after any background grid replacement.
+    if (dialog.open) {
+      const target = sourceElement();
+      if (returningSource !== target) {
+        returningSource?.classList.remove("artwork-source-lifted");
+        returningSource = target;
+        target?.classList.add("artwork-source-lifted");
+      }
+    }
+    if (
+      previewSource &&
+      !previewSource.element.isConnected &&
+      previewSource.sourceKey
+    ) {
+      const target = previewSource.container?.querySelector(
+        `[data-card-key="${CSS.escape(previewSource.sourceKey)}"] button`,
+      );
+      if (target) {
+        previewSource.element = target;
+        target.classList.add("artwork-source-lifted");
+      } else hidePreview();
+    }
+  }
   function hidePreview() {
     if (preview.hidden) return;
     previewSource?.element.classList.remove("artwork-source-lifted");
@@ -553,30 +577,9 @@ export function createArtworkViewer({
         }
         item.tagState?.reconcile(intent.tag);
       }
-      // Collection replacement can replace the hidden tile during a save.
-      // Keep the replacement hidden until the lifted image returns to it.
-      if (dialog.open) {
-        const target = sourceElement();
-        if (returningSource !== target) {
-          returningSource?.classList.remove("artwork-source-lifted");
-          returningSource = target;
-          target?.classList.add("artwork-source-lifted");
-        }
-      }
-      if (
-        previewSource &&
-        !previewSource.element.isConnected &&
-        previewSource.sourceKey
-      ) {
-        const target = previewSource.container?.querySelector(
-          `[data-card-key="${CSS.escape(previewSource.sourceKey)}"] button`,
-        );
-        if (target) {
-          previewSource.element = target;
-          target.classList.add("artwork-source-lifted");
-        } else hidePreview();
-      }
+      refreshSources();
     },
+    refreshSources,
     hover,
     setHoverTilt,
     previewBounds: (element) =>

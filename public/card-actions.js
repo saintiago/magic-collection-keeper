@@ -201,6 +201,7 @@ export function createCardActions({
       tagActions.stop();
       cardGestures.cancel();
     },
+    refreshSources: artworkViewer.refreshSources,
     cancel: cardGestures.cancel,
   };
 }

@@ -453,6 +453,7 @@ function render() {
   $("grid").innerHTML = rows
     .map((row, index) => collectionCard(row, index, selectedTag))
     .join("");
+  cardActions.refreshSources();
   $("grid")
     .querySelectorAll(".card-open")
     .forEach(
