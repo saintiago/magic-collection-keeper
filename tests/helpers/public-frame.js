@@ -2,10 +2,10 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 
 // Frozen public artwork; no user images or simulated model output.
-export async function publicCardFrame(page) {
-  const [source] = JSON.parse(
+export async function publicCardFrame(page, fixtureIndex = 0) {
+  const source = JSON.parse(
     await readFile(new URL("../performance/sources.json", import.meta.url)),
-  );
+  )[fixtureIndex];
   const response = await fetch(source.url, {
     headers: {
       "User-Agent":
