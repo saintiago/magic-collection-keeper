@@ -6,6 +6,141 @@ import {
   alt as importedAlt,
 } from "../helpers/import-page-fixture.js";
 import { moxfieldSource } from "../../domain/import-draft.js";
+import { savePrinting } from "../../db.js";
+
+test("RECENT-01/03 shared catalogue, collection, tag, pending and Home artwork opens update exact activity; hover and pending ownership remain separate", async ({
+  page,
+}) => {
+  const f = await importFixture(page, { lines: 1 });
+  const owned = {
+    ...importedCard,
+    image_uris: { normal: "https://cards.scryfall.io/recent-owned.jpg" },
+  };
+  const pending = {
+    ...importedAlt,
+    image_uris: {
+      normal: "https://cards.scryfall.io/recent-pending.jpg",
+      small: "https://cards.scryfall.io/recent-pending.jpg",
+    },
+  };
+  const catalogue = {
+    ...importedCard,
+    id: "55555555-5555-4555-8555-555555555555",
+    image_uris: { normal: "https://cards.scryfall.io/recent-catalogue.jpg" },
+  };
+  try {
+    [owned, pending, catalogue].forEach((card) => savePrinting(f.db, card));
+    await f.tagged.add("test", {
+      printing_id: owned.id,
+      quantity: 2,
+      finish: "nonfoil",
+      condition: "NM",
+    });
+    const role = (await f.tagged.tags("test")).find(
+      (tag) => tag.type === "role",
+    );
+    const [row] = await f.tagged.list("test");
+    await f.tagged.assign("test", row.id, {
+      locations: [],
+      tag_ids: [role.id],
+    });
+    const draft = await f.drafts.stageDraft("test", {
+      id: randomUUID(),
+      kind: "scan",
+      rows: [
+        {
+          id: randomUUID(),
+          name: pending.name,
+          printing_id: pending.id,
+          quantity: 1,
+          finish: "nonfoil",
+          condition: "UNK",
+        },
+      ],
+    });
+    await page.route("https://cards.scryfall.io/**", (route) =>
+      route.fulfill({
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="488" height="680"><rect width="488" height="680" fill="green"/></svg>',
+      }),
+    );
+    await page.route("**/api/discover?*", (route) =>
+      route.fulfill({ json: { cards: [catalogue], total: 1, hasMore: false } }),
+    );
+    await page.goto("/#collection");
+    const tile = page.locator("#grid .card-open");
+    await expect(
+      page.locator(`#tag-filter option[value="${role.id}"]`),
+    ).toHaveCount(1);
+    await expect(page.locator("#scan")).toBeEnabled();
+    await page.waitForFunction(
+      () => document.querySelector("#grid img")?.naturalWidth > 0,
+    );
+    await page.evaluate(() => document.fonts.ready);
+    await expect(async () => {
+      await tile.scrollIntoViewIfNeeded();
+      await expect(tile).toBeInViewport({ ratio: 0.9 });
+    }).toPass({ timeout: 5000 });
+    await page.mouse.move(0, 0);
+    await tile.hover();
+    await expect(page.locator(".artwork-hover")).toBeVisible();
+    expect(await historyPrintings(page)).toEqual([]);
+    await tile.click();
+    await expect(page.locator(".artwork-viewer")).toBeVisible();
+    expect(await historyPrintings(page)).toEqual([owned.id]);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+    await page.goto("/#import=" + draft.draft.id);
+    await page.locator(".draft-artwork").click();
+    await expect(page.locator(".artwork-viewer")).toBeVisible();
+    expect(await historyPrintings(page)).toEqual([pending.id, owned.id]);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+    await page.goto("/#tag=" + role.id);
+    await tile.click();
+    await expect(page.locator(".artwork-viewer")).toBeVisible();
+    expect(await historyPrintings(page)).toEqual([owned.id, pending.id]);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+    await page.goto("/#catalog");
+    await page.locator("#search").fill("catalogue fixture");
+    await page.locator("#search-submit").click();
+    await tile.click();
+    await expect(page.locator(".artwork-viewer")).toBeVisible();
+    expect(await historyPrintings(page)).toEqual([
+      catalogue.id,
+      owned.id,
+      pending.id,
+    ]);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+    await page.locator("#home-nav").click();
+    const pendingTile = page.locator(
+      `.home-card[data-card-key="${pending.id}"] button`,
+    );
+    await expect(pendingTile).toHaveAccessibleName(/Not owned/);
+    await pendingTile.click();
+    await expect(page.locator(".artwork-full-image")).toHaveAttribute(
+      "src",
+      pending.image_uris.normal,
+    );
+    expect(await historyPrintings(page)).toEqual([
+      pending.id,
+      catalogue.id,
+      owned.id,
+    ]);
+    const saved = await f.tagged.list("test");
+    expect(saved).toHaveLength(1);
+    expect(saved[0].quantity).toBe(2);
+    expect(
+      (await f.drafts.getDraft("test", { id: draft.draft.id })).draft.rows[0]
+        .quantity,
+    ).toBe(1);
+    expect(f.counts().ownedWrites).toBe(0);
+  } finally {
+    f.db.close();
+  }
+});
 
 test("RECENT-01 Import records receipt-confirmed additions after a lost response; unchanged reimport leaves cleared history empty", async ({
   page,

@@ -16,7 +16,7 @@ export function createHome({ root, onCard, onClearSearches, onRetry }) {
       name: card.name,
       printing_id: card.id || card.printing_id,
       oracle_id: card.oracle_id,
-      image_url: image(card) || card.image_url,
+      image_url: image(card) || card.image_url || card.image,
     };
   }
   function render() {
