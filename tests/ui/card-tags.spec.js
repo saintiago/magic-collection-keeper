@@ -388,8 +388,14 @@ test.describe("actual touch and hybrid input", () => {
     await page.setViewportSize({ width: 390, height: 740 });
     const f = await setup(page);
     const source = page.locator("#grid .card-open");
-    await source.scrollIntoViewIfNeeded();
-    const bounds = await source.boundingBox();
+    let bounds;
+    // Initial collection/tag refresh can replace the tile before pickup. Only
+    // reacquire setup geometry; never retry the gesture or its assertions.
+    await expect(async () => {
+      await source.scrollIntoViewIfNeeded();
+      bounds = await source.boundingBox();
+      expect(bounds?.width).toBeGreaterThan(0);
+    }).toPass({ timeout: 5000 });
     const pointer = {
       pointerId: 91,
       pointerType: "touch",
