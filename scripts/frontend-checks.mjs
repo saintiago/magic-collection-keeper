@@ -29,6 +29,8 @@ run([
   "tests/ui/app.spec.js",
   "tests/ui/phone-review.spec.js",
   "tests/ui/card-actions.spec.js",
+  "tests/ui/card-tags.spec.js",
+  "tests/ui/card-tag-retry.spec.js",
   "tests/ui/frontend-release.spec.js",
   "--browser=webkit",
   "--workers=1",

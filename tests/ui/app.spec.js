@@ -1,3 +1,4 @@
+import { openArtworkDetails } from "../helpers/artwork-actions.js";
 import { test, expect } from "./fixtures.js";
 import { publicCardFrame } from "../helpers/public-frame.js";
 const card = {
@@ -41,7 +42,7 @@ test("empty collection, catalog review, quantity edit, filtering and removal", a
     .fill("Lightning Bolt");
   await page.getByRole("button", { name: "Search cards", exact: true }).click();
   await page.locator(".card").click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   await page.locator("#quantity").fill("4");
   await page
     .getByRole("button", { name: "Add to collection", exact: false })
@@ -50,7 +51,7 @@ test("empty collection, catalog review, quantity edit, filtering and removal", a
   await page.locator("#collection-nav").click();
   await expect(page.locator("#total")).toHaveText("4");
   await page.locator(".card").click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   await page.locator("#quantity").fill("2");
   await page.getByRole("button", { name: "Save quantity" }).click();
   await expect(page.locator("#total")).toHaveText("2");
@@ -58,7 +59,7 @@ test("empty collection, catalog review, quantity edit, filtering and removal", a
   await expect(page.getByText("No cards match these filters")).toBeVisible();
   await page.getByRole("button", { name: "Clear filters" }).click();
   await page.locator(".card").click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Remove this entry" }).click();
   await expect(page.getByText("Your collection begins here")).toBeVisible();
@@ -107,13 +108,11 @@ test("real browser ONNX recognizes the frozen public fixture without selecting o
   await page.goto("/#collection");
   await page.locator("#scan").click();
   const frame = await publicCardFrame(page);
-  await page
-    .locator("#photo")
-    .setInputFiles({
-      name: "verified-public-fixture.jpg",
-      mimeType: "image/jpeg",
-      buffer: Buffer.from(frame.split(",")[1], "base64"),
-    });
+  await page.locator("#photo").setInputFiles({
+    name: "verified-public-fixture.jpg",
+    mimeType: "image/jpeg",
+    buffer: Buffer.from(frame.split(",")[1], "base64"),
+  });
   await expect(page.locator("#scan-wheel")).toContainText(
     "Adaptive Training Post",
     { timeout: 30000 },

@@ -139,7 +139,9 @@ await page.evaluate(() => {
             ).transform
           : null,
       infoOpacity: inspector
-        ? getComputedStyle(inspector.querySelector(".artwork-details")).opacity
+        ? getComputedStyle(
+            inspector.querySelector(".artwork-tags,.artwork-touch-wheel"),
+          ).opacity
         : null,
       imageWidth: card?.getBoundingClientRect().width,
     });
@@ -200,12 +202,10 @@ if (mode.startsWith("anchored")) {
 } else if (mode.startsWith("controls")) {
   await tile.click();
   await pause(650);
-  for (const [name, selector] of [
-    ["save", ".artwork-save"],
-    ["edit", '[data-artwork="edit"]'],
-    ["details", '[data-artwork="details"]'],
-  ]) {
-    const b = await page.locator(selector).boundingBox();
+  const tags = page.locator(".artwork-viewer .card-tag-toggle");
+  for (let i = 0; i < Math.min(3, await tags.count()); i++) {
+    const name = "tag-" + i;
+    const b = await tags.nth(i).boundingBox();
     await page.mouse.move(b.x + 5, b.y + 5, { steps: 12 });
     await pause(180);
     await page.screenshot({
@@ -217,10 +217,8 @@ if (mode.startsWith("anchored")) {
       path: root + "/" + mode + "-" + name + "-right.png",
     });
   }
-  const reset = await page
-    .getByLabel("Reset zoom", { exact: true })
-    .boundingBox();
-  await page.mouse.move(reset.x + reset.width / 2, reset.y + reset.height / 2, {
+  const tag = await tags.first().boundingBox();
+  await page.mouse.move(tag.x + tag.width / 2, tag.y + tag.height / 2, {
     steps: 10,
   });
   await page.mouse.down();
@@ -260,8 +258,8 @@ if (mode.startsWith("anchored")) {
   );
   await pause(1100);
   await page.screenshot({ path: root + "/inspector-desktop.png" });
-  await page.getByLabel("Close artwork").click();
-  await pause(250);
+  await page.mouse.click(5, 5);
+  await pause(450);
   await page.mouse.move(base.x + base.width / 2, base.y + base.height / 2);
   await pause(70);
   await page.mouse.move(4, 88);
@@ -298,10 +296,12 @@ if (mode.startsWith("anchored")) {
     }
     await touch("touchEnd", []);
     await pause(500);
-    await page.getByRole("button", { name: "Reset zoom" }).tap();
+    await page.touchscreen.tap(5, 5);
+    await pause(450);
+    await tile.tap();
     await pause(700);
-    await page.getByLabel("Close artwork").tap();
-    await pause(350);
+    await page.touchscreen.tap(5, 5);
+    await pause(450);
   }
 } else {
   const x = base.x + base.width / 2,

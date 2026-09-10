@@ -1,3 +1,4 @@
+import { openArtworkDetails } from "../helpers/artwork-actions.js";
 import { test, expect } from "./fixtures.js";
 test.use({ hasTouch: true });
 const cards = [
@@ -145,7 +146,7 @@ test("UC-32 actual card opens and tag visits order recent activity, persist and 
   await page.locator("#collection-nav").click();
   for (const name of ["Lightning Bolt", "Sol Ring", "Lightning Bolt"]) {
     await page.getByRole("button", { name: `Open ${name} printing` }).click();
-    await page.locator('[data-artwork="details"]').click();
+    await openArtworkDetails(page);
     await page.locator("#close").click();
   }
   await page.locator("#home-nav").click();
@@ -176,7 +177,7 @@ test("UC-32 actual card opens and tag visits order recent activity, persist and 
     page.locator(".home-card").first().locator("button"),
   ).toHaveAccessibleName(/^Open Lightning Bolt artwork/);
   await page.locator(".home-card").last().tap();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   await expect(page.locator("#detail h2")).toHaveText("Sol Ring");
   await page.locator("#close").click();
   await expect(
@@ -194,7 +195,7 @@ test("UC-32 home respects verified account isolation and sign-out hides every pr
   const f = await fixture(page, { cloud: true });
   await page.locator("#collection-nav").click();
   await page.locator(".card-open").first().click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   await page.locator("#close").click();
   await page.locator("#home-nav").click();
   await expect(page.locator(".home-card")).toHaveCount(1);

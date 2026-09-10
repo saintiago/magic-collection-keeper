@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { fixture, card } from "../helpers/import-page-fixture.js";
 import { savePrinting } from "../../db.js";
+import { openArtworkDetails } from "../helpers/artwork-actions.js";
 
 async function setup(page) {
   page.on("pageerror", (error) => console.log("Tag UI error:", error.message));
@@ -279,6 +280,19 @@ test("UC-SHARED-CARD-TAGS dropping on a tag link preserves the frozen Remove act
 
 test.describe("actual touch and hybrid input", () => {
   test.use({ hasTouch: true });
+  test("UC-CARD-INPUT-MODES touch artwork returns to its source menu and dedicated quantity page", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const f = await setup(page);
+    await page.locator("#grid .card-open").tap();
+    await openArtworkDetails(page, { mobile: true });
+    await expect(page.locator("#quantity")).toHaveValue("9");
+    await page.locator("#close").tap();
+    await expect(page.locator("#grid .card-open")).toBeFocused();
+    expect((await f.tagged.list("test"))[0].quantity).toBe(9);
+    f.db.close();
+  });
   for (const width of [320, 390, 1280]) {
     test(`UC-CARD-INPUT-MODES finger tap uses 200% radial tags at ${width}px and mouse retains its own presentation`, async ({
       page,

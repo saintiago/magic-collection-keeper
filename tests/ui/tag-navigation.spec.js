@@ -1,3 +1,4 @@
+import { openArtworkDetails } from "../helpers/artwork-actions.js";
 import { test, expect } from "./fixtures.js";
 const tags = ["deck", "binder", "box", "other", "role", "category"].map(
   (kind, i) => ({
@@ -142,20 +143,21 @@ test("UC-19 card, detail, assignment and source links close cleanly without edit
   const data = await fixture(page);
   await page.goto("/#collection");
   await page.locator(".card-open").first().click();
-  await page.locator(`.artwork-details a[data-tag-id="${tags[0].id}"]`).click();
+  await openArtworkDetails(page);
+  await page.locator(`#detail a[data-tag-id="${tags[0].id}"]`).click();
   await expect(page.locator("#detail")).not.toBeVisible();
   await expect(page.locator("#result-count")).toHaveText(
     "1 assigned copies · 1 distinct entry",
   );
   await page.locator(".card-open").click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   const detailLink = page.locator(`#detail a[data-tag-id="${tags[4].id}"]`);
   await detailLink.focus();
   await page.keyboard.press("Enter");
   await expect(page.locator("#detail")).not.toBeVisible();
   await expect(page.locator("#tag-filter")).toHaveValue(tags[4].id);
   await page.locator(".card-open").click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   await page.locator("#edit-card-tags").click();
   await page
     .locator(`.classification-choice a[data-tag-id="${tags[5].id}"]`)
@@ -163,7 +165,7 @@ test("UC-19 card, detail, assignment and source links close cleanly without edit
   await expect(page.locator("#tag-filter")).toHaveValue(tags[5].id);
   await expect(page.locator("dialog[open]")).toHaveCount(0);
   await page.locator(".card-open").click();
-  await page.locator('[data-artwork="details"]').click();
+  await openArtworkDetails(page);
   await page.locator("#edit-card-tags").click();
   await page.getByLabel("Copies at location 1").fill("99");
   await page.locator(`.assignment-tag a[data-tag-id="${tags[1].id}"]`).click();
@@ -250,7 +252,8 @@ test("UC-19 closing a loading source view prevents its late response from reopen
   await expect.poll(() => Boolean(release)).toBe(true);
   await page.locator("#tags-close").click();
   await page.locator(".card-open").first().click();
-  await page.locator(`.artwork-details a[data-tag-id="${tags[0].id}"]`).click();
+  await openArtworkDetails(page);
+  await page.locator(`#detail a[data-tag-id="${tags[0].id}"]`).click();
   release();
   await expect(page.locator("dialog[open]")).toHaveCount(0);
   await expect(page.locator("#tag-filter")).toHaveValue(tags[0].id);

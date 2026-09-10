@@ -836,8 +836,14 @@
   z-index: 8;
   pointer-events: none;
 }
-.card-wheel-tag {
+.artwork-touch-wheel .card-wheel-tag {
   touch-action: manipulation;
+  background: radial-gradient(
+    ellipse,
+    #081b12bb 20%,
+    #081b1270 58%,
+    transparent 76%
+  );
 }
 .artwork-touch-drag-copy {
   position: absolute;
