@@ -26,6 +26,43 @@ export async function exerciseCardActions(
     process.env.KEEPER_TEST_USER,
     process.env.KEEPER_TEST_PASSWORD,
   );
+  let failure;
+  try {
+    await checkCardActions({ page, browser }, test, mobile);
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    try {
+      // A failed assertion may leave a modal over Sign out. Navigation closes
+      // the test page's dialogs without depending on the failed interaction.
+      await page.goto("/#home", { timeout: 15000 });
+      await page.locator("#sign-out").click({ timeout: 10000 });
+    } catch (error) {
+      if (!failure) throw error;
+      console.info(
+        "Card action page cleanup failed; preserving scenario error:",
+        error.message,
+      );
+    }
+  }
+}
+
+export async function checkCardActions(
+  { page, browser },
+  test,
+  mobile = false,
+  {
+    verifyOtherOwner = true,
+    realCloud = true,
+    clearData = clearCaptureTestData,
+    commitTagAction = async (route) => {
+      const response = await route.fetch();
+      expect(response.ok()).toBeTruthy();
+      return { response };
+    },
+  } = {},
+) {
   expect(await liveApi(page, "/api/collection")).toEqual([]);
   const beforeDrafts = new Set(
     (await liveApi(page, "/api/import-draft")).pending_drafts.map((d) => d.id),
@@ -145,7 +182,8 @@ export async function exerciseCardActions(
       );
     }
   }
-  let otherContext;
+  let otherContext,
+    phase = "owned card details and tag retry";
   try {
     for (const name of ["Source", "Target"]) {
       const label = `Action ${name} ${randomUUID().slice(0, 8)}`;
@@ -231,8 +269,7 @@ export async function exerciseCardActions(
     let loseResponse = true;
     await page.route("**/api/tag-actions", async (route) => {
       operations.push(route.request().postDataJSON());
-      const response = await route.fetch();
-      expect(response.ok()).toBeTruthy();
+      const committedResponse = await commitTagAction(route);
       if (loseResponse) {
         loseResponse = false;
         await route.fulfill({
@@ -241,7 +278,7 @@ export async function exerciseCardActions(
             error: "Test delivery interruption after actual cloud commit",
           },
         });
-      } else await route.fulfill({ response });
+      } else await route.fulfill(committedResponse);
     });
     await directDrop(target.id);
     await expect(page.locator(".card-action-status")).toContainText(
@@ -272,7 +309,7 @@ export async function exerciseCardActions(
     expect(await post("/api/tag-actions", operations[0])).toEqual(beforeReplay);
     expect(beforeReplay[0].locations).toHaveLength(1);
     expect(beforeReplay[0].locations[0].quantity).toBe(2);
-    if (!mobile) {
+    if (!mobile && verifyOtherOwner) {
       expect(process.env.KEEPER_OTHER_USER).toBe("keeper-isolation");
       otherContext = await browser.newContext();
       const other = await otherContext.newPage();
@@ -303,6 +340,7 @@ export async function exerciseCardActions(
       otherContext = null;
       expect(await liveApi(page, "/api/collection")).toEqual(beforeReplay);
     }
+    phase = "catalogue tag staging";
     await post(
       "/api/tag-assignments",
       { inventory_id: row.id, locations: [], tag_ids: [] },
@@ -347,6 +385,7 @@ export async function exerciseCardActions(
     expect(await liveApi(page, "/api/collection")).toEqual([]);
     // Verify the new targeted draft route against actual JWT/Dynamo state,
     // including replay after a later opposite operation. Pending is never owned.
+    phase = "pending tag replay and clear";
     const pendingRemove = {
       operation_id: randomUUID(),
       id: draft.id,
@@ -375,6 +414,7 @@ export async function exerciseCardActions(
     await expect(page.locator(".draft-row")).toHaveCount(0);
     // A second untagged selection verifies explicit Add without retaining a
     // temporary tag in permanent source provenance.
+    phase = "catalogue explicit review and Add";
     await page.goto("/#catalog");
     await page.locator("#search").fill(query);
     await activate(page.locator("#search-submit"));
@@ -389,13 +429,22 @@ export async function exerciseCardActions(
     expect((await liveApi(page, "/api/collection"))[0].quantity).toBe(1);
     console.log(
       JSON.stringify({
-        realCloudCardActions: true,
+        realCloudCardActions: realCloud,
         mobileEngineEmulation: mobile,
         physicalDeviceVerified: false,
         ambiguousRetrySameId: true,
         catalogueExplicitAdd: true,
       }),
     );
+  } catch (error) {
+    console.info(
+      JSON.stringify({
+        cardActionFailure: phase,
+        mobile,
+        error: error.message,
+      }),
+    );
+    throw error;
   } finally {
     await otherContext?.close();
     await page.unroute("**/api/tag-actions");
@@ -405,12 +454,11 @@ export async function exerciseCardActions(
         { inventory_id: row.id, locations: [], tag_ids: [] },
         "PUT",
       );
-    await clearCaptureTestData(page, beforeDrafts);
+    await clearData(page, beforeDrafts);
     for (const tag of created)
       await liveApi(page, "/api/tags/" + tag.id, { method: "DELETE" });
     expect(
       new Set((await liveApi(page, "/api/tags")).map((t) => t.id)),
     ).toEqual(beforeTags);
-    await page.locator("#sign-out").click();
   }
 }
