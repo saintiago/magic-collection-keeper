@@ -379,6 +379,7 @@
   align-items: center;
   justify-content: center;
   animation: artwork-expand 380ms ease-out;
+  will-change: transform;
 }
 .artwork-open-orientation {
   width: 100%;
@@ -387,6 +388,7 @@
   align-items: center;
   justify-content: center;
   animation: artwork-untilt 380ms ease-out;
+  will-change: transform;
 }
 @keyframes artwork-untilt {
   from {
