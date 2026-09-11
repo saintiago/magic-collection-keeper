@@ -1,6 +1,6 @@
 # SCAN-10 consecutive recognition repair
 
-Status: locally verified; deployment and owner physical acceptance pending. The owner explicitly rejected r123-a2 as fixing their physical workflow, then chose consecutive same-card suppression instead of distinguishing identical physical copies. This supersedes the strict visual departure/artwork requirement.
+Status: published in r125-a2; complete live verification and owner physical acceptance pending. The owner explicitly rejected r123-a2 as fixing their physical workflow, then chose consecutive same-card suppression instead of distinguishing identical physical copies. This supersedes the strict visual departure/artwork requirement.
 
 ## Causal diagnosis
 
@@ -17,7 +17,7 @@ Unknown or missing-identity results do not advance the accepted sequence. Duplic
 - 135 unit tests pass, including fresh single-card admission, stale/gap/multiple rejection and consecutive Oracle-ID sequences.
 - Focused browser checks pass for A,A/B/A with unchanged image pixels, printing jitter, unknown results, success-cue count, late provider identity changes, one read in flight and stopped-camera cancellation.
 - Actual geometry cases pass for overlap, empty frames, A after empty still suppressed, B accepted and A accepted again; real browser model, photo fallback, review/persistence staging, background/resume, automatic error recovery and audio cases pass.
-- Desktop LIVE-04 and mobile LIVE-13 are updated to verify consecutive duplicate suppression and alternating real recognized public cards, preserving manual quantity and explicit ownership review. Their deployment results are pending.
+- Desktop LIVE-04 and mobile LIVE-13 are updated to verify consecutive duplicate suppression and alternating real recognized public cards, preserving manual quantity and explicit ownership review. Desktop LIVE-04 passes on r125-a2. An old shared LIVE-14 duplicate-photo expectation stopped the original desktop run (11/12 passed) before mobile. The helper now asserts duplicate suppression and manually increases the single row to three copies; exact-release desktop/mobile verification is pending.
 - The earlier private recording is replayed locally at half speed with real browser geometry/recognition and separately with the actual local primary visual/OCR service, hydrated from the frozen canonical catalog. Later distinct cards are read and accepted, so the first-card latch is no longer present. Not every recorded card resolves; fallible recognition and brief/ambiguous geometry remain distinct limits. No private image leaves the computer, and recorded playback is not physical-device verification.
 
-No backend/model, infrastructure, provider guidance, source guard or unrelated feature changes are included. The main workflow must pass before delivery is recorded.
+No backend/model, infrastructure, provider guidance, source guard or unrelated feature changes are included. All main prepublication checks passed (135 unit, 140 Chromium, 103 WebKit plus one existing unsupported-stream skip, 56 visual). The first attempt stopped on an unchanged keyboard-menu test; it passed twice locally and on the single failed-job retry. The originating main run remains failed because of the stale LIVE-14 expectation; its artifacts retain normal expiry. Full delivery evidence requires the existing exact-release live verification against r125-a2, without republishing unchanged application code.
