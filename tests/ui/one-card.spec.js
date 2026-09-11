@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { test, expect } from "./fixtures.js";
-import { mockVisualReading } from "./visual-fixture.js";
 test.use({ realCardPresence: true });
 
 test("UC-ONE-CARD actual geometry waits quietly through overlap and preserves outgoing-card suppression", async ({
@@ -20,14 +19,12 @@ test("UC-ONE-CARD actual geometry waits quietly through overlap and preserves ou
   const nextPhoto =
     "data:image/jpeg;base64," +
     (await readFile("recognition/fixtures/bolt.jpg")).toString("base64");
-  await mockVisualReading(page, {
-    card: {
-      id: "11111111-1111-4111-8111-111111111111",
-      oracle_id: "22222222-2222-4222-8222-222222222222",
-      name: "Controlled identity",
-      finishes: ["nonfoil"],
-    },
-  });
+  await page.route("**/browser-recognition.js", (route) =>
+    route.fulfill({
+      contentType: "text/javascript",
+      body: `export function createBrowserRecognition(){return {kind:"browser-onnx",prepare:async()=>({}),dispose(){},async recognize(){const next=window.oneCardScene==="next";const card={id:next?"33333333-3333-4333-8333-333333333333":"11111111-1111-4111-8111-111111111111",oracle_id:next?"44444444-4444-4444-8444-444444444444":"22222222-2222-4222-8222-222222222222",name:next?"Controlled B":"Controlled A",finishes:["nonfoil"]};return {name:card.name,status:"possible",candidates:[card],selected:card,suggested:true,finish:"nonfoil"};}}}`,
+    }),
+  );
   await page.addInitScript(
     async ({ photo, nextPhoto }) => {
       window.captureEvents = [];
@@ -54,6 +51,7 @@ test("UC-ONE-CARD actual geometry waits quietly through overlap and preserves ou
         canvas.height = Math.round(bounds.height * 2);
         const ctx = canvas.getContext("2d");
         window.paintScene = (kind) => {
+          window.oneCardScene = kind;
           const sample = document.createElement("canvas");
           sample.width = 800;
           sample.height = 1120;
@@ -135,18 +133,23 @@ test("UC-ONE-CARD actual geometry waits quietly through overlap and preserves ou
     )
     .toBe(true);
   await page.evaluate(() => window.paintScene("single"));
-  await expect(page.locator("#scan-count")).toHaveText("2 queued · 2 copies", {
-    timeout: 10000,
-  });
+  await expect(page.locator("#scan-status")).toContainText("Same card ignored");
+  await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
   await page.evaluate(() => window.paintScene("next"));
-  await expect(page.locator("#scan-count")).toHaveText("3 queued · 3 copies", {
+  await expect(page.locator("#scan-count")).toHaveText("2 queued · 2 copies", {
     timeout: 15000,
   });
   await page.waitForTimeout(1800);
-  await expect(page.locator("#scan-count")).toHaveText("3 queued · 3 copies");
-
-  const count = await page.evaluate(() => window.captureEvents.length);
-  expect(count).toBe(3);
+  await expect(page.locator("#scan-count")).toHaveText("2 queued · 2 copies");
+  await page.evaluate(() => window.paintScene("single"));
+  await expect(page.locator("#scan-count")).toHaveText("3 queued · 3 copies", {
+    timeout: 15000,
+  });
+  expect(
+    await page.evaluate(
+      () => window.captureEvents.filter((r) => r.outcome === "selected").length,
+    ),
+  ).toBe(3);
   await expect(page.locator("#scan-overlay")).toHaveAttribute(
     "aria-hidden",
     "true",

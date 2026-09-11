@@ -1,5 +1,7 @@
 # Development and operations
 
+SCAN-10 replaces strict visual replacement with consecutive Oracle-ID suppression under explicit owner instruction. Brief single-card/stability capture checks remain. Consecutive identical copies require the quantity control; unresolved recognition may retry automatically and never counts a copy. One camera read runs at a time, spaced by one second after completion, with a 150-attempt session bound and existing 50-row/independent-provider bounds. No backend, model, infrastructure or source-guard changes are part of this fix. The prior private 11-card recording is replayed only locally; recorded/emulated checks are separate from physical-phone acceptance.
+
 September 11 scanner/retention recovery: quota cleared; the corresponding-source guard then stopped main attempt 1 before publication because retention changed tracked CI/build files. Verified source/image publication refreshed recognition to version 18; the unchanged guard verifies 126 matching private/runtime/build files. Main 34581369109 attempt 2 reused its passed tests, published r123-a2 and passed all 20 live cases. Cleanup 34584731470 removed both app handoffs; an independent read-only check found the temporary test profile empty. Future retries after cleanup must start a complete run. [Release evidence](../tests/performance/R123-RELEASE.md).
 
 ## Automatic deployment versions

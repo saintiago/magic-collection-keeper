@@ -1,6 +1,7 @@
 import { scannerShell } from "./scan-view.js";
 import { startCamera, stopCamera, capture, signature } from "./camera.js";
 import { createScanAdmission } from "./scan-admission.js";
+import { createScanSequence } from "./scan-sequence.js";
 import { createFrameBurst, captureQuality } from "./camera-quality.js";
 import { createScanAudio } from "./scan-audio.js";
 import { createScanWheel } from "./scan-wheel.js";
@@ -27,6 +28,7 @@ export function createScanner({
     stream,
     timer,
     gate,
+    sequence,
     burst,
     overlay,
     running = false,
@@ -37,6 +39,7 @@ export function createScanner({
     preparationAttempt = 0;
   let presenceTask = null;
   let checkedFrame = null;
+  let nextReadingAt = 0;
   const el = (id) => dialog.querySelector(`#${id}`);
   const status = (text) => {
     if (dialog.open && el("scan-status").textContent !== text)
@@ -155,6 +158,14 @@ export function createScanner({
     document.documentElement.classList.remove("scanning");
   });
   function enqueue(canvas) {
+    if (attempt >= 150) {
+      stop();
+      update();
+      status(
+        "Recognition limit reached. Review these cards, or reopen Scan to continue.",
+      );
+      return;
+    }
     if (rows.length + queue.length + Number(processing) >= 50) {
       stop();
       update();
@@ -175,9 +186,7 @@ export function createScanner({
     };
     if (queue.length >= 3) {
       audio.cue("error", row.scanId);
-      status(
-        "Scanning is busy. Move this card out, then try again after the cue.",
-      );
+      status("Scanning is busy. Hold the next card until reading finishes.");
       return;
     }
     queue.push({ row, canvas, capturedAt: performance.now() });
@@ -214,15 +223,17 @@ export function createScanner({
             if (!rows.includes(row)) return;
             const chosen = row.selected,
               quantity = row.quantity;
-            const edited = row.userEdited
-              ? {
-                  selected: chosen,
-                  name: chosen.name,
-                  finish: row.finish,
-                  condition: row.condition,
-                  query: row.query,
-                }
-              : {};
+            const edited =
+              row.userEdited ||
+              verified.selected.oracle_id !== row.acceptedIdentity
+                ? {
+                    selected: chosen,
+                    name: chosen.name,
+                    finish: row.finish,
+                    condition: row.condition,
+                    query: row.query,
+                  }
+                : {};
             Object.assign(row, verified, { quantity, ...edited });
             overlay?.recognized(row.captureId, row.name);
             update();
@@ -240,8 +251,8 @@ export function createScanner({
           name: "Unclear reading",
           error:
             error.code === "SCANNER_PREPARING"
-              ? "Scanner is still preparing. Wait for Ready, then move the card out and retry."
-              : "Recognition failed. Move the card out, then try again.",
+              ? "Scanner is still preparing. Wait for Ready and keep one card still."
+              : "Recognition failed. Keep one card still to retry.",
           selected: null,
         };
       }
@@ -252,20 +263,28 @@ export function createScanner({
         processing: false,
       });
       delete row.latestRecognition;
-      if (row.selected) rows.push(row);
-      if (row.selected) overlay?.recognized(row.captureId, row.name);
+      const acceptance = sequence.accept(row.selected);
+      const accepted = acceptance === "accepted";
+      const duplicate = acceptance === "duplicate";
+      if (accepted) {
+        row.acceptedIdentity = row.selected.oracle_id;
+        rows.push(row);
+        overlay?.recognized(row.captureId, row.name);
+      }
 
-      if (!row.waitingForSingleCard)
-        audio.cue(row.selected ? "success" : "error", row.scanId);
-      update(Boolean(row.selected));
+      if (!duplicate && !row.waitingForSingleCard)
+        audio.cue(accepted ? "success" : "error", row.scanId);
+      if (!duplicate) update(accepted);
       status(
-        row.waitingForSingleCard
-          ? "Wait until only one card is visible."
-          : row.selected
-            ? `${row.name} queued · check suggested printing in Review. ${running ? "Slide in the next card." : "Upload another photo or start the camera."}`
-            : row.candidates?.length
-              ? "Identity uncertain. Move the card out and retry. No copy counted."
-              : `${row.error || "No match. Move the card out, then try again."} No copy counted.`,
+        duplicate
+          ? "Same card ignored. Slide in a different card, or use + for another copy."
+          : row.waitingForSingleCard
+            ? "Wait until only one card is visible."
+            : accepted
+              ? `${row.name} queued · check suggested printing in Review. ${running ? "Slide in the next card." : "Upload another photo or start the camera."}`
+              : row.candidates?.length
+                ? "Identity uncertain. Keep one card still to retry. No copy counted."
+                : `${row.error || "No match. Keep one card still to retry."} No copy counted.`,
       );
       window.dispatchEvent(
         new CustomEvent("keeper-scan-measurement", {
@@ -277,11 +296,13 @@ export function createScanner({
             queueMs: began - capturedAt,
             outcome: failure
               ? "error"
-              : row.selected
-                ? "selected"
-                : row.candidates?.length
-                  ? "possible"
-                  : "unknown",
+              : duplicate
+                ? "duplicate"
+                : accepted
+                  ? "selected"
+                  : row.candidates?.length
+                    ? "possible"
+                    : "unknown",
             failure,
             selected: row.selected?.id || null,
             candidates:
@@ -294,7 +315,10 @@ export function createScanner({
         }),
       );
     }
-    if (current === session) processing = false;
+    if (current === session) {
+      processing = false;
+      nextReadingAt = performance.now() + 1000;
+    }
   }
   function tick(current) {
     if (!running || current !== session) return;
@@ -310,12 +334,14 @@ export function createScanner({
         overlay?.track(frame);
         burst.observe(canvas, frame, now, captureQuality(canvas));
         if (
+          !processing &&
+          !queue.length &&
+          now >= nextReadingAt &&
           checkedFrame &&
           gate.validate(
             checkedFrame.frame,
             checkedFrame.at,
             checkedFrame.geometry.state,
-            checkedFrame.artwork,
           )
         )
           enqueue(checkedFrame.canvas);
@@ -353,16 +379,11 @@ export function createScanner({
                 )
                   return;
                 sample.cardGeometry = geometry;
-                const artwork =
-                  geometry.state === "single"
-                    ? signature(sample, geometry.regions?.[0])
-                    : undefined;
                 checkedFrame = {
                   canvas: sample,
                   frame: sampled,
                   at: capturedAt,
                   geometry,
-                  artwork,
                 };
                 overlay?.observe(geometry, sampled);
                 if (geometry.state !== "single") {
@@ -379,7 +400,12 @@ export function createScanner({
                 ) {
                   status("Hold still.");
                 }
-                if (gate.validate(sampled, capturedAt, geometry.state, artwork))
+                if (
+                  !processing &&
+                  !queue.length &&
+                  performance.now() >= nextReadingAt &&
+                  gate.validate(sampled, capturedAt, geometry.state)
+                )
                   enqueue(sample);
               },
               (error) => {
@@ -452,6 +478,8 @@ export function createScanner({
   return {
     open() {
       gate = createScanAdmission();
+      sequence = createScanSequence();
+      nextReadingAt = 0;
       rows = [];
       queue = [];
       attempt = 0;

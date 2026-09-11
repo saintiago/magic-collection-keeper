@@ -74,15 +74,19 @@ test("LIVE-04 continuous synthetic camera with real recognition, real printing r
       )
       .toBe(true);
     await page.evaluate(() => window.paintSyntheticCard());
-    await choose();
-    await expect(page.locator(".scan-option")).toHaveCount(2);
+    await expect(page.locator("#scan-status")).toContainText(
+      "Same card ignored",
+      { timeout: 30000 },
+    );
+    await expect(page.locator(".scan-option")).toHaveCount(1);
     await page.locator(".scan-plus").click();
     await expect(page.locator("#scan-controls output")).toHaveText("2");
-    // Slide to distinct artwork with no blank frame; the incoming card stays
-    // stationary afterward and must contribute exactly one capture.
     await page.evaluate(() => window.paintSyntheticCard(false, 1));
     await choose();
     await page.waitForTimeout(1800);
+    await expect(page.locator(".scan-option")).toHaveCount(2);
+    await page.evaluate(() => window.paintSyntheticCard(false, 0));
+    await choose();
     await expect(page.locator(".scan-option")).toHaveCount(3);
     await page.locator("#scan-back").click();
     expect(
@@ -93,9 +97,9 @@ test("LIVE-04 continuous synthetic camera with real recognition, real printing r
     await expect(page.locator(".draft-row")).toHaveCount(3);
     const { draft } = await liveApi(page, "/api/import-draft");
     expect(draft.rows).toHaveLength(3);
-    for (const row of draft.rows.slice(0, 2))
+    for (const row of [draft.rows[0], draft.rows[2]])
       expect(row.card.oracle_id).toBe("a6657fcf-f08c-4b03-8ec8-cb0b194eb553");
-    expect(draft.rows[2].card.oracle_id).toBe(
+    expect(draft.rows[1].card.oracle_id).toBe(
       "4457ed35-7c10-48c8-9776-456485fdf070",
     );
     const reviewed = reviewedOwnership(draft.rows);

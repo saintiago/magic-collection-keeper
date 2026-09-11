@@ -4,6 +4,8 @@
 
 A private Magic collection app with Scryfall printing lookup, persistent inventory, reviewed text imports, and assisted camera recognition.
 
+Scanner correction SCAN-10 is locally implemented, not yet deployed: consecutive recognitions of the same canonical card are ignored, including another suggested printing. Slide in a different card; A, B, then A creates three entries. Use the quantity control for consecutive identical copies. This explicitly replaces visual artwork/departure gating; brief stability and single-card checks remain. The owner's r123 physical failure remains unresolved until the new policy is deployed and tried on their device.
+
 - App: https://d3r1grp0vvv9f.cloudfront.net
 - Repository: https://github.com/saintiago/magic-collection-keeper
 - [Use cases and interaction coverage](docs/USE-CASES.md)

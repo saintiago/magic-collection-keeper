@@ -64,16 +64,22 @@ test("LIVE-13 unknown recognition does not count copies; optional candidates and
     path: test.info().outputPath("scanner-failed-no-copy.png"),
   });
   images.exact = (await publicCardFrame(page)).split(",")[1];
-  for (let i = 1; i <= 5; i++) {
-    await upload("exact");
+  images.other = (await publicCardFrame(page, 1)).split(",")[1];
+  await upload("exact");
+  await expect(page.locator(".scan-option")).toHaveCount(1, { timeout: 45000 });
+  await upload("exact");
+  await expect(page.locator("#scan-status")).toContainText(
+    "Same card ignored",
+    { timeout: 45000 },
+  );
+  await expect(page.locator(".scan-option")).toHaveCount(1);
+  for (let i = 2; i <= 6; i++) {
+    await upload(i % 2 ? "exact" : "other");
     await expect(page.locator(".scan-option")).toHaveCount(i, {
       timeout: 45000,
     });
   }
-  await upload("exact");
-  await expect(page.locator("#scan-count")).toHaveText("6 queued · 6 copies", {
-    timeout: 60000,
-  });
+  await expect(page.locator("#scan-count")).toHaveText("6 queued · 6 copies");
   const wheel = page.locator("#scan-wheel");
   await expect
     .poll(() =>
