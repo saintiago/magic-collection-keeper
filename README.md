@@ -4,7 +4,7 @@
 
 A private Magic collection app with Scryfall printing lookup, persistent inventory, reviewed text imports, and assisted camera recognition.
 
-Scanner correction SCAN-10 is published and verified in [r125-a2](tests/performance/R125-RELEASE.md): consecutive recognitions of the same canonical card are ignored, including another suggested printing. Slide in a different card; A, B, then A creates three entries. Use the quantity control for consecutive identical copies. This explicitly replaces visual artwork/departure gating; brief stability and single-card checks remain. The owner's r123 physical failure remains unresolved until the new policy is tried on their device.
+Scanner correction SCAN-10 is published and verified in [r125-a2](tests/performance/R125-RELEASE.md): consecutive recognitions of the same canonical card are ignored, including another suggested printing. Slide in a different card; A, B, then A creates three entries. Use the quantity control for consecutive identical copies. This explicitly replaces visual artwork/departure gating; brief stability and single-card checks remain. The owner now confirms this scanning behavior works on their phone. The reported 50-card restart limit and phone heat are under [investigation for sustained scanning](tests/performance/SCAN11-INVESTIGATION.md); performance changes are proposals only.
 
 - App: https://d3r1grp0vvv9f.cloudfront.net
 - Repository: https://github.com/saintiago/magic-collection-keeper
