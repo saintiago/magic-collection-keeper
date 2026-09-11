@@ -89,6 +89,7 @@ export function createScanner({
     wheel.update([...recent, ...rows], newest);
     wheel.setBusy?.(batchBusy || Boolean(saveError));
     el("photo").disabled = batchBusy || Boolean(saveError);
+    dialog.dataset.saving = String(batchBusy || Boolean(saveError));
     el("scan-count").textContent =
       `${rows.length} queued · ${rows.reduce((n, r) => n + r.quantity, 0)} copies`;
     el("scan-empty").hidden = rows.length + recent.length > 0;
@@ -106,6 +107,7 @@ export function createScanner({
         saveError = error;
         wheel.setBusy?.(true);
         el("photo").disabled = true;
+        dialog.dataset.saving = "true";
         status(`Saving paused: ${error.message} Use Retry saving.`);
         const retry = el("scan-save-retry");
         if (retry) retry.hidden = false;
@@ -363,6 +365,7 @@ export function createScanner({
     overlay?.pause?.();
     wheel.setBusy?.(true);
     el("photo").disabled = true;
+    dialog.dataset.saving = "true";
     status("Saving this batch. Scanning continues automatically when saved.");
     flushing = (async () => {
       await Promise.allSettled([...completions]);
@@ -394,6 +397,7 @@ export function createScanner({
         flushing = null;
         wheel.setBusy?.(Boolean(saveError));
         if (dialog.open) el("photo").disabled = Boolean(saveError);
+        dialog.dataset.saving = String(Boolean(saveError));
       });
     return flushing;
   }

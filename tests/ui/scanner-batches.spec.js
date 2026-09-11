@@ -101,6 +101,7 @@ test("SCAN-12/13 photo batches recover a lost response, retain identity across r
   page,
 }) => {
   test.setTimeout(90000);
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.route("**/api/collection", (route) => route.fulfill({ json: [] }));
   await mockVisualReading(page, { card: cards[0] });
   const store = await batchStore(page);
@@ -127,6 +128,9 @@ test("SCAN-12/13 photo batches recover a lost response, retain identity across r
   await expect(page.locator("#scan-count")).toHaveText("50 queued · 50 copies");
   await expect(page.locator("#photo")).toBeDisabled();
   await expect(page.locator(".scan-plus")).toBeDisabled();
+  await page.screenshot({
+    path: test.info().outputPath("paused-batch-mobile.png"),
+  });
   await page.locator("#scan-save-retry").click();
   await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
   expect(store.calls()).toBe(2);
@@ -147,6 +151,9 @@ test("SCAN-12/13 photo batches recover a lost response, retain identity across r
   await upload(cards[0]);
   await expect(page.locator("#scan-status")).toContainText("Same card ignored");
   await expect(page.locator(".scan-option")).toHaveCount(21);
+  await page.screenshot({
+    path: test.info().outputPath("resumed-batch-mobile.png"),
+  });
   await page.locator("#scan-review").click();
   await expect(page.locator(".draft-row")).toHaveCount(11);
   await page.getByRole("button", { name: "Previous batch" }).click();

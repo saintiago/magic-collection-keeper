@@ -353,6 +353,9 @@ html.scanning {
   transform: translateX(-50%);
   z-index: 5;
 }
+.scanner-dialog[data-saving="true"] .scan-start {
+  visibility: hidden;
+}
 .scan-batch-navigation {
   display: flex;
   align-items: center;

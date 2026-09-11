@@ -1,6 +1,6 @@
 # Continuous scanner implementation and validation
 
-September 11, 2026. Implements the owner's authorized scanner priorities SCAN-11�14 while preserving the physically accepted SCAN-10 sequence rule. Current status: locally implemented; full browser checks, final soak and deployment verification pending. Production remains r125-a2 until a recorded release succeeds. The owner's phone heat/battery behavior is not measured here.
+September 11, 2026. Implements the owner's authorized scanner priorities SCAN-11-14 while preserving the physically accepted SCAN-10 sequence rule. Current status: locally implemented; full browser checks, final soak and deployment verification pending. Production remains r125-a2 until a recorded release succeeds. The owner's phone heat/battery behavior is not measured here.
 
 ## Behavior and bounds
 
@@ -41,3 +41,5 @@ Evidence is retained privately in `data/recognition-evaluation/phone-feedback/sc
 Physical acceptance remains: scan for an extended session on the owner's phone, check stationary/consecutive suppression, alternating cards, glare/overlap, saved-batch Review, recovery, background/Back shutdown, heat and battery. Local/cloud tests cannot establish acceptable physical temperature or camera/audio behavior.
 
 Source packaging: the initial refreshed local archive exceeded the existing4,000,000-byte bound. The source builder now lists upstream documentation-only pictures in a pinned URL/SHA-256 manifest while retaining all upstream code/notices/examples/tests and every existing application/build source check. The complete pinned upstream checkout is still retrieved by the included installer. The size bound and source verification guards are unchanged.
+
+Final local checks:142 unit tests, build, all11 focused scanner cases after the wheel/upload fixes,10 focused WebKit cases plus one unsupported-stream skip, and56 visual/layout cases passed. The final historical mobile Review screenshots were inspected for navigation and fit. Actual cloud/source-image verification and the paced2h persistence soak remain pending.
