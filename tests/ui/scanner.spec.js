@@ -43,6 +43,12 @@ async function fixture(page, { failFirst = false, slow = false } = {}) {
     failFirst,
   });
   await page.addInitScript(() => {
+    window.testRecognitionCard ||= {
+      id: "scan-test",
+      oracle_id: "scan-test",
+      name: "Lightning Bolt",
+      finishes: ["nonfoil"],
+    };
     window.scanGeometry = [];
     window.addEventListener("keeper-card-geometry-measurement", (event) => {
       window.scanGeometry.push(event.detail);
@@ -94,29 +100,23 @@ async function fixture(page, { failFirst = false, slow = false } = {}) {
   await page.locator("#camera-start").click();
   if (!failFirst && !slow) await choosePossible(page);
 }
-async function nextIdentical(page) {
+async function nextCard(page) {
   const expected = (await page.locator(".scan-option").count()) + 1;
   await page.evaluate(() => {
-    window.scanGeometry = [];
-    window.paintCard("blank");
+    const index = (window.fixtureIdentityIndex || 0) + 1;
+    window.fixtureIdentityIndex = index;
+    window.testRecognitionCard = {
+      id: `scan-${index}`,
+      oracle_id: `oracle-${index}`,
+      name: `Controlled card ${index}`,
+      finishes: ["nonfoil"],
+    };
+    window.paintCard("first");
   });
-  await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const frames = window.scanGeometry.filter(
-          (frame) => frame.state === "none" && frame.sameScene,
-        );
-        return (
-          frames.length >= 3 &&
-          frames.at(-1).capturedAt - frames[0].capturedAt >= 600
-        );
-      }),
-    )
-    .toBe(true);
-  await page.evaluate(() => window.paintCard("first"));
   await choosePossible(page, expected);
 }
-test("SCAN-03/04 a stationary capture survives appearance changes and transient loss with one copy/cue, then an observed removal admits the next identical copy", async ({
+
+test("SCAN-10 consecutive identity survives appearance changes and transient loss with one copy/cue, then a different identity is admitted", async ({
   page,
 }) => {
   await fixture(page);
@@ -140,7 +140,7 @@ test("SCAN-03/04 a stationary capture survives appearance changes and transient 
   await page.evaluate(() => {
     delete window.testCardState;
   });
-  await nextIdentical(page);
+  await nextCard(page);
   await expect(page.locator("#scan-count")).toHaveText("2 queued · 2 copies");
   expect(await page.evaluate(() => window.cueNotes)).toEqual([
     440, 660, 880, 660, 880,
@@ -150,7 +150,7 @@ test("SCAN-03/04 a stationary capture survives appearance changes and transient 
   await page.reload();
   await expect(page.locator(".draft-row")).toHaveCount(2);
 });
-test("SCAN-03 background/resume keeps the stationary-card latch until observed removal", async ({
+test("SCAN-10 background/resume preserves consecutive identity suppression", async ({
   page,
 }) => {
   await fixture(page);
@@ -177,11 +177,11 @@ test("SCAN-03 background/resume keeps the stationary-card latch until observed r
       window.cueNotes.filter((note) => note === 660 || note === 880),
     ),
   ).toEqual([660, 880]);
-  await nextIdentical(page);
+  await nextCard(page);
   await expect(page.locator("#scan-count")).toHaveText("2 queued · 2 copies");
 });
 
-test("UC-14 hands-free identical copies, stationary suppression, error cue recovery and safe review", async ({
+test("UC-14 hands-free different identities, duplicate suppression, automatic error recovery and safe review", async ({
   page,
 }) => {
   await fixture(page, { failFirst: true });
@@ -190,16 +190,13 @@ test("UC-14 hands-free identical copies, stationary suppression, error cue recov
   );
   await expect(page.locator(".scan-option")).toHaveCount(0);
   await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
-  await page.waitForTimeout(1700);
-  await expect(page.locator(".scan-option")).toHaveCount(0);
-  expect(await page.evaluate(() => window.cueNotes)).toEqual([440, 230, 170]);
-  await nextIdentical(page);
+  await choosePossible(page, 1);
   await expect(page.locator(".scan-option")).toHaveCount(1);
   await expect(page.locator("#scan-status")).toContainText("queued");
   expect(await page.evaluate(() => window.cueNotes)).toEqual([
     440, 230, 170, 660, 880,
   ]);
-  await nextIdentical(page);
+  await nextCard(page);
   await expect(page.locator(".scan-option")).toHaveCount(2);
   await expect(
     page.locator('.scan-option[aria-selected="true"]'),
@@ -221,7 +218,7 @@ test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove co
   await fixture(page);
   await expect(page.locator("#scan-status")).toContainText("queued");
   for (let i = 0; i < 4; i++) {
-    await nextIdentical(page);
+    await nextCard(page);
     await expect(page.locator(".scan-option")).toHaveCount(i + 2);
     await expect(page.locator("#scan-status")).toContainText("queued");
   }
@@ -344,7 +341,7 @@ test("UC-15 chronological wheel snaps at edges, selected-only quantity/remove co
     .toBeLessThan(2);
   await page.locator("#scan-mute").click();
   const notes = await page.evaluate(() => window.cueNotes.length);
-  await nextIdentical(page);
+  await nextCard(page);
   await expect(page.locator(".scan-option")).toHaveCount(5);
   await expect(page.locator("#scan-status")).toContainText("queued");
   expect(await page.evaluate(() => window.cueNotes.length)).toBe(notes);
@@ -398,7 +395,7 @@ test("UC-14 sampling continues during slow recognition and removing the last que
   await fixture(page, { slow: true });
   await expect(page.locator("#scan-status")).toContainText("Reading card");
   await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
-  await nextIdentical(page);
+  await nextCard(page);
   await choosePossible(page);
   await expect(page.locator(".scan-option")).toHaveCount(2, { timeout: 12000 });
   await page.locator(".scan-remove").click();
@@ -443,7 +440,7 @@ test("UC-14 audio interruption remains visible and explicit testing resumes with
   await expect(page.locator("#scan-sound-state")).toContainText("Audio ready");
   await page.evaluate(() => window.scanAudioContext.suspend());
   await expect(page.locator("#scan-sound-state")).toContainText("Sound paused");
-  await nextIdentical(page);
+  await nextCard(page);
   await expect(page.locator(".scan-option")).toHaveCount(2);
   const before = await page.evaluate(() => [...window.cueNotes]);
   await page.locator("#scan-test-sound").click();

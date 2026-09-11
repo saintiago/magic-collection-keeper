@@ -7,14 +7,14 @@ test("UC-15 phone wheel puts newest beside controls and centers history with new
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route("**/api/collection", (r) => r.fulfill({ json: [] }));
   await mockVisualReading(page, {
-    card: {
-      id: "scan-test",
+    cards: Array.from({ length: 6 }, (_, index) => ({
+      id: `scan-test-${index}`,
       name: "Lightning Bolt",
       set: "m11",
       collector_number: "149",
       lang: "en",
       finishes: ["nonfoil"],
-    },
+    })),
   });
   await page.route("**/api/search?*", (r) =>
     r.fulfill({
