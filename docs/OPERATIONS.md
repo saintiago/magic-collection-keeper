@@ -1,5 +1,7 @@
 # Development and operations
 
+September 11 scanner/retention recovery: quota cleared; the corresponding-source guard then stopped main attempt 1 before publication because retention changed tracked CI/build files. Verified source/image publication refreshed recognition to version 18; the unchanged guard verifies 126 matching private/runtime/build files. Main 34581369109 attempt 2 reused its passed tests, published r123-a2 and passed all 20 live cases. Cleanup 34584731470 removed both app handoffs; an independent read-only check found the temporary test profile empty. Future retries after cleanup must start a complete run. [Release evidence](../tests/performance/R123-RELEASE.md).
+
 ## Automatic deployment versions
 
 Every main deployment gets `0.1.0+deploy.<run number>.<attempt>` using the package.json base and [GitHub workflow counters](https://docs.github.com/en/actions/reference/workflows-and-actions/variables). No version commit or bot loop is needed. Test/PR builds remain local development; failed pre-publish runs do not change served HTML. A rerun gets a new attempt. A failed check after HTML publication may still have deployed the visible version: the footer's Actions link shows actual check status.

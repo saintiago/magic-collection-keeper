@@ -1,5 +1,7 @@
 # Use cases and E2E coverage
 
+UC-SCAN-08 and UC-DEPLOY-RETENTION delivery checkpoint: production verified in [r123-a2](../tests/performance/R123-RELEASE.md), superseding earlier pending statuses. Actual LIVE-04 passed direct different-card replacement, stationary suppression and explicit ownership persistence; automatic cleanup removed both known app artifacts after successful live checks. Synthetic frames do not prove physical-device operation.
+
 UC-DEPLOY-RETENTION (DEPLOY-06): after a main release passes its protected deployment checks, remove only its known disposable Actions handoffs. Failed, PR, checks-only, concurrent or newer attempts retain artifacts until expiry; source/publication handoffs and durable release assets remain protected. Disposable uploads expire after one day; recognition cross-run handoffs have a documented seven-day exception. [Safety tests](../tests/artifact-cleanup.test.js), [consumer audit](OPERATIONS.md#github-artifact-retention). Status: locally implemented; main activation pending.
 
 [Owner requirements, acceptance criteria and queued requests](REQUIREMENTS.md).
