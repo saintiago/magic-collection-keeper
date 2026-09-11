@@ -2,6 +2,7 @@ const requested = {
   facingMode: { ideal: "environment" },
   width: { ideal: 2560 },
   height: { ideal: 1440 },
+  frameRate: { ideal: 15, max: 24 },
 };
 
 export function cameraDiagnostics(track, applied = []) {
@@ -192,10 +193,13 @@ export async function startCamera(
 export function stopCamera(stream) {
   stream?.getTracks().forEach((t) => t.stop());
 }
-export function capture(video, guide) {
+export function capture(
+  video,
+  guide,
+  { canvas = document.createElement("canvas"), maxPixels = 4000000 } = {},
+) {
   if (!(video.videoWidth > 0 && video.videoHeight > 0))
     throw new Error("Camera is not ready.");
-  const canvas = document.createElement("canvas");
   if (guide) {
     const bounds = video.getBoundingClientRect(),
       box = guide.getBoundingClientRect();
@@ -215,9 +219,11 @@ export function capture(video, guide) {
       height = Math.min(video.videoHeight, rawY + box.height / scale) - y;
     if (!(width > 0 && height > 0))
       throw new Error("Camera guide is outside the video.");
-    const bounded = Math.min(1, Math.sqrt(4000000 / (width * height)));
-    canvas.width = Math.max(1, Math.floor(width * bounded));
-    canvas.height = Math.max(1, Math.floor(height * bounded));
+    const bounded = Math.min(1, Math.sqrt(maxPixels / (width * height)));
+    if (canvas.width !== Math.max(1, Math.floor(width * bounded)))
+      canvas.width = Math.max(1, Math.floor(width * bounded));
+    if (canvas.height !== Math.max(1, Math.floor(height * bounded)))
+      canvas.height = Math.max(1, Math.floor(height * bounded));
     canvas
       .getContext("2d")
       .drawImage(video, x, y, width, height, 0, 0, canvas.width, canvas.height);
@@ -226,9 +232,11 @@ export function capture(video, guide) {
   // The guide corresponds to the central portrait-shaped area of the video.
   const h = video.videoHeight * 0.88,
     w = Math.min(video.videoWidth * 0.9, (h * 488) / 680);
-  const bounded = Math.min(1, Math.sqrt(4000000 / (w * h)));
-  canvas.width = Math.max(1, Math.floor(w * bounded));
-  canvas.height = Math.max(1, Math.floor(h * bounded));
+  const bounded = Math.min(1, Math.sqrt(maxPixels / (w * h)));
+  if (canvas.width !== Math.max(1, Math.floor(w * bounded)))
+    canvas.width = Math.max(1, Math.floor(w * bounded));
+  if (canvas.height !== Math.max(1, Math.floor(h * bounded)))
+    canvas.height = Math.max(1, Math.floor(h * bounded));
   canvas
     .getContext("2d")
     .drawImage(
@@ -244,10 +252,13 @@ export function capture(video, guide) {
     );
   return canvas;
 }
-export function signature(canvas, corners) {
-  const small = document.createElement("canvas");
-  small.width = 24;
-  small.height = 32;
+export function signature(
+  canvas,
+  corners,
+  small = document.createElement("canvas"),
+) {
+  if (small.width !== 24) small.width = 24;
+  if (small.height !== 32) small.height = 32;
   const ctx = small.getContext("2d", { willReadFrequently: true });
   if (corners?.length === 4) {
     const xs = corners.map(([x]) => x * canvas.width);

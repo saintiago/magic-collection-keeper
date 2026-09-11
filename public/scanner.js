@@ -2,7 +2,7 @@ import { scannerShell } from "./scan-view.js";
 import { startCamera, stopCamera, capture, signature } from "./camera.js";
 import { createScanAdmission } from "./scan-admission.js";
 import { createScanSequence } from "./scan-sequence.js";
-import { createFrameBurst, captureQuality } from "./camera-quality.js";
+import { visualDifference } from "./scan-transition.js";
 import { createScanAudio } from "./scan-audio.js";
 import { createScanWheel } from "./scan-wheel.js";
 import { createCardPresence } from "./card-presence.js";
@@ -12,6 +12,7 @@ export function createScanner({
   api,
   onReview,
   onRows = () => {},
+  onBatch = null,
   recognition = null,
 }) {
   const mode = recognition?.kind || "hybrid";
@@ -29,7 +30,6 @@ export function createScanner({
     timer,
     gate,
     sequence,
-    burst,
     overlay,
     running = false,
     processing = false,
@@ -38,8 +38,21 @@ export function createScanner({
     muted = false,
     preparationAttempt = 0;
   let presenceTask = null;
-  let checkedFrame = null;
-  let nextReadingAt = 0;
+  let nextReadingAt = 0,
+    nextGeometryAt = 0,
+    retryDelay = 1000;
+  let analysisCanvas, signatureCanvas, lastReadFrame;
+  let recent = [],
+    archived = 0,
+    batchBusy = false,
+    flushing = null,
+    saveError = null;
+  const completions = new Set();
+  const metadata = () => ({
+    attempt,
+    lastOracle: sequence?.current(),
+    archived,
+  });
   const el = (id) => dialog.querySelector(`#${id}`);
   const status = (text) => {
     if (dialog.open && el("scan-status").textContent !== text)
@@ -73,12 +86,33 @@ export function createScanner({
     );
   }
   function update(newest = false) {
-    wheel.update(rows, newest);
+    wheel.update([...recent, ...rows], newest);
+    wheel.setBusy?.(batchBusy || Boolean(saveError));
+    el("photo").disabled = batchBusy || Boolean(saveError);
     el("scan-count").textContent =
       `${rows.length} queued · ${rows.reduce((n, r) => n + r.quantity, 0)} copies`;
-    el("scan-empty").hidden = rows.length > 0;
-    el("scan-review").disabled = rows.length === 0;
-    onRows(rows);
+    el("scan-empty").hidden = rows.length + recent.length > 0;
+    el("scan-review").disabled = rows.length === 0 && archived === 0;
+    const saved = el("scan-saved");
+    if (saved) saved.hidden = !archived;
+    if (saved)
+      saved.textContent = archived
+        ? `${archived} earlier captures saved · Review opens batches`
+        : "";
+    const task = Promise.resolve().then(() => onRows(rows, metadata()));
+    return task.then(
+      () => true,
+      (error) => {
+        saveError = error;
+        wheel.setBusy?.(true);
+        el("photo").disabled = true;
+        status(`Saving paused: ${error.message} Use Retry saving.`);
+        const retry = el("scan-save-retry");
+        if (retry) retry.hidden = false;
+        overlay?.pause?.();
+        return false;
+      },
+    );
   }
   function soundState(state) {
     if (!el("scan-sound-state")) return;
@@ -99,8 +133,9 @@ export function createScanner({
     requestController = new AbortController();
     if (!preservePresence) presence.dispose();
     presenceTask = null;
-    checkedFrame = null;
     overlay?.clear();
+    overlay?.pause?.();
+    if (!preservePresence) recognition?.dispose?.();
     running = false;
     dialog.dataset.running = "false";
     processing = false;
@@ -110,14 +145,13 @@ export function createScanner({
     const video = el("camera-video");
     if (video) video.srcObject = null;
     queue = [];
-    burst?.clear();
     void audio?.close();
     if (el("camera-start")) {
       el("camera-start").hidden = false;
       el("camera-start").disabled = false;
     }
   }
-  function leave() {
+  async function leave() {
     stop();
     recognition?.dispose?.();
     const overlayMetrics = overlay?.destroy();
@@ -130,7 +164,8 @@ export function createScanner({
     wheel.destroy();
     dialog.close();
     document.documentElement.classList.remove("scanning");
-    if (rows.length) onReview(rows);
+    if (flushing) await flushing.catch(() => {});
+    if (rows.length || archived) onReview(rows, metadata());
   }
   dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
@@ -158,18 +193,9 @@ export function createScanner({
     document.documentElement.classList.remove("scanning");
   });
   function enqueue(canvas) {
-    if (attempt >= 150) {
-      stop();
-      update();
-      status(
-        "Recognition limit reached. Review these cards, or reopen Scan to continue.",
-      );
-      return;
-    }
-    if (rows.length + queue.length + Number(processing) >= 50) {
-      stop();
-      update();
-      status("Batch full. Open Review to check and save these cards.");
+    if (batchBusy || saveError) return;
+    if (rows.length >= 50) {
+      void flushBatch();
       return;
     }
     const row = {
@@ -208,7 +234,7 @@ export function createScanner({
             : "Reading card locally… Keep each card still until the cue.",
         );
         result = await recognition.recognize(canvas, {
-          attempt: row.scanId,
+          attempt: ((row.scanId - 1) % 99999) + 1,
           onStage: (stage) => {
             if (current === session && dialog.open)
               overlay?.stage(row.captureId, stage);
@@ -216,6 +242,8 @@ export function createScanner({
           onUpdate: (verified) => {
             if (current !== session || !dialog.open || !verified.selected)
               return;
+            verified = { ...verified };
+            delete verified.completion;
             if (row.processing) {
               row.latestRecognition = verified;
               return;
@@ -243,6 +271,13 @@ export function createScanner({
             AbortSignal.timeout(35000),
           ]),
         });
+        if (result?.completion) {
+          const pending = Promise.resolve(result.completion).catch(() => {});
+          completions.add(pending);
+          void pending.then(() => completions.delete(pending));
+          result = { ...result };
+          delete result.completion;
+        }
         if (current === session && dialog.open && el("scan-preparation"))
           el("scan-preparation").textContent = "Scanner ready.";
       } catch (error) {
@@ -274,7 +309,8 @@ export function createScanner({
 
       if (!duplicate && !row.waitingForSingleCard)
         audio.cue(accepted ? "success" : "error", row.scanId);
-      if (!duplicate) update(accepted);
+      if (!duplicate) await update(accepted);
+      retryDelay = accepted ? 1000 : Math.min(3000, retryDelay + 500);
       status(
         duplicate
           ? "Same card ignored. Slide in a different card, or use + for another copy."
@@ -317,39 +353,80 @@ export function createScanner({
     }
     if (current === session) {
       processing = false;
-      nextReadingAt = performance.now() + 1000;
+      nextReadingAt = performance.now() + retryDelay;
+      if (rows.length >= 50) void flushBatch();
     }
+  }
+  async function flushBatch() {
+    if (flushing) return flushing;
+    batchBusy = true;
+    overlay?.pause?.();
+    wheel.setBusy?.(true);
+    el("photo").disabled = true;
+    status("Saving this batch. Scanning continues automatically when saved.");
+    flushing = (async () => {
+      await Promise.allSettled([...completions]);
+      if (!onBatch) throw Error("Batch storage is unavailable.");
+      const saved = await onBatch(rows, metadata());
+      recent =
+        saved.recent ||
+        rows.slice(-10).map((row) => ({ ...row, archived: true }));
+      archived = saved.archived ?? archived + rows.length;
+      rows = [];
+      saveError = null;
+      const durable = await update();
+      if (!durable) return;
+      if (dialog.open) {
+        el("scan-save-retry").hidden = true;
+        status("Batch saved. Keep scanning, or open Review.");
+        if (running) overlay?.resume?.();
+      }
+    })()
+      .catch((error) => {
+        saveError = error;
+        status(`Batch not confirmed: ${error.message} Use Retry saving.`);
+        if (dialog.open) el("scan-save-retry").hidden = false;
+        recognition?.dispose?.();
+        presence.dispose();
+      })
+      .finally(() => {
+        batchBusy = false;
+        flushing = null;
+        wheel.setBusy?.(Boolean(saveError));
+        if (dialog.open) el("photo").disabled = Boolean(saveError);
+      });
+    return flushing;
   }
   function tick(current) {
     if (!running || current !== session) return;
-    const tickStarted = performance.now();
+    const began = performance.now();
     try {
       const video = el("camera-video");
-      if (video.readyState >= 2) {
-        const canvas = capture(video, el("scan-guide"));
-        const frame = signature(canvas),
+      if (video.readyState >= 2 && !batchBusy && !saveError) {
+        const low = capture(video, el("scan-guide"), {
+          canvas: analysisCanvas,
+          maxPixels: 384000,
+        });
+        const frame = signature(low, null, signatureCanvas),
           now = performance.now();
-        canvas.capturedAt = now;
         gate.track(frame, now);
         overlay?.track(frame);
-        burst.observe(canvas, frame, now, captureQuality(canvas));
+        // Motion only shortens a retry delay. Periodic reads never require it.
+        if (lastReadFrame && visualDifference(frame, lastReadFrame) > 5) {
+          nextReadingAt = Math.min(nextReadingAt, now);
+          retryDelay = 1000;
+        }
         if (
           !processing &&
           !queue.length &&
+          !presenceTask &&
           now >= nextReadingAt &&
-          checkedFrame &&
-          gate.validate(
-            checkedFrame.frame,
-            checkedFrame.at,
-            checkedFrame.geometry.state,
-          )
-        )
-          enqueue(checkedFrame.canvas);
-        if (!presenceTask) {
-          const sample = burst.take() || canvas;
-          const sampled = signature(sample),
-            capturedAt = sample.capturedAt;
-          const task = presence.inspect(sample, {
+          now >= nextGeometryAt
+        ) {
+          const sampled = frame,
+            capturedAt = now;
+          nextGeometryAt = now + 350;
+          const task = presence.inspect(low, {
             signal: AbortSignal.any([
               requestController.signal,
               AbortSignal.timeout(35000),
@@ -359,32 +436,19 @@ export function createScanner({
           task
             .then(
               (geometry) => {
-                if (current === session)
-                  window.dispatchEvent(
-                    new CustomEvent("keeper-card-geometry-measurement", {
-                      detail: {
-                        state: geometry.state,
-                        capturedAt,
-                        workerMs: geometry.elapsedMs,
-                        frameAgeMs: performance.now() - capturedAt,
-                        sameScene: gate.matches(sampled, capturedAt),
-                      },
-                    }),
-                  );
-                if (
-                  !running ||
-                  current !== session ||
-                  !dialog.open ||
-                  !gate.matches(sampled, capturedAt)
-                )
-                  return;
-                sample.cardGeometry = geometry;
-                checkedFrame = {
-                  canvas: sample,
-                  frame: sampled,
-                  at: capturedAt,
-                  geometry,
-                };
+                if (current !== session || !running || !dialog.open) return;
+                window.dispatchEvent(
+                  new CustomEvent("keeper-card-geometry-measurement", {
+                    detail: {
+                      state: geometry.state,
+                      capturedAt,
+                      workerMs: geometry.elapsedMs,
+                      frameAgeMs: performance.now() - capturedAt,
+                      sameScene: gate.matches(sampled, capturedAt),
+                    },
+                  }),
+                );
+                if (!gate.matches(sampled, capturedAt)) return;
                 overlay?.observe(geometry, sampled);
                 if (geometry.state !== "single") {
                   status(
@@ -394,19 +458,26 @@ export function createScanner({
                   );
                 } else if (
                   [
-                    "Wait until only one card is visible.",
                     "Place one card inside the guide.",
+                    "Wait until only one card is visible.",
                   ].includes(el("scan-status").textContent)
-                ) {
-                  status("Hold still.");
-                }
-                if (
-                  !processing &&
-                  !queue.length &&
-                  performance.now() >= nextReadingAt &&
-                  gate.validate(sampled, capturedAt, geometry.state)
                 )
-                  enqueue(sample);
+                  status("Hold still.");
+                if (
+                  processing ||
+                  queue.length ||
+                  batchBusy ||
+                  saveError ||
+                  !gate.validate(sampled, capturedAt, geometry.state)
+                )
+                  return;
+                // Full resolution is copied only for a due, stable single-card read.
+                const image = capture(video, el("scan-guide"));
+                const fresh = signature(image, null, signatureCanvas);
+                if (!gate.matches(fresh, performance.now())) return;
+                image.cardGeometry = geometry;
+                lastReadFrame = fresh;
+                enqueue(image);
               },
               (error) => {
                 if (current !== session || error.name === "AbortError") return;
@@ -429,7 +500,7 @@ export function createScanner({
     if (running && current === session)
       timer = setTimeout(
         () => tick(current),
-        Math.max(0, 120 - (performance.now() - tickStarted)),
+        Math.max(0, 120 - (performance.now() - began)),
       );
   }
   async function start() {
@@ -438,7 +509,10 @@ export function createScanner({
     update();
     const current = session;
     gate ||= createScanAdmission();
-    burst = createFrameBurst();
+    analysisCanvas = document.createElement("canvas");
+    signatureCanvas = document.createElement("canvas");
+    lastReadFrame = null;
+    nextGeometryAt = 0;
     el("camera-start").disabled = true;
     status("Waiting for camera permission…");
     // Called directly from the initial tap, before awaiting camera permission.
@@ -463,6 +537,7 @@ export function createScanner({
           guide: el("scan-guide"),
         });
       running = true;
+      overlay?.resume?.();
       dialog.dataset.running = "true";
       el("camera-start").hidden = true;
       status(
@@ -476,13 +551,18 @@ export function createScanner({
     }
   }
   return {
-    open() {
+    open(resume = {}) {
       gate = createScanAdmission();
-      sequence = createScanSequence();
+      sequence = createScanSequence(resume.lastOracle);
       nextReadingAt = 0;
-      rows = [];
+      rows = resume.rows || [];
+      recent = resume.recent || [];
+      archived = resume.archived || 0;
       queue = [];
-      attempt = 0;
+      attempt = resume.attempt || 0;
+      saveError = null;
+      batchBusy = false;
+      retryDelay = 1000;
       dialog.innerHTML = scannerShell(muted);
       overlay?.destroy();
       overlay = createScanOverlay({
@@ -497,7 +577,21 @@ export function createScanner({
         viewport: el("scan-wheel"),
         controls: el("scan-controls"),
         onChange: () => update(),
+        onRemove: (row) => {
+          const index = rows.indexOf(row);
+          if (index >= 0) rows.splice(index, 1);
+        },
       });
+      overlay?.pause?.();
+      el("scan-save-retry").onclick = async () => {
+        saveError = null;
+        if (rows.length >= 50 || resume.outgoing) await flushBatch();
+        else if (await update()) {
+          el("scan-save-retry").hidden = true;
+          if (running) overlay?.resume?.();
+        }
+        if (!saveError) prepareRecognition();
+      };
       el("camera-start").onclick = start;
       el("scan-back").onclick = leave;
       el("scan-review").onclick = leave;
@@ -518,6 +612,13 @@ export function createScanner({
       el("photo").onchange = async (event) => {
         const file = event.target.files[0];
         if (!file) return;
+        if (batchBusy || saveError) {
+          event.target.value = "";
+          status(
+            "Saving is paused. Retry saving before uploading another photo.",
+          );
+          return;
+        }
         stop({ preservePresence: true });
         update();
         const current = session;
@@ -565,7 +666,7 @@ export function createScanner({
       dialog.showModal();
       prepareRecognition();
       el("camera-start").focus();
-      update();
+      update(true);
     },
   };
 }

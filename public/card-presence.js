@@ -1,6 +1,6 @@
 // Only geometry; never searches names, artwork, ownership or a provider.
 export function createCardPresence() {
-  let worker, preparation, ready, pending;
+  let worker, preparation, ready, pending, analysisCanvas;
   function dispose() {
     worker?.terminate();
     worker = null;
@@ -9,6 +9,7 @@ export function createCardPresence() {
     ready?.reject(error);
     pending?.reject(error);
     ready = pending = null;
+    analysisCanvas = null;
   }
   function prepare() {
     if (preparation) return preparation;
@@ -51,14 +52,17 @@ export function createCardPresence() {
       const abort = () => dispose();
       signal?.addEventListener("abort", abort, { once: true });
       try {
-        await prepare();
-        signal?.throwIfAborted();
         if (pending) throw Error("Card check busy");
-        const small = document.createElement("canvas");
-        small.width = small.height = 384;
+        const small = (analysisCanvas ||= document.createElement("canvas"));
+        if (small.width !== 384) small.width = 384;
+        if (small.height !== 384) small.height = 384;
         const context = small.getContext("2d", { willReadFrequently: true });
         context.drawImage(canvas, 0, 0, 384, 384);
         const frame = context.getImageData(0, 0, 384, 384);
+        // Snapshot before waiting: the caller may reuse its analysis surface.
+        await prepare();
+        signal?.throwIfAborted();
+        if (pending) throw Error("Card check busy");
         return await new Promise((resolve, reject) => {
           pending = { resolve, reject };
           worker.postMessage(

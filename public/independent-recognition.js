@@ -117,7 +117,11 @@ export function createIndependentRecognition({
         .finally(() => {
           if (active === independentTask) active = null;
         });
-      return promise;
+      const completion = Promise.allSettled([
+        primaryTask.then((result) => result?.completion),
+        independentTask,
+      ]);
+      return promise.then((result) => ({ ...result, completion }));
     },
   };
 }

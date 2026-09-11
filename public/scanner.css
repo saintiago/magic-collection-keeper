@@ -336,3 +336,27 @@ html.scanning {
   pointer-events: none;
   z-index: 1;
 }
+
+#scan-saved {
+  position: absolute;
+  top: 19px;
+  left: 16px;
+  z-index: 2;
+  font-size: 9px;
+  color: #627b6e;
+  pointer-events: none;
+}
+#scan-save-retry {
+  position: absolute;
+  bottom: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+}
+.scan-batch-navigation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}

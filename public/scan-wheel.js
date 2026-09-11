@@ -1,9 +1,11 @@
 import { esc } from "./view.js";
-export function createScanWheel({ viewport, controls, onChange }) {
+export function createScanWheel({ viewport, controls, onChange, onRemove }) {
+  let busy = false;
   let rows = [],
     selected = -1,
     pinned = true,
-    settleTimer;
+    settleTimer,
+    rendered = "";
   function layout(end) {
     const oldPad = parseFloat(getComputedStyle(viewport).paddingTop);
     pinned = end;
@@ -33,8 +35,12 @@ export function createScanWheel({ viewport, controls, onChange }) {
     if (!row) return;
     controls.setAttribute("aria-label", `Controls for ${row.name}`);
     controls.querySelector("output").textContent = row.quantity;
-    controls.querySelector(".scan-minus").disabled = row.quantity <= 1;
-    controls.querySelector(".scan-plus").disabled = row.quantity >= 100000;
+    controls.querySelector(".scan-minus").disabled =
+      busy || row.archived || row.quantity <= 1;
+    controls.querySelector(".scan-plus").disabled =
+      busy || row.archived || row.quantity >= 100000;
+    controls.querySelector(".scan-remove").disabled =
+      busy || Boolean(row.archived);
   }
   function select(index) {
     clearTimeout(settleTimer);
@@ -109,7 +115,7 @@ export function createScanWheel({ viewport, controls, onChange }) {
   });
   function change(delta) {
     const row = rows[selected];
-    if (!row) return;
+    if (!row || busy || row.archived) return;
     row.quantity = Math.max(1, Math.min(100000, row.quantity + delta));
     row.userEdited = true;
     paint();
@@ -118,19 +124,27 @@ export function createScanWheel({ viewport, controls, onChange }) {
   controls.querySelector(".scan-minus").onclick = () => change(-1);
   controls.querySelector(".scan-plus").onclick = () => change(1);
   controls.querySelector(".scan-remove").onclick = () => {
-    if (selected < 0) return;
+    if (selected < 0 || busy || rows[selected].archived) return;
+    if (onRemove) onRemove(rows[selected]);
     rows.splice(selected, 1);
     update(rows, false);
     onChange();
   };
   function update(next, newest = false) {
     rows = next;
-    viewport.innerHTML = rows
+    const markup = rows
       .map(
         (row, index) =>
-          `<div class="scan-option" role="option" id="scan-row-${row.scanId}" data-index="${index}"><span>${esc(row.name)}</span><small>${row.processing ? "Reading…" : row.selected ? "✓ Matched" : "! Review"}</small></div>`,
+          `<div class="scan-option" role="option" id="scan-row-${row.scanId}" data-index="${index}"><span>${esc(row.name)}</span><small>${row.archived ? "Saved · edit in Review" : row.processing ? "Reading…" : row.selected ? "✓ Matched" : "! Review"}</small></div>`,
       )
       .join("");
+    if (markup === rendered) {
+      paint();
+      if (newest) select(rows.length - 1);
+      return;
+    }
+    rendered = markup;
+    viewport.innerHTML = markup;
     select(newest ? rows.length - 1 : selected, false);
   }
   const resize = new ResizeObserver(() => {
@@ -138,6 +152,10 @@ export function createScanWheel({ viewport, controls, onChange }) {
   });
   resize.observe(viewport);
   return {
+    setBusy(value) {
+      busy = value;
+      paint();
+    },
     update,
     destroy() {
       resize.disconnect();

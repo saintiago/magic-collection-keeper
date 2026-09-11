@@ -1,12 +1,16 @@
 // Camera interaction tests use controlled recognition; this is only their pending-store transport.
 export async function mockCaptureDrafts(page) {
   const drafts = new Map();
-  await page.route("**/api/import-draft**", async (route) => {
+  const handler = async (route) => {
     const url = new URL(route.request().url()),
-      input = route.request().postDataJSON();
+      raw = route.request().postDataJSON(),
+      input = raw?.batch || raw;
     let draft =
       drafts.get(url.searchParams.get("id")) || [...drafts.values()][0] || null;
-    if (url.pathname.endsWith("/stage")) {
+    if (
+      url.pathname.endsWith("/stage") ||
+      url.pathname.endsWith("/scan-session/batch")
+    ) {
       draft = {
         id: input.id,
         version: 1,
@@ -57,6 +61,9 @@ export async function mockCaptureDrafts(page) {
     return route.fulfill({
       json: {
         draft,
+        ...(raw?.batch
+          ? { session_id: raw.id, index: raw.index, staged_id: input.id }
+          : {}),
         pending_drafts,
         staged_id: input?.id,
         summary: draft
@@ -70,5 +77,7 @@ export async function mockCaptureDrafts(page) {
           : null,
       },
     });
-  });
+  };
+  await page.route("**/api/import-draft**", handler);
+  await page.route("**/api/scan-session/batch", handler);
 }

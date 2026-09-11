@@ -1013,3 +1013,156 @@ test("UC-SCAN-IMPORT canonical alternatives survive review and removing captures
   assert.deepEqual(await s.collection.list("test"), []);
   s.db.close();
 });
+
+test("SCAN-12 bounded scan batches retain 2000 captures, permanent replay, paged review and explicit ownership", async () => {
+  const s = setup();
+  const id = randomUUID();
+  const batches = [];
+  const payload = (index, count = 50) => ({
+    id,
+    index,
+    last_oracle: card.oracle_id,
+    batch: {
+      id: randomUUID(),
+      kind: "scan",
+      rows: Array.from({ length: count }, () => ({
+        id: randomUUID(),
+        name: card.name,
+        printing_id: card.id,
+        quantity: 1,
+        finish: "nonfoil",
+        condition: "NM",
+      })),
+    },
+  });
+  try {
+    for (let index = 1; index <= 40; index++) {
+      const batch = payload(index);
+      batches.push(batch);
+      const result = await s.service.stageScanBatch("a", batch);
+      assert.equal(result.accepted, index * 50);
+      assert.equal(result.index, index);
+      assert.equal(result.last_oracle, card.oracle_id);
+    }
+    assert.deepEqual(await s.collection.list("a"), []);
+    const latest = await s.service.getDraft("a", { id });
+    assert.equal(latest.pending_drafts.length, 1);
+    assert.equal(latest.pending_drafts[0].copies, 2000);
+    assert.equal(latest.draft.rows.length, 50);
+    assert.equal(latest.scan_session.index, 40);
+    assert.equal(latest.scan_session.previous, batches[38].batch.id);
+    const first = await s.service.getDraft("a", { id: batches[0].batch.id });
+    assert.equal(first.scan_session.next, batches[1].batch.id);
+    assert.equal(first.scan_session.previous, null);
+    assert.equal(
+      (await s.service.stageScanBatch("a", batches[0])).accepted,
+      2000,
+    );
+    assert.equal((await s.service.getDraft("b", { id })).draft, null);
+    await assert.rejects(
+      s.service.stageScanBatch("a", {
+        ...batches[0],
+        last_oracle: randomUUID(),
+      }),
+      /different/,
+    );
+    await assert.rejects(
+      s.service.stageScanBatch("a", payload(42)),
+      /advanced/,
+    );
+    const duplicate = payload(41);
+    duplicate.batch.rows[0].id = batches[0].batch.rows[0].id;
+    await assert.rejects(s.service.stageScanBatch("a", duplicate), /changed/);
+    const identity = { ...input(first), kind: "capture" };
+    const result = await s.service.addDraft("a", identity);
+    assert.equal(result.additions, 50);
+    assert.equal((await s.service.addDraft("a", identity)).replayed, true);
+    assert.equal(
+      (await s.service.stageScanBatch("a", batches[0])).accepted,
+      2000,
+    );
+    const cleared = await s.service.getDraft("a", { id: batches[0].batch.id });
+    assert.equal(cleared.draft, null);
+    assert.equal(cleared.scan_session.next, batches[1].batch.id);
+    assert.equal(cleared.pending_drafts[0].copies, 1950);
+    const second = await s.service.getDraft("a", { id: batches[1].batch.id });
+    second.draft.rows[0].quantity = 3;
+    const edited = await s.service.saveDraft("a", {
+      ...input(second),
+      kind: "capture",
+      rows: second.draft.rows,
+    });
+    assert.equal(
+      (await s.service.getDraft("a", { id })).pending_drafts[0].copies,
+      1952,
+    );
+    await s.service.clearDraft("a", { ...input(edited), kind: "capture" });
+    assert.equal(
+      (await s.service.getDraft("a", { id })).pending_drafts[0].copies,
+      1900,
+    );
+    assert.equal((await s.collection.list("a"))[0].quantity, 50);
+  } finally {
+    s.db.close();
+  }
+});
+
+test("SCAN-12 concurrent batch writers cannot fork a session or partially stage captures", async () => {
+  const s = setup(),
+    id = randomUUID();
+  const payload = () => ({
+    id,
+    index: 1,
+    last_oracle: card.oracle_id,
+    batch: {
+      id: randomUUID(),
+      kind: "scan",
+      rows: [
+        {
+          id: randomUUID(),
+          name: card.name,
+          printing_id: card.id,
+          quantity: 1,
+          finish: "nonfoil",
+          condition: "NM",
+        },
+      ],
+    },
+  });
+  try {
+    const a = payload(),
+      b = payload();
+    const results = await Promise.allSettled([
+      s.service.stageScanBatch("a", a),
+      s.service.stageScanBatch("a", b),
+    ]);
+    assert.equal(results.filter((x) => x.status === "fulfilled").length, 1);
+    const loser = results[0].status === "rejected" ? a : b;
+    assert.equal(await s.raw.get("a", "import-stages", loser.batch.id), null);
+    assert.equal(
+      await s.raw.get("a", "scan-capture-index", loser.batch.rows[0].id),
+      null,
+    );
+    assert.equal(
+      (await s.service.getDraft("a", { id })).scan_session.accepted,
+      1,
+    );
+    await s.service.stageScanBatch("a", { ...loser, index: 2 });
+    assert.equal(
+      (await s.service.getDraft("a", { id })).scan_session.accepted,
+      2,
+    );
+    assert.deepEqual(await s.collection.list("a"), []);
+    for (const invalid of [
+      { ...payload(), batch: {} },
+      { ...payload(), owner: "b" },
+      { ...payload(), last_oracle: "invalid" },
+    ])
+      await assert.rejects(
+        s.service.stageScanBatch("a", invalid),
+        (error) => error.status === 400,
+      );
+  } finally {
+    s.db.close();
+  }
+});

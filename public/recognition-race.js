@@ -85,12 +85,16 @@ export async function raceReadings({
     finished = 0;
   const readings = [],
     errors = [];
-  let resolveFirst, rejectFirst;
+  let resolveFirst, rejectFirst, finish;
+  const completion = new Promise((resolve) => {
+    finish = resolve;
+  });
   const first = new Promise((resolve, reject) => {
     resolveFirst = resolve;
     rejectFirst = reject;
   });
   const abort = () => {
+    finish();
     clearTimeout(timer);
     rejectFirst(signal.reason || new DOMException("Cancelled", "AbortError"));
   };
@@ -107,11 +111,17 @@ export async function raceReadings({
       if (!remoteStarted) {
         clearTimeout(timer);
         signal?.removeEventListener("abort", abort);
+        finish();
       }
-      resolveFirst({ ...merged, provisional: remoteStarted && finished < 2 });
+      resolveFirst({
+        ...merged,
+        completion,
+        provisional: remoteStarted && finished < 2,
+      });
     } else if (merged && firstDelivered) onUpdate(merged);
     if (!merged && !remoteStarted) startRemote();
     if (finished === 2) {
+      finish();
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
       if (!firstDelivered) {

@@ -1,3 +1,4 @@
+import { createScanSessions } from "./scan-sessions.js";
 import { ApplicationError } from "../domain/inventory.js";
 import { captureInput, draftSlot } from "../domain/capture-draft.js";
 import { sameStoredValue } from "../domain/stored-value.js";
@@ -28,8 +29,12 @@ export function createImportDraftService({
     expected: record?.version || 0,
     value,
   });
-  const active = (owner, input) =>
-    store.get(owner, "import-drafts", draftSlot(input));
+  const scans = createScanSessions({ store, now });
+  const active = async (owner, input = {}) =>
+    (await store.get(owner, "import-drafts", draftSlot(input))) ||
+    (input.kind === "capture" ? await scans.find(owner, input.id) : null);
+  const draftChange = (record, input, value) =>
+    scans.mutation(record, draftSlot(input), value);
   const registry = async (owner) =>
     new Map((await collection.tags(owner)).map((tag) => [tag.id, tag]));
   function check(record, input) {
@@ -45,8 +50,13 @@ export function createImportDraftService({
       );
   }
   async function view(owner, record) {
+    const scan_session = await scans.context(owner, record);
     if (!record || record.value.state !== "pending")
-      return { draft: null, revision: record?.version || 0 };
+      return {
+        draft: null,
+        revision: record?.version || 0,
+        ...(scan_session ? { scan_session } : {}),
+      };
     const draft = record.value,
       tags = await registry(owner),
       errors = draftProblems(draft, tags);
@@ -66,6 +76,7 @@ export function createImportDraftService({
       }
     }
     return {
+      ...(scan_session ? { scan_session } : {}),
       draft: {
         ...draft,
         created_at: draft.created_at || null,
@@ -88,7 +99,7 @@ export function createImportDraftService({
       },
     };
   }
-  return {
+  const service = {
     async getDraft(owner, input = {}) {
       const records = (await store.list(owner, "import-drafts"))
         .filter((record) => record.value.state === "pending")
@@ -98,33 +109,50 @@ export function createImportDraftService({
               a.value.created_at || "",
             ) || a.value.id.localeCompare(b.value.id),
         );
-      const selected = input.id
-        ? records.find((record) => record.value.id === input.id)
+      let selected = input.id
+        ? records.find((record) => record.value.id === input.id) ||
+          (await scans.find(owner, input.id))
         : records[0];
+      if (selected?.value.provider === "scan-session")
+        selected = await scans.find(owner, selected.value.id);
       return {
         ...(await view(owner, selected)),
         pending_drafts: records.map(({ value }) => ({
           id: value.id,
           name: value.name,
-          kind: value.provider === "reviewed-capture" ? "capture" : "url",
+          kind: ["reviewed-capture", "scan-session"].includes(value.provider)
+            ? "capture"
+            : "url",
           created_at: value.created_at || null,
           updated_at: value.updated_at || null,
-          copies: value.rows.reduce((n, row) => n + row.quantity, 0),
+          copies:
+            value.pending_copies ??
+            value.rows.reduce((n, row) => n + row.quantity, 0),
         })),
       };
     },
-    async stageDraft(owner, raw) {
+    async stageScanBatch(owner, raw) {
+      return scans.stage(owner, raw, service.stageDraft);
+    },
+    async stageDraft(owner, raw, options = {}) {
       const input = captureInput(raw);
       const staged = await store.get(owner, "import-stages", input.id);
       const slot = draftSlot({ kind: "capture", id: input.id });
-      const previous = await store.get(owner, "import-drafts", slot);
+      const space = options.scanContext ? "scan-drafts" : "import-drafts";
+      const storageSlot = options.scanContext ? input.id : slot;
+      const previous = await store.get(owner, space, storageSlot);
       if (staged) {
-        if (!sameStoredValue(staged.value.input, input))
+        if (
+          !sameStoredValue(staged.value.input, input) ||
+          !sameStoredValue(staged.value.scan_context, options.scanContext)
+        )
           throw new ApplicationError(
             "This capture was already staged with different lines.",
             409,
           );
-        return { ...(await view(owner, previous)), staged_id: input.id };
+        return options.scanContext
+          ? { staged_id: input.id }
+          : { ...(await view(owner, previous)), staged_id: input.id };
       }
       const ids = [
         ...new Set(
@@ -207,7 +235,7 @@ export function createImportDraftService({
           },
         };
       });
-      const draft = {
+      let draft = {
         id: input.id,
         state: "pending",
         system_tag_ids: [IMPORT_PENDING_TAG.id],
@@ -237,11 +265,17 @@ export function createImportDraftService({
         },
         rows,
       };
+      if (options.decorate) draft = options.decorate(draft);
       await store.saveCards(owner, cards);
       await store.commit(owner, [
-        change("import-drafts", slot, previous, draft),
-        change("import-stages", input.id, null, { input }),
+        change(space, storageSlot, previous, draft),
+        change("import-stages", input.id, null, {
+          input,
+          ...(options.scanContext ? { scan_context: options.scanContext } : {}),
+        }),
+        ...(options.changes ? options.changes(draft) : []),
       ]);
+      if (options.scanContext) return { staged_id: input.id };
       return {
         ...(await view(owner, {
           version: (previous?.version || 0) + 1,
@@ -385,7 +419,8 @@ export function createImportDraftService({
         const updated = { ...draft, rows, updated_at: timestamp };
         await store.commit(owner, [
           ...changes,
-          change("import-drafts", draftSlot(input), record, updated),
+          draftChange(record, input, updated),
+          ...(await scans.summaryChanges(owner, record, updated)),
         ]);
         return view(owner, { value: updated, version: record.version + 1 });
       });
@@ -427,7 +462,8 @@ export function createImportDraftService({
       if (sameStoredValue(rows, record.value.rows)) return view(owner, record);
       const draft = { ...record.value, rows, updated_at: now() };
       await store.commit(owner, [
-        change("import-drafts", draftSlot(input), record, draft),
+        draftChange(record, input, draft),
+        ...(await scans.summaryChanges(owner, record, draft)),
       ]);
       return view(owner, { version: record.version + 1, value: draft });
     },
@@ -435,20 +471,39 @@ export function createImportDraftService({
       const record = await active(owner, input);
       check(record, input);
       // Keep the slot's monotonic revision to prevent clear/refetch ABA races.
+      const empty = {
+        state: "empty",
+        cleared_at: now(),
+        ...(record.value.scan_session
+          ? { scan_session: record.value.scan_session }
+          : {}),
+      };
       await store.commit(owner, [
-        change("import-drafts", draftSlot(input), record, {
-          state: "empty",
-          cleared_at: now(),
-        }),
+        draftChange(record, input, empty),
+        ...(await scans.summaryChanges(owner, record, empty)),
       ]);
-      return { draft: null, revision: record.version + 1 };
+      return view(owner, {
+        ...record,
+        value: empty,
+        version: record.version + 1,
+      });
     },
     async addDraft(owner, input) {
       if (typeof input.id !== "string" || !/^[a-f0-9-]{36}$/.test(input.id))
         throw new ApplicationError("A saved draft is required.");
       return store.withInventoryLock(owner, async () => {
         const receipt = await store.get(owner, "import-receipts", input.id);
-        if (receipt) return { ...receipt.value, replayed: true };
+        if (receipt) {
+          const scan_session = await scans.context(
+            owner,
+            await active(owner, input),
+          );
+          return {
+            ...receipt.value,
+            replayed: true,
+            ...(scan_session ? { scan_session } : {}),
+          };
+        }
         const record = await active(owner, input);
         check(record, input);
         const draft = record.value,
@@ -470,13 +525,17 @@ export function createImportDraftService({
         await store.commit(owner, [
           ...prepared.changes,
           change("import-receipts", draft.id, null, result),
-          change("import-drafts", draftSlot(input), record, {
+          draftChange(record, input, {
             state: "empty",
             added_at: now(),
+            ...(draft.scan_session ? { scan_session: draft.scan_session } : {}),
           }),
+          ...(await scans.summaryChanges(owner, record, { state: "empty" })),
         ]);
-        return result;
+        const scan_session = await scans.context(owner, record);
+        return { ...result, ...(scan_session ? { scan_session } : {}) };
       });
     },
   };
+  return service;
 }
