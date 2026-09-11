@@ -161,13 +161,17 @@ export async function exerciseBackendScanner({ page }, test) {
     );
     await expect(page.locator("#scan-count")).toHaveText("0 queued · 0 copies");
     await expect(page.locator("#scan-possible")).toBeHidden();
-    for (let i = 0; i < 2; i++) {
-      await upload("card");
-      await expect(page.locator("#scan-count")).toHaveText(
-        `${i + 1} queued · ${i + 1} copies`,
-        { timeout: 45000 },
-      );
-    }
+    await upload("card");
+    await expect(page.locator("#scan-count")).toHaveText(
+      "1 queued · 1 copies",
+      { timeout: 45000 },
+    );
+    await upload("card");
+    await expect(page.locator("#scan-status")).toContainText(
+      "Same card ignored",
+      { timeout: 45000 },
+    );
+    await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
     await expect
       .poll(() =>
         page
@@ -184,12 +188,14 @@ export async function exerciseBackendScanner({ page }, test) {
       path: test.info().outputPath("deployed-backend-candidates.png"),
     });
     await page.locator(".scan-plus").click();
+    await page.locator(".scan-plus").click();
+    await expect(page.locator("#scan-count")).toHaveText("1 queued · 3 copies");
     await page.locator("#scan-review").click();
-    await expect(page.locator(".draft-row")).toHaveCount(2);
+    await expect(page.locator(".draft-row")).toHaveCount(1);
     await expect(page.locator("#draft-add")).toBeEnabled();
     expect(await liveApi(page, "/api/collection")).toEqual([]);
     const { draft } = await liveApi(page, "/api/import-draft");
-    expect(draft.rows).toHaveLength(2);
+    expect(draft.rows).toHaveLength(1);
     for (const row of draft.rows)
       expect(row.card.oracle_id).toBe(card.oracle_id);
     const reviewed = reviewedOwnership(draft.rows);

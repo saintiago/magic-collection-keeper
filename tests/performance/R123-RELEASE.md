@@ -1,5 +1,7 @@
 # r123 scanner release verification
 
+Historical release record: the owner subsequently reported that only the first physical card scanned (SCAN-09). The automated results below did not establish physical acceptance. SCAN-10 explicitly supersedes the artwork/departure policy with consecutive canonical-card suppression; see [causal diagnosis and replacement tests](SCAN10-REPAIR.md). DEPLOY-06 artifact retention remains in effect.
+
 **SCAN-08 and DEPLOY-06 are deployed and verified** in r123-a2 / 0.1.0+deploy.123.2, main `b82f3581ae87b90d9953d0a373ec82bb6bbdb560`, on September 11, 2026. [Successful main deployment](https://github.com/saintiago/magic-collection-keeper/actions/runs/34581369109/attempts/2).
 
 ## Scanner correction
