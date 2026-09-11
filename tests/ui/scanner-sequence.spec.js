@@ -19,6 +19,7 @@ test("SCAN-10 stable unchanged camera accepts A,B,A, suppresses consecutive iden
     window.sequenceCues = [];
     window.sequenceRows = [];
     window.sequenceCalls = 0;
+    window.sequenceAttempts = [];
     window.sequencePeak = 0;
     let active = 0;
     const a = {
@@ -58,6 +59,7 @@ test("SCAN-10 stable unchanged camera accepts A,B,A, suppresses consecutive iden
         dispose() {},
         async recognize(canvas, options) {
           window.sequenceCalls++;
+          window.sequenceAttempts.push(options.attempt);
           active++;
           window.sequencePeak = Math.max(active, window.sequencePeak);
           if (window.sequenceCalls === 1)
@@ -68,7 +70,7 @@ test("SCAN-10 stable unchanged camera accepts A,B,A, suppresses consecutive iden
           return reading(card);
         },
       },
-    }).open();
+    }).open({ attempt: 99998 });
   });
   await page.locator("#camera-start").click();
   await expect(page.locator("#scan-count")).toHaveText("1 queued · 1 copies");
@@ -125,6 +127,17 @@ test("SCAN-10 stable unchanged camera accepts A,B,A, suppresses consecutive iden
     ),
   ).toBe(3);
   expect(await page.evaluate(() => window.sequencePeak)).toBe(1);
+  const attempts = await page.evaluate(() => window.sequenceAttempts);
+  expect(attempts[0]).toBe(99999);
+  expect(attempts[1]).toBe(1);
+  expect(
+    attempts.every(
+      (value) => Number.isInteger(value) && value > 0 && value <= 99999,
+    ),
+  ).toBe(true);
+  expect(
+    await page.evaluate(() => window.sequenceRows.at(-1).scanId),
+  ).toBeGreaterThan(100000);
   const calls = await page.evaluate(() => window.sequenceCalls);
   await page.waitForTimeout(1200);
   expect(await page.evaluate(() => window.sequenceCalls)).toBe(calls);
