@@ -2,6 +2,7 @@
 
 import subprocess
 import json
+import hashlib
 import zipfile
 from pathlib import Path
 
@@ -38,6 +39,8 @@ with zipfile.ZipFile(
         if path.is_file():
             archive.write(path, "keeper/" + name)
     vendor = root / "recognition/vendor/CollectorVision"
+    upstream = json.loads((root / "recognition/artifact-manifest.json").read_text())["code"]
+    documentation_media = []
     for path in sorted(vendor.rglob("*")):
         rel = path.relative_to(vendor)
         if (
@@ -48,7 +51,15 @@ with zipfile.ZipFile(
                 for x in rel.parts
             )
         ):
-            archive.write(path, "CollectorVision/" + rel.as_posix())
+            if rel.parts[0] == "docs" and path.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+                documentation_media.append({
+                    "path": rel.as_posix(),
+                    "url": f"https://raw.githubusercontent.com/HanClinto/CollectorVision/{upstream}/{rel.as_posix()}",
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                })
+            else:
+                archive.write(path, "CollectorVision/" + rel.as_posix())
+    archive.writestr("CollectorVision/DOCUMENTATION_MEDIA.json", json.dumps(documentation_media, indent=2))
     archive.write(root / "recognition/LICENSE", "COPYING")
     archive.write(
         root / "recognition/artifacts/ocr-onnx.json",

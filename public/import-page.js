@@ -82,12 +82,27 @@ export function createImportPage({ root, api, onAdded, back, select }) {
       (data?.pending_drafts || []).filter(
         (item) => result.draft || item.id !== previous,
       )
-    ).map((item) =>
-      item.id === result.draft?.id
-        ? { ...item, copies: result.summary.reviewed_copies }
-        : item,
-    );
-    if (result.draft && !pending.some((item) => item.id === result.draft.id))
+    )
+      .filter(
+        (item) =>
+          item.id !== result.scan_session?.id ||
+          result.scan_session.pending_batches > 0,
+      )
+      .map((item) =>
+        item.id === (result.scan_session?.id || result.draft?.id)
+          ? {
+              ...item,
+              copies:
+                result.scan_session?.pending_copies ??
+                result.summary.reviewed_copies,
+            }
+          : item,
+      );
+    if (
+      result.draft &&
+      !result.scan_session &&
+      !pending.some((item) => item.id === result.draft.id)
+    )
       pending.push({
         id: result.draft.id,
         name: result.draft.name,
@@ -100,7 +115,11 @@ export function createImportPage({ root, api, onAdded, back, select }) {
       history.replaceState(
         history.state,
         "",
-        result.draft ? "#import=" + result.draft.id : "#import",
+        result.draft
+          ? "#import=" + result.draft.id
+          : result.scan_session
+            ? "#import=" + result.scan_session.batch_id
+            : "#import",
       );
     editingRows = null;
     message =
@@ -427,11 +446,29 @@ export function createImportPage({ root, api, onAdded, back, select }) {
             .map((row) => row.card);
           data = {
             draft: null,
-            pending_drafts: (data.pending_drafts || []).filter(
-              (item) => item.id !== data.draft.id,
-            ),
+            ...(result.scan_session
+              ? { scan_session: result.scan_session }
+              : {}),
+            pending_drafts: (data.pending_drafts || [])
+              .filter(
+                (item) =>
+                  item.id !== data.draft.id &&
+                  (item.id !== result.scan_session?.id ||
+                    result.scan_session.pending_batches > 0),
+              )
+              .map((item) =>
+                item.id === result.scan_session?.id
+                  ? { ...item, copies: result.scan_session.pending_copies }
+                  : item,
+              ),
           };
-          history.replaceState(history.state, "", "#import");
+          history.replaceState(
+            history.state,
+            "",
+            result.scan_session
+              ? "#import=" + result.scan_session.batch_id
+              : "#import",
+          );
           editingRows = null;
           url = "";
           message = `Added ${result.additions} new copies from ${result.reviewed_copies} reviewed copies. This import is saved; retries cannot add duplicates.`;

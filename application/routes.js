@@ -20,6 +20,8 @@ export async function routeCollection(
     return service.suggest((query.q || "").trim());
   if (path === "/api/import-draft" && method === "GET")
     return service.getDraft(owner, query);
+  if (path === "/api/scan-session/batch" && method === "POST")
+    return service.stageScanBatch(owner, input);
   if (path === "/api/import-draft/stage" && method === "POST")
     return service.stageDraft(owner, input);
   if (path === "/api/import-draft/tag" && method === "POST")

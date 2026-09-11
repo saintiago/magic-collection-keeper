@@ -35,18 +35,24 @@ export async function clearCaptureTestData(page, beforeDrafts) {
     .pending_drafts) {
     if (beforeDrafts.has(descriptor.id) || descriptor.kind !== "capture")
       continue;
-    const { draft } = await liveApi(
-      page,
-      "/api/import-draft?id=" + descriptor.id,
-    );
-    await liveApi(page, "/api/import-draft/clear", {
-      method: "POST",
-      body: JSON.stringify({
-        id: draft.id,
-        version: draft.version,
-        kind: "capture",
-      }),
-    });
+    let cursor = descriptor.id;
+    const visited = new Set();
+    while (cursor) {
+      expect(visited.has(cursor)).toBe(false);
+      visited.add(cursor);
+      const view = await liveApi(page, "/api/import-draft?id=" + cursor);
+      const draft = view.draft;
+      if (draft)
+        await liveApi(page, "/api/import-draft/clear", {
+          method: "POST",
+          body: JSON.stringify({
+            id: draft.id,
+            version: draft.version,
+            kind: "capture",
+          }),
+        });
+      cursor = view.scan_session?.previous || null;
+    }
   }
   for (const row of await liveApi(page, "/api/collection"))
     await liveApi(page, "/api/collection/" + row.id, { method: "DELETE" });

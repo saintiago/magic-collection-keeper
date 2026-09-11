@@ -19,6 +19,12 @@ class PublicFixtureTests(unittest.TestCase):
             (recognition / "fixtures").mkdir()
             (recognition / "artifacts").mkdir()
             (recognition / "artifacts/ocr-onnx.json").write_text("{}")
+            (recognition / "artifact-manifest.json").write_text(json.dumps({"code": "a" * 40}))
+            vendor = recognition / "vendor/CollectorVision"
+            (vendor / "docs").mkdir(parents=True)
+            (vendor / "docs/diagram.png").write_bytes(b"public documentation picture")
+            (vendor / "docs/diagram.svg").write_bytes(b"editable diagram source")
+            (vendor / "service.py").write_bytes(b"# complete upstream source")
             (recognition / "LICENSE").write_text("Test licence fixture")
             script = recognition / "scripts/source_bundle.py"
             script.write_bytes((repo / "recognition/scripts/source_bundle.py").read_bytes())
@@ -37,6 +43,15 @@ class PublicFixtureTests(unittest.TestCase):
             subprocess.run([sys.executable, str(script)], check=True, capture_output=True)
             with zipfile.ZipFile(recognition / "source.zip") as archive:
                 self.assertNotIn("keeper/private-photo.jpg", archive.namelist())
+                self.assertNotIn("CollectorVision/docs/diagram.png", archive.namelist())
+                self.assertEqual(archive.read("CollectorVision/docs/diagram.svg"), b"editable diagram source")
+                self.assertEqual(archive.read("CollectorVision/service.py"), b"# complete upstream source")
+                media = json.loads(archive.read("CollectorVision/DOCUMENTATION_MEDIA.json"))
+                self.assertEqual(media, [{
+                    "path": "docs/diagram.png",
+                    "url": "https://raw.githubusercontent.com/HanClinto/CollectorVision/" + "a" * 40 + "/docs/diagram.png",
+                    "sha256": hashlib.sha256(b"public documentation picture").hexdigest(),
+                }])
                 for name, data in expected.items():
                     self.assertEqual(archive.read(name), data)
 

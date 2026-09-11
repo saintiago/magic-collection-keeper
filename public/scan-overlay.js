@@ -34,7 +34,13 @@ export function createScanOverlay({ canvas, video, guide }) {
     identity = "";
     stages.clear();
   }
+  function requestDraw() {
+    if (!stopped && !frame) frame = requestAnimationFrame(draw);
+  }
+  const resized = new ResizeObserver(requestDraw);
+  resized.observe(canvas);
   function draw(now) {
+    frame = 0;
     if (stopped) return;
     const began = performance.now(),
       bounds = canvas.getBoundingClientRect(),
@@ -135,15 +141,27 @@ export function createScanOverlay({ canvas, video, guide }) {
     metrics.frames++;
     metrics.totalDrawMs += elapsed;
     metrics.maxDrawMs = Math.max(metrics.maxDrawMs, elapsed);
-    frame = requestAnimationFrame(draw);
+    if (stages.size || (identity && now < until)) requestDraw();
   }
-  frame = requestAnimationFrame(draw);
+  requestDraw();
   return {
+    resume() {
+      if (stopped) {
+        stopped = false;
+        frame = requestAnimationFrame(draw);
+      }
+    },
+    pause() {
+      stopped = true;
+      cancelAnimationFrame(frame);
+      frame = 0;
+    },
     track(signature) {
       if (anchor && visualDifference(anchor, signature) > 16) {
         resetCapture();
         geometry = null;
         anchor = signature;
+        requestDraw();
       }
     },
     observe(next, signature) {
@@ -156,6 +174,7 @@ export function createScanOverlay({ canvas, video, guide }) {
         anchor = signature;
       }
       geometry = next;
+      requestDraw();
     },
     capture(id, signature, detected) {
       if (
@@ -166,25 +185,31 @@ export function createScanOverlay({ canvas, video, guide }) {
         resetCapture();
         captureId = id;
         geometry = detected;
+        requestDraw();
       }
     },
     stage(id, { stage, active }) {
       if (id !== captureId || stopped) return;
       if (active) stages.add(stage);
       else stages.delete(stage);
+      requestDraw();
     },
     recognized(id, name) {
       if (id !== captureId || stopped) return;
       identity = String(name).slice(0, 65);
       until = performance.now() + 1400;
       stages.clear();
+      requestDraw();
     },
     clear() {
       geometry = null;
       anchor = null;
       resetCapture();
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      requestDraw();
     },
     destroy() {
+      resized.disconnect();
       stopped = true;
       cancelAnimationFrame(frame);
       context.clearRect(0, 0, canvas.width, canvas.height);
