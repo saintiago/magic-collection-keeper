@@ -4,6 +4,8 @@
 
 A private Magic collection app with Scryfall printing lookup, persistent inventory, reviewed text imports, and assisted camera recognition.
 
+Import confirmation now completes from its saved receipt without waiting for a full collection refresh. Other pending drafts retain their order and scroll; visiting a collection consumer refreshes stale data. [r130-a1 release evidence](tests/performance/R130-RELEASE.md) records successful exact-release desktop/mobile verification and the first run's unresolved intermittent card-focus failure.
+
 Scanner correction SCAN-10 is published and verified in [r125-a2](tests/performance/R125-RELEASE.md): consecutive recognitions of the same canonical card are ignored, including another suggested printing. Slide in a different card; A, B, then A creates three entries. Use the quantity control for consecutive identical copies. This explicitly replaces visual artwork/departure gating; brief stability and single-card checks remain. The owner now confirms this scanning behavior works on their phone. Continuous scanning beyond 50 captures is now deployed in [r127-a1](tests/performance/R127-RELEASE.md), with durable pending batches, bounded Review and reduced analysis work. Physical-phone heat remains unverified.
 
 - App: https://d3r1grp0vvv9f.cloudfront.net

@@ -1,5 +1,9 @@
 # Product requirements
 
+## September 12 Import release checkpoint
+
+IMPORT-05 is production verified within automated cloud/browser coverage in [r130-a1](../tests/performance/R130-RELEASE.md). This supersedes its earlier planning/unimplemented notes. IMPORT-07 remains in progress for the measurement scope not supplied by this release; IMPORT-06/08–10 backend optimization remains queued. The first main run published successfully but failed one LIVE-17 return-focus assertion; unchanged exact-release verification passed all 13 desktop and eight mobile cases. QUALITY-01 retains an unresolved intermittent-focus investigation, not a claimed repair. The release report records both outcomes and truthful local-coding/API-review provenance; hosted implementation remains a separate unfinished harness milestone.
+
 ## Product direction — recorded; implementation queued
 
 The owner is the initial audience; [Product charter revision 3](PRODUCT-CHARTER.md) is the intent/evidence source for PRODUCT-01–08. These are directional requirements with proposed acceptance, not proof of implementation or production delivery. They do not reorder existing urgent fixes.
@@ -90,7 +94,6 @@ HARNESS-15 baseline refinement: produce standardized authoritative records with 
 - **HARNESS-01:** Propose a development harness for this repository using the OpenAI Agents API. The owner's September 12 correction supersedes the assistant's interpretation as an in-app deck assistant. Acceptance: describe request intake, saved testable requirements, isolated implementation, independent review, meaningful checks, resumable bounded execution, authorization enforcement and existing-main-workflow deployment evidence. Preserve owner data and separate test profiles. Status: proposal documented; implementation queued for a future instruction, not implemented or production verified. Evidence: [development harness proposal](DEVELOPMENT-HARNESS.md); [DEV-HARNESS-01](USE-CASES.md#development-harness--proposed). This proposal does not reprioritize existing application fixes.
 
 This document records owner intent, including queued work. It is not proof of production behavior. Latest owner corrections override earlier decisions. Update it for every feature request or correction; connect implemented requirements to use cases, tests and release evidence.
-
 
 This document records owner intent, including queued work. It is not proof of production behavior. Latest owner corrections override earlier decisions. Update it for every feature request or correction; connect implemented requirements to use cases, tests and release evidence.
 
@@ -361,7 +364,6 @@ Status: the authorized scanner/session storage, recovery and bounded review chan
 This supersedes the earlier investigation-only status for these scanner requirements. Transparent durable 50-capture rollover, bounded 50+10 wheel/history, frozen retry journal, session/capture idempotency, last-identity recovery and paged batch review are implemented. No session accepted/attempt cap remains. Resource reuse, bounded geometry/retry cadence and idle/stop work cleanup are implemented; a slower trial cadence failed replay acceptance and was corrected. Evidence: [continuous scanner validation](../tests/performance/SCAN12-CONTINUOUS.md), UC-SCAN-BATCHES/RESOURCES and LIVE-21. The r127-a1 release passed all required unit, browser, visual and deployed checks; independent source/identity and reserved-profile cleanup checks also passed. The paced local soak passed 2,000 simulated captures over 7,200.027 seconds, with 40 batch reloads, ten retained recent rows, a 32,135-byte peak journal and zero ownership writes. Final journal compatibility with the deployed module passed. Its Node/SQLite scope excludes camera, models, browser rendering and hardware thermal behavior. Physical-phone thermal improvement is not established. IMPORT-05-10, SCALE-01-05 and DATA-01-07 remain queued plans.
 
 SCAN-12 supporting publication constraint: preserve the existing bounded source download and exact corresponding-code checks. Upstream documentation-only pictures may be represented by pinned public URLs and hashes; retain all upstream/application/build code, notices, test/example source and reproducible retrieval. No credential, owner-data, infrastructure-role or download-size-bound changes are authorized by this packaging adjustment.
-
 
 ## Normalized current assessment and delivery
 
@@ -894,13 +896,13 @@ These explicit fields reconcile current evidence under HARNESS-15/16. Earlier pr
   },
   "IMPORT-05": {
     "assessment": "accepted",
-    "delivery": "in progress",
+    "delivery": "production verified",
     "authorization": "implementation and existing main release workflow",
     "priority": "1",
     "priority rationale": "Selected bounded first-delivery scope after reconciling completed scanner/deployment streams; see HARNESS-15 and baseline decision.",
     "dependencies": "none",
-    "blockers": "Implementation, current meaningful tests and independent review before existing main release.",
-    "evidence": "[Baseline and hosted readiness](HARNESS-BASELINE.md); implementation gate passed against e0815c3 using actual command evidence September 12."
+    "blockers": "none for IMPORT-05; separate intermittent LIVE-17 focus finding remains under QUALITY-01",
+    "evidence": "[r130-a1 release and exact verification](../tests/performance/R130-RELEASE.md); [bounded validation](../tests/performance/IMPORT05-VALIDATION.md)"
   },
   "IMPORT-06": {
     "assessment": "pending assessment",
@@ -919,8 +921,8 @@ These explicit fields reconcile current evidence under HARNESS-15/16. Earlier pr
     "priority": "2",
     "priority rationale": "Selected bounded first-delivery scope after reconciling completed scanner/deployment streams; see HARNESS-15 and baseline decision.",
     "dependencies": "IMPORT-05@locally verified",
-    "blockers": "Implementation, current meaningful tests and independent review before existing main release.",
-    "evidence": "[Baseline and hosted readiness](HARNESS-BASELINE.md); implementation gate passed against e0815c3 using actual command evidence September 12."
+    "blockers": "Functional release scope verified; repeated production before/after timings and larger-session resource measurements remain incomplete.",
+    "evidence": "[r130-a1 scoped coverage and remaining measurements](../tests/performance/R130-RELEASE.md); [controlled local timing](../tests/performance/IMPORT05-VALIDATION.md)"
   },
   "IMPORT-08": {
     "assessment": "pending assessment",
@@ -1119,8 +1121,8 @@ These explicit fields reconcile current evidence under HARNESS-15/16. Earlier pr
     "priority": "unknown",
     "priority rationale": "No current global ranking established.",
     "dependencies": "unknown",
-    "blockers": "Acceptance/delivery/dependency evidence requires reconciliation.",
-    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+    "blockers": "Historical scope needs reconciliation; r130 LIVE-17 return-focus failure did not recur in unchanged cloud verification or six local repeats, but its cause remains unresolved. Capture focus/source/redraw timing before selecting a repair.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); [r130 original failure and unchanged passing recheck](../tests/performance/R130-RELEASE.md)"
   },
   "RECENT-01": {
     "assessment": "accepted",

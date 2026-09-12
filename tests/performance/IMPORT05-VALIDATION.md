@@ -1,6 +1,6 @@
 # IMPORT-05/07 bounded confirmation validation
 
-September 12, 2026, isolated delivery worktree from e0815c3. Local implementation; release verification pending.
+September 12, 2026, isolated delivery worktree from e0815c3. Local implementation; [r130-a1 release and exact verification](R130-RELEASE.md) supersede the historical pending checkpoints below. Full API-review, CI and execution provenance are recorded there, including the first live run's intermittent focus failure and unchanged passing recheck.
 
 The receipt callback no longer starts or awaits full collection/tag reads. Loader invalidation removes the account cache and labels ownership stale. Consumers coalesce active reads, reject older generations and can retry failures. Home, Collection, catalog and restored views reconcile lazily. No backend preparation/read-scope optimization is claimed for IMPORT-06/08–10.
 
