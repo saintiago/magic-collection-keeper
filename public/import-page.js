@@ -22,8 +22,19 @@ export function createImportPage({ root, api, onAdded, back, select }) {
   const dialog = document.createElement("dialog");
   dialog.className = "draft-dialog";
   document.body.append(dialog);
-  const draw = () =>
-    (root.innerHTML = importPageView({
+  function draw({ preserveScroll = false } = {}) {
+    const position =
+      preserveScroll && visible
+        ? {
+            x: window.scrollX,
+            y: window.scrollY,
+            top: root.scrollTop,
+            left: root.scrollLeft,
+            pendingTop: root.querySelector(".pending-drafts")?.scrollTop || 0,
+            pendingLeft: root.querySelector(".pending-drafts")?.scrollLeft || 0,
+          }
+        : null;
+    root.innerHTML = importPageView({
       data,
       busy,
       message,
@@ -34,7 +45,19 @@ export function createImportPage({ root, api, onAdded, back, select }) {
       textOpen,
       text,
       textFrozen: Boolean(textIntent),
-    }));
+    });
+    if (position) {
+      root.scrollTop = position.top;
+      root.scrollLeft = position.left;
+      const pending = root.querySelector(".pending-drafts");
+      if (pending) {
+        pending.scrollTop = position.pendingTop;
+        pending.scrollLeft = position.pendingLeft;
+      }
+      // The browser clamps offsets if confirmed content made the page shorter.
+      window.scrollTo(position.x, position.y);
+    }
+  }
   const close = () => dialog.close();
   dialog.addEventListener("click", (event) => {
     if (event.target.closest("[data-close]")) close();
@@ -50,13 +73,13 @@ export function createImportPage({ root, api, onAdded, back, select }) {
     close();
     draw();
   });
-  async function run(action, success) {
+  async function run(action, success, { preserveScroll = false } = {}) {
     if (busy) return false;
     const turn = ++generation;
     busy = true;
     error = false;
     message = "Saving…";
-    draw();
+    draw({ preserveScroll });
     try {
       const result = await action();
       if (turn !== generation) return false;
@@ -71,7 +94,7 @@ export function createImportPage({ root, api, onAdded, back, select }) {
     } finally {
       if (turn === generation) {
         busy = false;
-        draw();
+        draw({ preserveScroll });
       }
     }
   }
@@ -478,6 +501,7 @@ export function createImportPage({ root, api, onAdded, back, select }) {
             message += " Refresh the collection to see its latest totals.";
           }
         },
+        { preserveScroll: true },
       );
     const rowId = button.closest("[data-row]")?.dataset.row;
     if (!rowId) return;

@@ -37,7 +37,14 @@ export function createCollectionLoader({
   let key,
     generation = 0,
     active = false;
-  let state = { rows: null, status: "loading", savedAt: null, error: "" };
+  let state = {
+    rows: null,
+    status: "loading",
+    savedAt: null,
+    error: "",
+    stale: true,
+  };
+  let pending;
   // Serialize storage with account changes and invalidations so late writes cannot resurrect old data.
   let storage = Promise.resolve();
   function persist(action) {
@@ -52,7 +59,13 @@ export function createCollectionLoader({
     const token = ++generation;
     active = true;
     key = nextKey;
-    publish({ rows: null, status: "loading", savedAt: null, error: "" });
+    publish({
+      rows: null,
+      status: "loading",
+      savedAt: null,
+      error: "",
+      stale: true,
+    });
     let saved;
     try {
       saved = await cache.read(key);
@@ -73,23 +86,36 @@ export function createCollectionLoader({
     }
     return refresh();
   }
-  async function refresh() {
-    if (!active) return false;
+  function refresh() {
+    if (!active) return Promise.resolve(false);
     const token = ++generation;
     publish({
       status: state.rows === null ? "loading" : "updating",
       error: "",
+      stale: true,
     });
-    try {
-      const rows = await load();
-      if (token !== generation || !active) return false;
-      replace(rows);
-      return true;
-    } catch (error) {
-      if (token === generation && active)
-        publish({ status: "error", error: error.message });
-      return false;
-    }
+    const promise = (async () => {
+      try {
+        const rows = await load();
+        if (token !== generation || !active) return false;
+        replace(rows);
+        return true;
+      } catch (error) {
+        if (token === generation && active)
+          publish({ status: "error", error: error.message });
+        return false;
+      }
+    })();
+    pending = { token, promise };
+    const clear = () => {
+      if (pending?.promise === promise) pending = null;
+    };
+    void promise.then(clear, clear);
+    return promise;
+  }
+  function ensureFresh() {
+    if (!active || !state.stale) return Promise.resolve(false);
+    return pending?.token === generation ? pending.promise : refresh();
   }
   function replace(rows) {
     if (!active) return;
@@ -98,13 +124,16 @@ export function createCollectionLoader({
     ++generation;
     const savedAt = now(),
       target = key;
-    publish({ rows, savedAt, status: "ready", error: "" });
+    publish({ rows, savedAt, status: "ready", error: "", stale: false });
     persist(() => cache.write(target, { schema: 1, rows, savedAt }));
   }
   function invalidate() {
     ++generation;
     const target = key;
-    if (active) persist(() => cache.remove(target));
+    if (active) {
+      persist(() => cache.remove(target));
+      publish({ stale: true, status: "stale", error: "" });
+    }
   }
   function stop() {
     invalidate();
@@ -115,6 +144,7 @@ export function createCollectionLoader({
   return {
     start,
     refresh,
+    ensureFresh,
     replace,
     invalidate,
     stop,

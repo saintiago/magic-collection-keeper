@@ -40,9 +40,11 @@ export function homeContent({
   const status =
     collection.status === "error"
       ? "Collection update failed. Saved ownership may be out of date."
-      : collection.status !== "ready"
-        ? "Updating your collection…"
-        : "";
+      : collection.status === "stale"
+        ? "Saved ownership will refresh when needed."
+        : collection.status !== "ready"
+          ? "Updating your collection…"
+          : "";
   return {
     cards,
     html: `<div class="home-section-heading"><h2>Recent cards</h2><button class="text-button" id="clear-home-history" ${activity.entries.length || searches.length ? "" : "hidden"}>Clear activity</button></div><div class="home-cards">${cards
