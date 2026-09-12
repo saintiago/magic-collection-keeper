@@ -74,6 +74,7 @@ test("UC-SCAN-IMPORT mobile fifty-line shared Import survives lost Add response,
     await expect(page.locator(".import-status")).toContainText(
       "Response interrupted",
     );
+    await expect(page.locator(".draft-row")).toHaveCount(50);
     expect(f.counts().ownedWrites).toBe(1);
     expect((await f.tagged.list("test"))[0].quantity).toBe(50);
     const reads = f.counts().collectionReads;
@@ -81,7 +82,7 @@ test("UC-SCAN-IMPORT mobile fifty-line shared Import survives lost Add response,
     await expect(page.locator(".import-status")).toContainText(
       "Added 50 new copies",
     );
-    expect(f.counts().collectionReads - reads).toBe(1);
+    expect(f.counts().collectionReads - reads).toBe(0);
     expect((await f.tagged.list("test"))[0].quantity).toBe(50);
     await page.locator(`[data-draft="${other.draft.id}"]`).click();
     await expect(page.locator(".draft-row")).toHaveCount(1);

@@ -37,7 +37,7 @@ export function suggestionOwnership(item, ownership) {
   const saved = ownership.status !== "ready";
   return {
     label: saved
-      ? `Saved: ${count ? "owned" : "not owned"} · ${ownership.status === "error" ? "update failed" : "updating"}`
+      ? `Saved: ${count ? "owned" : "not owned"} · ${ownership.status === "error" ? "update failed" : ownership.status === "stale" ? "refresh pending" : "updating"}`
       : count
         ? "Owned"
         : "Not owned",

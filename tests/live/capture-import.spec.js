@@ -13,6 +13,17 @@ test("LIVE-02 real text import, explicit ownership and durable quantity", async 
     .fill(process.env.KEEPER_TEST_PASSWORD);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.locator(".auth-dialog")).toHaveCount(0);
+  await expect(page.locator("#collection-status-text")).toContainText(
+    "up to date",
+  );
+  let collectionReads = 0;
+  page.on("request", (request) => {
+    if (
+      request.method() === "GET" &&
+      new URL(request.url()).pathname === "/api/collection"
+    )
+      collectionReads++;
+  });
   await page.locator("#import-nav").click();
   await page.locator("#draft-show-text").click();
   await page.locator("#import-text").fill("1 Lightning Bolt (M11) 149");
@@ -24,8 +35,11 @@ test("LIVE-02 real text import, explicit ownership and durable quantity", async 
   await expect(
     page.getByText("Added 1 new copies", { exact: false }),
   ).toBeVisible();
+  expect(collectionReads).toBe(0);
   await page.locator("#draft-back").click();
   await page.locator("#collection-nav").click();
+  await expect(page.locator("#total")).toHaveText("1");
+  expect(collectionReads).toBeGreaterThan(0);
   await page.reload();
   await expect(page.locator("#total")).toHaveText("1");
   await page.locator(".card").click();

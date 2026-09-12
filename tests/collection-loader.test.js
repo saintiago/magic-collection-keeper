@@ -29,6 +29,39 @@ function fixture() {
   return { loader, saved, pending, cache };
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+test("IMPORT-05 invalidation does no I/O until a consumer, coalesces consumers and retries failed refresh", async () => {
+  const { loader, pending, saved } = fixture();
+  const initial = loader.start("a");
+  await tick();
+  pending[0].resolve(rows(1));
+  await initial;
+  loader.invalidate();
+  await loader.settled();
+  assert.equal(pending.length, 1);
+  assert.equal(saved.has("a"), false);
+  assert.equal(loader.state.stale, true);
+  const first = loader.ensureFresh(),
+    second = loader.ensureFresh();
+  assert.equal(first, second);
+  assert.equal(pending.length, 2);
+  pending[1].reject(Error("offline"));
+  assert.equal(await first, false);
+  const retry = loader.ensureFresh();
+  assert.equal(pending.length, 3);
+  pending[2].resolve(rows(2));
+  assert.equal(await retry, true);
+  assert.equal(loader.state.stale, false);
+  assert.equal(await loader.ensureFresh(), false);
+  assert.equal(pending.length, 3);
+  const old = loader.refresh();
+  loader.invalidate();
+  const current = loader.ensureFresh();
+  pending[3].resolve(rows(1));
+  assert.equal(await old, false);
+  pending[4].resolve(rows(3));
+  await current;
+  assert.equal(loader.state.rows[0].quantity, 3);
+});
 test("UC-17 late refresh cannot overwrite a newer refresh or a successful mutation", async () => {
   const { loader, pending, saved } = fixture();
   const first = loader.start("a");

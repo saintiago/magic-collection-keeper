@@ -145,6 +145,7 @@ const cardNavigation = createCardNavigation({
     if (mode === "import") importPage.show();
     message(view.message);
     render();
+    void refreshForView();
   },
 });
 const cardPage = createCardPage({
@@ -234,11 +235,10 @@ const importPage = createImportPage({
   back: () => cardNavigation.back(),
   select: (id) => enterImport(id),
   api: request,
-  onAdded: async (cards) => {
-    // Record only receipt-confirmed additions before independent refresh I/O.
+  onAdded: (cards) => {
+    // Import only needs the durable receipt; collection consumers reconcile lazily.
     for (const card of cards) home.card(card);
     collection.invalidate();
-    await refresh();
   },
 });
 const autocomplete = setupAutocomplete({
@@ -396,7 +396,9 @@ function render() {
           freshness +
           ". Update failed; your last saved cards remain visible."
         : "Your collection could not be loaded."
-      : "Collection is up to date. Last loaded " + freshness + ".";
+      : collectionState.stale
+        ? "Showing saved snapshot from " + freshness + ". Refresh pending."
+        : "Collection is up to date. Last loaded " + freshness + ".";
   $("collection-error").textContent = collectionState.error;
   $("retry-collection").hidden = collectionState.status !== "error";
   $("grid").setAttribute(
@@ -523,6 +525,14 @@ function switchMode(next, { restore = false } = {}) {
   else importPage.hide();
   render();
   if (mode === "catalog") $("search").focus();
+  void refreshForView();
+}
+async function refreshForView() {
+  if (
+    ["home", "collection", "catalog"].includes(mode) &&
+    (await collection.ensureFresh())
+  )
+    await refreshTags();
 }
 async function refresh() {
   if (await collection.refresh()) await refreshTags();

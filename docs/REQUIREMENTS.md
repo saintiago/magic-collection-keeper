@@ -1,5 +1,97 @@
 # Product requirements
 
+## Product direction — recorded; implementation queued
+
+The owner is the initial audience; [Product charter revision 3](PRODUCT-CHARTER.md) is the intent/evidence source for PRODUCT-01–08. These are directional requirements with proposed acceptance, not proof of implementation or production delivery. They do not reorder existing urgent fixes.
+
+- **PRODUCT-08:** Monetization must never contradict app goals/charter; prioritize long-term opportunities over short-term revenue, with early recovery of app running and development costs. Acceptance: commercial review rejects charter/UX conflicts irrespective of revenue; each candidate distinguishes long-term value and early cost coverage, identifies measured/estimated operating and development costs (including agents/CI/tools/MELT), states a consistent accounting period and avoids double counting. Cost recovery does not waive quality/security/UX constraints; no model, price, human-time valuation or historical investment recovery period is inferred. This refines PRODUCT-06 and HARNESS-03, preserving their IDs. Status: owner direction saved; runtime enforcement and commercial validation queued. Evidence: [charter monetization policy](PRODUCT-CHARTER.md#product-discovery-and-monetization), DEV-HARNESS-06 in USE-CASES.md.
+
+- **PRODUCT-07:** Adopt **Give life to your collection** as the central product purpose. Organization is the foundation; bringing the collection into play is the purpose. Acceptance: each feature/opportunity brief answers **Does this feature help someone do something meaningful with their collection?**, identifies the enabled action or supporting trust/quality benefit, and links its success criteria to that outcome. Reject or revise proposals whose only benefit is more features or time spent. This supersedes the previous primary working promise, retained as supporting explanation in charter revision 2. Status: owner-approved direction saved; harness enforcement queued. Evidence: [charter purpose](PRODUCT-CHARTER.md#audience-and-purpose), DEV-HARNESS-03 in USE-CASES.md.
+
+- **PRODUCT-01:** Serve collectors who organize physical collections for AI-assisted/inspired deck building, upgrades and trading, including the owner as first user. Acceptance: each feature brief identifies a concrete collector-builder-trader job and evidence; owner feedback is labeled first-person rather than market-wide validation.
+- **PRODUCT-02:** Minimize friction between physical cards and their digital representation. Acceptance: connected capture/correction/location/deck/trading scenarios preserve exact printings, quantities, provenance and explicit ownership confirmation; suggested or pending cards cannot silently become owned. Test affected old and new journeys together.
+- **PRODUCT-03:** Provide AI-assisted new-deck inspiration and upgrades grounded in the collection. Acceptance: briefs distinguish owned/available/suggested cards, record user constraints and explanations, preserve user choice and test unavailable/stale data and invalid suggestions. Detailed recommendation scope and formats remain to be specified.
+- **PRODUCT-04:** Help maintain trading and sales, including but not limited to Cardmarket. Acceptance: document and test separate ownership, assignment, availability, listing and disposal states with retry/conflict reconciliation; verify provider feasibility before promising integration. Sales proceeds are not assumed to be app revenue. No live provider action is authorized by this direction alone.
+- **PRODUCT-05:** Sustain useful engagement through new sets, reveals/spoilers and Wizards news. Acceptance: discovery briefs connect sourced, dated content to collector/deck jobs, handle stale/unavailable information and specify user controls and measurable usefulness. Feed/notification implementations remain queued.
+- **PRODUCT-06:** Uphold code quality, security, applicable user-data obligations, composition and responsive asynchronous UX while continually researching monetization that does not harm UX. Acceptance: every accepted brief includes relevant architecture/security/data-flow review, measured performance criteria with cancellation/retry cases, and commercial impact on trust and task completion. Unknown legal/market/provider facts require current evidence; generated claims are not compliance or revenue proof. Numerical targets, research cadence and revenue model remain unset. See [harness linkage](DEVELOPMENT-HARNESS.md#product-discovery-and-requirements-authoring) and [product use cases](USE-CASES.md#product-direction--queued).
+
+## Development harness proposal — queued
+
+- **HARNESS-16:** Reconcile and validate actual GitHub Actions CI/CD as part of HARNESS-15's baseline. Inspect workflows, architecture/operations, recent run/release evidence and DEPLOY-01–06; distinguish delivered behavior from stale pending records. Measure build/test/deploy bottlenecks and assess caching, duplicate work, artifact reuse/retention/quota failures, concurrency/cancellation, failure/rollback, permissions/secrets and deployment eligibility. Evaluate frontend/backend/recognition separation without assuming splitting is beneficial or bypassing main. The independent reviewer validates workflow behavior and proposed changes; candidates record evidence, benefit/cost/risk, acceptance and no-action/defer outcomes. Preserve checks, revision/artifact provenance, source availability, owner data and test profiles; do not adopt all optimizations, widen permissions or change multiple deployment dimensions at once. Source: owner instruction relayed September 12, 2026.
+  - Title: Reconcile and independently validate CI/CD
+  - Assessment: accepted
+  - Assessment rationale: Establish actual workflow behavior and measured bottlenecks before selecting a bounded improvement.
+  - Delivery: in progress
+  - Authorization: investigation and validation
+  - Priority: unknown
+  - Priority rationale: Included in baseline reconciliation; optimization ranking awaits evidence.
+  - Dependencies: unknown
+  - Blockers: Recent workflow/run/release evidence and independent review pending.
+  - Evidence: HARNESS-15; DEPLOY-01–06; detailed investigation pending.
+
+HARNESS-15 baseline refinement: produce standardized authoritative records with stable IDs, acceptance, separate assessment/delivery, priority rationale, dependencies/evidence, explicit unknowns/conflicts and explainable eligibility. HARNESS-14 renders those same saved records; it is not a second backlog. Normalize existing entries only from verified evidence and recorded authority, preserving superseded history.
+
+- **HARNESS-15:** Execute the owner's first-delivery sequence, authorized September 12, 2026 through the discussion channel: reconcile checkout/uncommitted work, effective requirements and release evidence; resolve scanner/deployment priorities from evidence rather than file order; choose a suitable bounded existing fix; validate hosted Node 24/build/browser tools, isolated checkout/test profiles and enforced acceptance/authorization/cost/recovery gates; implement the independent quality/architecture reviewer from HARNESS-13; deliver one fix through meaningful tests, commit-specific independent review and a reviewable PR, then existing main workflow and deployed verification. Preserve the total $100 pilot budget and held/unknown exposure; do not widen infrastructure/CI permissions or claim physical-camera verification from simulation. Use W7 evidence before broadening autonomy, then conduct one bounded free-roam investigation and scrutinize findings plus the deck-seed proposal without automatic feature acceptance or a recurring schedule. Backlog visibility supports the sequence without unnecessary delay; live Langfuse access is not a blocker. Surface only concrete unresolved evidence/priority/access dependencies.
+  - Title: First gated app delivery through the independent harness
+  - Assessment: accepted
+  - Assessment rationale: Validate the development loop on one useful existing fix before broadening exploratory autonomy.
+  - Delivery: in progress
+  - Authorization: implementation and existing main release workflow
+  - Priority: unknown
+  - Priority rationale: The sequence is explicit; selection/rank of the app fix requires evidence reconciliation.
+  - Dependencies: unknown
+  - Blockers: Hosted tool compatibility and independent-review gates require verification.
+  - Evidence: Owner sequence relayed September 12, 2026; execution evidence pending.
+
+- **HARNESS-14:** Provide a read-only, automatically refreshed local backlog view sourced from authoritative saved requirements, with no duplicate manually maintained backlog. Show IDs, concise titles, assessment, delivery, recorded priority/rationale, dependencies/blockers and evidence. Unknown or conflicting fields remain explicit; never infer acceptance/priority from source order or legacy prose. Show next eligible work only from explicit acceptance, authorization and satisfied dependencies. Preserve superseded history. Refresh already-open pages after saved changes, with freshness and last-good data on read/parse failures. Scope configured project/file access, escape source text and avoid owner data/secret publication. Verify updates, filters, conflicts/missing fields, malformed input recovery and project/path isolation. Source: explicit owner implementation instruction via discussion channel September 12, 2026.
+  - Title: Read-only local backlog with automatic refresh
+  - Assessment: accepted
+  - Assessment rationale: A view over saved records supports transparent scrutiny and sequencing without introducing a second source of truth; explicit unknowns avoid promoting legacy requests by accident.
+  - Delivery: locally verified
+  - Authorization: implementation
+  - Priority: unknown
+  - Priority rationale: Owner authorized this bounded tooling implementation; no global backlog priority was assigned.
+  - Dependencies: none
+  - Blockers: none
+  - Evidence: DEV-HARNESS-BACKLOG-01 in USE-CASES.md; harness docs/BACKLOG.md, test/backlog.test.mjs and checks/backlog-ui.mjs; local browser/source checks passed.
+
+- **HARNESS-13:** Assess a dedicated code-quality, architecture-adherence and PR-review agent as a refinement of the existing independent reviewer, avoiding duplicate roles without demonstrated need. Source: owner request relayed from the discussion channel September 12, 2026. Acceptance: a reviewer independent of the implementer reads the actual diff, surrounding code, relevant architecture, AGENTS guidance and requirements; checks domain invariants, security and meaningful test evidence; produces actionable file/line findings distinguishing blockers from suggestions; records review against the exact commit and rechecks fixes, invalidating affected conclusions when code changes. It cannot approve its own implementation or equate review with deployment. Apply HARNESS-11 assessment and prioritization before implementation. Status: requested/pending assessment; no new paid delivery cycle authorized. Evidence: DEV-HARNESS-12 and W4 in HARNESS-WORKFLOWS.md.
+
+- **HARNESS-12:** Evaluate Langfuse for the independent reusable harness and integrate if it fits. Source: owner authorization relayed from the product discussion September 12, 2026. Acceptance: bounded synthetic graph/timing/token/cost evaluation covering loops, handoffs, retries and failures; correlation to project/task/cycle/stage and durable requirement/decision/evidence records; OpenTelemetry compatibility; project isolation and credential/content redaction; feasible hosting/dependencies, maintenance and total cost within the existing $100 pilot authorization. Keep ledger accounting authoritative and label incomplete/model-only costs. Record accept/defer/reject rationale and gaps; integration is authorized if suitable, without another confirmation. No unrelated purchases or app-runtime coupling. Status: optional adapter locally implemented and synthetic tests passed; live Langfuse project credentials and remote UI/isolation verification remain pending. Evidence: HARNESS-PILOT.md and E:/projects/harness-observability/docs/LANGFUSE-EVALUATION.md.
+
+- **HARNESS-09:** Execute a bounded, independent harness pilot using the funded project/controller key, without app deployment. Acceptance: hosted command evidence, a reviewable repository-grounded requirements candidate, one nonrecursive efficiency review, durable session/cost records and independently queryable scoped telemetry; distinguish local synthetic checks from app/provider compatibility and production evidence. Status: initial live cycle completed locally September 12, 2026; broader delivery automation remains queued. Evidence: [pilot results and limits](HARNESS-PILOT.md).
+
+- **HARNESS-11:** Apply equal scrutiny and prioritization criteria to owner, agent, competitor and community-origin ideas. Acceptance: record owner requests promptly with stable IDs as requested/pending assessment; source alone cannot imply development acceptance, bypass scrutiny or grant priority. Evaluate charter fit, collection value, evidence, UX, feasibility, risk, effort and lifecycle costs using the same criteria; candidly challenge assumptions and propose reject/defer/validate/simpler alternatives with rationale. Preserve explicit final owner decisions and governing constraints; record decisions and tradeoffs rather than silently discarding requests or overriding final instructions. Status: owner correction recorded September 12, 2026; automated intake/gate enforcement queued. This updates decision policy without automatically implementing or reprioritizing the backlog. Evidence: DEV-HARNESS-10 in USE-CASES.md.
+
+- **HARNESS-10:** Add charter-grounded **free roam discovery** beyond already specified features. Source: owner's product-discussion requests relayed September 12, 2026. Acceptance: explore competitor capabilities, forum/community discussions and emerging technical innovations; attach dated source links and distinguish verified competitor facts, anecdotal signals and hypotheses; use primary technical evidence for maturity/feasibility; map opportunities to meaningful collection actions, existing requirement IDs, adjacent workflows and long-term charter-compatible monetization. Produce testable candidates and validation steps, including counterevidence. **A justified conclusion that nothing merits action is a successful outcome.** Before development, require a recorded scrutiny decision evaluating charter fit, concrete collection benefit, evidence quality, overlap with existing capabilities, simpler alternatives, UX complexity, technical feasibility, security/privacy, and build plus ongoing maintenance/running cost. Valid dispositions: reject, defer, investigate/validate further, accept for development. Preserve concise rationale/evidence links. Acceptance is not implementation/release or automatic priority over existing requirements. Preserve budget/privacy/security limits; no community messages or owner collection disclosure. Status: queued; this request authorizes recording/design, not a research run, schedule or increased $100 pilot budget. Evidence: DEV-HARNESS-08 in USE-CASES.md and [free roam workflow](HARNESS-WORKFLOWS.md#free-roam-discovery--queued-harness-10).
+
+- **HARNESS-08:** Owner sets a USD 100 total pilot spending budget on September 12, 2026. Acceptance: record costs for all pilot agent work, hosted environments and attributable tools/observability, reserve headroom for delayed accounting and stop new dispatch before exhausting the budget; report estimates, unknown charges and any overshoot. This is a total pilot authorization, not a recurring monthly budget or authorization for unrelated infrastructure purchases. Status: budget recorded; enforcement implementation and billing funding unverified. Evidence: [pilot setup](HARNESS-WORKFLOWS.md#hosted-pilot-decision).
+
+- **HARNESS-07:** Owner selects OpenAI-hosted coding environments for the first harness pilot. This supersedes the earlier self-hosted-first recommendation and executor-key prerequisite. Acceptance: configure a reusable hosted template, validate required runtime/build/browser dependencies before claiming compatibility, keep controller credentials outside the sandbox, preserve independent harness-observability infrastructure and report unavailable host/system tracing explicitly. The executor integration remains replaceable for later self-hosting. Status: hosting choice recorded; runtime implementation and verification queued. Evidence: [hosting decision](HARNESS-WORKFLOWS.md#hosted-pilot-decision).
+
+### MELT, cost and cycle optimization — designed; implementation queued
+
+- **OBS-07:** Harness observability must be separate reusable infrastructure for development across projects, independently deployed and operated from this app and its future observability. Acceptance: dedicated lifecycle/compute/network/collectors/stores/credentials/backups/budget; generic infrastructure package and project registration; trusted project attribution and enforced query/cost isolation; two synthetic projects onboard independently; app downtime/deployment/removal cannot own or destroy harness telemetry. Shared app/harness tenants on the same runtime backend are explicitly superseded. Reuse conventions/templates, not app infrastructure; preserve optional authorized release-provenance links. Status: corrected design saved, implementation queued. Evidence: [independent infrastructure](HARNESS-OBSERVABILITY.md#independent-reusable-infrastructure-obs-07), DEV-HARNESS-07 in USE-CASES.md.
+
+- **OBS-01:** Trace every material harness decision through rationale, evidence, authority, requirement/charter revisions, agent/session, code/check/release result. Acceptance: all decisions and promotions have durable linked records, including rejected/cancelled/failed paths; record concise stated rationale, not hidden reasoning. Evidence: [MELT design](HARNESS-OBSERVABILITY.md).
+- **OBS-02:** Add correlated metrics, events, technical logs and traces covering controller, tools, system/process and network activity. Acceptance: verify async/subprocess/retry/restart correlation, technical error diagnostics, metadata redaction and explicit coverage gaps for uninstrumented or opaque provider calls; system-call diagnostics must have bounded scope and measured overhead. Evidence: [coverage contract](HARNESS-OBSERVABILITY.md#system-and-network-coverage).
+- **OBS-03:** Log cost of all agent work, including root/subagents, research, review, failed/retried/cancelled work and optimizer work. Acceptance: retain usage/price revisions, separate pending/estimated/reconciled charges and infrastructure/tool/MELT overhead, deduplicate aggregation, reconcile where possible and never treat missing usage as zero. Evidence: [cost ledger](HARNESS-OBSERVABILITY.md#cost-ledger).
+- **OBS-04:** A dedicated agent analyzes every loop cycle for efficiency and cost improvements. Acceptance: W7 handles success/failure/cancelled/blocked attempts, cites trace evidence, proposes bounded quality-preserving experiments, accounts for its own cost, avoids recursive self-analysis and cannot alter policy or bypass review. Evidence: [W7](HARNESS-OBSERVABILITY.md#w7--cycle-efficiency-and-cost-review).
+- **OBS-05:** Make MELT reliable, private and economical. Acceptance: pre-export redaction, bounded async queues/spool, protected unsampled decision/accounting records, explicit sampling/drops/retention, collector failure and disk-full checks, least-privilege analyst reads and measured instrumentation overhead. Evidence: [operational design](HARNESS-OBSERVABILITY.md#reliability-privacy-and-retention).
+- **OBS-06:** Design for future app-wide MELT reuse through composition, preserving responsive UX and user-data boundaries. Acceptance: specify separate browser/API/storage/provider instrumentation and release correlation without domain dependencies or owner-data capture; app implementation remains queued. Evidence: [future app reuse](HARNESS-OBSERVABILITY.md#future-app-reuse), DEV-HARNESS-05 in USE-CASES.md. All OBS requirements are documented design, not implemented or production verified.
+
+- **HARNESS-06:** Design actionable harness workflows grounded in the current repository and PRODUCT-07 purpose. Acceptance: map actual modules, tests and workflows separately from planned capabilities; specify reconciliation, discovery/commercial critique, requirements authoring, cross-app integration, implementation/review, release and product learning with triggers, outputs and failure gates; define API session recovery, authority boundaries, traceability and an incremental pilot. Preserve dirty work and resolve conflicting priority evidence before selecting implementation. Status: design documented; runtime implementation and execution queued. Evidence: [workflow design W0–W6](HARNESS-WORKFLOWS.md), DEV-HARNESS-04 in USE-CASES.md. Documentation checks do not establish running harness behavior.
+
+- **HARNESS-02:** Extend the harness to discover ideas, features and use cases and author requirements itself. Acceptance: use sourced observations and explicit hypotheses, deduplicate against backlog/rejections, produce stable requirement IDs and testable happy/error/persistence scenarios without requiring an owner-written specification. Status: proposal documented, implementation queued. Evidence: [product discovery design](DEVELOPMENT-HARNESS.md#product-discovery-and-requirements-authoring).
+- **HARNESS-03:** Critically review candidates against stated purpose and monetization avenues. Acceptance: version the product charter; label unknown business assumptions; independently assess user value, commercial mechanism, costs, alternatives and disconfirming evidence; record adopt/experiment/defer/reject rationale. Agent agreement cannot count as market validation. No approved monetization strategy was found in inspected repository docs. Status: proposal documented, implementation queued. Evidence: [product discovery design](DEVELOPMENT-HARNESS.md#product-discovery-and-requirements-authoring).
+- **HARNESS-04:** Adapt existing parts of the app when needed to integrate an accepted feature consistently. Acceptance: require a journey/data/control impact map, trace adjacent edits to feature acceptance or preserved invariants, align terminology/navigation/docs, test affected existing journeys and preserve ownership/source/account rules. Unrelated redesigns remain separate proposals. Status: proposal documented, implementation queued. Evidence: [product discovery design](DEVELOPMENT-HARNESS.md#product-discovery-and-requirements-authoring).
+- **HARNESS-05:** Close the product learning loop without confusing delivery with value. Acceptance: preserve evidence and charter revisions, independent objections, decision and release states, outcome baseline/window/success criteria and rejection history; support post-release retain/adjust/retire proposals. Missing data remains unknown; generated requirements cannot authorize themselves or override owner priorities. This extends HARNESS-01's execution-first scope. Status: proposal documented, implementation queued. Evidence: [product discovery design](DEVELOPMENT-HARNESS.md#product-discovery-and-requirements-authoring), [DEV-HARNESS-02](USE-CASES.md#development-harness--proposed).
+
+- **HARNESS-01:** Propose a development harness for this repository using the OpenAI Agents API. The owner's September 12 correction supersedes the assistant's interpretation as an in-app deck assistant. Acceptance: describe request intake, saved testable requirements, isolated implementation, independent review, meaningful checks, resumable bounded execution, authorization enforcement and existing-main-workflow deployment evidence. Preserve owner data and separate test profiles. Status: proposal documented; implementation queued for a future instruction, not implemented or production verified. Evidence: [development harness proposal](DEVELOPMENT-HARNESS.md); [DEV-HARNESS-01](USE-CASES.md#development-harness--proposed). This proposal does not reprioritize existing application fixes.
+
+This document records owner intent, including queued work. It is not proof of production behavior. Latest owner corrections override earlier decisions. Update it for every feature request or correction; connect implemented requirements to use cases, tests and release evidence.
+
+
 This document records owner intent, including queued work. It is not proof of production behavior. Latest owner corrections override earlier decisions. Update it for every feature request or correction; connect implemented requirements to use cases, tests and release evidence.
 
 ## Status and traceability
@@ -269,3 +361,1036 @@ Status: the authorized scanner/session storage, recovery and bounded review chan
 This supersedes the earlier investigation-only status for these scanner requirements. Transparent durable 50-capture rollover, bounded 50+10 wheel/history, frozen retry journal, session/capture idempotency, last-identity recovery and paged batch review are implemented. No session accepted/attempt cap remains. Resource reuse, bounded geometry/retry cadence and idle/stop work cleanup are implemented; a slower trial cadence failed replay acceptance and was corrected. Evidence: [continuous scanner validation](../tests/performance/SCAN12-CONTINUOUS.md), UC-SCAN-BATCHES/RESOURCES and LIVE-21. The r127-a1 release passed all required unit, browser, visual and deployed checks; independent source/identity and reserved-profile cleanup checks also passed. The paced local soak passed 2,000 simulated captures over 7,200.027 seconds, with 40 batch reloads, ten retained recent rows, a 32,135-byte peak journal and zero ownership writes. Final journal compatibility with the deployed module passed. Its Node/SQLite scope excludes camera, models, browser rendering and hardware thermal behavior. Physical-phone thermal improvement is not established. IMPORT-05-10, SCALE-01-05 and DATA-01-07 remain queued plans.
 
 SCAN-12 supporting publication constraint: preserve the existing bounded source download and exact corresponding-code checks. Upstream documentation-only pictures may be represented by pinned public URLs and hashes; retain all upstream/application/build code, notices, test/example source and reproducible retrieval. No credential, owner-data, infrastructure-role or download-size-bound changes are authorized by this packaging adjustment.
+
+
+## Normalized current assessment and delivery
+
+These explicit fields reconcile current evidence under HARNESS-15/16. Earlier prose and release checkpoints remain history; unknowns are not acceptance. Changes require evidence and authority, not file-order inference.
+
+```backlog-json
+{
+  "CARD-01": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-02": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-03": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-04": {
+    "assessment": "accepted",
+    "delivery": "superseded",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Earlier interaction/admission requirement superseded by explicit later correction; retain history.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "CARD-05": {
+    "assessment": "accepted",
+    "delivery": "superseded",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Earlier interaction/admission requirement superseded by explicit later correction; retain history.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "CARD-06": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-07": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-08": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-09": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-10": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-11": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-12": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-13": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-14": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-15": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-16": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "CARD-17": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "DATA-01": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "DATA-02": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "DATA-03": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "DATA-04": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "DATA-05": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "DATA-06": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "DATA-07": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "DEPLOY-01": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "DEPLOY-02": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "DEPLOY-03": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "DEPLOY-04": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "DEPLOY-05": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "DEPLOY-06": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "DRAG-01": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "DRAG-02": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "DRAG-03": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "DRAG-04": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "DRAG-05": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "HARNESS-01": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "HARNESS-02": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "HARNESS-03": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "HARNESS-04": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "HARNESS-05": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "HARNESS-06": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "HARNESS-07": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "HARNESS-08": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "HARNESS-09": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "HARNESS-10": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "HARNESS-11": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "HARNESS-12": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "HARNESS-13": {
+    "assessment": "accepted",
+    "delivery": "in progress",
+    "authorization": "implementation",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Independent API reviewer and commit-bound evidence wiring in progress.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); local delivery-gate tests reject self-review, stale commits, blockers and missing authority."
+  },
+  "HARNESS-14": {},
+  "HARNESS-15": {},
+  "HARNESS-16": {},
+  "IMPORT-01": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "IMPORT-02": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "IMPORT-03": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "IMPORT-04": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "IMPORT-05": {
+    "assessment": "accepted",
+    "delivery": "in progress",
+    "authorization": "implementation and existing main release workflow",
+    "priority": "1",
+    "priority rationale": "Selected bounded first-delivery scope after reconciling completed scanner/deployment streams; see HARNESS-15 and baseline decision.",
+    "dependencies": "none",
+    "blockers": "Implementation, current meaningful tests and independent review before existing main release.",
+    "evidence": "[Baseline and hosted readiness](HARNESS-BASELINE.md); implementation gate passed against e0815c3 using actual command evidence September 12."
+  },
+  "IMPORT-06": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "IMPORT-07": {
+    "assessment": "accepted",
+    "delivery": "in progress",
+    "authorization": "implementation and existing main release workflow",
+    "priority": "2",
+    "priority rationale": "Selected bounded first-delivery scope after reconciling completed scanner/deployment streams; see HARNESS-15 and baseline decision.",
+    "dependencies": "IMPORT-05@locally verified",
+    "blockers": "Implementation, current meaningful tests and independent review before existing main release.",
+    "evidence": "[Baseline and hosted readiness](HARNESS-BASELINE.md); implementation gate passed against e0815c3 using actual command evidence September 12."
+  },
+  "IMPORT-08": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "IMPORT-09": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "IMPORT-10": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "OBS-01": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "OBS-02": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "OBS-03": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "OBS-04": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "OBS-05": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "OBS-06": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "OBS-07": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "PERF-01": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Acceptance/delivery/dependency evidence requires reconciliation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "PRODUCT-01": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "PRODUCT-02": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "PRODUCT-03": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "PRODUCT-04": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "PRODUCT-05": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "PRODUCT-06": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "PRODUCT-07": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "PRODUCT-08": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "See recorded scope and pilot evidence; full runtime enforcement is not implied.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "QUALITY-01": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Acceptance/delivery/dependency evidence requires reconciliation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "RECENT-01": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "RECENT-02": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "RECENT-03": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "RECENT-04": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  },
+  "SCALE-01": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCALE-02": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCALE-03": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCALE-04": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCALE-05": {
+    "assessment": "pending assessment",
+    "delivery": "not started",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Concrete scope and acceptance review pending; saved plan alone did not authorize implementation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCAN-01": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Acceptance/delivery/dependency evidence requires reconciliation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCAN-02": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Acceptance/delivery/dependency evidence requires reconciliation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCAN-03": {
+    "assessment": "accepted",
+    "delivery": "superseded",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Earlier interaction/admission requirement superseded by explicit later correction; retain history.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCAN-04": {
+    "assessment": "accepted",
+    "delivery": "superseded",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Earlier interaction/admission requirement superseded by explicit later correction; retain history.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCAN-05": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Acceptance/delivery/dependency evidence requires reconciliation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCAN-06": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Acceptance/delivery/dependency evidence requires reconciliation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCAN-07": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Acceptance/delivery/dependency evidence requires reconciliation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCAN-08": {
+    "assessment": "accepted",
+    "delivery": "superseded",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Earlier interaction/admission requirement superseded by explicit later correction; retain history.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCAN-09": {
+    "assessment": "accepted",
+    "delivery": "superseded",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Earlier interaction/admission requirement superseded by explicit later correction; retain history.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCAN-10": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); r125/r127 automated release scope; SCAN-10 owner physical sequence acceptance is separately recorded."
+  },
+  "SCAN-11": {
+    "assessment": "accepted",
+    "delivery": "locally verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Physical phone thermal/battery acceptance remains unverified. Automated/cloud and two-hour synthetic persistence evidence covers narrower scope.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "SCAN-12": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); r125/r127 automated release scope; SCAN-10 owner physical sequence acceptance is separately recorded."
+  },
+  "SCAN-13": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); r125/r127 automated release scope; SCAN-10 owner physical sequence acceptance is separately recorded."
+  },
+  "SCAN-14": {
+    "assessment": "accepted",
+    "delivery": "locally verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Physical phone thermal/battery acceptance remains unverified. Automated/cloud and two-hour synthetic persistence evidence covers narrower scope.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "VIEW-01": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Acceptance/delivery/dependency evidence requires reconciliation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "VIEW-02": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Acceptance/delivery/dependency evidence requires reconciliation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "VIEW-03": {
+    "assessment": "pending assessment",
+    "delivery": "unknown",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "Acceptance/delivery/dependency evidence requires reconciliation.",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md)"
+  },
+  "VIEW-04": {
+    "assessment": "accepted",
+    "delivery": "production verified",
+    "authorization": "unknown",
+    "priority": "unknown",
+    "priority rationale": "No current global ranking established.",
+    "dependencies": "unknown",
+    "blockers": "none",
+    "evidence": "[Baseline reconciliation](HARNESS-BASELINE.md); exact release scope is retained in linked r88/r91/r114/r123 evidence."
+  }
+}
+```
