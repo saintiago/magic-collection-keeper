@@ -46,7 +46,8 @@ let visibleCards = [],
 let collectionReady = Promise.resolve();
 let filterTags = [],
   activeTagId = tagFromHash(location.hash),
-  registryReady = false;
+  registryReady = false,
+  tagsNeedRefresh = false;
 const tagNavigation = setupTagNavigation(navigateTag);
 let collectionState = {
   rows: null,
@@ -74,6 +75,7 @@ window.addEventListener("keeper-sign-out", () => {
   cardActionEpoch++;
   cardActions.stop();
   collection.stop();
+  tagsNeedRefresh = false;
   recentSearches.stop();
   home.stop();
   autocomplete.close();
@@ -238,6 +240,7 @@ const importPage = createImportPage({
   onAdded: (cards) => {
     // Import only needs the durable receipt; collection consumers reconcile lazily.
     for (const card of cards) home.card(card);
+    tagsNeedRefresh = true;
     collection.invalidate();
   },
 });
@@ -528,10 +531,11 @@ function switchMode(next, { restore = false } = {}) {
   void refreshForView();
 }
 async function refreshForView() {
-  if (
-    ["home", "collection", "catalog"].includes(mode) &&
-    (await collection.ensureFresh())
-  )
+  const consumesCollection = () =>
+    ["home", "collection", "catalog"].includes(mode);
+  if (!consumesCollection()) return;
+  if (await collection.ensureFresh()) tagsNeedRefresh = true;
+  if (consumesCollection() && !collection.state.stale && tagsNeedRefresh)
     await refreshTags();
 }
 async function refresh() {
@@ -559,6 +563,7 @@ function setFilterTags(tags) {
 async function refreshTags() {
   try {
     const tags = await tagController.refresh();
+    tagsNeedRefresh = false;
     registryReady = true;
     home.update({ tagsError: "" });
     setFilterTags(tags);

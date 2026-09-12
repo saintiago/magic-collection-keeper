@@ -13,6 +13,86 @@ const payload = (count) => ({
     condition: "NM",
   })),
 });
+test("IMPORT-05 confirmation preserves unrelated draft order and current page scroll", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const f = await fixture(page);
+  let release;
+  try {
+    const staged = await f.drafts.stageDraft("test", payload(50));
+    for (let i = 0; i < 20; i++) await f.drafts.stageDraft("test", payload(1));
+    await page.goto("/#import=" + staged.draft.id);
+    await expect(page.locator(".draft-row")).toHaveCount(50);
+    const order = await page
+      .locator(".pending-drafts [data-draft]")
+      .evaluateAll((elements) => elements.map((e) => e.dataset.draft));
+    await page.route("**/api/import-draft/add", async (route) => {
+      await new Promise((resolve) => {
+        release = resolve;
+      });
+      await route.fallback();
+    });
+    await page.locator("#draft-add").click();
+    await expect.poll(() => typeof release).toBe("function");
+    await page.evaluate(() => window.scrollTo(0, 240));
+    expect(await page.evaluate(() => scrollY)).toBe(240);
+    release();
+    await expect(page.locator(".import-status")).toContainText(
+      "Added 50 new copies",
+    );
+    expect(
+      await page
+        .locator(".pending-drafts [data-draft]")
+        .evaluateAll((elements) => elements.map((e) => e.dataset.draft)),
+    ).toEqual(order.filter((id) => id !== staged.draft.id));
+    expect(await page.evaluate(() => scrollY)).toBe(240);
+  } finally {
+    release?.();
+    f.db.close();
+  }
+});
+test("IMPORT-07 leaving a stale consumer defers tags until the next consumer", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  let release;
+  try {
+    const staged = await f.drafts.stageDraft("test", payload(1));
+    await page.goto("/#collection");
+    await expect(page.locator("#collection-status-text")).toContainText(
+      "up to date",
+    );
+    await page.locator("#import-nav").click();
+    await page.locator(`[data-draft="${staged.draft.id}"]`).click();
+    await page.locator("#draft-add").click();
+    await expect(page.locator(".import-status")).toContainText(
+      "Added 1 new copies",
+    );
+    let tagReads = 0;
+    await page.route("**/api/tags", async (route) => {
+      tagReads++;
+      await route.fallback();
+    });
+    await page.route("**/api/collection", async (route) => {
+      await new Promise((resolve) => {
+        release = resolve;
+      });
+      await route.fallback();
+    });
+    await page.locator("#collection-nav").click();
+    await expect.poll(() => typeof release).toBe("function");
+    await page.locator("#import-nav").click();
+    release();
+    await expect(page.locator("#total")).toHaveText("1");
+    expect(tagReads).toBe(0);
+    await page.locator("#home-nav").click();
+    await expect.poll(() => tagReads).toBe(1);
+  } finally {
+    release?.();
+    f.db.close();
+  }
+});
 for (const destination of ["collection", "home", "back"]) {
   test(`IMPORT-05/07 receipt settles without collection I/O; ${destination} lazily refreshes`, async ({
     page,
