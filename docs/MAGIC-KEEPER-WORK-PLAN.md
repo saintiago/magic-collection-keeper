@@ -1,6 +1,6 @@
 # Magic Keeper: preparation and development work list
 
-Assessment and preparation execution: 2026-09-20. B-01–B-08 preparation has started; Part 3 implementation and Jira backlog creation remain unauthorized.
+Assessment and preparation execution: 2026-09-20. B-01–B-08 preparation plus B-09–11 review corrections are in progress; Part 3 implementation and Jira backlog creation remain unauthorized.
 
 ## Ownership and delivery rules
 
@@ -31,12 +31,13 @@ Keep this requested plan in Keeper docs for review and later Jira conversion. Pu
 
 - **B-01:** selected current `origin/main` at `16bc79e` and isolated the preparation on `codex/keeper-preparation`; product changes and owner data were preserved.
 - **B-02:** removed the abandoned Keeper-local harness documents and local records while retaining product mockups, application data, source, tests, license/source records and release evidence.
-- **B-03:** established the charter, concise specification, architecture, requirement ledger and E2E-oriented use cases; documentation links and retired-material exclusions validate locally.
+- **B-03/B-11:** established the charter, concise specification, architecture and requirement ledger; restored every UC-01–37 traceability key and every individual accepted stable requirement, including exact pending-import interaction/lifecycle criteria, without restoring superseded behavior.
 - **B-04:** added explicit documentation, JavaScript, Python recognition, build and browser entry points. The measured local baseline is recorded in OPERATIONS; the complete WebKit profile had one transient failure whose exact retry passed, so it is not represented as a clean full run.
-- **B-05:** implemented docs/checks/full change classification, a fail-closed `Keeper delivery` aggregate, pull-request-only cancellation, and independent desktop/mobile live diagnostics. Local tests pass; PR #30 supplies aggregate evidence, while main publication evidence requires a merge.
-- **B-06:** verified repository administrator access and authenticated Lens App read access to Keeper. Main now requires strict up-to-date App-bound `Keeper delivery` and `Nexus Lens review` checks, dismisses stale reviews, resolves conversations, blocks force-push/deletion, and permits only squash/native auto-merge. Actual required checks remain to be observed on PR #30.
+- **B-05/B-10:** implemented separate current-change validation and accumulated release classification, a fail-closed `Keeper delivery` aggregate, pull-request-only cancellation, and independent desktop/mobile live diagnostics. Targeted regressions cover test-only main followed by docs-only work plus mixed/unpublished runtime paths; updated exact-head CI remains required.
+- **B-06:** verified repository administrator access and authenticated Lens App read access to Keeper. Main requires strict up-to-date App-bound `Keeper delivery` and `Nexus Lens review` checks, dismisses stale reviews, resolves conversations, blocks force-push/deletion, and permits only squash/native auto-merge. The earlier aggregate passed; the new exact head and actual Lens check remain open.
 - **B-07:** blocked on the supported Nexus interface. Nexus main currently accepts only its combined configuration, while HARN-24 remains To Do and specifies categories but no project-file name or schema. No speculative Keeper configuration was invented.
 - **B-08:** verified Jira KAN and Ready-queue access. The only Ready item, empty placeholder KAN-2, was returned to Draft; no backlog issue was created.
+- **B-09:** the full PR path now downloads authenticated current corresponding source with `keeper-e2e`, verifies its independent digest, and executes the unchanged deployment file/byte guard before browser work. Matching exact-head source verification/publication is still required before integration.
 
 The audit bullets above remain historical baseline evidence. Local implementation or testing does not imply merge, deployment or production delivery.
 

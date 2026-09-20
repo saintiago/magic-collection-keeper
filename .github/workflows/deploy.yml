@@ -40,6 +40,7 @@ jobs:
           RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
           FORCE_FULL: ${{ inputs.force_full || 'false' }}
           REDEPLOY_FRONTEND: ${{ inputs.redeploy_frontend || 'false' }}
+          CURRENT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
         run: node scripts/select-release.mjs
       - name: Validate documentation foundation and links
         run: node scripts/validate-docs.mjs
@@ -88,6 +89,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Verify current corresponding source
+        env:
+          API_URL: ${{ vars.API_URL }}
+          CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
+          RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
+          KEEPER_TEST_USER: ${{ secrets.KEEPER_TEST_USER }}
+          KEEPER_TEST_PASSWORD: ${{ secrets.KEEPER_TEST_PASSWORD }}
+        run: |
+          node scripts/download-corresponding-source.mjs build/recognition-source.zip
+          python scripts/verify-corresponding-source.py build/recognition-source.zip
       - name: Build verified browser recognition assets
         run: |
           pip install -r recognition/requirements-visual.txt

@@ -1,9 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, writeFile, appendFile } from "node:fs/promises";
-import { planRelease } from "./release-plan.mjs";
+import { planDelivery } from "./release-plan.mjs";
 import { createHash } from "node:crypto";
 
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
+const pathsBetween = (from, to = "HEAD") =>
+  git("diff", "--name-only", "--no-renames", from, to)
+    .split("\n")
+    .filter(Boolean);
+const commit = (value) => /^[a-f0-9]{40}$/.test(value || "");
 let base = null,
   plan;
 try {
@@ -37,17 +42,20 @@ try {
   if (base.id !== id || !/^[a-f0-9]{40}$/.test(base.commit || ""))
     throw Error("Invalid published commit");
   git("merge-base", "--is-ancestor", base.commit, "HEAD");
-  const changedPaths = git(
-    "diff",
-    "--name-only",
-    "--no-renames",
-    base.commit,
-    "HEAD",
-  )
-    .split("\n")
-    .filter(Boolean);
-  plan = planRelease({
-    changedPaths,
+  const releaseChangedPaths = pathsBetween(base.commit);
+  let currentChangedPaths = releaseChangedPaths;
+  const currentBase = process.env.CURRENT_BASE_SHA;
+  if (
+    ["pull_request", "push"].includes(process.env.GITHUB_EVENT_NAME || "") &&
+    commit(currentBase) &&
+    currentBase !== "0".repeat(40)
+  ) {
+    git("merge-base", "--is-ancestor", currentBase, "HEAD");
+    currentChangedPaths = pathsBetween(currentBase);
+  }
+  plan = planDelivery({
+    currentChangedPaths,
+    releaseChangedPaths,
     base,
     redeployFrontend: process.env.REDEPLOY_FRONTEND === "true",
   });
