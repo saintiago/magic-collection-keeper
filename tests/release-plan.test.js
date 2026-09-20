@@ -83,14 +83,19 @@ test("DEPLOY-02 missing or corrupt published identities never use the fast path"
   }
 });
 
-test("DEPLOY-01 saved requirements and tests alone do not republish application code", () => {
-  for (const changedPaths of [
-    [],
-    ["docs/REQUIREMENTS.md", "AGENTS.md"],
-    ["tests/prototype/playwright.config.mjs"],
-  ]) {
-    assert.equal(planRelease({ changedPaths }).mode, "checks");
+test("DEPLOY-01 documentation takes the fast path and tests remain validated", () => {
+  for (const changedPaths of [[], ["docs/REQUIREMENTS.md", "AGENTS.md"]]) {
+    assert.equal(planRelease({ changedPaths }).mode, "docs");
   }
+  assert.equal(
+    planRelease({
+      changedPaths: [
+        "docs/REQUIREMENTS.md",
+        "tests/prototype/playwright.config.mjs",
+      ],
+    }).mode,
+    "checks",
+  );
 });
 
 test("DEPLOY-05 explicit frontend redeploy keeps compatibility and unknown-input guards", () => {

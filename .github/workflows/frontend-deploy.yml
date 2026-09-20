@@ -85,7 +85,9 @@ jobs:
           BUCKET: ${{ vars.WEBSITE_BUCKET }}
           DISTRIBUTION: ${{ vars.DISTRIBUTION_ID }}
         run: node scripts/publish-frontend.mjs
-      - name: Verify the deployed frontend with reserved profiles
+      - name: Verify the deployed frontend on desktop
+        id: desktop_live
+        continue-on-error: true
         env:
           RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
           LIVE_URL: ${{ vars.WEBSITE_URL }}
@@ -97,9 +99,28 @@ jobs:
           KEEPER_TAGS_PASSWORD: ${{ secrets.KEEPER_TAGS_PASSWORD }}
           KEEPER_IMPORT_USER: ${{ secrets.KEEPER_IMPORT_USER }}
           KEEPER_IMPORT_PASSWORD: ${{ secrets.KEEPER_IMPORT_PASSWORD }}
+        run: npx playwright test --config playwright.live.config.js tests/live/deployment.spec.js tests/live/release.spec.js tests/live/discovery.spec.js tests/live/card-actions.spec.js
+      - name: Verify the deployed frontend on mobile
+        id: mobile_live
+        if: always() && steps.desktop_live.outcome != 'skipped'
+        continue-on-error: true
+        env:
+          RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
+          LIVE_URL: ${{ vars.WEBSITE_URL }}
+          KEEPER_TEST_USER: ${{ secrets.KEEPER_TEST_USER }}
+          KEEPER_TEST_PASSWORD: ${{ secrets.KEEPER_TEST_PASSWORD }}
+          KEEPER_OTHER_USER: ${{ secrets.KEEPER_OTHER_USER }}
+          KEEPER_OTHER_PASSWORD: ${{ secrets.KEEPER_OTHER_PASSWORD }}
+          KEEPER_TAGS_USER: ${{ secrets.KEEPER_TAGS_USER }}
+          KEEPER_TAGS_PASSWORD: ${{ secrets.KEEPER_TAGS_PASSWORD }}
+          KEEPER_IMPORT_USER: ${{ secrets.KEEPER_IMPORT_USER }}
+          KEEPER_IMPORT_PASSWORD: ${{ secrets.KEEPER_IMPORT_PASSWORD }}
+        run: npx playwright test --config playwright.mobile-live.config.js tests/mobile-live/home.spec.js tests/mobile-live/card-actions.spec.js
+      - name: Require both deployed-frontend suites
+        if: always() && steps.desktop_live.outcome != 'skipped'
         run: |
-          npx playwright test --config playwright.live.config.js tests/live/deployment.spec.js tests/live/release.spec.js tests/live/discovery.spec.js tests/live/card-actions.spec.js
-          npx playwright test --config playwright.mobile-live.config.js tests/mobile-live/home.spec.js tests/mobile-live/card-actions.spec.js
+          test "${{ steps.desktop_live.outcome }}" = success
+          test "${{ steps.mobile_live.outcome }}" = success
       - name: Restore the verified previous frontend if publication checks fail
         if: failure() && steps.publish.outputs.published == 'true'
         env:

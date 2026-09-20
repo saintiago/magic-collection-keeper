@@ -1,6 +1,6 @@
 # Local card motion prototype
 
-This development harness compares the shared application interactions with public sample data. It has no deployment or account access. The application uses the SVG glass renderer; the real WebGL lighting variant is retained here for repeatable comparison.
+This local prototype suite compares the shared application interactions with public sample data. It has no deployment or account access. The application uses the SVG glass renderer; the real WebGL lighting variant is retained here for repeatable comparison.
 
 Run `node tests/prototype/serve.mjs` from the repository root and open http://127.0.0.1:3120/. The server listens only on loopback. It serves the actual shared card renderers, gesture controller, inspector and styles with a restrictive content security policy. It has no account or API routes. Sample tag edits stay in memory; other actions display their selected label. Reload resets the sample state.
 

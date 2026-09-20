@@ -33,11 +33,33 @@ The three public recognition smoke images are checked-in fixtures with their ori
 Checks:
 
 ```sh
+npm run validate:docs
 npm test
+npm run test:python
+npm run build
 npx playwright install chromium
 npm run test:ui
-npm run build
 ```
+
+`npm run validate` runs that baseline after browser/model assets are prepared. Use `python -m pip install -r recognition/requirements-visual.txt` and `python recognition/scripts/prepare.py --visual-only` before the Python/build/browser stages in a clean checkout. `npm run test:python` requires Python 3.12; it uses the Windows Python launcher or a `python`/`python3` executable and accepts `KEEPER_PYTHON` as an explicit executable override. CI uses the Python 3.12 installed by `actions/setup-python`.
+
+Measured Windows preparation baseline on September 20, 2026 (warm package/model caches where noted):
+
+| Stage                              |  Elapsed | Result                                                                       |
+| ---------------------------------- | -------: | ---------------------------------------------------------------------------- |
+| `npm ci`                           |     3.1s | Passed                                                                       |
+| Python visual dependency install   |    17.8s | Passed                                                                       |
+| Visual model preparation           |    21.9s | Passed                                                                       |
+| Name-index build                   |    26.8s | Passed                                                                       |
+| JavaScript unit suite              |     1.4s | 146 passed                                                                   |
+| Python recognition suite           |     2.0s | 27 passed                                                                    |
+| Application build                  |     0.4s | Passed                                                                       |
+| Chromium UI suite                  |    76.1s | 148 passed                                                                   |
+| WebKit selected profile            | about 4m | 104 passed, three capability skips, one transient card-action timing failure |
+| Isolated WebKit retry of that case |     3.4s | Passed                                                                       |
+| Prototype UI suite                 |    97.7s | 56 passed                                                                    |
+
+Allow roughly ten minutes for the prepared local baseline, with additional time for cold downloads and CI queueing. The WebKit profile is not recorded as clean because its full run had the transient failure even though the exact case passed on retry. These measurements are planning allowances, not universal guarantees.
 
 Local UI tests run their own isolated in-memory SQLite server on port 3100. Controlled network fixtures exercise failures without writing inventory to Scryfall or AWS. The live suite needs `LIVE_URL`, `KEEPER_TEST_USER`, `KEEPER_TEST_PASSWORD`, `KEEPER_OTHER_USER`, `KEEPER_OTHER_PASSWORD`, and runs with `npx playwright test --config playwright.live.config.js`. It creates/removes data only in those dedicated test profiles. The service tests include a real file database reopen rather than only mocks.
 
@@ -61,7 +83,9 @@ Use a new CodeKey for infrastructure deployments; do not accidentally reapply an
 
 Production verification: full `r90-a1` and frontend-only `r91-a1` passed their respective deployed suites. A controlled redeploy of the same main commit took 13m 00s versus 18m 18s, saving 29.0%; API code/last-modified, recognition version and vendor identities were unchanged. [Exact runs, source identities, checks and limits](../tests/performance/FRONTEND-DEPLOYMENT.md). This result completes DEPLOY-01–05; separate scanner/UI requests still need their own verification.
 
-The private GitHub repository runs `.github/workflows/deploy.yml`. Its plan compares the complete proposed tree with the actually published frontend. Explicit presentation changes use the separate same-commit reusable `.github/workflows/frontend-deploy.yml`; backend/build/workflow/dependency/model/API-caller changes, unknown files or incomplete compatibility metadata use the full path. Docs/tests-only changes run checks without republishing. Pull requests have no publication permission through the main-scoped AWS trust. Both release paths obtain temporary AWS credentials through the existing OIDC role; no role expansion or static AWS key is introduced.
+The GitHub repository runs `.github/workflows/deploy.yml`. Its plan compares the complete proposed tree with the actually published frontend. Documentation-only changes run the link/foundation validator and no install/build/browser work. Test-only changes run the ordinary validation suites without publication. Explicit presentation changes use the separate same-commit reusable `.github/workflows/frontend-deploy.yml`; backend/build/workflow/dependency/model/API-caller changes, unknown files or incomplete compatibility metadata use the full path. Pull requests have no publication permission through the main-scoped AWS trust. Both release paths obtain temporary AWS credentials through the existing OIDC role; no role expansion or static AWS key is introduced.
+
+The always-evaluated **Keeper delivery** job is the branch-protection result. It rejects a failed plan, unknown mode, missing/failed/cancelled selected job, or an unexpectedly run/skipped job. On main, a full path requires the exact push run's deployment and live verification; frontend publication is part of the called workflow. A separate `verify-live.yml` run is diagnostic evidence and never changes a failed push result. Obsolete PR runs are cancelled; main publication is never cancelled and remains serialized. Desktop and mobile live steps collect both outcomes before the selected path fails.
 
 The frontend path verifies the previous immutable vendor manifest and all referenced worker/runtime/model bytes, runs unit, browser and prototype checks, packages the UI with independent frontend/API/recognition identities, and checks the live backend and authenticated source. It uploads only its new frontend prefix and root HTML, invalidates `/` and `/index.html`, then runs selected deployed desktop/mobile controls plus combined-source verification with reserved profiles. Failed deployed checks restore the previous HTML only when no newer frontend or changed backend would be overwritten. Unknown compatibility fails closed; start a fresh run to replan. The full path retains all model/build/browser/live checks and verifies matching private backend/build source before API publication.
 
