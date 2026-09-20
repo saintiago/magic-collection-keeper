@@ -50,11 +50,22 @@ owner data, and never mutate repository documents. Repeated runs must pass witho
 test-order dependencies. `npm test`, `npm run validate:docs`, configured project
 checks, and formatting checks must pass.
 
-**Status / evidence:** Accepted; implementation and verification in progress in
-[validator regression tests](../tests/validate-docs.test.js). This is a tooling
-requirement; application architecture and user journeys are unchanged. Protected
-PR, genuine Lens review, and exact merged-SHA main workflow success remain delivery
-requirements. This local-only task does not claim merge or production delivery.
+**Status / evidence:** Locally verified on September 20, 2026; implementation
+commit `84441e1`, [validator regression tests](../tests/validate-docs.test.js).
+The seven cases passed directly, then through two complete `npm test` runs
+(158 passed each). `npm ci` and `npm run prepare:validation` passed, followed by
+the configured `npm run validate`: documentation validation, 158 Node tests,
+27 Python tests, application build, and 150 Chromium UI tests all passed.
+Prettier checks for both changed files and `git diff --check` passed. Verification
+used Node 24.14.1, a checkout-local Python 3.12 virtual environment and browser
+installation, and isolated test data. No validator fixture directories remained.
+The regression tests themselves use no network or credentials; the existing
+[preparation](OPERATIONS.md#local-setup-and-checks) downloads public inputs.
+
+This is a tooling requirement; application architecture and user journeys are
+unchanged. Protected PR, genuine Lens review, and exact merged-SHA main workflow
+success remain delivery requirements. This local-only task does not claim merge
+or production delivery.
 
 ## Product direction
 
