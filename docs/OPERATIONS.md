@@ -45,6 +45,8 @@ npm run test:ui
 
 Measured Windows preparation baseline on September 20, 2026 (warm package/model caches where noted):
 
+These measurements assume Python 3.12 is discoverable in the launch environment. They do not prove that an unconfigured host can run the declared setup. [B-04 runtime availability](REQUIREMENTS.md#b-04-runtime-availability) tracks the remaining host prerequisite or reproducible-bootstrap requirement separately from successful application deployment.
+
 A disposable clone of `99f2d6a` contained no ignored/generated workspace inputs and used no owner data. With host-level npm, pip and Playwright caches already warm, its configured `npm ci` took 5.7 seconds, first `npm run prepare:validation` took 55.9 seconds, an immediate repeat took 29.7 seconds, and `npm run validate` took 78.2 seconds and passed. The first preparation still cloned and pinned CollectorVision, verified/prepared the visual model/catalog, built the current Scryfall index and confirmed Chromium; the repeat reused downloaded workspace artifacts while rechecking them. These are observed cache-warm host timings, not cold-network guarantees.
 
 | Stage                              |  Elapsed | Result                                                                       |

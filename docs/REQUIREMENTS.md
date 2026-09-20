@@ -38,6 +38,14 @@ Every stable product ID links to its authoritative detailed criterion in the spe
 | B-10 | Validation scope uses the current PR/push change set, while release scope also considers every unpublished change since the served release. Prior test-only changes must not make a later documentation-only change expensive; unpublished runtime still forces its guarded path.                                                                                          | Locally verified by release-plan regressions; final exact-head CI pending.                                                                                                                                           |
 | B-11 | Preserve every UC-01–UC-37 identity and every accepted stable product criterion with observable evidence. Concise grouped journeys may supplement but never erase individual acceptance, lifecycle, timing, identity, failure, or supersession semantics.                                                                                                                  | Locally restored and verified by `npm run validate:docs`; final exact-head CI pending.                                                                                                                               |
 
+### B-04 runtime availability
+
+**Accepted / queued:** Keeper owns the Python 3.12 prerequisite of its declared `prepare:validation` command. Readiness requires either an installed Python 3.12 discoverable in the launch environment or a documented, reproducible Keeper bootstrap for that runtime. Nexus executes the declared commands; it is not responsible for installing this project runtime.
+
+Acceptance: from a fresh clone, `npm ci`, `npm run prepare:validation`, and `npm run validate` pass unattended in the documented launch environment. Preparation must resolve Python 3.12 before installing visual dependencies, preparing recognition assets, building the name index, and installing Chromium. A missing or incompatible runtime must produce an actionable error.
+
+The earlier clean-clone timings remain valid for their prepared environment. They do not establish readiness in the current launch environment, where `selectPython312()` reports that Python 3.12 is unavailable. B-04 remains partially verified until the host prerequisite or bootstrap is resolved and the declared commands pass there; successful application deployment does not close this setup gap.
+
 ## Product direction
 
 | ID         | Acceptance criteria                                                                                                                                                | Status / evidence                                 |
