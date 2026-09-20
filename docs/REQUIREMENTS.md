@@ -67,6 +67,23 @@ unchanged. Protected PR, genuine Lens review, and exact merged-SHA main workflow
 success remain delivery requirements. This local-only task does not claim merge
 or production delivery.
 
+**B-12 repair acceptance:** The harness subsequently reported a timeout in
+[UC-05](../tests/ui/interactions.spec.js) after Add retry, with Scan intercepting
+the collection-navigation click. Before that click, the test must verify that
+the successful retry has closed the detail page and restored catalog-card focus.
+Retain the normal pointer click and all Add/remove failure and cancellation
+assertions. No application or check configuration changes are authorized.
+**Repair status / evidence (September 20, 2026):** Locally verified. UC-05
+passed ten repeated Chromium runs after adding the return-state assertions.
+The original test also passed five isolated runs; these results do not establish
+the sole cause of the intermittent harness failure. The configured
+`npm run validate` exited 0: documentation validation, 158 Node tests, 27 Python
+tests, build, and all 150 Chromium UI tests passed. The seven validator cases
+also passed two additional direct runs, with no fixture directories remaining.
+Prettier checks on all three changed files and `git diff --check` passed.
+The harness must independently rerun its checks; this evidence does not
+supersede its earlier failure or establish merge or production delivery.
+
 ## Product direction
 
 | ID         | Acceptance criteria                                                                                                                                                | Status / evidence                                 |
