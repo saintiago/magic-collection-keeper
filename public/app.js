@@ -368,6 +368,20 @@ function stats() {
     ? selected
     : "";
 }
+function renderCardGrid(rows, selectedTag) {
+  const grid = $("grid");
+  const focusedKey = document.activeElement?.matches("#grid .card-open")
+    ? document.activeElement.closest("[data-card-key]")?.dataset.cardKey
+    : null;
+  grid.innerHTML = rows
+    .map((row, index) => collectionCard(row, index, selectedTag))
+    .join("");
+  cardActions.refreshSources();
+  if (focusedKey && document.activeElement === document.body)
+    grid
+      .querySelector(`[data-card-key="${CSS.escape(focusedKey)}"] .card-open`)
+      ?.focus({ preventScroll: true });
+}
 function render() {
   if (cardActions?.holding) {
     cardRenderPending = true;
@@ -455,10 +469,7 @@ function render() {
       )
     : "";
   visibleCards = rows;
-  $("grid").innerHTML = rows
-    .map((row, index) => collectionCard(row, index, selectedTag))
-    .join("");
-  cardActions.refreshSources();
+  renderCardGrid(rows, selectedTag);
   $("grid")
     .querySelectorAll(".card-open")
     .forEach(

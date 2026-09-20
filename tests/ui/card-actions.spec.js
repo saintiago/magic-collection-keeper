@@ -11,6 +11,13 @@ const art = {
   ...card,
   image_uris: { normal: "http://127.0.0.1:3100/fixture-card.svg" },
 };
+const otherArt = {
+  ...art,
+  id: "33333333-3333-4333-8333-333333333333",
+  oracle_id: "44444444-4444-4444-8444-444444444444",
+  name: "Zulu Test Card",
+  collector_number: "2",
+};
 
 for (const mobile of [false, true])
   test.describe(mobile ? "touch live scenario" : "mouse live scenario", () => {
@@ -201,6 +208,96 @@ test("UC-CARD-RETURN a late tag refresh keeps the catalogue source hidden until 
     await expect(source).not.toHaveClass(/artwork-source-lifted/);
     await expect(source).toBeFocused();
     expect(await f.tagged.list("test")).toEqual([]);
+  } finally {
+    release();
+    await page.unroute("**/api/tags");
+    f.db.close();
+  }
+});
+
+test("QUALITY-01 a post-return grid redraw preserves exact source focus", async ({
+  page,
+}) => {
+  const f = await setup(page, 1);
+  try {
+    savePrinting(f.db, otherArt);
+    await f.tagged.add("test", {
+      printing_id: otherArt.id,
+      quantity: 2,
+      finish: "nonfoil",
+      condition: "NM",
+    });
+    await page.goto("/#collection");
+    const source = page.getByRole("button", {
+      name: /Open Draft Test Card printing/,
+    });
+    const other = page.getByRole("button", {
+      name: /Open Zulu Test Card printing/,
+    });
+    await expect(source).toHaveCount(1);
+    await expect(other).toHaveCount(1);
+    expect(await source.getAttribute("data-index")).toBe("0");
+    await source.click();
+    await expectInspectorFit(page);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+    await expect(source).toBeFocused();
+
+    await page.locator("#sort").evaluate((select) => {
+      select.value = "quantity";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(await source.getAttribute("data-index")).toBe("1");
+    await expect(source).toBeFocused();
+    await expect(other).not.toBeFocused();
+
+    const sort = page.locator("#sort");
+    await sort.focus();
+    await sort.evaluate((select) => {
+      select.value = "name";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await expect(sort).toBeFocused();
+    await expect(page.locator("#grid .card-open:focus")).toHaveCount(0);
+  } finally {
+    f.db.close();
+  }
+});
+
+test("QUALITY-01 a tag refresh completing after artwork return retains source focus", async ({
+  page,
+}) => {
+  const f = await setup(page);
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  let waiting = false;
+  await page.route("**/api/tags", async (route) => {
+    waiting = true;
+    await held;
+    await route.fulfill({ json: await f.tagged.tags("test") });
+  });
+  try {
+    await page.goto("/#catalog");
+    await page.locator("#search").fill(card.name);
+    await page.locator("#search-submit").click();
+    const source = page.locator("#grid .card-open");
+    await expect(source).toHaveCount(1);
+    await expect.poll(() => waiting).toBe(true);
+    await source.click();
+    await expectInspectorFit(page);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".artwork-viewer")).not.toBeVisible();
+    await expect(source).toBeFocused();
+
+    release();
+
+    await expect(
+      page.locator("#tag-filter option").filter({ hasText: "Draft Box" }),
+    ).toHaveCount(1);
+    await expect(source).toBeFocused();
   } finally {
     release();
     await page.unroute("**/api/tags");
