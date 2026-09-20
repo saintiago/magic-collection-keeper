@@ -29,7 +29,11 @@ export function reviewedOwnership(rows) {
     .map(([, row]) => row);
 }
 
-export async function clearCaptureTestData(page, beforeDrafts) {
+export async function clearCaptureTestData(
+  page,
+  beforeDrafts,
+  beforeCollectionIds = new Set(),
+) {
   expect(process.env.KEEPER_TEST_USER).toBe("keeper-e2e");
   for (const descriptor of (await liveApi(page, "/api/import-draft"))
     .pending_drafts) {
@@ -37,7 +41,7 @@ export async function clearCaptureTestData(page, beforeDrafts) {
       continue;
     let cursor = descriptor.id;
     const visited = new Set();
-    while (cursor) {
+    while (cursor && !beforeDrafts.has(cursor)) {
       expect(visited.has(cursor)).toBe(false);
       visited.add(cursor);
       const view = await liveApi(page, "/api/import-draft?id=" + cursor);
@@ -55,8 +59,11 @@ export async function clearCaptureTestData(page, beforeDrafts) {
     }
   }
   for (const row of await liveApi(page, "/api/collection"))
-    await liveApi(page, "/api/collection/" + row.id, { method: "DELETE" });
-  expect(await liveApi(page, "/api/collection")).toEqual([]);
+    if (!beforeCollectionIds.has(row.id))
+      await liveApi(page, "/api/collection/" + row.id, { method: "DELETE" });
+  expect(
+    (await liveApi(page, "/api/collection")).map((row) => row.id).sort(),
+  ).toEqual([...beforeCollectionIds].sort());
 }
 
 // Public catalog artwork in a generated frame; never physical-camera evidence.
