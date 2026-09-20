@@ -46,6 +46,8 @@ Acceptance: from a fresh clone, `npm ci`, `npm run prepare:validation`, and `npm
 
 The earlier clean-clone timings remain valid for their prepared environment. They do not establish readiness in the current launch environment, where `selectPython312()` reports that Python 3.12 is unavailable. B-04 remains partially verified until the host prerequisite or bootstrap is resolved and the declared commands pass there; successful application deployment does not close this setup gap.
 
+Direct verification on September 20, 2026 at 19:20 UTC used a fresh remote clone of `b72e1ad1692daa1166f2ca78df774a12b36bf165` and the inherited host environment, with no `KEEPER_PYTHON` override. `npm ci` passed in 2.86 seconds. `npm run prepare:validation` exited 1 after 0.35 seconds: `Python 3.12 was not found. Put it on PATH or set KEEPER_PYTHON to its executable.` Validation was not run after failed setup. The unattended-setup acceptance check therefore failed on this host; no Nexus run, runtime installation, or host configuration change was performed.
+
 ## Product direction
 
 | ID         | Acceptance criteria                                                                                                                                                | Status / evidence                                 |
