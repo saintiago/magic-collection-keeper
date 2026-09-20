@@ -38,6 +38,24 @@ Every stable product ID links to its authoritative detailed criterion in the spe
 | B-10 | Validation scope uses the current PR/push change set, while release scope also considers every unpublished change since the served release. Prior test-only changes must not make a later documentation-only change expensive; unpublished runtime still forces its guarded path.                                                                                          | Locally verified by release-plan regressions; final exact-head CI pending.                                                                                                                                           |
 | B-11 | Preserve every UC-01–UC-37 identity and every accepted stable product criterion with observable evidence. Concise grouped journeys may supplement but never erase individual acceptance, lifecycle, timing, identity, failure, or supersession semantics.                                                                                                                  | Locally restored and verified by `npm run validate:docs`; final exact-head CI pending.                                                                                                                               |
 
+## Documentation validator regression coverage (KAN-5)
+
+**B-12 — Acceptance:** The actual documentation validator must exit successfully
+for a valid fixture and fail separately for a missing required document, broken
+local file link, missing cross-file anchor, missing UC identifier, missing required
+SPEC anchor, and retired document reference. Assert the relevant diagnostics.
+Use disposable, independently created fixtures with cleanup, existing dependencies,
+and the existing `npm test` discovery; require no network, cloud credentials, or
+owner data, and never mutate repository documents. Repeated runs must pass without
+test-order dependencies. `npm test`, `npm run validate:docs`, configured project
+checks, and formatting checks must pass.
+
+**Status / evidence:** Accepted; implementation and verification in progress in
+[validator regression tests](../tests/validate-docs.test.js). This is a tooling
+requirement; application architecture and user journeys are unchanged. Protected
+PR, genuine Lens review, and exact merged-SHA main workflow success remain delivery
+requirements. This local-only task does not claim merge or production delivery.
+
 ## Product direction
 
 | ID         | Acceptance criteria                                                                                                                                                | Status / evidence                                 |
