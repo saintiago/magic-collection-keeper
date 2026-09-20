@@ -17,7 +17,7 @@ permissions:
   contents: read
 concurrency:
   group: keeper-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   plan:
     runs-on: ubuntu-latest
@@ -40,12 +40,26 @@ jobs:
           RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
           FORCE_FULL: ${{ inputs.force_full || 'false' }}
           REDEPLOY_FRONTEND: ${{ inputs.redeploy_frontend || 'false' }}
+          CURRENT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
         run: node scripts/select-release.mjs
+      - name: Validate documentation foundation and links
+        run: node scripts/validate-docs.mjs
       - uses: actions/upload-artifact@v4
         with:
           retention-days: 1
           name: keeper-release-plan
           path: build/release-plan.json
+  docs:
+    name: Documentation validation
+    needs: plan
+    if: needs.plan.outputs.mode == 'docs'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: node scripts/validate-docs.mjs
   frontend:
     needs: plan
     permissions:
@@ -56,7 +70,7 @@ jobs:
     secrets: inherit
   test:
     needs: plan
-    if: needs.plan.outputs.mode != 'frontend'
+    if: needs.plan.outputs.mode == 'full' || needs.plan.outputs.mode == 'checks'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +83,7 @@ jobs:
           name: keeper-release-plan
           path: build
       - run: npm ci
+      - run: npm run validate:docs
       - run: node scripts/build-name-index.mjs
       - run: npm test
       - uses: actions/setup-python@v5
@@ -78,6 +93,8 @@ jobs:
         run: |
           pip install -r recognition/requirements-visual.txt
           python recognition/scripts/prepare.py --visual-only
+      - name: Run Python recognition tests
+        run: npm run test:python
       - run: npm run build
       - name: Install verified Playwright browsers and dependencies
         run: bash scripts/install-ci-browsers.sh
@@ -169,7 +186,9 @@ jobs:
           aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION" --id "$INVALIDATION"
       - name: Install verified Playwright browsers and dependencies
         run: bash scripts/install-ci-browsers.sh
-      - name: Verify protected deployed app
+      - name: Verify protected deployed app on desktop
+        id: desktop_live
+        continue-on-error: true
         env:
           RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
           LIVE_URL: ${{ vars.WEBSITE_URL }}
@@ -181,6 +200,47 @@ jobs:
           KEEPER_TAGS_PASSWORD: ${{ secrets.KEEPER_TAGS_PASSWORD }}
           KEEPER_IMPORT_USER: ${{ secrets.KEEPER_IMPORT_USER }}
           KEEPER_IMPORT_PASSWORD: ${{ secrets.KEEPER_IMPORT_PASSWORD }}
+        run: npx playwright test --config playwright.live.config.js
+      - name: Verify protected deployed app on mobile
+        id: mobile_live
+        if: always() && steps.desktop_live.outcome != 'skipped'
+        continue-on-error: true
+        env:
+          RECOGNITION_SOURCE_SHA256: ${{ vars.RECOGNITION_SOURCE_SHA256 }}
+          LIVE_URL: ${{ vars.WEBSITE_URL }}
+          KEEPER_TEST_USER: ${{ secrets.KEEPER_TEST_USER }}
+          KEEPER_TEST_PASSWORD: ${{ secrets.KEEPER_TEST_PASSWORD }}
+          KEEPER_OTHER_USER: ${{ secrets.KEEPER_OTHER_USER }}
+          KEEPER_OTHER_PASSWORD: ${{ secrets.KEEPER_OTHER_PASSWORD }}
+          KEEPER_TAGS_USER: ${{ secrets.KEEPER_TAGS_USER }}
+          KEEPER_TAGS_PASSWORD: ${{ secrets.KEEPER_TAGS_PASSWORD }}
+          KEEPER_IMPORT_USER: ${{ secrets.KEEPER_IMPORT_USER }}
+          KEEPER_IMPORT_PASSWORD: ${{ secrets.KEEPER_IMPORT_PASSWORD }}
+        run: npx playwright test --config playwright.mobile-live.config.js
+      - name: Require both deployed-app suites
+        if: always() && steps.desktop_live.outcome != 'skipped'
         run: |
-          npx playwright test --config playwright.live.config.js
-          npx playwright test --config playwright.mobile-live.config.js
+          test "${{ steps.desktop_live.outcome }}" = success
+          test "${{ steps.mobile_live.outcome }}" = success
+  result:
+    name: Keeper delivery
+    if: ${{ always() }}
+    needs: [plan, docs, frontend, test, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Require the selected exact-commit path
+        env:
+          MODE: ${{ needs.plan.outputs.mode }}
+          PLAN: ${{ needs.plan.result }}
+          DOCS: ${{ needs.docs.result }}
+          FRONTEND: ${{ needs.frontend.result }}
+          TEST: ${{ needs.test.result }}
+          DEPLOY: ${{ needs.deploy.result }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          COMMIT: ${{ github.sha }}
+        run: node scripts/verify-delivery-result.mjs

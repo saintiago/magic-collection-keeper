@@ -26,8 +26,27 @@ const presentation = new Set([
 
 const documentationOrTest = (path) =>
   ["AGENTS.md", "README.md"].includes(path) || /^(?:docs|tests)\//.test(path);
+const documentation = (path) =>
+  ["AGENTS.md", "README.md"].includes(path) || /^docs\//.test(path);
 const sha = (value) => /^[a-f0-9]{40}$/.test(value || "");
 const digest = (value) => /^[a-f0-9]{64}$/.test(value || "");
+
+function changesOf(changedPaths) {
+  if (
+    !Array.isArray(changedPaths) ||
+    changedPaths.some(
+      (path) =>
+        typeof path !== "string" ||
+        !path ||
+        path.includes("\\") ||
+        path.startsWith("/") ||
+        path.split("/").includes(".."),
+    )
+  ) {
+    throw Error("A repository-relative changed-path list is required");
+  }
+  return [...new Set(changedPaths)].sort();
+}
 
 export function reusableRelease(base) {
   return Boolean(
@@ -46,25 +65,14 @@ export function reusableRelease(base) {
 }
 
 export function planRelease({ changedPaths, base, redeployFrontend = false }) {
-  if (
-    !Array.isArray(changedPaths) ||
-    changedPaths.some(
-      (path) =>
-        typeof path !== "string" ||
-        !path ||
-        path.includes("\\") ||
-        path.startsWith("/") ||
-        path.split("/").includes(".."),
-    )
-  ) {
-    throw Error("A repository-relative changed-path list is required");
-  }
-  const changes = [...new Set(changedPaths)].sort();
+  const changes = changesOf(changedPaths);
   const runtime = changes.filter((path) => !documentationOrTest(path));
   if (!runtime.length && !redeployFrontend)
     return {
-      mode: "checks",
-      reason: "Only documentation or tests changed",
+      mode: changes.every(documentation) ? "docs" : "checks",
+      reason: changes.every(documentation)
+        ? "Only documentation changed"
+        : "Only documentation or tests changed",
       changes,
     };
   const unknown = runtime.filter((path) => !presentation.has(path));
@@ -87,5 +95,53 @@ export function planRelease({ changedPaths, base, redeployFrontend = false }) {
     changes,
     baseCommit: base.commit,
     baseRelease: base.id,
+  };
+}
+
+export function planDelivery({
+  currentChangedPaths,
+  releaseChangedPaths,
+  base,
+  redeployFrontend = false,
+}) {
+  const currentChanges = changesOf(currentChangedPaths);
+  const release = planRelease({
+    changedPaths: releaseChangedPaths,
+    base,
+    redeployFrontend,
+  });
+
+  // Any unpublished runtime or presentation input still needs its guarded
+  // release path, even when the newest commit changes only documentation.
+  if (release.mode === "full" || release.mode === "frontend") {
+    return { ...release, currentChanges };
+  }
+
+  // Accumulated documentation and tests are not application release inputs.
+  // Validate only the current PR/push so a prior test-only main commit cannot
+  // make every later documentation correction run the browser/model suite.
+  const unexpectedRuntime = currentChanges.filter(
+    (path) => !documentationOrTest(path),
+  );
+  if (unexpectedRuntime.length > 0) {
+    return {
+      mode: "full",
+      reason: "Current runtime changes are missing from release classification",
+      changes: currentChanges,
+      currentChanges,
+      releaseChanges: release.changes,
+      fullInputs: unexpectedRuntime,
+    };
+  }
+  const mode = currentChanges.every(documentation) ? "docs" : "checks";
+  return {
+    mode,
+    reason:
+      mode === "docs"
+        ? "Only current documentation changed; accumulated changes contain no runtime inputs"
+        : "Current documentation or tests changed; accumulated changes contain no runtime inputs",
+    changes: currentChanges,
+    currentChanges,
+    releaseChanges: release.changes,
   };
 }

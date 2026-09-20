@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planRelease } from "../scripts/release-plan.mjs";
+import { planDelivery, planRelease } from "../scripts/release-plan.mjs";
 
 const base = {
   schema: 1,
@@ -83,14 +83,59 @@ test("DEPLOY-02 missing or corrupt published identities never use the fast path"
   }
 });
 
-test("DEPLOY-01 saved requirements and tests alone do not republish application code", () => {
-  for (const changedPaths of [
-    [],
-    ["docs/REQUIREMENTS.md", "AGENTS.md"],
-    ["tests/prototype/playwright.config.mjs"],
-  ]) {
-    assert.equal(planRelease({ changedPaths }).mode, "checks");
+test("DEPLOY-01 documentation takes the fast path and tests remain validated", () => {
+  for (const changedPaths of [[], ["docs/REQUIREMENTS.md", "AGENTS.md"]]) {
+    assert.equal(planRelease({ changedPaths }).mode, "docs");
   }
+  assert.equal(
+    planRelease({
+      changedPaths: [
+        "docs/REQUIREMENTS.md",
+        "tests/prototype/playwright.config.mjs",
+      ],
+    }).mode,
+    "checks",
+  );
+});
+
+test("B-05 a test-only main commit does not make the next documentation change expensive", () => {
+  const result = planDelivery({
+    base,
+    currentChangedPaths: ["docs/OPERATIONS.md"],
+    releaseChangedPaths: ["tests/release-plan.test.js", "docs/OPERATIONS.md"],
+  });
+  assert.equal(result.mode, "docs");
+  assert.deepEqual(result.currentChanges, ["docs/OPERATIONS.md"]);
+  assert.deepEqual(result.releaseChanges, [
+    "docs/OPERATIONS.md",
+    "tests/release-plan.test.js",
+  ]);
+});
+
+test("B-05 current tests stay checked and unpublished runtime still selects release", () => {
+  assert.equal(
+    planDelivery({
+      base,
+      currentChangedPaths: ["tests/release-plan.test.js"],
+      releaseChangedPaths: ["docs/OPERATIONS.md", "tests/release-plan.test.js"],
+    }).mode,
+    "checks",
+  );
+  assert.equal(
+    planDelivery({
+      base,
+      currentChangedPaths: ["docs/OPERATIONS.md"],
+      releaseChangedPaths: ["public/style.css", "docs/OPERATIONS.md"],
+    }).mode,
+    "frontend",
+  );
+  const full = planDelivery({
+    base,
+    currentChangedPaths: ["docs/OPERATIONS.md"],
+    releaseChangedPaths: ["cloud.mjs", "docs/OPERATIONS.md"],
+  });
+  assert.equal(full.mode, "full");
+  assert.deepEqual(full.fullInputs, ["cloud.mjs"]);
 });
 
 test("DEPLOY-05 explicit frontend redeploy keeps compatibility and unknown-input guards", () => {

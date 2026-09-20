@@ -1,6 +1,6 @@
 # Magic Collection Keeper
 
-[Owner requirements, acceptance criteria and queued requests](docs/REQUIREMENTS.md).
+[Product charter](docs/PRODUCT-CHARTER.md) · [Application specification](docs/SPEC.md) · [Requirements and status](docs/REQUIREMENTS.md) · [Use cases and E2E foundation](docs/USE-CASES.md) · [Architecture](docs/ARCHITECTURE.md) · [Operations](docs/OPERATIONS.md)
 
 A private Magic collection app with Scryfall printing lookup, persistent inventory, reviewed text imports, and assisted camera recognition.
 
@@ -10,9 +10,6 @@ Scanner correction SCAN-10 is published and verified in [r125-a2](tests/performa
 
 - App: https://d3r1grp0vvv9f.cloudfront.net
 - Repository: https://github.com/saintiago/magic-collection-keeper
-- [Use cases and interaction coverage](docs/USE-CASES.md)
-- [Architecture and adapter contracts](docs/ARCHITECTURE.md)
-- [Development, deployment, recovery](docs/OPERATIONS.md)
 - [Verified r114 release and remaining limits](tests/performance/R114-RELEASE.md)
 - [Verified scanner repair and artifact retention, r123](tests/performance/R123-RELEASE.md)
 
@@ -20,13 +17,13 @@ Deployment classifies changes against the published application. Supported prese
 
 ## Use it
 
-A separate, unreleased Recent cards revision preserves different printings of the same card and keeps each Home artwork/tag action on its exact printing. It records confirmed autocomplete choices and successful dedicated-page additions, without treating reloads, highlighting or failed additions as new activity. Import activity uses exact additions from the server's saved receipt and excludes unchanged reimports. Local Chromium/WebKit checks pass; broad application checks, matching backend source publication and production verification remain pending.
+Recent cards preserve different printings of the same card and keep each Home artwork/tag action on its exact printing. They record confirmed autocomplete choices, successful dedicated-page additions, and receipt-confirmed Import additions without treating reloads, highlighting, failed additions, or unchanged reimports as new activity. This behavior is production verified in r114/r130.
 
 Scan stays briefly disabled while your account and saved captures load after sign-in; it becomes available as soon as that recovery finishes.
 
 Home opens with a compact symbol/account bar, Scan, Import, Tags & locations, and the shared search field. It shows up to six recently opened cards and four recent decks or other tags. Card opens, tag visits, and tag creation/renaming count as activity; unfinished typing and background loading do not. Earlier selected search cards can appear too. If no deck/tag activity has been recorded on this browser, the sections are honestly labeled **Your decks** and **Your tags**. Nothing is added to ownership by appearing on Home.
 
-A separate, unreleased layout follow-up moves the whole-collection statistics block below your Home cards and tags. Collection, catalogue, deck, Import and card pages omit that block; totals retain their existing loading and saved-state behavior.
+Whole-collection statistics appear below Home cards and tags. Collection, catalogue, deck, Import and card pages omit that block; totals retain their existing loading and saved-state behavior. This behavior is production verified in r114.
 
 **View collection** opens the complete inventory with its filters, quantities, tags and **Update collection**. The small ✦ Home link returns to the dashboard; browser Back and reload preserve the active collection, tag, search or import view. **Import** opens the saved URL-import page, with **Import list** available there for pasted text. Home activity stays on this browser under your verified account. Signing out hides it; **Clear activity** removes this account's Home activity and recent searches on this browser. Deleted tags disappear and renamed tags use their current label.
 
@@ -95,9 +92,7 @@ Node 24, npm and Python 3.12 are required.
 
 ```sh
 npm ci
-node scripts/build-name-index.mjs
-pip install -r recognition/requirements-visual.txt
-python recognition/scripts/prepare.py --visual-only
+npm run prepare:validation
 npm run build
 npm start
 ```
@@ -106,7 +101,8 @@ Open http://localhost:3000. The local server binds to loopback and uses `data/co
 
 ```sh
 npm test
-npx playwright install chromium
+npm run test:python
+npm run validate:docs
 npm run test:ui
 ```
 
