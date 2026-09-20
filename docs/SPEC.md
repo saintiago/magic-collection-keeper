@@ -66,7 +66,7 @@ These entries are the authoritative detailed criteria for the stable IDs in the 
 
 - <a id="view-01"></a>**VIEW-01:** Add whole-result card-type and deck-oriented ordering with deterministic backend semantics rather than sorting only a loaded page.
 - <a id="view-02"></a>**VIEW-02:** Add stable format and commander-role metadata (including Commander and Modern) without treating editable labels as structural keys or legality as selection.
-- <a id="view-03"></a>**VIEW-03:** An explicitly qualifying nonempty full Commander result places commander-role cards first with an unmistakable accessible normal-grid treatment; never infer it from legality or one page.
+- <a id="view-03"></a>**VIEW-03:** An explicitly qualifying nonempty full Commander result places commander-role cards first with a prominent golden frame/wrapping that is unmistakable and accessible at normal grid size on desktop and phone without obscuring art; a faint border alone is insufficient. Never infer it from legality or one page.
 - <a id="view-04"></a>**VIEW-04:** Whole-collection statistics appear only on Home after user content, with honest loading/saved/error state, and are absent from collection, catalogue, deck/tag, Import, Scan, and card routes.
 - <a id="recent-01"></a>**RECENT-01:** Record cards actually opened from shared lists/pages and printings successfully added; hover, background recognition/loading, failed/cancelled Add, and mere list appearance do not qualify.
 - <a id="recent-02"></a>**RECENT-02:** Order by latest qualifying event, deduplicate by exact printing, and move an existing printing forward without changing ownership, source, or pending state.

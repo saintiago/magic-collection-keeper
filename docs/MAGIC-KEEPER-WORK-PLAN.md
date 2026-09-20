@@ -37,7 +37,7 @@ Keep this requested plan in Keeper docs for review and later Jira conversion. Pu
 - **B-06:** verified repository administrator access and authenticated Lens App read access to Keeper. Main requires strict up-to-date App-bound `Keeper delivery` and `Nexus Lens review` checks, dismisses stale reviews, resolves conversations, blocks force-push/deletion, and permits only squash/native auto-merge. The earlier aggregate passed; the new exact head and actual Lens check remain open.
 - **B-07:** blocked on the supported Nexus interface. Nexus main currently accepts only its combined configuration, while HARN-24 remains To Do and specifies categories but no project-file name or schema. No speculative Keeper configuration was invented.
 - **B-08:** verified Jira KAN and Ready-queue access. The only Ready item, empty placeholder KAN-2, was returned to Draft; no backlog issue was created.
-- **B-09:** the full PR path now downloads authenticated current corresponding source with `keeper-e2e`, verifies its independent digest, and executes the unchanged deployment file/byte guard before browser work. Matching exact-head source verification/publication is still required before integration.
+- **B-09:** ordinary PR validation now uses a deterministic source-tree readiness digest and no live credentials; fork/Dependabot trust separation has focused coverage. Trusted main retains authenticated source download and the unchanged file/byte deployment guard. Matching exact-head source verification/publication/deployment is still required before integration.
 
 The audit bullets above remain historical baseline evidence. Local implementation or testing does not imply merge, deployment or production delivery.
 
