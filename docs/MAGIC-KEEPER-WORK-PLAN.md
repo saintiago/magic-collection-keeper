@@ -35,7 +35,7 @@ Keep this requested plan in Keeper docs for review and later Jira conversion. Pu
 - **B-04:** added explicit documentation, JavaScript, Python recognition, build and browser entry points. The measured local baseline is recorded in OPERATIONS; the complete WebKit profile had one transient failure whose exact retry passed, so it is not represented as a clean full run.
 - **B-05/B-10:** implemented separate current-change validation and accumulated release classification, a fail-closed `Keeper delivery` aggregate, pull-request-only cancellation, and independent desktop/mobile live diagnostics. Targeted regressions cover test-only main followed by docs-only work plus mixed/unpublished runtime paths; updated exact-head CI remains required.
 - **B-06:** verified repository administrator access and authenticated Lens App read access to Keeper. Main requires strict up-to-date App-bound `Keeper delivery` and `Nexus Lens review` checks, dismisses stale reviews, resolves conversations, blocks force-push/deletion, and permits only squash/native auto-merge. The earlier aggregate passed; the new exact head and actual Lens check remain open.
-- **B-07:** blocked on the supported Nexus interface. Nexus main currently accepts only its combined configuration, while HARN-24 remains To Do and specifies categories but no project-file name or schema. No speculative Keeper configuration was invented.
+- **B-07:** added the supported repository-root `nexus.project.json` for KAN rank ordering, Keeper setup/checks, GitHub delivery to `main`, and post-merge `deploy.yml`. Nexus-wide launches, limits, reviewer identity, workspace policy, and credential values remain outside Keeper. Composed static validation uses Nexus `c05fd2b`.
 - **B-08:** verified Jira KAN and Ready-queue access. The only Ready item, empty placeholder KAN-2, was returned to Draft; no backlog issue was created.
 - **B-09:** ordinary PR validation tests and packages the proposed candidate offline without live credentials or a production-equality prerequisite; fork/Dependabot trust separation has focused coverage. Trusted main retains authenticated source download and the unchanged file/byte deployment guard. PR #30 matching-source verification/publication/deployment is release-preparation evidence, not a global PR fingerprint policy.
 
@@ -47,7 +47,7 @@ The audit bullets above remain historical baseline evidence. Local implementatio
 
 No harness-side showstopper was established. Preflight, bounded execution, continuation, Jira intake, PR delivery, review and completion already exist. Rank prioritisation is already in progress.
 
-Nexus work is managed separately. This plan does not track its delivery. [HARN-24](https://malton-family.atlassian.net/browse/HARN-24) is a reference for the shared/project configuration split used by B-07.
+Nexus work is managed separately. This plan consumes its documented supported interface without tracking Nexus delivery as a Keeper dependency.
 
 ## Part 2 — Preparation before Keeper harness runs
 
@@ -71,7 +71,7 @@ Known locations include docs/DEVELOPMENT-HARNESS.md, docs/HARNESS-*.md, embedded
 
 **Acceptance:** no abandoned harness context remains in Keeper's tracked or local working files; links resolve. Retain product requirements, application code/tests, owner data and product release/source/license evidence. Mixed files retain only product content. Harness development remains a separate project.
 
-The new repository project configuration specified by HARN-24/B-07 is intentional integration configuration, not abandoned harness material.
+The supported repository project configuration added by B-07 is intentional integration configuration, not abandoned harness material.
 
 ### B-03 — Establish the cornerstone documents and reconcile requirements
 
