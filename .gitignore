@@ -4,6 +4,7 @@ test-results/
 *.log
 *.zip
 build/
+output/
 public/vendor/
 public/config.json
 infra/outputs.json
