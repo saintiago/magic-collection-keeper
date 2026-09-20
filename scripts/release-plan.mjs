@@ -26,6 +26,8 @@ const presentation = new Set([
 
 const documentationOrTest = (path) =>
   ["AGENTS.md", "README.md"].includes(path) || /^(?:docs|tests)\//.test(path);
+const documentation = (path) =>
+  ["AGENTS.md", "README.md"].includes(path) || /^docs\//.test(path);
 const sha = (value) => /^[a-f0-9]{40}$/.test(value || "");
 const digest = (value) => /^[a-f0-9]{64}$/.test(value || "");
 
@@ -63,8 +65,10 @@ export function planRelease({ changedPaths, base, redeployFrontend = false }) {
   const runtime = changes.filter((path) => !documentationOrTest(path));
   if (!runtime.length && !redeployFrontend)
     return {
-      mode: "checks",
-      reason: "Only documentation or tests changed",
+      mode: changes.every(documentation) ? "docs" : "checks",
+      reason: changes.every(documentation)
+        ? "Only documentation changed"
+        : "Only documentation or tests changed",
       changes,
     };
   const unknown = runtime.filter((path) => !presentation.has(path));
