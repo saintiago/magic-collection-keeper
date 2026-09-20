@@ -92,9 +92,7 @@ Node 24, npm and Python 3.12 are required.
 
 ```sh
 npm ci
-node scripts/build-name-index.mjs
-pip install -r recognition/requirements-visual.txt
-python recognition/scripts/prepare.py --visual-only
+npm run prepare:validation
 npm run build
 npm start
 ```
@@ -105,7 +103,6 @@ Open http://localhost:3000. The local server binds to loopback and uses `data/co
 npm test
 npm run test:python
 npm run validate:docs
-npx playwright install chromium
 npm run test:ui
 ```
 

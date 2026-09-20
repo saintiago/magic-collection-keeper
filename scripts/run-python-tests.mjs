@@ -1,45 +1,19 @@
-import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnPython312 } from "./python312.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const candidates = process.env.KEEPER_PYTHON
-  ? [[process.env.KEEPER_PYTHON, []]]
-  : process.platform === "win32"
-    ? [
-        ["py", ["-3.12"]],
-        ["python", []],
-      ]
-    : [
-        ["python", []],
-        ["python3", []],
-      ];
-const selected = candidates.find(([candidate, args]) => {
-  const probe = spawnSync(candidate, [...args, "--version"], {
-    encoding: "utf8",
+let result;
+try {
+  result = spawnPython312(["-m", "unittest", "discover", "-s", "tests"], {
+    cwd: path.join(root, "recognition"),
+    env: process.env,
+    stdio: "inherit",
   });
-  return (
-    probe.status === 0 &&
-    /Python 3\.12(?:\.|\s|$)/.test(`${probe.stdout}${probe.stderr}`)
-  );
-});
-
-if (!selected) {
-  console.error(
-    "Python 3.12 was not found. Put it on PATH or set KEEPER_PYTHON to its executable.",
-  );
+} catch (error) {
+  console.error(error.message);
   process.exit(1);
 }
-
-const [executable, prefix] = selected;
-const result = spawnSync(
-  executable,
-  [...prefix, "-m", "unittest", "discover", "-s", "tests"],
-  {
-    cwd: path.join(root, "recognition"),
-    stdio: "inherit",
-  },
-);
 
 if (result.error) {
   console.error(result.error.message);

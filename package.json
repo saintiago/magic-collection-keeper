@@ -11,6 +11,7 @@
     "dev": "node --watch server.js",
     "test": "node --test tests/*.test.js",
     "test:python": "node scripts/run-python-tests.mjs",
+    "prepare:validation": "node scripts/prepare-validation.mjs",
     "build": "node scripts/build.mjs",
     "test:ui": "playwright test",
     "validate:docs": "node scripts/validate-docs.mjs",

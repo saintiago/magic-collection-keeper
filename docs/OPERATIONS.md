@@ -24,7 +24,7 @@ For loading failures, read the timestamp/status and retry. Sign-out clears snaps
 
 See [GitHub artifact retention](#github-artifact-retention) for temporary build handoffs and durable-source exceptions.
 
-Use Node 24 and Python 3.12, run `npm ci`, build the name index and verified visual assets as in README, then `npm run build` and `npm start` (loopback port 3000). `PORT` and `DB_PATH` override the local listener/database. The app has no local account system and cannot be used as a LAN/public server. Use the protected AWS deployment for phones. Local collection data is in ignored `data/collection.sqlite`; stop the server before making a simple file backup so the WAL is checkpointed.
+Use Node 24 and Python 3.12, run `npm ci` and `npm run prepare:validation`, then `npm run build` and `npm start` (loopback port 3000). Preparation installs the pinned visual dependencies, verifies or reuses the frozen model/catalog inputs, builds the current name index, and installs Playwright Chromium. It honors `KEEPER_PYTHON` as an explicit Python 3.12 executable and has no machine-specific path in repository configuration. `PORT` and `DB_PATH` override the local listener/database. The app has no local account system and cannot be used as a LAN/public server. Use the protected AWS deployment for phones. Local collection data is in ignored `data/collection.sqlite`; stop the server before making a simple file backup so the WAL is checkpointed.
 
 `python recognition/scripts/prepare.py --visual-only` fetches and verifies the frozen visual models and full reference index, without browser OCR dependencies. `npm run build` creates the app Lambda bundle and pinned CPU ONNX Runtime assets with a SHA-256 runtime manifest. Generated assets are ignored by git. Do not commit public config, credentials, collection files or compiled artifacts. Release packaging excludes retired Tesseract and GPU artifacts that may remain in an older local build; existing deployed prefixes remain untouched.
 
@@ -41,7 +41,7 @@ npx playwright install chromium
 npm run test:ui
 ```
 
-`npm run validate` runs that baseline after browser/model assets are prepared. Use `python -m pip install -r recognition/requirements-visual.txt` and `python recognition/scripts/prepare.py --visual-only` before the Python/build/browser stages in a clean checkout. `npm run test:python` requires Python 3.12; it uses the Windows Python launcher or a `python`/`python3` executable and accepts `KEEPER_PYTHON` as an explicit executable override. CI uses the Python 3.12 installed by `actions/setup-python`.
+`npm run validate` runs that baseline after `npm run prepare:validation`. The preparation command is repeatable: pinned artifacts and Playwright browsers are reused after their checks pass, while current Scryfall metadata is still checked before rebuilding the generated index. `npm run test:python` and preparation require Python 3.12; both use the Windows Python launcher or a `python`/`python3` executable and accept `KEEPER_PYTHON` as an explicit executable override. CI uses the Python 3.12 installed by `actions/setup-python`.
 
 Measured Windows preparation baseline on September 20, 2026 (warm package/model caches where noted):
 

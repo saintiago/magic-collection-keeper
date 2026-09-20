@@ -1,5 +1,8 @@
 {
-  "setup": [["npm", "ci"]],
+  "setup": [
+    ["npm", "ci"],
+    ["npm", "run", "prepare:validation"]
+  ],
   "checks": [["npm", "run", "validate"]],
   "source": {
     "type": "jira",
