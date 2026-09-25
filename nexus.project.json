@@ -32,8 +32,8 @@
       "orderBy": "Rank ASC"
     },
     "fields": {
-      "workspacePointer": "customfield_10107",
-      "pullRequest": "customfield_10108"
+      "workspacePointer": "customfield_10141",
+      "pullRequest": "customfield_10142"
     },
     "statuses": {
       "ready": "To Do",
