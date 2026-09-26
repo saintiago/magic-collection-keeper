@@ -6,6 +6,10 @@ GitHub Actions CI and automatic deployment remain disabled during the rebuild. P
 and merges do not deploy the service. Nexus runs the repository's preparation and validation
 commands once workspace bootstrap supplies them. A passing task check is not deployed verification.
 
+Nexus Lens review is required for merges to main during Nexus execution. The required check is
+`Nexus Lens review`, published by the configured Nexus Lens GitHub App. This review gate is enabled
+independently of GitHub Actions CI and automatic deployment.
+
 Builds and deployment preparation remain part of development. Execute deployments explicitly against
 the intended environment; production cutover and collection migration require the owner's concrete
 authorization. Existing production resources and collection data remain intact. Introducing CI/CD
