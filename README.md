@@ -4,8 +4,8 @@ This repository contains the approved rebuild design and the workspace harness t
 on. The previous application implementation has been removed. Product components from
 docs/architecture.md are rebuilt task by task: Catalog already provides its read contract, its
 atomic bulk synchronization and its published query surface with their contract tests, and
-UserCards provides physical-copy storage with its account-scoped read surface; the remaining
-components are not implemented yet.
+UserCards provides physical-copy storage, tags, associations and physical locations with their
+account-scoped read surface; the remaining components are not implemented yet.
 
 Start with AGENTS.md for the documentation index and engineering principles.
 The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
@@ -55,13 +55,17 @@ packaging and deployment stay with the deployment tasks listed in docs/tasks/inv
 component and integration checks exercise the same statements, provider limits, rollback and
 published relations that the deployed job uses.
 
-UserCards owns the account's physical copies: each copy keeps one stable identity, one Catalog
-printing reference and its finish and condition, and a corrected copy keeps that identity while its
-revision advances. Application supplies the transaction-capable executor and the Catalog contract,
-so a copy is only stored once its printing resolves and offers the stored finish. Copies are read
+UserCards owns the account's physical copies and their organization: each copy keeps one stable
+identity, one Catalog printing reference, its finish and condition, its system-owned membership and
+at most one physical location, and a corrected or moved copy keeps that identity while its revision
+advances. Application supplies the transaction-capable executor and the Catalog contract, so a copy,
+an association or a location move is only stored once its references resolve, and each change
+commits atomically behind the revision the caller read. Tags keep stable identities with editable
+labels; card and printing associations carry the intended quantity, while copy membership identifies
+one physical copy and carries none. Copies, tags, associations and the private-data revision are read
 through the published views (docs/user-cards.md#query-surface), which filter on the account bound to
-the connection inside a read transaction and return nothing without that scope; tags,
-associations, imports and the UI remain with their own tasks.
+the connection inside a read transaction and return nothing without that scope; imports and the UI
+remain with their own tasks.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without
