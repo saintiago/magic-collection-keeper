@@ -7,8 +7,12 @@
  * so a replacement storage maps its data to exactly these relations and passes the same tests.
  */
 
+import { CATALOG_LIMITS } from './model.js';
+
 export const catalogQuerySchema = 'catalog';
 export const catalogPrivateSchema = 'catalog_private';
+
+const identifierLength = CATALOG_LIMITS.maxIdentifierLength;
 
 /** Column types as Search consumes them, not the storage's internal representation. */
 export type CatalogColumnType = 'text' | 'text-array' | 'boolean' | 'numeric' | 'timestamp';
@@ -223,14 +227,14 @@ create schema if not exists ${catalogQuerySchema};
 
 create table if not exists ${catalogPrivateSchema}.revision (
   singleton boolean not null default true primary key check (singleton),
-  revision_id text not null check (length(revision_id) between 1 and 200),
+  revision_id text not null check (length(revision_id) between 1 and ${identifierLength}),
   source_name text not null check (length(source_name) between 1 and 200),
   source_version text not null check (length(source_version) between 1 and 200),
   published_at timestamptz not null
 );
 
 create table if not exists ${catalogPrivateSchema}.card (
-  card_id text primary key check (length(card_id) between 1 and 200),
+  card_id text primary key check (length(card_id) between 1 and ${identifierLength}),
   name text not null check (length(name) between 1 and 300),
   rules_text text,
   type_line text,
@@ -252,7 +256,7 @@ create index if not exists card_name_lower_name_index
   on ${catalogPrivateSchema}.card_name (lower(name));
 
 create table if not exists ${catalogPrivateSchema}.printing (
-  printing_id text primary key check (length(printing_id) between 1 and 200),
+  printing_id text primary key check (length(printing_id) between 1 and ${identifierLength}),
   card_id text not null references ${catalogPrivateSchema}.card (card_id) on delete cascade,
   edition text not null check (length(edition) between 1 and 32),
   collector_number text not null check (length(collector_number) between 1 and 32),

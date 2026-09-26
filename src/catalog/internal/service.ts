@@ -58,14 +58,25 @@ const resolveRequestSchema = z
   .array(catalogReferenceSchema)
   .max(CATALOG_LIMITS.maxResolutionReferences);
 
+const identifierLength = CATALOG_LIMITS.maxIdentifierLength;
+
 const continuationPayloadSchema = z.object({
   version: z.literal(1),
-  cardId: z.string().min(1).max(200),
+  cardId: z.string().min(1).max(identifierLength),
   offset: z.number().int().min(0),
-  revision: z.string().min(1).max(200),
+  revision: z.string().min(1).max(identifierLength),
 });
 
 type ContinuationPayload = z.infer<typeof continuationPayloadSchema>;
+
+/**
+ * Longest token `encodeContinuation` can emit: both identifiers are bounded by
+ * CATALOG_LIMITS.maxIdentifierLength, JSON escaping can spend six bytes on one string unit
+ * (`"\uXXXX"`), base64url expands by 4/3, and the payload keys and an integer offset fit the
+ * remaining margin. The decoder accepts every token its encoder can produce.
+ */
+const maxContinuationIdentifierBytes = CATALOG_LIMITS.maxIdentifierLength * 6;
+const maxContinuationLength = 4 * Math.ceil((2 * maxContinuationIdentifierBytes + 64) / 3);
 
 /**
  * The Catalog read contract. Lookups are always local: no operation waits for, or falls back to, a
@@ -120,8 +131,11 @@ export function createCatalog(dependencies: CatalogDependencies): Catalog {
       cardId: CardId,
       options: ListCardPrintingsOptions = {},
     ): Promise<CardPrintingsPage> {
-      if (typeof cardId !== 'string' || cardId.length === 0 || cardId.length > 200) {
-        throw new CatalogError('invalid-request', 'A card ID of 1 to 200 characters is required.');
+      if (typeof cardId !== 'string' || cardId.length === 0 || cardId.length > identifierLength) {
+        throw new CatalogError(
+          'invalid-request',
+          `A card ID of 1 to ${identifierLength} characters is required.`,
+        );
       }
       const pageSize = options.pageSize ?? CATALOG_LIMITS.defaultPrintingPageSize;
       if (
@@ -172,7 +186,10 @@ function invalidResolveMessage(error: z.ZodError): string {
   if (error.issues.some((issue) => issue.code === 'too_big')) {
     return `Resolve accepts at most ${CATALOG_LIMITS.maxResolutionReferences} references per request.`;
   }
-  return 'Resolve accepts typed card or printing references with an identifier of 1 to 200 characters.';
+  return (
+    'Resolve accepts typed card or printing references with an identifier of ' +
+    `1 to ${identifierLength} characters.`
+  );
 }
 
 function encodeContinuation(payload: ContinuationPayload): string {
@@ -180,7 +197,7 @@ function encodeContinuation(payload: ContinuationPayload): string {
 }
 
 function decodeContinuation(token: string, cardId: string): ContinuationPayload {
-  if (typeof token !== 'string' || token.length === 0 || token.length > 1024) {
+  if (typeof token !== 'string' || token.length === 0 || token.length > maxContinuationLength) {
     throw staleContinuation('This continuation is not readable; start the printing list again.');
   }
   let decoded: unknown;

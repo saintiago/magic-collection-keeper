@@ -4,12 +4,16 @@ import { CatalogError } from './errors.js';
 import type { CatalogSqlExecutor, CatalogSqlRow, CatalogSqlValue } from './executor.js';
 import {
   cardColors,
+  CATALOG_LIMITS,
   finishes,
   type CardName,
   type CardRecord,
+  type CatalogRevision,
   type PrintingRecord,
 } from './model.js';
 import type { CardPrintingsData, CatalogReadStore, ResolvedCatalogData } from './store.js';
+
+const identifierLength = CATALOG_LIMITS.maxIdentifierLength;
 
 const revisionColumn = `json_build_object(
     'revision_id', revision.revision_id,
@@ -19,14 +23,14 @@ const revisionColumn = `json_build_object(
   )::text`;
 
 const revisionJsonSchema = z.object({
-  revision_id: z.string().min(1).max(200),
+  revision_id: z.string().min(1).max(identifierLength),
   source_name: z.string().min(1).max(200),
   source_version: z.string().min(1).max(200),
   published_at: z.string().min(1),
 });
 
 const cardJsonSchema = z.object({
-  card_id: z.string().min(1).max(200),
+  card_id: z.string().min(1).max(identifierLength),
   name: z.string().min(1).max(300),
   rules_text: z.string().nullable(),
   type_line: z.string().nullable(),
@@ -36,14 +40,14 @@ const cardJsonSchema = z.object({
 });
 
 const cardNameJsonSchema = z.object({
-  card_id: z.string().min(1).max(200),
+  card_id: z.string().min(1).max(identifierLength),
   language: z.string().min(1).max(20),
   name: z.string().min(1).max(300),
 });
 
 const printingJsonSchema = z.object({
-  printing_id: z.string().min(1).max(200),
-  card_id: z.string().min(1).max(200),
+  printing_id: z.string().min(1).max(identifierLength),
+  card_id: z.string().min(1).max(identifierLength),
   edition: z.string().min(1).max(32),
   collector_number: z.string().min(1).max(32),
   language: z.string().min(1).max(20),
@@ -70,6 +74,25 @@ function placeholdersFor(values: readonly string[], prefix: string): NamedPlaceh
   return { list: names.join(', '), parameters };
 }
 
+/**
+ * One row per record. The deployed executor reaches Aurora through the RDS Data API, which caps a
+ * response row at 64 KB, so a read never aggregates a whole batch or page into one row.
+ * `row_position` keeps the declared record order inside the statement's single snapshot.
+ */
+function recordRows(options: {
+  readonly kind: string;
+  readonly columns: string;
+  readonly table: string;
+  readonly filter: string;
+  readonly orderBy: string;
+}): string {
+  return `select '${options.kind}' as row_kind,
+  (row_number() over (order by ${options.orderBy}))::int as row_position,
+  to_jsonb(entry)::text as payload
+from (select ${options.columns}
+      from ${options.table} where ${options.filter}) as entry`;
+}
+
 function resolveStatement(
   cardIds: readonly string[],
   printingIds: readonly string[],
@@ -77,31 +100,44 @@ function resolveStatement(
   const card = placeholdersFor(cardIds, 'card');
   const name = placeholdersFor(cardIds, 'name');
   const printing = placeholdersFor(printingIds, 'printing');
-  const cards =
-    cardIds.length === 0
-      ? `'[]'`
-      : `coalesce((select json_agg(to_jsonb(entry) order by entry.card_id)::text
-      from (select card_id, name, rules_text, type_line, colors, color_identity, mana_value
-            from catalog.cards where card_id in (${card.list})) as entry), '[]')`;
-  const names =
-    cardIds.length === 0
-      ? `'[]'`
-      : `coalesce((select json_agg(to_jsonb(entry) order by entry.card_id, entry.language, entry.name)::text
-      from (select card_id, language, name
-            from catalog.card_names where card_id in (${name.list})) as entry), '[]')`;
-  const printings =
-    printingIds.length === 0
-      ? `'[]'`
-      : `coalesce((select json_agg(to_jsonb(entry) order by entry.printing_id)::text
-      from (select printing_id, card_id, edition, collector_number, language, finishes, physical,
-                   image_small, image_normal, image_large, image_art_crop
-            from catalog.printings where printing_id in (${printing.list})) as entry), '[]')`;
-  const statement = `select
-  ${revisionColumn} as revision,
-  ${cards} as cards,
-  ${names} as names,
-  ${printings} as printings
-from catalog.published_revision as revision`;
+  const branches = [
+    `select 'revision' as row_kind,
+  0 as row_position,
+  ${revisionColumn} as payload
+from catalog.published_revision as revision`,
+  ];
+  if (cardIds.length > 0) {
+    branches.push(
+      recordRows({
+        kind: 'card',
+        columns: 'card_id, name, rules_text, type_line, colors, color_identity, mana_value',
+        table: 'catalog.cards',
+        filter: `card_id in (${card.list})`,
+        orderBy: 'card_id',
+      }),
+      recordRows({
+        kind: 'name',
+        columns: 'card_id, language, name',
+        table: 'catalog.card_names',
+        filter: `card_id in (${name.list})`,
+        orderBy: 'card_id, language, name',
+      }),
+    );
+  }
+  if (printingIds.length > 0) {
+    branches.push(
+      recordRows({
+        kind: 'printing',
+        columns: `printing_id, card_id, edition, collector_number, language, finishes, physical,
+                   image_small, image_normal, image_large, image_art_crop`,
+        table: 'catalog.printings',
+        filter: `printing_id in (${printing.list})`,
+        orderBy: 'printing_id',
+      }),
+    );
+  }
+  const statement = `${branches.join('\nunion all\n')}
+order by row_kind, row_position`;
   return {
     statement,
     parameters: { ...card.parameters, ...name.parameters, ...printing.parameters },
@@ -122,12 +158,22 @@ function listPrintingsStatement(
   limit :page_limit offset :page_offset
 )
 select
-  ${revisionColumn} as revision,
+  'revision' as row_kind,
+  0 as row_position,
+  ${revisionColumn} as payload,
   case when exists (select 1 from catalog.cards where card_id = :card_present_id)
-       then 'true' else 'false' end as card_exists,
-  coalesce((select json_agg(to_jsonb(page) order by page.edition, page.collector_number, page.language, page.printing_id)::text
-            from page), '[]') as printings
-from catalog.published_revision as revision`;
+       then 'true' else 'false' end as card_exists
+from catalog.published_revision as revision
+union all
+select
+  'printing' as row_kind,
+  (row_number() over (
+     order by page.edition, page.collector_number, page.language, page.printing_id
+   ))::int as row_position,
+  to_jsonb(page)::text as payload,
+  null::text as card_exists
+from page
+order by row_kind, row_position`;
   return {
     statement,
     parameters: {
@@ -149,14 +195,6 @@ async function readRows(
   } catch (cause) {
     throw new CatalogError('unavailable', 'The catalog database could not be read.', { cause });
   }
-}
-
-function firstRow(rows: readonly CatalogSqlRow[]): CatalogSqlRow {
-  const row = rows[0];
-  if (row === undefined) {
-    throw new CatalogError('unavailable', 'The catalog has no published revision.');
-  }
-  return row;
 }
 
 function parseJsonText<T>(schema: z.ZodType<T>, value: CatalogSqlValue | undefined): T {
@@ -187,6 +225,45 @@ type CardJson = z.infer<typeof cardJsonSchema>;
 type CardNameJson = z.infer<typeof cardNameJsonSchema>;
 type PrintingJson = z.infer<typeof printingJsonSchema>;
 
+interface GroupedRows {
+  readonly revision: readonly CatalogSqlRow[];
+  readonly cards: readonly CatalogSqlRow[];
+  readonly names: readonly CatalogSqlRow[];
+  readonly printings: readonly CatalogSqlRow[];
+}
+
+/** Groups the statement's rows by record kind; anything else violates the read contract. */
+function groupRows(rows: readonly CatalogSqlRow[]): GroupedRows {
+  const grouped: {
+    revision: CatalogSqlRow[];
+    cards: CatalogSqlRow[];
+    names: CatalogSqlRow[];
+    printings: CatalogSqlRow[];
+  } = { revision: [], cards: [], names: [], printings: [] };
+  for (const row of rows) {
+    switch (row.row_kind) {
+      case 'revision':
+        grouped.revision.push(row);
+        break;
+      case 'card':
+        grouped.cards.push(row);
+        break;
+      case 'name':
+        grouped.names.push(row);
+        break;
+      case 'printing':
+        grouped.printings.push(row);
+        break;
+      default:
+        throw new CatalogError(
+          'unavailable',
+          'The catalog returned a result that is not readable.',
+        );
+    }
+  }
+  return grouped;
+}
+
 function revisionFromJson(json: RevisionJson): {
   readonly revisionId: string;
   readonly sourceName: string;
@@ -206,6 +283,18 @@ function revisionFromJson(json: RevisionJson): {
     sourceVersion: json.source_version,
     publishedAt: publishedAt.toISOString(),
   };
+}
+
+function readRecords<T>(rows: readonly CatalogSqlRow[], schema: z.ZodType<T>): T[] {
+  return rows.map((row) => parseJsonText(schema, row.payload));
+}
+
+function revisionFromRows(rows: GroupedRows): CatalogRevision {
+  const row = rows.revision[0];
+  if (row === undefined) {
+    throw new CatalogError('unavailable', 'The catalog has no published revision.');
+  }
+  return revisionFromJson(parseJsonText(revisionJsonSchema, row.payload));
 }
 
 function cardRecords(cards: readonly CardJson[], names: readonly CardNameJson[]): CardRecord[] {
@@ -250,24 +339,28 @@ export function createPostgresReadStore(sql: CatalogSqlExecutor): CatalogReadSto
   return {
     async resolve(cardIds, printingIds): Promise<ResolvedCatalogData> {
       const { statement, parameters } = resolveStatement(cardIds, printingIds);
-      const row = firstRow(await readRows(sql, statement, parameters));
+      const rows = groupRows(await readRows(sql, statement, parameters));
       return {
-        revision: revisionFromJson(parseJsonText(revisionJsonSchema, row.revision)),
+        revision: revisionFromRows(rows),
         cards: cardRecords(
-          parseJsonText(z.array(cardJsonSchema), row.cards),
-          parseJsonText(z.array(cardNameJsonSchema), row.names),
+          readRecords(rows.cards, cardJsonSchema),
+          readRecords(rows.names, cardNameJsonSchema),
         ),
-        printings: printingRecords(parseJsonText(z.array(printingJsonSchema), row.printings)),
+        printings: printingRecords(readRecords(rows.printings, printingJsonSchema)),
       };
     },
 
     async listPrintings(cardId, offset, limit): Promise<CardPrintingsData> {
       const { statement, parameters } = listPrintingsStatement(cardId, offset, limit);
-      const row = firstRow(await readRows(sql, statement, parameters));
+      const rows = groupRows(await readRows(sql, statement, parameters));
+      const revisionRow = rows.revision[0];
+      if (revisionRow === undefined) {
+        throw new CatalogError('unavailable', 'The catalog has no published revision.');
+      }
       return {
-        revision: revisionFromJson(parseJsonText(revisionJsonSchema, row.revision)),
-        cardExists: cardExistsValue(row.card_exists),
-        printings: printingRecords(parseJsonText(z.array(printingJsonSchema), row.printings)),
+        revision: revisionFromRows(rows),
+        cardExists: cardExistsValue(revisionRow.card_exists),
+        printings: printingRecords(readRecords(rows.printings, printingJsonSchema)),
       };
     },
   };

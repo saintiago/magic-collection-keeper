@@ -20,7 +20,20 @@ export type CardColor = (typeof cardColors)[number];
 export const finishes = ['nonfoil', 'foil', 'etched'] as const;
 export type Finish = (typeof finishes)[number];
 
-const identifierSchema = z.string().min(1).max(200);
+/**
+ * Bounds that keep public lookups and filtered reads bounded (docs/catalog.md#synchronization).
+ * A caller that needs more resolves further batches; the catalog never silently truncates a batch.
+ */
+export const CATALOG_LIMITS = {
+  /** Longest accepted provider identifier, counted in JavaScript string units. */
+  maxIdentifierLength: 200,
+  maxResolutionReferences: 100,
+  defaultPrintingPageSize: 50,
+  minPrintingPageSize: 1,
+  maxPrintingPageSize: 100,
+} as const;
+
+const identifierSchema = z.string().min(1).max(CATALOG_LIMITS.maxIdentifierLength);
 
 /** A request for one playable identity. */
 export const cardReferenceSchema = z.object({
@@ -99,14 +112,3 @@ export interface CatalogRevision {
   /** Publication time as an ISO-8601 UTC timestamp. */
   readonly publishedAt: string;
 }
-
-/**
- * Bounds that keep public lookups and filtered reads bounded (docs/catalog.md#synchronization).
- * A caller that needs more resolves further batches; the catalog never silently truncates a batch.
- */
-export const CATALOG_LIMITS = {
-  maxResolutionReferences: 100,
-  defaultPrintingPageSize: 50,
-  minPrintingPageSize: 1,
-  maxPrintingPageSize: 100,
-} as const;

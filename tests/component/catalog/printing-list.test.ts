@@ -222,6 +222,44 @@ describe('catalog printing listing', () => {
     expect(error.message).toMatch(/start the printing list again/);
   });
 
+  it('continues a printing list whose identifiers reach the documented length bound', async () => {
+    const cardId = '界'.repeat(CATALOG_LIMITS.maxIdentifierLength);
+    const revisionId = 'r'.repeat(CATALOG_LIMITS.maxIdentifierLength);
+    await publishCatalog(database, {
+      revisionId,
+      cards: [{ cardId, name: 'Boundary Card' }],
+      printings: [
+        {
+          printingId: 'printing-boundary-1',
+          cardId,
+          edition: 'TST',
+          collectorNumber: '1',
+          language: 'en',
+        },
+        {
+          printingId: 'printing-boundary-2',
+          cardId,
+          edition: 'TST',
+          collectorNumber: '2',
+          language: 'en',
+        },
+      ],
+    });
+
+    const first = await catalog.listCardPrintings(cardId, { pageSize: 1 });
+    expect(first.printings.map((printing) => printing.printingId)).toEqual(['printing-boundary-1']);
+    expect(first.continuation).not.toBeNull();
+
+    const second = await catalog.listCardPrintings(cardId, {
+      pageSize: 1,
+      continuation: first.continuation ?? '',
+    });
+    expect(second.printings.map((printing) => printing.printingId)).toEqual([
+      'printing-boundary-2',
+    ]);
+    expect(second.continuation).toBeNull();
+  });
+
   it('reports an unreadable catalog as unavailable instead of an empty list', async () => {
     const failing = createCatalog({
       sql: {
