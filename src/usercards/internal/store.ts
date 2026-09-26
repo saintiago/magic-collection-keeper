@@ -3,6 +3,9 @@ import type {
   Association,
   AssociationTargetLevel,
   CopyCondition,
+  ImportCandidate,
+  ImportEntry,
+  ImportSession,
   PhysicalCopy,
   Tag,
   TagKind,
@@ -197,4 +200,260 @@ export interface OrganizationStore {
   ): Promise<AssociationRemovalOutcome>;
   /** Moves or clears the single location membership of one copy. */
   moveCopyLocation(accountId: string, change: CopyLocationChange): Promise<CopyLocationOutcome>;
+}
+
+/** One pending entry about to be staged; its stable capture or source-line identity is assigned. */
+export interface NewImportEntry {
+  readonly entryId: string;
+  readonly printingId: string | null;
+  readonly finish: Finish | null;
+  readonly condition: CopyCondition | null;
+  readonly quantity: number;
+  readonly candidates: readonly ImportCandidate[];
+}
+
+/** One parsed source line about to be staged, with the digest of the input it was parsed from. */
+export interface NewStagedImportEntry extends NewImportEntry {
+  /**
+   * Digest of the staged input. Restaging the identical line returns the recorded state, while a
+   * changed line under the same identity is refused instead of silently overwriting review work
+   * (docs/user-cards.md#import-and-capture-state).
+   */
+  readonly fingerprint: string;
+}
+
+export interface ImportStagePlan {
+  readonly sessionId: string;
+  readonly sourceKind: string;
+  readonly sourceId: string;
+  readonly entries: readonly NewStagedImportEntry[];
+}
+
+export interface ImportStageData {
+  readonly privateRevision: string;
+  readonly session: ImportSession;
+  /** The staged entries as they are stored now, in request order. */
+  readonly entries: readonly ImportEntry[];
+  /** Entries this call staged; the remainder were already staged with identical input. */
+  readonly staged: number;
+  readonly replayed: boolean;
+}
+
+export type ImportStageOutcome =
+  ({ readonly outcome: 'staged' } & ImportStageData) | { readonly outcome: 'line-conflict' };
+
+export interface CaptureStagePlan {
+  readonly sessionId: string;
+  readonly captureId: string;
+  /** Digest of the staged observation, so a retry replays its recorded admission decision. */
+  readonly fingerprint: string;
+  /** Accepted card identity of the observation, or `null` while the reading is unresolved. */
+  readonly identity: string | null;
+  /** Entry data the observation carries when it resolves; `null` for an unresolved reading. */
+  readonly entry: NewImportEntry | null;
+}
+
+/**
+ * The recorded decision of one staged capture observation: it was admitted as a new pending entry,
+ * suppressed as a repeat of the session's last accepted identity, or left unresolved. A replay
+ * returns the recorded decision instead of deciding again.
+ */
+export type CaptureStageData =
+  | {
+      readonly outcome: 'admitted';
+      readonly replayed: boolean;
+      readonly privateRevision: string;
+      readonly session: ImportSession;
+      readonly entry: ImportEntry;
+    }
+  | {
+      readonly outcome: 'suppressed';
+      readonly replayed: boolean;
+      readonly privateRevision: string;
+      readonly session: ImportSession;
+      readonly entry: null;
+    }
+  | {
+      readonly outcome: 'unresolved';
+      readonly replayed: boolean;
+      readonly privateRevision: string;
+      readonly session: ImportSession;
+      readonly entry: null;
+    };
+
+export type CaptureStageOutcome = CaptureStageData | { readonly outcome: 'conflict' };
+
+/** The reviewed state of one pending entry, guarded by the revision it was read at. */
+export interface ImportEntryCorrection {
+  readonly entryId: string;
+  readonly expectedRevision: number;
+  readonly printingId: string;
+  readonly finish: Finish;
+  readonly condition: CopyCondition | null;
+  readonly quantity: number;
+}
+
+export type ImportEntryCorrectionOutcome =
+  | {
+      readonly outcome: 'updated';
+      readonly privateRevision: string;
+      readonly session: ImportSession;
+      readonly entry: ImportEntry;
+    }
+  | { readonly outcome: 'missing' }
+  | { readonly outcome: 'conflict' };
+
+/** Later recognition alternatives for one pending entry; they never replace reviewed values. */
+export interface CandidateAttachment {
+  readonly entryId: string;
+  readonly candidates: readonly ImportCandidate[];
+}
+
+export type CandidateAttachmentOutcome =
+  | {
+      readonly outcome: 'recorded';
+      readonly privateRevision: string;
+      readonly session: ImportSession;
+      readonly entry: ImportEntry;
+    }
+  | { readonly outcome: 'missing' };
+
+export type ImportEntryDiscardOutcome =
+  | {
+      readonly outcome: 'discarded';
+      readonly privateRevision: string;
+      readonly session: ImportSession;
+      readonly entry: ImportEntry;
+    }
+  | { readonly outcome: 'missing' }
+  | { readonly outcome: 'conflict' };
+
+export type ImportSessionDiscardOutcome =
+  | {
+      readonly outcome: 'discarded';
+      readonly privateRevision: string;
+      readonly session: ImportSession;
+    }
+  | { readonly outcome: 'missing' }
+  | { readonly outcome: 'conflict' };
+
+/** The reviewed copy data one pending entry carried when the caller read it. */
+export interface ReviewedEntryCopy {
+  readonly printingId: string | null;
+  readonly finish: Finish | null;
+  readonly condition: CopyCondition | null;
+  readonly quantity: number;
+}
+
+/** One reviewed entry a confirmation covers, with the state and copy data the caller read. */
+export interface ConfirmedImportEntry {
+  readonly entryId: string;
+  readonly expectedRevision: number;
+  readonly state: ImportEntry['state'];
+  readonly copy: ReviewedEntryCopy;
+}
+
+export interface ConfirmationPlan {
+  /** Operation identity scoped to the account, so a retry refers to the same action. */
+  readonly operationId: string;
+  readonly sessionId: string;
+  /** Digest of the confirmation request; reuse with a different request is refused. */
+  readonly inputFingerprint: string;
+  /** Digest of the reviewed content the acquisition carries; it identifies an acquisition. */
+  readonly contentFingerprint: string;
+  readonly entries: readonly ConfirmedImportEntry[];
+}
+
+export interface ImportReceiptData {
+  readonly operationId: string;
+  readonly sessionId: string;
+  readonly sourceKind: string;
+  readonly sourceId: string;
+  /** Copies the acquisition created, ordered by copy identity. */
+  readonly copies: readonly PhysicalCopy[];
+}
+
+export type ConfirmationOutcome =
+  | {
+      readonly outcome: 'confirmed';
+      readonly replayed: boolean;
+      readonly privateRevision: string;
+      readonly receipt: ImportReceiptData;
+    }
+  | { readonly outcome: 'missing-session' }
+  | { readonly outcome: 'missing-entry' }
+  /** A reviewed entry changed after it was read, or is no longer pending. */
+  | { readonly outcome: 'stale-entry' }
+  /** A reviewed entry has no resolved printing and finish, so it cannot become copies. */
+  | { readonly outcome: 'unresolved-entry' }
+  /** The operation identity was already used for a different request. */
+  | { readonly outcome: 'operation-conflict' };
+
+export interface ImportSessionsData {
+  readonly privateRevision: string;
+  readonly sessions: readonly ImportSession[];
+}
+
+export interface ImportEntriesData {
+  readonly privateRevision: string;
+  readonly session: ImportSession;
+  readonly entries: readonly ImportEntry[];
+}
+
+/**
+ * Private import and capture storage of one account (docs/user-cards.md#import-and-capture-state).
+ * Pending entries are stored separately from the account's owned copies and never change ownership;
+ * every operation is scoped by the account the caller passes and never returns another account's
+ * record. A replacement implementation keeps the same promises, including the consecutive-identity
+ * admission rule and the permanent operation and acquisition records that make confirmation
+ * replay-safe.
+ */
+export interface ImportStore {
+  /** Reads the account's pending import sessions, ordered by session identity. */
+  listSessions(accountId: string, offset: number, limit: number): Promise<ImportSessionsData>;
+  /**
+   * Reads one session with a bounded page of its pending entries, or `null` when it is not this
+   * account's.
+   */
+  listEntries(
+    accountId: string,
+    sessionId: string,
+    offset: number,
+    limit: number,
+  ): Promise<ImportEntriesData | null>;
+  /** Reads the entries among `entryIds` that belong to this account, in capture order. */
+  readEntries(accountId: string, entryIds: readonly string[]): Promise<readonly ImportEntry[]>;
+  /** Stages parsed source lines, each admitted once under its own stable identity. */
+  stageEntries(accountId: string, plan: ImportStagePlan): Promise<ImportStageOutcome>;
+  /** Stages one capture observation and returns the admission decision it recorded. */
+  stageCapture(accountId: string, plan: CaptureStagePlan): Promise<CaptureStageOutcome>;
+  /** Stores the reviewed values of one pending entry, guarded by its revision. */
+  correctEntry(
+    accountId: string,
+    correction: ImportEntryCorrection,
+  ): Promise<ImportEntryCorrectionOutcome>;
+  /** Records later recognition alternatives without touching reviewed values or the sequence. */
+  attachCandidates(
+    accountId: string,
+    attachment: CandidateAttachment,
+  ): Promise<CandidateAttachmentOutcome>;
+  /** Discards one pending entry when it still carries `expectedRevision`. */
+  discardEntry(
+    accountId: string,
+    entryId: string,
+    expectedRevision: number,
+  ): Promise<ImportEntryDiscardOutcome>;
+  /** Discards every pending entry of one session when it still carries `expectedRevision`. */
+  discardSession(
+    accountId: string,
+    sessionId: string,
+    expectedRevision: number,
+  ): Promise<ImportSessionDiscardOutcome>;
+  /**
+   * Confirms reviewed entries, creating individual copies with their provenance, or returns the
+   * acquisition's recorded outcome when this source, operation or content was already confirmed.
+   */
+  confirm(accountId: string, plan: ConfirmationPlan): Promise<ConfirmationOutcome>;
+  /** Reads the recorded outcome of one operation, or `null` when the account has none. */
+  recover(accountId: string, operationId: string): Promise<ImportReceiptData | null>;
 }

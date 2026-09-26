@@ -9,10 +9,18 @@
  * consumer's own predicate is evaluated after the account filter instead of on foreign rows.
  * `tests/integration/usercards-query-surface.test.ts` verifies the views against this declaration,
  * so a replacement storage maps its data to exactly these relations and passes the same tests.
+ * Pending import state has no published relation: it is read through the component's own pending
+ * reads and stays outside the ownership relations (docs/user-cards.md#import-and-capture-state).
  */
 
 import { finishes } from '../../catalog/index.js';
-import { USERCARDS_LIMITS, associationLevelsByTagKind, copyConditions, tagKinds } from './model.js';
+import {
+  USERCARDS_LIMITS,
+  associationLevelsByTagKind,
+  copyConditions,
+  importEntryStates,
+  tagKinds,
+} from './model.js';
 
 export const usercardsQuerySchema = 'usercards';
 export const usercardsPrivateSchema = 'usercards_private';
@@ -185,9 +193,12 @@ export const USERCARDS_QUERY_SURFACE: UserCardsQuerySurface = {
 };
 
 const identifierLength = USERCARDS_LIMITS.maxIdentifierLength;
+/** Fingerprints are digests, so their bound only has to cover the encodings a store may choose. */
+const fingerprintLength = 128;
 const finishValues = finishes.map((finish) => `'${finish}'`).join(', ');
 const conditionValues = copyConditions.map((condition) => `'${condition}'`).join(', ');
 const tagKindValues = tagKinds.map((kind) => `'${kind}'`).join(', ');
+const importEntryStateValues = importEntryStates.map((state) => `'${state}'`).join(', ');
 /**
  * Target levels each tag kind may associate, derived from the same declaration the operations
  * enforce, so storage and behaviour cannot drift apart.
@@ -278,6 +289,111 @@ create index if not exists association_copy_index
 
 create index if not exists association_tag_index
   on ${usercardsPrivateSchema}.association (account_id, tag_id);
+
+create table if not exists ${usercardsPrivateSchema}.import_session (
+  session_id text not null check (length(session_id) between 1 and ${identifierLength}),
+  account_id text not null check (length(account_id) between 1 and ${identifierLength}),
+  source_kind text not null check (length(source_kind) between 1 and ${identifierLength}),
+  source_id text not null check (length(source_id) between 1 and ${identifierLength}),
+  last_accepted_identity text check (last_accepted_identity is null
+    or length(last_accepted_identity) between 1 and ${identifierLength}),
+  revision integer not null default 1 check (revision >= 1),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (account_id, session_id)
+);
+
+create table if not exists ${usercardsPrivateSchema}.import_entry (
+  entry_id text not null check (length(entry_id) between 1 and ${identifierLength}),
+  account_id text not null check (length(account_id) between 1 and ${identifierLength}),
+  session_id text not null check (length(session_id) between 1 and ${identifierLength}),
+  state text not null default 'pending' check (state in (${importEntryStateValues})),
+  position integer not null check (position >= 1),
+  printing_id text check (printing_id is null or length(printing_id) between 1 and ${identifierLength}),
+  finish text check (finish is null or finish in (${finishValues})),
+  condition text check (condition in (${conditionValues})),
+  quantity integer not null default 1
+    check (quantity between 1 and ${USERCARDS_LIMITS.maxCreateQuantity}),
+  revision integer not null default 1 check (revision >= 1),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (account_id, entry_id),
+  foreign key (account_id, session_id)
+    references ${usercardsPrivateSchema}.import_session (account_id, session_id),
+  unique (account_id, session_id, position)
+);
+
+create index if not exists import_entry_session_index
+  on ${usercardsPrivateSchema}.import_entry (account_id, session_id, position);
+
+create table if not exists ${usercardsPrivateSchema}.import_candidate (
+  entry_id text not null check (length(entry_id) between 1 and ${identifierLength}),
+  account_id text not null check (length(account_id) between 1 and ${identifierLength}),
+  printing_id text not null check (length(printing_id) between 1 and ${identifierLength}),
+  provider text not null check (length(provider) between 1 and ${identifierLength}),
+  evidence text not null check (length(evidence) between 1 and ${identifierLength}),
+  created_at timestamptz not null default now(),
+  primary key (account_id, entry_id, printing_id, provider, evidence),
+  foreign key (account_id, entry_id)
+    references ${usercardsPrivateSchema}.import_entry (account_id, entry_id)
+);
+
+create index if not exists import_candidate_entry_index
+  on ${usercardsPrivateSchema}.import_candidate (account_id, entry_id);
+
+create table if not exists ${usercardsPrivateSchema}.import_stage (
+  capture_id text not null check (length(capture_id) between 1 and ${identifierLength}),
+  account_id text not null check (length(account_id) between 1 and ${identifierLength}),
+  session_id text not null check (length(session_id) between 1 and ${identifierLength}),
+  fingerprint text not null check (length(fingerprint) between 1 and ${fingerprintLength}),
+  outcome text not null check (outcome in ('admitted', 'suppressed')),
+  entry_id text check (entry_id is null or length(entry_id) between 1 and ${identifierLength}),
+  created_at timestamptz not null default now(),
+  primary key (account_id, capture_id),
+  foreign key (account_id, session_id)
+    references ${usercardsPrivateSchema}.import_session (account_id, session_id)
+);
+
+create table if not exists ${usercardsPrivateSchema}.import_acquisition (
+  acquisition_id text primary key check (length(acquisition_id) between 1 and ${identifierLength}),
+  account_id text not null check (length(account_id) between 1 and ${identifierLength}),
+  source_kind text not null check (length(source_kind) between 1 and ${identifierLength}),
+  source_id text not null check (length(source_id) between 1 and ${identifierLength}),
+  content_fingerprint text not null check (length(content_fingerprint) between 1 and ${fingerprintLength}),
+  committed_at timestamptz not null default now(),
+  unique (account_id, source_kind, source_id, content_fingerprint)
+);
+
+create table if not exists ${usercardsPrivateSchema}.import_receipt (
+  operation_id text not null check (length(operation_id) between 1 and ${identifierLength}),
+  account_id text not null check (length(account_id) between 1 and ${identifierLength}),
+  acquisition_id text not null,
+  session_id text not null check (length(session_id) between 1 and ${identifierLength}),
+  input_fingerprint text not null check (length(input_fingerprint) between 1 and ${fingerprintLength}),
+  created_at timestamptz not null default now(),
+  primary key (account_id, operation_id),
+  foreign key (acquisition_id)
+    references ${usercardsPrivateSchema}.import_acquisition (acquisition_id)
+);
+
+create index if not exists import_receipt_acquisition_index
+  on ${usercardsPrivateSchema}.import_receipt (account_id, acquisition_id);
+
+create table if not exists ${usercardsPrivateSchema}.copy_provenance (
+  copy_id text primary key check (length(copy_id) between 1 and ${identifierLength}),
+  account_id text not null check (length(account_id) between 1 and ${identifierLength}),
+  acquisition_id text not null,
+  entry_id text not null check (length(entry_id) between 1 and ${identifierLength}),
+  created_at timestamptz not null default now(),
+  foreign key (copy_id) references ${usercardsPrivateSchema}.copy (copy_id),
+  foreign key (acquisition_id)
+    references ${usercardsPrivateSchema}.import_acquisition (acquisition_id),
+  foreign key (account_id, entry_id)
+    references ${usercardsPrivateSchema}.import_entry (account_id, entry_id)
+);
+
+create index if not exists copy_provenance_acquisition_index
+  on ${usercardsPrivateSchema}.copy_provenance (account_id, acquisition_id);
 
 create or replace view ${usercardsQuerySchema}.copies with (security_barrier) as
   select copy.copy_id,

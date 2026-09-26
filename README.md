@@ -64,8 +64,14 @@ commits atomically behind the revision the caller read. Tags keep stable identit
 labels; card and printing associations carry the intended quantity, while copy membership identifies
 one physical copy and carries none. Copies, tags, associations and the private-data revision are read
 through the published views (docs/user-cards.md#query-surface), which filter on the account bound to
-the connection inside a read transaction and return nothing without that scope; imports and the UI
-remain with their own tasks.
+the connection inside a read transaction and return nothing without that scope. UserCards also owns
+the pending imports behind that surface: a capture observation or parsed source line is staged once
+(consecutive accepted capture identities collapse into one entry, unresolved readings advance
+nothing), review quotes the entry revision and keeps late recognition alternatives beside the
+reviewed values, and confirmation under an account-scoped operation identity creates the individual
+copies with their provenance or returns the recorded outcome, so a repeated import adds nothing.
+Pending entries have no published relation and never change ownership; source-format parsing and the
+UI remain with their own tasks.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without

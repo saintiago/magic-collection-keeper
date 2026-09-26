@@ -5,10 +5,14 @@
  * Catalog contract: a copy is stored with one printing reference and its physical attributes,
  * corrections keep the copy identity and quote the revision they started from, and tags,
  * associations and a copy's single physical location follow the same revision-checked,
- * account-scoped rules. Consumers read private copies, tags and associations through the declared
- * query surface (USERCARDS_QUERY_SURFACE), which Application binds to that account inside one read
- * transaction. Other components import UserCards through this module only; its internal modules
- * stay private to the component (docs/architecture.md, .dependency-cruiser.mjs).
+ * account-scoped rules. Pending imports, review and confirmation follow the same rules: an
+ * observation or parsed line is staged once, review quotes the entry revision, and a confirmation
+ * under an operation identity creates the copies with their provenance or returns the recorded
+ * outcome. Consumers read private copies, tags and associations through the declared query surface
+ * (USERCARDS_QUERY_SURFACE), which Application binds to that account inside one read transaction;
+ * pending imports have no published relation and are read through the component's own pending
+ * reads. Other components import UserCards through this module only; its internal modules stay
+ * private to the component (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
 export { UserCardsError, type UserCardsFailureCode } from './internal/errors.js';
@@ -22,6 +26,8 @@ export {
   associationLevelsByTagKind,
   associationTargetLevels,
   copyConditions,
+  importEntryStates,
+  importSessionStates,
   tagKinds,
   userTagKinds,
   USERCARDS_LIMITS,
@@ -30,6 +36,14 @@ export {
   type AssociationTargetLevel,
   type CopyCondition,
   type CopyId,
+  type ImportCandidate,
+  type ImportEntry,
+  type ImportEntryId,
+  type ImportEntryState,
+  type ImportOperationId,
+  type ImportSession,
+  type ImportSessionId,
+  type ImportSessionState,
   type PhysicalCopy,
   type Tag,
   type TagId,
@@ -37,6 +51,30 @@ export {
   type TrustedUserContext,
   type UserTagKind,
 } from './internal/model.js';
+export {
+  type AttachImportCandidatesInput,
+  type CaptureStageResult,
+  type ConfirmImportEntryInput,
+  type ConfirmImportInput,
+  type DiscardImportEntryInput,
+  type DiscardImportSessionInput,
+  type ImportConfirmationResult,
+  type ImportEntryChangeResult,
+  type ImportEntryListResult,
+  type ImportOperationRecoveryResult,
+  type ImportOperations,
+  type ImportReceipt,
+  type ImportSessionChange,
+  type ImportSessionListResult,
+  type ImportSourceInput,
+  type ImportStageResult,
+  type ListImportEntriesOptions,
+  type ListImportSessionsOptions,
+  type ReviewImportEntryInput,
+  type StageCaptureInput,
+  type StageImportEntriesInput,
+  type StageImportEntryInput,
+} from './internal/import-service.js';
 export {
   USERCARDS_ACCOUNT_SCOPE_SQL,
   USERCARDS_ACCOUNT_SETTING,
