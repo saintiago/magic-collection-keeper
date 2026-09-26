@@ -153,7 +153,8 @@ conditions for CardList, query and recognition measurements. Distinguish locally
 live-provider evidence, physical-device evidence and production acceptance.
 
 Workspace verification starts from a fresh Linux/WSL checkout: install locked dependencies, run the
-documented checks, verify builds and demonstrate that an invalid cross-component import is rejected.
+checks documented in [README](../README.md#checks), verify builds and demonstrate that an invalid
+cross-component import is rejected.
 For packaging, infrastructure and release acceptance, follow the operations document's checks and
 keep template/package verification distinct from live environment evidence.
 

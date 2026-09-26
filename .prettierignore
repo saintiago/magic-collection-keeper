@@ -1,0 +1,15 @@
+# Installed, generated and cached content.
+node_modules/
+build/
+coverage/
+.turbo/
+playwright-report/
+test-results/
+
+# Generated lockfile.
+package-lock.json
+
+# Python sources and bytecode are not part of Prettier's languages.
+*.py
+__pycache__/
+*.pyc

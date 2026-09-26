@@ -1,0 +1,36 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "ui": "stream",
+  "concurrency": "1",
+  "tasks": {
+    "format:check": {
+      "inputs": ["$TURBO_DEFAULT$", "!build/**"],
+      "outputs": []
+    },
+    "lint": {
+      "inputs": ["$TURBO_DEFAULT$", "!build/**"],
+      "outputs": []
+    },
+    "typecheck": {
+      "inputs": ["$TURBO_DEFAULT$", "!build/**"],
+      "outputs": []
+    },
+    "boundaries": {
+      "inputs": ["$TURBO_DEFAULT$", "!build/**"],
+      "outputs": []
+    },
+    "build": {
+      "cache": false
+    },
+    "test": {
+      "cache": false
+    },
+    "test:python": {
+      "cache": false,
+      "env": ["KEEPER_PYTHON"]
+    },
+    "test:browser": {
+      "cache": false
+    }
+  }
+}
