@@ -52,6 +52,52 @@ On September 20, 2026, the current Windows host installed Python 3.12.10 per-use
 
 Unattended verification then used a fresh remote clone of unchanged `main` commit `b72e1ad1692daa1166f2ca78df774a12b36bf165` in the normal inherited environment with `KEEPER_PYTHON` absent. `npm ci` passed in 2.92 seconds, first-workspace `npm run prepare:validation` passed in 46.06 seconds, and `npm run validate` passed in 77.27 seconds with 151 Node tests, 27 Python tests, the build, and 150 Chromium browser tests. The workspace began without ignored/generated repository inputs, while npm, pip, browser, model, and network caches outside the clone were warm; these are not cold-network timings or production-delivery evidence. The existing selector and recognition corresponding-source guard remained unchanged.
 
+## Documentation validator regression coverage (KAN-5)
+
+**B-12 — Acceptance:** The actual documentation validator must exit successfully
+for a valid fixture and fail separately for a missing required document, broken
+local file link, missing cross-file anchor, missing UC identifier, missing required
+SPEC anchor, and retired document reference. Assert the relevant diagnostics.
+Use disposable, independently created fixtures with cleanup, existing dependencies,
+and the existing `npm test` discovery; require no network, cloud credentials, or
+owner data, and never mutate repository documents. Repeated runs must pass without
+test-order dependencies. `npm test`, `npm run validate:docs`, configured project
+checks, and formatting checks must pass.
+
+**Status / evidence:** Locally verified on September 20, 2026; implementation
+commit `84441e1`, [validator regression tests](../tests/validate-docs.test.js).
+The seven cases passed directly, then through two complete `npm test` runs
+(158 passed each). `npm ci` and `npm run prepare:validation` passed, followed by
+the configured `npm run validate`: documentation validation, 158 Node tests,
+27 Python tests, application build, and 150 Chromium UI tests all passed.
+Prettier checks for both changed files and `git diff --check` passed. Verification
+used Node 24.14.1, a checkout-local Python 3.12 virtual environment and browser
+installation, and isolated test data. No validator fixture directories remained.
+The regression tests themselves use no network or credentials; the existing
+[preparation](OPERATIONS.md#local-setup-and-checks) downloads public inputs.
+
+This is a tooling requirement; application architecture and user journeys are
+unchanged. Protected PR, genuine Lens review, and exact merged-SHA main workflow
+success remain delivery requirements. This local-only task does not claim merge
+or production delivery.
+
+**B-12 repair acceptance:** The harness subsequently reported a timeout in
+[UC-05](../tests/ui/interactions.spec.js) after Add retry, with Scan intercepting
+the collection-navigation click. Before that click, the test must verify that
+the successful retry has closed the detail page and restored catalog-card focus.
+Retain the normal pointer click and all Add/remove failure and cancellation
+assertions. No application or check configuration changes are authorized.
+**Repair status / evidence (September 20, 2026):** Locally verified. UC-05
+passed ten repeated Chromium runs after adding the return-state assertions.
+The original test also passed five isolated runs; these results do not establish
+the sole cause of the intermittent harness failure. The configured
+`npm run validate` exited 0: documentation validation, 158 Node tests, 27 Python
+tests, build, and all 150 Chromium UI tests passed. The seven validator cases
+also passed two additional direct runs, with no fixture directories remaining.
+Prettier checks on all three changed files and `git diff --check` passed.
+The harness must independently rerun its checks; this evidence does not
+supersede its earlier failure or establish merge or production delivery.
+
 ## Product direction
 
 | ID         | Acceptance criteria                                                                                                                                                | Status / evidence                                 |

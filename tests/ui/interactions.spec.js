@@ -203,6 +203,10 @@ test("UC-05 add failure, retry, remove cancellation and remove failure", async (
   );
   fail = false;
   await page.locator("#inventory-form button[type=submit]").click();
+  // Add returns through asynchronous history navigation and restores focus/scroll.
+  // Verify that return before starting another navigation click.
+  await expect(page.locator("#detail")).not.toBeVisible();
+  await expect(page.locator(".card-open")).toBeFocused();
   await page.locator("#collection-nav").click();
   await page.locator(".card").click();
   await openArtworkDetails(page);
