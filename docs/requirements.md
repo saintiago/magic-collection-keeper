@@ -47,6 +47,12 @@ no further acceptance criteria.
 
 ## Queued product direction
 
+**DELIVERY-LENS-001 — Accepted; enabling for Nexus execution.** Require the `Nexus Lens review`
+check from the configured Nexus Lens GitHub App on main. Keep CI and automatic deployment disabled.
+Acceptance: branch protection requires the named check from that App, and Nexus project/runtime
+configuration names the same check and publisher. This supersedes removal of the Lens requirement
+for the preparation phase.
+
 Recommendations, trading/sales integrations and relevant news remain charter direction. Their
 feature requirements are not yet specified and no delivery is claimed by this rebuild backlog.
 

@@ -66,6 +66,5 @@ record dependencies. This index groups tasks by subject and does not prescribe e
   are complete. Rank does not itself enforce Jira dependency links.
 - The documentation-only baseline has no application package or build. Workspace implementation supplies
   preparation and validation commands.
-- Nexus currently requires a named review check in its project schema. The existing
-  `delivery.reviewCheck` setting does not enable a GitHub branch requirement or CI workflow.
-  Resolve the runner policy before launch if review-free delivery is required.
+- Nexus delivery uses the required Nexus Lens review check. Its review gate is independent of
+  GitHub Actions CI and automatic deployment, which remain disabled during the rebuild.
