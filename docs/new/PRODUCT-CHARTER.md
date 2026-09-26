@@ -1,7 +1,5 @@
 # Product charter
 
-Revision 4 — September 20, 2026. This charter records product direction, not implemented capability, market validation, or authorization to change pricing or connect an external account. Requirement mapping: PRODUCT-01–08 in [REQUIREMENTS.md](REQUIREMENTS.md).
-
 ## Purpose
 
 **Give life to your collection.**
@@ -16,7 +14,7 @@ The owner is the first user. The intended audience is Magic collectors who want 
 
 1. Capture, correct, locate, and organize physical cards with minimal friction and accurate exact-printing, language, finish, condition, and quantity representation.
 2. Use the owned and available collection for deck building, inspiration, and upgrades. Keep owned cards, assigned copies, pending imports, and suggested acquisitions distinct; explain suggestions and let the user decide.
-3. Manage trading and sales across supported channels, potentially including Cardmarket. A listing is not a disposal, and sale proceeds are not app revenue. Provider feasibility and lifecycle rules remain to be designed.
+3. Manage trading and sales across supported channels, potentially including Cardmarket.
 4. Discover useful sets, card reveals, and Wizards news in ways connected to the user's cards and decks. Freshness, provenance, relevance, and user control are mandatory design inputs.
 
 These jobs share card identities and private collection state. New features must account for affected search, navigation, quantities, tags, imports, and source-provenance workflows rather than becoming disconnected islands.
@@ -34,14 +32,3 @@ These jobs share card identities and private collection state. New features must
 Monetization must not contradict the charter or damage trust and task completion. Prefer durable value over short-term revenue; an early objective is to cover measured app-operation and development costs without weakening quality, security, accessibility, or performance.
 
 No revenue model, price, marketplace partnership, research cadence, or human-time valuation is selected. Product operating cost, development cost, app revenue, and the owner's own card-sale proceeds must remain separate. Estimates and unknowns must be labeled and use a consistent accounting period.
-
-## Open product decisions
-
-Discovery still needs to establish the first supported deck format, availability semantics, trading/listing lifecycle, provider contracts, useful news experience, applicable data obligations, numerical performance targets, and viable commercial hypotheses. Those are inputs for later scoped requirements, not implied implementation authorization.
-
-## Decision history
-
-- Revision 4 removes development-orchestration material; the charter is solely the product vision and governing principles.
-- Revision 3 set the monetization ordering: charter compatibility first, long-term value second, near-term cost coverage third.
-- Revision 2 made **Give life to your collection** the primary purpose.
-- Revision 1 established the initial collector-builder-trader audience and connected product jobs.
