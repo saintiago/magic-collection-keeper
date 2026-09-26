@@ -27,7 +27,8 @@
       "cache": false
     },
     "test:python": {
-      "cache": false
+      "cache": false,
+      "env": ["KEEPER_PYTHON"]
     },
     "test:browser": {
       "cache": false

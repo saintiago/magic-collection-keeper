@@ -4,8 +4,8 @@
     "noEmit": false,
     "rootDir": "src",
     "outDir": "build",
-    "incremental": true,
-    "tsBuildInfoFile": ".turbo/tsc/build.tsbuildinfo"
+    "incremental": false,
+    "tsBuildInfoFile": null
   },
   "include": ["src/**/*.ts"]
 }

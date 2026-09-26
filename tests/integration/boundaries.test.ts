@@ -1,8 +1,8 @@
 /**
  * The boundary rules in .dependency-cruiser.mjs, run for real against the fixture component tree in
  * tests/fixtures/boundaries. The fixture pairs every documented boundary with an allowed
- * public-entry import and a forbidden internal import, so a rule that silently stops matching fails
- * here.
+ * public-entry import and a forbidden internal import, and adds deliberately unresolved relative
+ * and package imports, so a rule that silently stops matching fails here.
  */
 
 import { execFile } from 'node:child_process';
@@ -78,6 +78,9 @@ describe('component import boundaries', () => {
         'no-internals-of-catalog: src/usercards/store.ts -> src/catalog/internal/records.ts',
         // UserInterface reads Recognition internals instead of its public entry point.
         'no-internals-of-recognition: src/ui/index.ts -> src/recognition/internal/engine.ts',
+        // Deliberately unresolved fixture imports are reported instead of filtered out.
+        'no-unresolvable: src/application/internal/unresolved.ts -> ../catalog/missing-record.js',
+        'no-unresolvable: src/application/internal/unresolved.ts -> missing-review-package',
       ].sort(),
     );
   });

@@ -10,7 +10,9 @@ The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
 ## Workspace preparation
 
 Node.js 24, npm and Python 3.12 or newer (the recognition suite baseline) are required. On Windows,
-preparation, builds and tests run inside WSL as docs/tech-stack.md requires.
+preparation, builds and tests run inside WSL as docs/tech-stack.md requires. Set `KEEPER_PYTHON` to
+the interpreter to use when `python3` is not the documented baseline; focused and aggregate checks
+honour it.
 
 Prepare a fresh checkout from the committed lockfile, including the browser that Playwright drives:
 
@@ -42,8 +44,9 @@ Nexus uses the same commands for preparation and validation (nexus.project.json)
 
 Each component from docs/architecture.md owns src/<component>/index.ts as its provider-owned public
 entry point; cross-component imports use that module, and `.dependency-cruiser.mjs` fails the
-boundaries check for anything else. tests/integration/boundaries.test.ts proves that an internal
-import is reported. Tests follow the scopes in docs/testing.md: tests/component, tests/integration,
+boundaries check for anything else, including imports it cannot resolve.
+tests/integration/boundaries.test.ts proves that an internal import and an unresolved import are
+reported. Tests follow the scopes in docs/testing.md: tests/component, tests/integration,
 tests/browser for browser journeys, src/recognition/tests for Python recognition tests, and
 tests/unit and tests/system once their first tests exist.
 
