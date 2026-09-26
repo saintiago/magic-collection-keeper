@@ -11,7 +11,7 @@
     "projectKey": "KAN",
     "issueType": "Task",
     "label": "harness-task",
-    "readyStatus": "Ready",
+    "readyStatus": "To Do",
     "runningStatus": "In Progress",
     "reviewStatus": "In Review",
     "ordering": "rank",
@@ -24,7 +24,7 @@
     "baseBranch": "main",
     "completion": {
       "postMergeWorkflows": ["deploy.yml"],
-      "toDoStatus": "Ready",
+      "toDoStatus": "To Do",
       "doneStatus": "Done"
     }
   }
