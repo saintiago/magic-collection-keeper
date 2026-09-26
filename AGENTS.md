@@ -55,6 +55,12 @@ All documents in `docs/new/` are relevant to the rebuild.
 
 - [Product charter](docs/new/PRODUCT-CHARTER.md)
 - [Architecture](docs/new/architecture.md)
+- [Application](docs/new/application.md)
+- [UserInterface](docs/new/user-interface.md)
+- [Catalog](docs/new/catalog.md)
+- [UserCards](docs/new/user-cards.md)
+- [Search](docs/new/search.md)
+- [Recognition](docs/new/recognition.md)
 - [Tech stack](docs/new/tech-stack.md)
 - [Testing architecture](docs/new/testing.md)
 

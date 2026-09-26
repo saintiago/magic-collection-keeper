@@ -35,7 +35,7 @@ scenarios in integration or system tests according to their scope.
 | Owner | Focused evidence |
 | --- | --- |
 | Catalog | Card-to-printing resolution, complete basic information and reads independent of live provider requests. |
-| UserCards | Stable copy identities; distinction between desired quantities and physical counts; card/printing refinement; pending entries excluded from ownership until confirmation. |
+| UserCards | Stable copy identities; one physical location per copy; distinction between desired quantities and physical counts; card/printing refinement; pending entries excluded from ownership until confirmation. |
 | Search | Mixed catalog and private filters, ordering and pagination over the complete result, without duplicate counts or another user's entries. Use real database queries. |
 | UserInterface | Basic information before optional fragments, partial failures, empty versus unavailable results, stale responses after query/navigation/account changes, and preserved interaction context. |
 | Recognition | Candidate interpretation, ambiguity and failure handling; recognition output cannot grant ownership. |

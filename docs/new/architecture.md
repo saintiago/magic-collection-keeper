@@ -26,6 +26,7 @@ flowchart LR
     UI -->|Card information| Catalog
     UI -->|Private data and changes| UserCards
     UI -->|Captured images| Recognition
+    Recognition -->|Validate candidates and resolve printings| Catalog
     UserCards -->|Card and printing references| Catalog
 ```
 
@@ -50,6 +51,8 @@ are authorized against trusted user context, including requests made through Sea
 A card has many printings; each physical copy references one printing. A physical copy has no
 quantity field. Equivalent copies can be grouped for display and bulk actions while retaining
 individual identities.
+
+A copy has at most one physical location. Planned decks refer independently to cards or printings.
 
 Catalog maintains a complete, indexed database of basic card and printing information. Reads use
 this database; provider synchronization runs independently of user queries. Basic information can
