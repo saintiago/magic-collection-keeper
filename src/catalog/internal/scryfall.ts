@@ -43,10 +43,15 @@ const imageUrisSchema = z.object({
 const cardFaceSchema = z.object({
   name: z.string().min(1).max(300),
   printed_name: z.string().min(1).max(300).nullish(),
+  oracle_id: z.string().min(1).max(identifierLength).optional(),
   oracle_text: z.string().nullish(),
+  type_line: z.string().nullish(),
   colors: z.array(z.enum(cardColors)).optional(),
+  cmc: z.number().min(0).nullish(),
   image_uris: imageUrisSchema.nullish(),
 });
+
+type CardFace = z.infer<typeof cardFaceSchema>;
 
 /**
  * The published fields of a Scryfall card object the catalog needs. Scryfall publishes many more
@@ -78,10 +83,11 @@ const scryfallCardSchema = z.object({
 type ScryfallCard = z.infer<typeof scryfallCardSchema>;
 
 /**
- * Maps one provider record onto catalog records. A record the provider publishes without a card
- * identity (Scryfall's reversible promo cards) has no playable identity to own, so it is not
- * catalog data and maps to null; an unreadable record fails the refresh and leaves the published
- * revision in place.
+ * Maps one provider record onto catalog records. Scryfall publishes reversible printings — the
+ * same card on both sides — without a card-level identity or card-level attributes; their faces
+ * carry the one card the printing depicts, so the faces supply the identity and every field the
+ * record omits. A record neither level identifies is not catalog data and maps to null; an
+ * unreadable record fails the refresh and leaves the published revision in place.
  */
 export function mapProviderRecord(
   value: unknown,
@@ -96,25 +102,27 @@ export function mapProviderRecord(
     );
   }
   const record = parsed.data;
-  if (record.oracle_id === undefined) {
+  const faces = record.card_faces ?? [];
+  const cardId = record.oracle_id ?? sharedFaceIdentity(faces);
+  if (cardId === undefined) {
     return null;
   }
-  const faces = record.card_faces ?? [];
+  const name = record.oracle_id === undefined ? faceName(faces) : record.name;
   const finishesForPrinting = availableFinishes(record, context);
   return {
     card: {
-      cardId: record.oracle_id,
-      name: record.name,
+      cardId,
+      name,
       names: publishedNames(record, faces),
       rulesText: publishedText(record.oracle_text) ?? faceRulesText(faces),
-      typeLine: publishedText(record.type_line),
+      typeLine: publishedText(record.type_line) ?? faceTypeLines(faces),
       colors: orderedColors(record.colors ?? faces.flatMap((face) => face.colors ?? [])),
       colorIdentity: orderedColors(record.color_identity),
-      manaValue: record.cmc ?? null,
+      manaValue: record.cmc ?? faceManaValue(faces),
     },
     printing: {
       printingId: record.id,
-      cardId: record.oracle_id,
+      cardId,
       edition: record.set,
       collectorNumber: record.collector_number,
       language: record.lang,
@@ -129,26 +137,57 @@ function publishedText(value: string | null | undefined): string | null {
   return typeof value === 'string' && value !== '' ? value : null;
 }
 
-function faceRulesText(faces: readonly z.infer<typeof cardFaceSchema>[]): string | null {
-  const texts = faces
-    .map((face) => publishedText(face.oracle_text))
-    .filter((text): text is string => text !== null);
+/**
+ * The one playable identity the faces of a printing publish. Scryfall omits the card-level
+ * `oracle_id` on reversible printings; a record whose faces do not agree on one identity has no
+ * playable identity to own.
+ */
+function sharedFaceIdentity(faces: readonly CardFace[]): string | undefined {
+  const identities = new Set(
+    faces
+      .map((face) => face.oracle_id)
+      .filter((identity): identity is string => identity !== undefined),
+  );
+  return identities.size === 1 ? identities.values().next().value : undefined;
+}
+
+/** Canonical name of a printing whose faces publish the card, joined as the provider joins faces. */
+function faceName(faces: readonly CardFace[]): string {
+  return [...new Set(faces.map((face) => face.name))].join(' // ');
+}
+
+function faceRulesText(faces: readonly CardFace[]): string | null {
+  const texts = distinctFaceTexts(faces.map((face) => publishedText(face.oracle_text)));
   return texts.length === 0 ? null : texts.join('\n//\n');
 }
 
+/** Type line of a printing whose card-level record omits it; the provider publishes it per face. */
+function faceTypeLines(faces: readonly CardFace[]): string | null {
+  const lines = distinctFaceTexts(faces.map((face) => publishedText(face.type_line)));
+  return lines.length === 0 ? null : lines.join(' // ');
+}
+
+/** Mana value the faces publish, or `null` when the provider's faces disagree on one value. */
+function faceManaValue(faces: readonly CardFace[]): number | null {
+  const values = [...new Set(faces.map((face) => face.cmc ?? null))];
+  return values.length === 1 ? (values[0] ?? null) : null;
+}
+
+/** Distinct values the faces publish for one card-level text field, in provider order. */
+function distinctFaceTexts(values: readonly (string | null)[]): string[] {
+  return [...new Set(values.filter((value): value is string => value !== null))];
+}
+
 /** Translated and face names of this printing; the canonical name stays on the card row. */
-function publishedNames(
-  record: ScryfallCard,
-  faces: readonly z.infer<typeof cardFaceSchema>[],
-): CardName[] {
+function publishedNames(record: ScryfallCard, faces: readonly CardFace[]): CardName[] {
   const names: CardName[] = [];
   const seen = new Set<string>();
-  const add = (name: string | null): void => {
-    if (name === null || seen.has(name)) {
+  const add = (value: string | null): void => {
+    if (value === null || seen.has(value)) {
       return;
     }
-    seen.add(name);
-    names.push({ language: record.lang, name });
+    seen.add(value);
+    names.push({ language: record.lang, name: value });
   };
   add(publishedText(record.printed_name) ?? record.name);
   for (const face of faces) {
@@ -193,10 +232,7 @@ function isFinish(value: string): value is Finish {
 }
 
 /** Multi-faced cards publish their images per face; the front face is the printing's image. */
-function printingImages(
-  record: ScryfallCard,
-  faces: readonly z.infer<typeof cardFaceSchema>[],
-): PrintingImages {
+function printingImages(record: ScryfallCard, faces: readonly CardFace[]): PrintingImages {
   const uris = record.image_uris ?? faces[0]?.image_uris ?? {};
   return {
     small: uris.small ?? null,

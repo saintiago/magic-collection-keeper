@@ -4,7 +4,7 @@ import { CatalogError } from './errors.js';
 import type { CatalogSqlTransactor } from './executor.js';
 import type { CatalogRevision } from './model.js';
 import { readPublishedRevision } from './postgres.js';
-import { publishCandidate } from './publication.js';
+import { alreadyPublished, publishCandidate, type CandidateRevision } from './publication.js';
 import { mapProviderRecord, type MappedProviderRecord } from './scryfall.js';
 import {
   openSnapshot,
@@ -24,9 +24,10 @@ import {
 export interface CatalogSynchronizer {
   /**
    * Ingests the requested refresh and returns the published revision. A snapshot whose source and
-   * version are already published is not ingested again. Every failure is a `CatalogError`: the
-   * request names no dataset (`invalid-request`), another task holds the publication lock (`busy`),
-   * or the snapshot or database could not be used (`unavailable`).
+   * version are already published is not ingested again, including when an overlapping invocation
+   * publishes it after this one opened the snapshot. Every failure is a `CatalogError`: the request
+   * names no dataset (`invalid-request`), another task holds the publication lock (`busy`), or the
+   * snapshot or database could not be used (`unavailable`).
    */
   synchronize(request: CatalogSynchronizationRequest): Promise<CatalogRevision>;
 }
@@ -64,22 +65,23 @@ export function createCatalogSynchronizer(
       const snapshot = await openSnapshot(snapshots, parsedRequest);
 
       try {
-        if (
-          published !== null &&
-          published.sourceName === snapshot.sourceName &&
-          published.sourceVersion === snapshot.sourceVersion
-        ) {
+        if (alreadyPublished(published, snapshot)) {
           await releaseSnapshot(snapshot);
           return published;
         }
-        const revision: CatalogRevision = {
+        const candidate: CandidateRevision = {
           revisionId: randomUUID(),
           sourceName: snapshot.sourceName,
           sourceVersion: snapshot.sourceVersion,
           publishedAt: new Date().toISOString(),
         };
-        await publishCandidate(sql, revision, mappedRecords(snapshot));
-        return revision;
+        const outcome = await publishCandidate(sql, candidate, mappedRecords(snapshot));
+        if (!outcome.published) {
+          // An overlapping invocation published this exact source and version while this one
+          // opened the snapshot; nothing read it, so the transfer is released unread.
+          await releaseSnapshot(snapshot);
+        }
+        return outcome.revision;
       } catch (cause) {
         throw cause instanceof CatalogError
           ? cause

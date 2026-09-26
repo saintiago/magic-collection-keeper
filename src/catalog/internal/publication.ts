@@ -10,6 +10,8 @@
 
 import { CatalogError } from './errors.js';
 import type { CatalogSqlExecutor, CatalogSqlTransactor } from './executor.js';
+import type { CatalogRevision } from './model.js';
+import { readPublishedRevision } from './postgres.js';
 import type { MappedProviderRecord } from './scryfall.js';
 import { CATALOG_SYNCHRONIZATION_LIMITS } from './snapshot.js';
 
@@ -19,6 +21,29 @@ export interface CandidateRevision {
   readonly sourceName: string;
   readonly sourceVersion: string;
   readonly publishedAt: string;
+}
+
+/** What one publication attempt left published: the candidate, or the version that got there first. */
+export interface PublicationOutcome {
+  /** The revision readers observe after the attempt. */
+  readonly revision: CatalogRevision;
+  /** False when the source and version were already published; nothing was written then. */
+  readonly published: boolean;
+}
+
+/**
+ * Whether the revision readers observe already carries this provider source and version. The
+ * pre-read that avoids opening an unchanged snapshot and the publication transaction both use it.
+ */
+export function alreadyPublished(
+  published: CatalogRevision | null,
+  source: { readonly sourceName: string; readonly sourceVersion: string },
+): published is CatalogRevision {
+  return (
+    published !== null &&
+    published.sourceName === source.sourceName &&
+    published.sourceVersion === source.sourceVersion
+  );
 }
 
 /**
@@ -101,25 +126,34 @@ const revisionUpsertStatement = `insert into catalog_private.revision (
     source_version = excluded.source_version,
     published_at = excluded.published_at`;
 
-/** Publishes the candidate revision in one transaction, or leaves the published one untouched. */
+/**
+ * Publishes the candidate revision in one transaction, or leaves the published one untouched.
+ * The decision to publish happens under the publication lock: when an overlapping invocation
+ * published the same provider source and version while this one opened its snapshot, the existing
+ * revision is returned without writing anything.
+ */
 export async function publishCandidate(
   sql: CatalogSqlTransactor,
-  revision: CandidateRevision,
+  candidate: CandidateRevision,
   records: AsyncIterable<MappedProviderRecord>,
-): Promise<void> {
-  await sql.transaction(async (statements) => {
+): Promise<PublicationOutcome> {
+  return await sql.transaction(async (statements) => {
     await takePublicationLock(statements);
+    const published = await readPublishedRevision(statements);
+    if (alreadyPublished(published, candidate)) {
+      return { revision: published, published: false };
+    }
 
-    let candidate: SerializedRecord[] = [];
+    let buffered: SerializedRecord[] = [];
     let batched = 0;
     let bytes = 0;
 
     const flush = async (): Promise<void> => {
-      if (candidate.length === 0) {
+      if (buffered.length === 0) {
         return;
       }
-      const rows = collapseBatch(candidate);
-      candidate = [];
+      const rows = collapseBatch(buffered);
+      buffered = [];
       batched = 0;
       bytes = 0;
       // Cards precede the names and printings that reference them, and one batch never exceeds the
@@ -133,7 +167,7 @@ export async function publishCandidate(
     for await (const record of records) {
       const serialized = serializeRecord(record);
       if (
-        candidate.length > 0 &&
+        buffered.length > 0 &&
         (batched >= CATALOG_SYNCHRONIZATION_LIMITS.maxRecordsPerStatement ||
           bytes + serialized.bytes > CATALOG_SYNCHRONIZATION_LIMITS.maxStatementBytes)
       ) {
@@ -142,10 +176,10 @@ export async function publishCandidate(
       if (serialized.bytes > CATALOG_SYNCHRONIZATION_LIMITS.maxStatementBytes) {
         throw new CatalogError(
           'unavailable',
-          `The ${revision.sourceName} snapshot contains a record larger than the catalog write bound.`,
+          `The ${candidate.sourceName} snapshot contains a record larger than the catalog write bound.`,
         );
       }
-      candidate.push(serialized);
+      buffered.push(serialized);
       batched += 1;
       bytes += serialized.bytes;
       ingested += 1;
@@ -155,16 +189,17 @@ export async function publishCandidate(
       // would only drift the revision away from the records readers can still resolve.
       throw new CatalogError(
         'unavailable',
-        `The ${revision.sourceName} snapshot contains no card records.`,
+        `The ${candidate.sourceName} snapshot contains no card records.`,
       );
     }
     await flush();
     await statements.query(revisionUpsertStatement, {
-      revision_id: revision.revisionId,
-      source_name: revision.sourceName,
-      source_version: revision.sourceVersion,
-      published_at: revision.publishedAt,
+      revision_id: candidate.revisionId,
+      source_name: candidate.sourceName,
+      source_version: candidate.sourceVersion,
+      published_at: candidate.publishedAt,
     });
+    return { revision: candidate, published: true };
   });
 }
 

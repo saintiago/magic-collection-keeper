@@ -126,7 +126,8 @@ export interface CatalogSnapshotRecord {
 
 /**
  * Reads the snapshot's JSON Lines records. The reader accepts any chunking, ignores blank lines and
- * rejects unreadable records; the previous revision stays published because nothing is written yet.
+ * rejects unreadable records and raw records beyond the declared bound; the previous revision stays
+ * published because nothing is written yet.
  */
 export async function* snapshotRecords(
   snapshot: CatalogSnapshot,
@@ -143,7 +144,11 @@ export async function* snapshotRecords(
     buffered += chunk;
     let newline = buffered.indexOf('\n');
     while (newline !== -1) {
-      const record = readRecordLine(snapshot, buffered.slice(0, newline), position + 1);
+      const line = buffered.slice(0, newline);
+      // A complete line is measured before it is parsed, so the readable bound rejects a record
+      // however the source chunked it.
+      assertWithinRecordBound(snapshot, line);
+      const record = readRecordLine(snapshot, line, position + 1);
       buffered = buffered.slice(newline + 1);
       if (record !== undefined) {
         position += 1;
@@ -151,17 +156,23 @@ export async function* snapshotRecords(
       }
       newline = buffered.indexOf('\n');
     }
-    if (buffered.length > CATALOG_SYNCHRONIZATION_LIMITS.maxRecordLength) {
-      throw new CatalogError(
-        'unavailable',
-        `A record of the ${snapshot.sourceName} snapshot exceeds the readable bound.`,
-      );
-    }
+    // The unterminated remainder is the record being accumulated; it stays bounded the same way.
+    assertWithinRecordBound(snapshot, buffered);
   }
   const trailing = readRecordLine(snapshot, buffered, position + 1);
   if (trailing !== undefined) {
     position += 1;
     yield { position, value: trailing };
+  }
+}
+
+/** Rejects a raw record longer than the buffer bound before anything parses or interprets it. */
+function assertWithinRecordBound(snapshot: CatalogSnapshot, line: string): void {
+  if (line.length > CATALOG_SYNCHRONIZATION_LIMITS.maxRecordLength) {
+    throw new CatalogError(
+      'unavailable',
+      `A record of the ${snapshot.sourceName} snapshot exceeds the readable bound.`,
+    );
   }
 }
 

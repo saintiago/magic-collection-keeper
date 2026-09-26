@@ -115,6 +115,122 @@ const digitalOnlyCard = {
   cmc: 0,
 };
 
+const ghaltaRulesText =
+  'This spell costs {X} less to cast, where X is the total power of creatures you control.\n' +
+  'Trample (This creature can deal excess combat damage to the player or planeswalker it is attacking.)';
+
+/** An ordinary printing of Ghalta, Primal Hunger. */
+const ghaltaOrdinary = {
+  object: 'card',
+  id: 'printing-rix-137-en',
+  oracle_id: 'oracle-ghalta-primal-hunger',
+  name: 'Ghalta, Primal Hunger',
+  lang: 'en',
+  set: 'rix',
+  collector_number: '137',
+  finishes: ['nonfoil', 'foil'],
+  nonfoil: true,
+  foil: true,
+  digital: false,
+  oracle_text: ghaltaRulesText,
+  type_line: 'Legendary Creature — Elder Dinosaur',
+  colors: ['G'],
+  color_identity: ['G'],
+  cmc: 12,
+  image_uris: {
+    small: 'https://images.example.test/rix-137-small.jpg',
+    normal: 'https://images.example.test/rix-137-normal.jpg',
+  },
+};
+
+/**
+ * A representative Scryfall reversible printing: the provider publishes no card-level identity,
+ * name, type line, rules text, colors or mana value, so both faces carry the one card it depicts.
+ */
+const reversibleGhalta = {
+  object: 'card',
+  id: 'printing-sld-1124-en',
+  name: 'Ghalta, Primal Hunger // Ghalta, Primal Hunger',
+  lang: 'en',
+  set: 'sld',
+  collector_number: '1124',
+  finishes: ['nonfoil', 'foil'],
+  nonfoil: true,
+  foil: true,
+  digital: false,
+  color_identity: ['G'],
+  card_faces: [
+    {
+      object: 'card_face',
+      oracle_id: 'oracle-ghalta-primal-hunger',
+      name: 'Ghalta, Primal Hunger',
+      mana_cost: '{10}{G}{G}',
+      cmc: 12,
+      type_line: 'Legendary Creature — Elder Dinosaur',
+      oracle_text: ghaltaRulesText,
+      colors: ['G'],
+      image_uris: {
+        small: 'https://images.example.test/sld-1124-front-small.jpg',
+        normal: 'https://images.example.test/sld-1124-front-normal.jpg',
+      },
+    },
+    {
+      object: 'card_face',
+      oracle_id: 'oracle-ghalta-primal-hunger',
+      name: 'Ghalta, Primal Hunger',
+      mana_cost: '{10}{G}{G}',
+      cmc: 12,
+      type_line: 'Legendary Creature — Elder Dinosaur',
+      oracle_text: ghaltaRulesText,
+      colors: ['G'],
+      image_uris: {
+        small: 'https://images.example.test/sld-1124-back-small.jpg',
+        normal: 'https://images.example.test/sld-1124-back-normal.jpg',
+      },
+    },
+  ],
+};
+
+const bloomvineRulesText =
+  'Flying\nWhenever this creature or another Dragon you control enters, you gain 3 life.';
+
+/** A reversible adventure printing: its faces name the two halves of the one card it depicts. */
+const reversibleAdventure = {
+  object: 'card',
+  id: 'printing-tdm-381-en',
+  name: 'Bloomvine Regent // Claim Territory // Bloomvine Regent',
+  lang: 'en',
+  set: 'tdm',
+  collector_number: '381',
+  finishes: ['nonfoil'],
+  nonfoil: true,
+  foil: false,
+  digital: false,
+  color_identity: ['G'],
+  card_faces: [
+    {
+      object: 'card_face',
+      oracle_id: 'oracle-bloomvine-regent',
+      name: 'Bloomvine Regent',
+      mana_cost: '{3}{G}{G}',
+      cmc: 5,
+      type_line: 'Creature — Dragon',
+      oracle_text: bloomvineRulesText,
+      colors: ['G'],
+    },
+    {
+      object: 'card_face',
+      oracle_id: 'oracle-bloomvine-regent',
+      name: 'Claim Territory',
+      mana_cost: '{2}{G}',
+      cmc: 5,
+      type_line: 'Sorcery — Omen',
+      oracle_text: bloomvineRulesText,
+      colors: ['G'],
+    },
+  ],
+};
+
 function generatedRecord(index: number): unknown {
   return {
     object: 'card',
@@ -269,42 +385,122 @@ describe('catalog synchronization', () => {
     expect(counts[0]).toEqual({ cards: 3, names: 5, printings: 3 });
   });
 
+  it('publishes reversible printings under the identity and attributes their faces publish', async () => {
+    // Scryfall's reversible printings (layout: reversible_card) publish no card-level identity,
+    // name, type line, rules text or mana value; both faces carry the one card the printing
+    // depicts. The printing must resolve, list and describe the same card as its ordinary
+    // printing, whichever record the snapshot publishes last.
+    const revision = await synchronizer(
+      createSnapshotSource({
+        cards: { sourceVersion: 'snapshot-1', records: [ghaltaOrdinary, reversibleGhalta] },
+      }),
+    ).synchronize({ dataset: 'cards' });
+
+    const resolution = await catalog().resolve([
+      { kind: 'card', cardId: 'oracle-ghalta-primal-hunger' },
+      { kind: 'printing', printingId: 'printing-rix-137-en' },
+      { kind: 'printing', printingId: 'printing-sld-1124-en' },
+    ]);
+    expect(resolution.revision).toEqual(revision);
+    expect(resolution.missing).toEqual([]);
+
+    const card = resolution.cards.get('oracle-ghalta-primal-hunger');
+    expect(card?.name).toBe('Ghalta, Primal Hunger');
+    expect(card?.names).toEqual([
+      { language: 'en', name: 'Ghalta, Primal Hunger' },
+      { language: 'en', name: 'Ghalta, Primal Hunger // Ghalta, Primal Hunger' },
+    ]);
+    expect(card?.rulesText).toBe(ghaltaRulesText);
+    expect(card?.typeLine).toBe('Legendary Creature — Elder Dinosaur');
+    expect(card?.colors).toEqual(['G']);
+    expect(card?.manaValue).toBe(12);
+
+    expect(resolution.printings.get('printing-sld-1124-en')).toEqual({
+      printingId: 'printing-sld-1124-en',
+      cardId: 'oracle-ghalta-primal-hunger',
+      edition: 'sld',
+      collectorNumber: '1124',
+      language: 'en',
+      finishes: ['nonfoil', 'foil'],
+      physical: true,
+      images: {
+        small: 'https://images.example.test/sld-1124-front-small.jpg',
+        normal: 'https://images.example.test/sld-1124-front-normal.jpg',
+        large: null,
+        artCrop: null,
+      },
+    });
+
+    const listed = await catalog().listCardPrintings('oracle-ghalta-primal-hunger', {
+      pageSize: 50,
+    });
+    expect(listed.cardExists).toBe(true);
+    expect(listed.revision).toEqual(revision);
+    expect(listed.printings.map((printing) => printing.printingId)).toEqual([
+      'printing-rix-137-en',
+      'printing-sld-1124-en',
+    ]);
+  });
+
+  it('joins the names and type lines of a reversible printing whose faces name two halves', async () => {
+    const revision = await synchronizer(
+      createSnapshotSource({
+        cards: { sourceVersion: 'snapshot-1', records: [reversibleAdventure] },
+      }),
+    ).synchronize({ dataset: 'cards' });
+
+    const resolution = await catalog().resolve([
+      { kind: 'card', cardId: 'oracle-bloomvine-regent' },
+      { kind: 'printing', printingId: 'printing-tdm-381-en' },
+    ]);
+    expect(resolution.revision).toEqual(revision);
+    expect(resolution.missing).toEqual([]);
+
+    // The joined card name and type line match the card's ordinary printing, and the identical
+    // rules text both faces publish stays one value.
+    const card = resolution.cards.get('oracle-bloomvine-regent');
+    expect(card?.name).toBe('Bloomvine Regent // Claim Territory');
+    expect(card?.typeLine).toBe('Creature — Dragon // Sorcery — Omen');
+    expect(card?.rulesText).toBe(bloomvineRulesText);
+    expect(card?.manaValue).toBe(5);
+  });
+
   it('leaves out provider records that publish no card identity', async () => {
-    // Scryfall publishes reversible promo cards without an oracle identity; they have no playable
-    // identity to own, and they must not fail an otherwise readable snapshot.
-    const reversiblePromo = {
+    // A record whose card level and faces publish no identity is not catalog data; it must not
+    // fail an otherwise readable snapshot.
+    const identityLessRecord = {
       object: 'card',
-      id: 'printing-slp-1-en',
-      name: 'Ghalta, Primal Hunger // Ghalta, Primal Hunger',
+      id: 'printing-unknown-1-en',
+      name: 'Unidentified Provider Record',
       lang: 'en',
-      set: 'slp',
+      set: 'unk',
       collector_number: '1',
       finishes: ['nonfoil'],
       nonfoil: true,
       digital: false,
-      type_line: 'Legendary Creature — Dinosaur // Legendary Creature — Dinosaur',
-      color_identity: ['G'],
-      card_faces: [{ object: 'card_face', name: 'Ghalta, Primal Hunger', colors: ['G'] }],
+      type_line: 'Unknown',
+      color_identity: [],
+      card_faces: [{ object: 'card_face', name: 'Unidentified Face' }],
     };
 
     const revision = await synchronizer(
       createSnapshotSource({
-        cards: { sourceVersion: 'snapshot-1', records: [lightningBolt, reversiblePromo] },
+        cards: { sourceVersion: 'snapshot-1', records: [lightningBolt, identityLessRecord] },
       }),
     ).synchronize({ dataset: 'cards' });
 
     const resolution = await catalog().resolve([
       { kind: 'printing', printingId: 'printing-tle-32-en' },
-      { kind: 'printing', printingId: 'printing-slp-1-en' },
+      { kind: 'printing', printingId: 'printing-unknown-1-en' },
     ]);
     expect(resolution.revision).toEqual(revision);
     expect(resolution.printings.has('printing-tle-32-en')).toBe(true);
-    expect(resolution.missing).toEqual([{ kind: 'printing', printingId: 'printing-slp-1-en' }]);
+    expect(resolution.missing).toEqual([{ kind: 'printing', printingId: 'printing-unknown-1-en' }]);
 
     const identityLessOnly = await captureCatalogError(
       synchronizer(
         createSnapshotSource({
-          cards: { sourceVersion: 'snapshot-2', records: [reversiblePromo] },
+          cards: { sourceVersion: 'snapshot-2', records: [identityLessRecord] },
         }),
       ).synchronize({ dataset: 'cards' }),
     );
@@ -363,6 +559,32 @@ describe('catalog synchronization', () => {
     expect(recovered.sourceVersion).toBe('snapshot-2');
     const rows = await database.query('select count(*)::int as cards from catalog.cards');
     expect(rows[0]).toEqual({ cards: 2 });
+  });
+
+  it('rejects a raw record beyond the readable bound whatever the chunking', async () => {
+    const first = await synchronizer(
+      createSnapshotSource({ cards: { sourceVersion: 'snapshot-1', records: [lightningBolt] } }),
+    ).synchronize({ dataset: 'cards' });
+
+    // The oversized part is a provider field the mapper never reads, so only the raw record bound
+    // can reject it; a single newline-terminated chunk must be rejected like a split one.
+    const oversized = `${JSON.stringify({
+      ...lightningBolt,
+      unused_provider_field: 'x'.repeat(CATALOG_SYNCHRONIZATION_LIMITS.maxRecordLength),
+    })}\n`;
+
+    for (const chunkSize of [oversized.length, 64]) {
+      const error = await captureCatalogError(
+        synchronizer(
+          createSnapshotSource({
+            cards: { sourceVersion: 'snapshot-2', text: oversized, chunkSize },
+          }),
+        ).synchronize({ dataset: 'cards' }),
+      );
+      expect(error.code, `chunk size ${chunkSize}`).toBe('unavailable');
+      expect(error.message, `chunk size ${chunkSize}`).toContain('readable bound');
+      expect(await publishedRevision(), `chunk size ${chunkSize}`).toEqual(first);
+    }
   });
 
   it('rolls back an ingestion interrupted after part of the candidate was written', async () => {
@@ -439,6 +661,67 @@ describe('catalog synchronization', () => {
     expect(second).toEqual(first);
     expect(source.opened).toBe(2);
     expect(source.read).toBe(1);
+  });
+
+  it('does not publish a second revision when an overlapping invocation got there first', async () => {
+    const records = [lightningBolt, lightningBoltSpanish];
+    const document = `${records.map((record) => JSON.stringify(record)).join('\n')}\n`;
+    let opened = 0;
+    let reads = 0;
+    let announceOpen: () => void = () => {};
+    const openedSnapshot = new Promise<void>((resolve) => {
+      announceOpen = resolve;
+    });
+    let continueOpen: () => void = () => {};
+    const holdOpen = new Promise<void>((resolve) => {
+      continueOpen = resolve;
+    });
+    const source: CatalogSnapshotSource = {
+      async open() {
+        opened += 1;
+        if (opened === 1) {
+          // The first invocation pauses inside the source until the second has published.
+          announceOpen();
+          await holdOpen;
+        }
+        return {
+          sourceName: 'scryfall',
+          sourceVersion: 'snapshot-1',
+          text: (async function* () {
+            reads += 1;
+            yield document;
+          })(),
+        };
+      },
+    };
+
+    const paused = synchronizer(source).synchronize({ dataset: 'cards' });
+    await openedSnapshot;
+    const firstPublished = await synchronizer(source).synchronize({ dataset: 'cards' });
+    const page = await catalog().listCardPrintings('oracle-lightning-bolt', { pageSize: 1 });
+    expect(page.revision).toEqual(firstPublished);
+    continueOpen();
+    const resumed = await paused;
+
+    // The resumed invocation returns the revision it found rather than republishing identical
+    // content, it never consumed its own snapshot, and pagination taken meanwhile stays valid.
+    expect(resumed).toEqual(firstPublished);
+    expect(reads).toBe(1);
+    const revisionRow = await database.query(
+      'select revision_id, source_version from catalog_private.revision',
+    );
+    expect(revisionRow).toEqual([
+      {
+        revision_id: firstPublished.revisionId,
+        source_version: firstPublished.sourceVersion,
+      },
+    ]);
+    const next = await catalog().listCardPrintings('oracle-lightning-bolt', {
+      pageSize: 1,
+      continuation: page.continuation ?? '',
+    });
+    expect(next.revision).toEqual(firstPublished);
+    expect(next.printings.map((printing) => printing.printingId)).toEqual(['printing-tle-32-es']);
   });
 
   it('reports a held publication lock as busy without writing anything', async () => {

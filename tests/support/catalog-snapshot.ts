@@ -15,6 +15,8 @@ export interface SnapshotFixture {
   readonly records?: readonly unknown[];
   /** Raw snapshot text, used to exercise unreadable snapshots. */
   readonly text?: string;
+  /** Characters per streamed chunk; the default splits records like a real download does. */
+  readonly chunkSize?: number;
 }
 
 /** A source over fixed snapshots, keyed by the dataset a synchronization request names. */
@@ -30,7 +32,7 @@ export function createSnapshotSource(
       return {
         sourceName: fixture.sourceName ?? 'scryfall',
         sourceVersion: fixture.sourceVersion,
-        text: jsonLines(fixture.records ?? [], fixture.text),
+        text: jsonLines(fixture.records ?? [], fixture.text, fixture.chunkSize),
       };
     },
   };
