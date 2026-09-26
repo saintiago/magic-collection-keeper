@@ -25,6 +25,7 @@
     "validate": "turbo run format:check lint typecheck boundaries build test test:python test:browser"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.63.0",
     "@types/node": "^24.13.4",
@@ -36,5 +37,8 @@
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.1",
     "vitest": "^5.0.1"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
   }
 }

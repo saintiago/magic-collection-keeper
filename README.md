@@ -1,8 +1,9 @@
 # Magic Collection Keeper
 
 This repository contains the approved rebuild design and the workspace harness the rebuild is built
-on. The previous application implementation has been removed; the product components in
-docs/architecture.md are not implemented yet.
+on. The previous application implementation has been removed. Product components from
+docs/architecture.md are rebuilt task by task: Catalog already provides its read contract, its
+published query surface and its contract tests; the remaining components are not implemented yet.
 
 Start with AGENTS.md for the documentation index and engineering principles.
 The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
@@ -43,6 +44,11 @@ tests are organised as tests/component/<component>/ so one component's tests can
 The build clears `build/` before compiling; caching is disabled so restoring cached artifacts cannot
 leave output from deleted sources behind.
 Nexus uses the same commands for preparation and validation (nexus.project.json).
+
+Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
+WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without
+a database service. Deployed statements reach Aurora PostgreSQL through the executor Application
+supplies.
 
 Each component from docs/architecture.md owns src/<component>/index.ts as its provider-owned public
 entry point; cross-component imports use that module, and `.dependency-cruiser.mjs` fails the
