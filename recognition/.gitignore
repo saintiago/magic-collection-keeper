@@ -1,6 +1,0 @@
-artifacts/
-vendor/
-__pycache__/
-*.pyc
-source.zip
-requirements-linux-observed.txt

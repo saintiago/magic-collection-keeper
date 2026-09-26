@@ -51,22 +51,29 @@ Apply these to component responsibilities and public contracts as well as code.
 
 ## Documentation references
 
-All documents in `docs/new/` are relevant to the rebuild.
+The repository owns requirements, acceptance criteria and test guidance. Keep each rule in its
+owning document. Jira tasks reference the relevant document sections and identify scope exclusions;
+they do not define additional behavior or test instructions. Jira Rank owns execution order and
+issue links record dependencies. Discuss undocumented requirements with the owner before adopting
+them; an existing ticket or old implementation does not establish a requirement.
 
-- [Product charter](docs/new/PRODUCT-CHARTER.md)
-- [Architecture](docs/new/architecture.md)
-- [Application](docs/new/application.md)
-- [UserInterface](docs/new/user-interface.md)
-- [Catalog](docs/new/catalog.md)
-- [UserCards](docs/new/user-cards.md)
-- [Search](docs/new/search.md)
-- [Recognition](docs/new/recognition.md)
-- [Tech stack](docs/new/tech-stack.md)
-- [Testing architecture](docs/new/testing.md)
-- [Rebuild requirements](docs/new/requirements.md)
-- [Collection migration](docs/new/migration.md)
-- [Recognition baseline](docs/new/recognition-preservation.md)
-- [Implementation task inventory](docs/new/tasks/inventory.md)
+All documents in `docs/` are relevant to the rebuild.
+
+- [Product charter](docs/PRODUCT-CHARTER.md)
+- [Architecture](docs/architecture.md)
+- [Application](docs/application.md)
+- [UserInterface](docs/user-interface.md)
+- [Catalog](docs/catalog.md)
+- [UserCards](docs/user-cards.md)
+- [Search](docs/search.md)
+- [Recognition](docs/recognition.md)
+- [Tech stack](docs/tech-stack.md)
+- [Testing architecture](docs/testing.md)
+- [Build and release operations](docs/operations.md)
+- [Rebuild requirements](docs/requirements.md)
+- [Collection migration](docs/migration.md)
+- [Recognition baseline](docs/recognition-preservation.md)
+- [Implementation task inventory](docs/tasks/inventory.md)
 
 Search reference:
 
