@@ -1,0 +1,40 @@
+{
+  "name": "magic-collection-keeper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.11.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --cache --cache-location .turbo/eslint/.eslintcache --cache-strategy content",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "boundaries": "depcruise src",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:component": "vitest run --project component",
+    "test:integration": "vitest run --project integration",
+    "test:browser": "playwright test",
+    "test:python": "node scripts/run-python-tests.ts",
+    "install:browsers": "playwright install chromium",
+    "validate": "turbo run format:check lint typecheck boundaries build test test:python test:browser"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^24.13.4",
+    "dependency-cruiser": "^18.4.0",
+    "eslint": "^10.11.0",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.9",
+    "turbo": "2.11.3",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.1"
+  }
+}

@@ -64,7 +64,8 @@ record dependencies. This index groups tasks by subject and does not prescribe e
 - Select the `keeper-rebuild` label and Jira Rank. Older KAN tasks are outside this queue.
 - Draft tasks are not eligible for execution; To Do tasks are eligible once their prerequisites
   are complete. Rank does not itself enforce Jira dependency links.
-- The documentation-only baseline has no application package or build. Workspace implementation supplies
-  preparation and validation commands.
+- KAN-6 supplies the workspace harness: locked dependencies, `npm ci`, focused checks and the
+  aggregate `npm run validate` command. Product packages and deployable builds remain with their
+  implementation tasks.
 - Nexus delivery uses the required Nexus Lens review check. Its review gate is independent of
   GitHub Actions CI and automatic deployment, which remain disabled during the rebuild.
