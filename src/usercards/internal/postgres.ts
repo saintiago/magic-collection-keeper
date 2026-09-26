@@ -1,14 +1,18 @@
-import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 
-import { finishes } from '../../catalog/index.js';
 import { UserCardsError } from './errors.js';
-import type {
-  UserCardsSqlExecutor,
-  UserCardsSqlRow,
-  UserCardsSqlTransactor,
-  UserCardsSqlValue,
-} from './executor.js';
-import { USERCARDS_LIMITS, copyConditions, type PhysicalCopy } from './model.js';
+import type { UserCardsSqlTransactor, UserCardsSqlValue } from './executor.js';
+import { copyFromRow, copyPayloadSql, copiesFromRows } from './rows.js';
+import {
+  groupRows,
+  inTransaction,
+  placeholdersFor,
+  readRows,
+  revisionBranchSql,
+  revisionFromPayload,
+  revisionFromRow,
+  revisionStatement,
+} from './sql.js';
 import type {
   CopiesData,
   CopyCorrection,
@@ -17,42 +21,6 @@ import type {
   NewCopy,
 } from './store.js';
 
-const identifierLength = USERCARDS_LIMITS.maxIdentifierLength;
-
-const revisionJsonSchema = z.object({ revision: z.number().int().min(0) });
-
-const copyJsonSchema = z.object({
-  copy_id: z.string().min(1).max(identifierLength),
-  printing_id: z.string().min(1).max(identifierLength),
-  finish: z.enum(finishes),
-  condition: z.enum(copyConditions).nullable(),
-  revision: z.number().int().min(1),
-});
-
-/** One JSON payload per stored copy, so a response row never mixes or aggregates copies. */
-const copyPayloadSql = `json_build_object(
-    'copy_id', copy_id,
-    'printing_id', printing_id,
-    'finish', finish,
-    'condition', condition,
-    'revision', revision
-  )::text`;
-
-interface NamedPlaceholders {
-  readonly list: string;
-  readonly parameters: Record<string, string>;
-}
-
-/** One placeholder per value; RDS Data API parameters are named and never arrays. */
-function placeholdersFor(values: readonly string[], prefix: string): NamedPlaceholders {
-  const parameters: Record<string, string> = {};
-  const names = values.map((value, index) => {
-    parameters[`${prefix}_${index}`] = value;
-    return `:${prefix}_${index}`;
-  });
-  return { list: names.join(', '), parameters };
-}
-
 function readCopiesStatement(
   accountId: string,
   copyIds: readonly string[],
@@ -60,13 +28,7 @@ function readCopiesStatement(
   // The deployed executor reaches Aurora through the RDS Data API, which caps a response row at
   // 64 KB, so copies arrive one row each; the revision row is part of the same statement, so
   // records and revision always come from one snapshot.
-  const revisionBranch = `select 'revision' as row_kind,
-  0 as row_position,
-  json_build_object('revision', coalesce(
-    (select state.revision
-       from usercards_private.account_state as state
-      where state.account_id = :account_id), 0))::text as payload`;
-  const branches = [revisionBranch];
+  const branches = [revisionBranchSql()];
   const parameters: Record<string, UserCardsSqlValue> = { account_id: accountId };
   if (copyIds.length > 0) {
     const references = placeholdersFor(copyIds, 'copy');
@@ -108,6 +70,55 @@ function insertCopiesStatement(
   };
 }
 
+/**
+ * The account's system ownership tag, created on first use and reused afterwards
+ * (docs/architecture.md#tags-and-associations). A partial unique index keeps one owned tag per
+ * account, so the returned identity is the account's only ownership tag.
+ */
+function ownedTagStatement(
+  accountId: string,
+  proposedTagId: string,
+): { statement: string; parameters: Record<string, UserCardsSqlValue> } {
+  return {
+    statement: `insert into usercards_private.tag (tag_id, account_id, kind, label, system, revision)
+     values (:tag_id, :account_id, 'owned', 'Owned', true, 1)
+     on conflict (account_id) where kind = 'owned'
+     do update set label = excluded.label
+     returning tag_id`,
+    parameters: { tag_id: proposedTagId, account_id: accountId },
+  };
+}
+
+/**
+ * Associates every stored copy with the account's owned tag in the same transaction, so a copy
+ * that exists in private storage is owned and its physical membership is explicit
+ * (docs/user-cards.md#records-and-associations).
+ */
+function ownedAssociationsStatement(
+  accountId: string,
+  ownedTagId: string,
+  copies: readonly NewCopy[],
+): { statement: string; parameters: Record<string, UserCardsSqlValue> } {
+  const parameters: Record<string, UserCardsSqlValue> = {
+    account_id: accountId,
+    tag_id: ownedTagId,
+  };
+  const values = copies
+    .map((copy, index) => {
+      parameters[`association_id_${index}`] = randomUUID();
+      parameters[`copy_id_${index}`] = copy.copyId;
+      return `(:association_id_${index}, :account_id, :tag_id, 'owned', 'copy', :copy_id_${index}, null, 1)`;
+    })
+    .join(',\n       ');
+  return {
+    statement: `insert into usercards_private.association
+       (association_id, account_id, tag_id, tag_kind, target_level, target_id, quantity, revision)
+     values ${values}
+     returning association_id`,
+    parameters,
+  };
+}
+
 function correctionStatement(
   accountId: string,
   correction: CopyCorrection,
@@ -134,130 +145,6 @@ function correctionStatement(
   };
 }
 
-/** Publication of one change: the account revision advances in the same transaction as the row. */
-function revisionStatement(accountId: string): {
-  statement: string;
-  parameters: Record<string, UserCardsSqlValue>;
-} {
-  return {
-    statement: `insert into usercards_private.account_state (account_id, revision)
-     values (:account_id, 1)
-     on conflict (account_id) do update set revision = account_state.revision + 1
-     returning revision::text as revision`,
-    parameters: { account_id: accountId },
-  };
-}
-
-async function readRows(
-  sql: UserCardsSqlExecutor,
-  statement: string,
-  parameters: Readonly<Record<string, UserCardsSqlValue>>,
-  message: string,
-): Promise<readonly UserCardsSqlRow[]> {
-  try {
-    return await sql.query(statement, parameters);
-  } catch (cause) {
-    throw new UserCardsError('unavailable', message, { cause });
-  }
-}
-
-async function inTransaction<T>(
-  sql: UserCardsSqlTransactor,
-  work: (statements: UserCardsSqlExecutor) => Promise<T>,
-  message: string,
-): Promise<T> {
-  try {
-    return await sql.transaction((statements) => work(statements));
-  } catch (cause) {
-    if (cause instanceof UserCardsError) {
-      throw cause;
-    }
-    throw new UserCardsError('unavailable', message, { cause });
-  }
-}
-
-function parsePayload<T>(schema: z.ZodType<T>, value: UserCardsSqlValue | undefined): T {
-  if (typeof value !== 'string') {
-    throw new UserCardsError('unavailable', 'UserCards returned a result that is not readable.');
-  }
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(value);
-  } catch (cause) {
-    throw new UserCardsError('unavailable', 'UserCards returned unreadable result data.', {
-      cause,
-    });
-  }
-  const parsed = schema.safeParse(decoded);
-  if (!parsed.success) {
-    throw new UserCardsError(
-      'unavailable',
-      'The stored copy data does not match the declared read contract.',
-      { cause: parsed.error },
-    );
-  }
-  return parsed.data;
-}
-
-type CopyJson = z.infer<typeof copyJsonSchema>;
-
-function copyFromJson(json: CopyJson): PhysicalCopy {
-  return {
-    copyId: json.copy_id,
-    printingId: json.printing_id,
-    finish: json.finish,
-    condition: json.condition,
-    revision: json.revision,
-  };
-}
-
-function copiesFromRows(rows: readonly UserCardsSqlRow[]): PhysicalCopy[] {
-  return rows
-    .map((row) => copyFromJson(parsePayload(copyJsonSchema, row.payload)))
-    .sort((left, right) => left.copyId.localeCompare(right.copyId));
-}
-
-function revisionFromPayload(value: UserCardsSqlValue | undefined): string {
-  return String(parsePayload(revisionJsonSchema, value).revision);
-}
-
-function revisionFromRow(row: UserCardsSqlRow | undefined): string {
-  const value = row?.revision;
-  if (typeof value !== 'string' || !/^[0-9]+$/.test(value)) {
-    throw new UserCardsError('unavailable', 'UserCards did not report its private-data revision.');
-  }
-  return value;
-}
-
-interface GroupedRows {
-  readonly revision: readonly UserCardsSqlRow[];
-  readonly copies: readonly UserCardsSqlRow[];
-}
-
-/** Groups the statement's rows by record kind; anything else violates the read contract. */
-function groupRows(rows: readonly UserCardsSqlRow[]): GroupedRows {
-  const grouped: { revision: UserCardsSqlRow[]; copies: UserCardsSqlRow[] } = {
-    revision: [],
-    copies: [],
-  };
-  for (const row of rows) {
-    switch (row.row_kind) {
-      case 'revision':
-        grouped.revision.push(row);
-        break;
-      case 'copy':
-        grouped.copies.push(row);
-        break;
-      default:
-        throw new UserCardsError(
-          'unavailable',
-          'UserCards returned a result that is not readable.',
-        );
-    }
-  }
-  return grouped;
-}
-
 /** Reads and writes the private copy records of one account. */
 export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore {
   return {
@@ -270,6 +157,7 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
           request.parameters,
           'The private copies could not be read.',
         ),
+        ['revision', 'copy'] as const,
       );
       const revisionRow = rows.revision[0];
       if (revisionRow === undefined) {
@@ -280,7 +168,7 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
       }
       return {
         privateRevision: revisionFromPayload(revisionRow.payload),
-        copies: copiesFromRows(rows.copies),
+        copies: copiesFromRows(rows.copy),
       };
     },
 
@@ -288,6 +176,21 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
       return inTransaction(
         sql,
         async (statements) => {
+          const owned = ownedTagStatement(accountId, randomUUID());
+          const ownedRows = await readRows(
+            statements,
+            owned.statement,
+            owned.parameters,
+            'The account ownership tag could not be prepared.',
+          );
+          const ownedTagId = ownedRows[0]?.tag_id;
+          if (typeof ownedTagId !== 'string') {
+            throw new UserCardsError(
+              'unavailable',
+              'UserCards did not report the account ownership tag.',
+            );
+          }
+
           const insert = insertCopiesStatement(accountId, copies);
           const rows = await readRows(
             statements,
@@ -295,6 +198,15 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
             insert.parameters,
             'The copies could not be stored.',
           );
+
+          const ownership = ownedAssociationsStatement(accountId, ownedTagId, copies);
+          await readRows(
+            statements,
+            ownership.statement,
+            ownership.parameters,
+            'The copy ownership could not be stored.',
+          );
+
           const publication = revisionStatement(accountId);
           const revisionRow = await readRows(
             statements,
@@ -334,7 +246,7 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
             return {
               outcome: 'updated',
               privateRevision: revisionFromRow(revisionRow[0]),
-              copy: copyFromJson(parsePayload(copyJsonSchema, row.payload)),
+              copy: copyFromRow(row),
             };
           }
           const existing = await readRows(

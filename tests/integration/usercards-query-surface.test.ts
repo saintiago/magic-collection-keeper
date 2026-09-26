@@ -56,8 +56,8 @@ function declaredColumns(
 }
 
 function columnType(dataType: string): UserCardsColumnType {
-  if (dataType === 'text') {
-    return 'text';
+  if (dataType === 'text' || dataType === 'boolean' || dataType === 'integer') {
+    return dataType;
   }
   throw new Error(`Undeclared UserCards column type ${dataType}.`);
 }
@@ -141,6 +141,13 @@ describe('usercards query surface', () => {
   it('grants consumer roles read-only access to the account-scoped views and no private tables', async () => {
     const aliceCopy = await createCopy(alice, { finish: 'foil', condition: 'LP' });
     await createCopy(bob, { finish: 'nonfoil', condition: null });
+    const deck = await userCards.createTag(alice, { kind: 'deck', label: 'Burn' });
+    const association = await userCards.createAssociation(alice, {
+      tagId: deck.tag.tagId,
+      targetLevel: 'card',
+      targetId: lightningBolt.cardId,
+      quantity: 4,
+    });
 
     await database.exec('create role keeper_reader');
     await database.exec(usercardsReaderGrants('keeper_reader'));
@@ -166,14 +173,52 @@ describe('usercards query surface', () => {
         alice.accountId,
         'select revision from usercards.private_revision',
       );
-      expect(revision).toEqual([{ revision: '1' }]);
+      // Alice's copy, tag and association are three private changes.
+      expect(revision).toEqual([{ revision: '3' }]);
+
+      expect(
+        await readScoped(
+          database,
+          alice.accountId,
+          'select tag_id, kind, label, system from usercards.tags order by kind',
+        ),
+      ).toEqual([
+        { tag_id: deck.tag.tagId, kind: 'deck', label: 'Burn', system: false },
+        { tag_id: expect.any(String) as string, kind: 'owned', label: 'Owned', system: true },
+      ]);
+      expect(
+        await readScoped(
+          database,
+          alice.accountId,
+          `select association_id, tag_id, target_level, target_id, quantity
+             from usercards.associations
+            where target_level <> 'copy'`,
+        ),
+      ).toEqual([
+        {
+          association_id: association.association.associationId,
+          tag_id: deck.tag.tagId,
+          target_level: 'card',
+          target_id: lightningBolt.cardId,
+          quantity: 4,
+        },
+      ]);
 
       await expect(database.query('select copy_id from usercards_private.copy')).rejects.toThrow(
         /permission denied/,
       );
+      await expect(database.query('select tag_id from usercards_private.tag')).rejects.toThrow(
+        /permission denied/,
+      );
+      await expect(
+        database.query('select association_id from usercards_private.association'),
+      ).rejects.toThrow(/permission denied/);
       await expect(
         database.exec("insert into usercards.copies (copy_id) values ('copy-injected')"),
-      ).rejects.toThrow(/permission denied|cannot insert into a view/);
+      ).rejects.toThrow(/permission denied|cannot insert into view/);
+      await expect(
+        database.exec("insert into usercards.associations (association_id) values ('injected')"),
+      ).rejects.toThrow(/permission denied|cannot insert into view/);
     } finally {
       await database.exec('reset role');
     }
@@ -181,28 +226,43 @@ describe('usercards query surface', () => {
 
   it('keeps consumer predicates from evaluating the rows the account filter excludes', async () => {
     const aliceCopy = await createCopy(alice);
+    const deck = await userCards.createTag(alice, { kind: 'deck', label: 'Burn' });
+    const association = await userCards.createAssociation(alice, {
+      tagId: deck.tag.tagId,
+      targetLevel: 'card',
+      targetId: lightningBolt.cardId,
+      quantity: 4,
+    });
 
     await database.exec('create role keeper_prober');
     await database.exec(usercardsReaderGrants('keeper_prober'));
     await database.exec('set role keeper_prober');
     try {
       // Both probes force a sequential plan: there the predicate would run over the base rows and
-      // a failing cast would quote Alice's private copy ID without the security barrier.
-      async function probe(accountId: string | null): Promise<readonly UserCardsSqlRow[]> {
+      // a failing cast would quote Alice's private identity without the security barrier.
+      async function probe(
+        accountId: string | null,
+        statement: string,
+      ): Promise<readonly UserCardsSqlRow[]> {
         return database.sql.transaction(async (statements) => {
           await statements.query('set local enable_indexscan = off');
           await statements.query('set local enable_bitmapscan = off');
           if (accountId !== null) {
             await statements.query(USERCARDS_ACCOUNT_SCOPE_SQL, { account_id: accountId });
           }
-          return statements.query('select copy_id from usercards.copies where copy_id::boolean');
+          return statements.query(statement);
         });
       }
 
-      await expect(probe(bob.accountId)).resolves.toEqual([]);
-      await expect(probe(null)).resolves.toEqual([]);
+      const copyProbe = 'select copy_id from usercards.copies where copy_id::boolean';
+      const associationProbe =
+        'select association_id from usercards.associations where association_id::boolean';
+      await expect(probe(bob.accountId, copyProbe)).resolves.toEqual([]);
+      await expect(probe(null, copyProbe)).resolves.toEqual([]);
+      await expect(probe(bob.accountId, associationProbe)).resolves.toEqual([]);
+      await expect(probe(null, associationProbe)).resolves.toEqual([]);
 
-      // The same reader sees Alice's copy with Alice's account bound, so the empty probes above
+      // The same reader sees Alice's records with Alice's account bound, so the empty probes above
       // come from the account filter and not from a relation that never returns rows.
       expect(
         await database.sql.transaction(async (statements) => {
@@ -210,6 +270,13 @@ describe('usercards query surface', () => {
           return statements.query('select copy_id from usercards.copies');
         }),
       ).toEqual([{ copy_id: aliceCopy.copyId }]);
+      expect(
+        await readScoped(
+          database,
+          alice.accountId,
+          `select association_id from usercards.associations where target_level = 'card'`,
+        ),
+      ).toEqual([{ association_id: association.association.associationId }]);
     } finally {
       await database.exec('reset role');
     }
@@ -218,14 +285,19 @@ describe('usercards query surface', () => {
   it('fails closed while no account context is bound', async () => {
     await createCopy(alice);
     await createCopy(bob);
+    await userCards.createTag(alice, { kind: 'deck', label: 'Burn' });
 
     expect(await database.query('select * from usercards.copies')).toEqual([]);
+    expect(await database.query('select * from usercards.tags')).toEqual([]);
+    expect(await database.query('select * from usercards.associations')).toEqual([]);
     expect(await database.query('select * from usercards.private_revision')).toEqual([]);
   });
 
   it('keeps the account scope from leaking between transactions on a reused connection', async () => {
     const aliceCopy = await createCopy(alice);
     const bobCopy = await createCopy(bob, { condition: 'LP' });
+    await userCards.createTag(alice, { kind: 'deck', label: 'Burn' });
+    await userCards.createTag(bob, { kind: 'wishlist', label: 'Wanted' });
 
     const scopedForAlice = await readScoped(
       database,
@@ -233,15 +305,31 @@ describe('usercards query surface', () => {
       'select copy_id from usercards.copies',
     );
     expect(scopedForAlice).toEqual([{ copy_id: aliceCopy.copyId }]);
+    expect(
+      await readScoped(
+        database,
+        alice.accountId,
+        'select kind, label from usercards.tags order by kind',
+      ),
+    ).toEqual([
+      { kind: 'deck', label: 'Burn' },
+      { kind: 'owned', label: 'Owned' },
+    ]);
+    expect(
+      await readScoped(database, bob.accountId, 'select label from usercards.tags order by label'),
+    ).toEqual([{ label: 'Owned' }, { label: 'Wanted' }]);
 
     // The transaction ended, so the same connection is unscoped again: nothing leaks out of it.
     expect(await database.query('select copy_id from usercards.copies')).toEqual([]);
+    expect(await database.query('select tag_id from usercards.tags')).toEqual([]);
+    expect(await database.query('select association_id from usercards.associations')).toEqual([]);
     expect(await database.query('select revision from usercards.private_revision')).toEqual([]);
 
     // Binding without a transaction is transaction-local too: the next statement fails closed. A
     // released setting stays defined as an empty string, which the views treat as no context.
     await database.sql.query(USERCARDS_ACCOUNT_SCOPE_SQL, { account_id: alice.accountId });
     expect(await database.query('select copy_id from usercards.copies')).toEqual([]);
+    expect(await database.query('select tag_id from usercards.tags')).toEqual([]);
     expect(await database.query('select revision from usercards.private_revision')).toEqual([]);
 
     const scopedForBob = await readScoped(
@@ -278,6 +366,107 @@ describe('usercards query surface', () => {
     ]);
   });
 
+  it('publishes derived ownership and single-location membership on copies', async () => {
+    const copy = await createCopy(alice);
+    const binder = await userCards.createTag(alice, { kind: 'location', label: 'Binder' });
+    const box = await userCards.createTag(alice, { kind: 'location', label: 'Box' });
+    const bobCopy = await createCopy(bob);
+
+    const before = await readScoped(
+      database,
+      alice.accountId,
+      'select copy_id, owned, location_id from usercards.copies',
+    );
+    expect(before).toEqual([{ copy_id: copy.copyId, owned: true, location_id: null }]);
+
+    const moved = await userCards.setCopyLocation(alice, {
+      copyId: copy.copyId,
+      locationTagId: binder.tag.tagId,
+      expectedRevision: 1,
+    });
+    expect(moved.copy.revision).toBe(2);
+
+    // A move replaces the membership instead of adding a second row, and ownership is untouched.
+    await userCards.setCopyLocation(alice, {
+      copyId: copy.copyId,
+      locationTagId: box.tag.tagId,
+      expectedRevision: 2,
+    });
+    expect(
+      await readScoped(
+        database,
+        alice.accountId,
+        'select copy_id, owned, location_id from usercards.copies',
+      ),
+    ).toEqual([{ copy_id: copy.copyId, owned: true, location_id: box.tag.tagId }]);
+    expect(
+      await readScoped(
+        database,
+        alice.accountId,
+        `select tag_id from usercards.associations
+          where tag_id in ('${binder.tag.tagId}', '${box.tag.tagId}')
+          order by tag_id`,
+      ),
+    ).toEqual([{ tag_id: box.tag.tagId }]);
+
+    // The bound account only sees its own membership; Bob's copy is owned without a location.
+    expect(
+      await readScoped(
+        database,
+        bob.accountId,
+        'select copy_id, owned, location_id from usercards.copies',
+      ),
+    ).toEqual([{ copy_id: bobCopy.copyId, owned: true, location_id: null }]);
+  });
+
+  it('publishes intended quantities separately from physical copy membership', async () => {
+    const deck = await userCards.createTag(alice, { kind: 'deck', label: 'Burn' });
+    const copy = await createCopy(alice);
+    const twin = await createCopy(alice);
+    await userCards.createAssociation(alice, {
+      tagId: deck.tag.tagId,
+      targetLevel: 'printing',
+      targetId: m11Printing.printingId,
+      quantity: 4,
+    });
+    await userCards.createAssociation(alice, {
+      tagId: deck.tag.tagId,
+      targetLevel: 'copy',
+      targetId: copy.copyId,
+    });
+    await userCards.createAssociation(alice, {
+      tagId: deck.tag.tagId,
+      targetLevel: 'copy',
+      targetId: twin.copyId,
+    });
+
+    const rows = await readScoped(
+      database,
+      alice.accountId,
+      `select target_level, quantity
+         from usercards.associations
+        where tag_id = '${deck.tag.tagId}'
+        order by target_level, target_id`,
+    );
+    expect(rows).toEqual([
+      { target_level: 'copy', quantity: null },
+      { target_level: 'copy', quantity: null },
+      { target_level: 'printing', quantity: 4 },
+    ]);
+
+    // Two physical copies of one printing count once each; the printing intention does not add to
+    // the physical count (docs/search.md#evaluation-and-grouping).
+    expect(
+      await readScoped(
+        database,
+        alice.accountId,
+        `select count(*)::int as copies, count(distinct target_id)::int as distinct_copies
+           from usercards.associations
+          where tag_id = '${deck.tag.tagId}' and target_level = 'copy'`,
+      ),
+    ).toEqual([{ copies: 2, distinct_copies: 2 }]);
+  });
+
   it('publishes a private-data revision that advances with the account’s writes', async () => {
     const empty = await readScoped(
       database,
@@ -310,6 +499,36 @@ describe('usercards query surface', () => {
       ),
     ).toEqual([{ revision: '2' }]);
 
+    const deck = await userCards.createTag(alice, { kind: 'deck', label: 'Burn' });
+    expect(
+      await readScoped(
+        database,
+        alice.accountId,
+        'select revision from usercards.private_revision',
+      ),
+    ).toEqual([{ revision: '3' }]);
+
+    const association = await userCards.createAssociation(alice, {
+      tagId: deck.tag.tagId,
+      targetLevel: 'card',
+      targetId: lightningBolt.cardId,
+      quantity: 2,
+    });
+    expect(association.association.revision).toBe(1);
+    const binder = await userCards.createTag(alice, { kind: 'location', label: 'Binder' });
+    await userCards.setCopyLocation(alice, {
+      copyId: copy.copyId,
+      locationTagId: binder.tag.tagId,
+      expectedRevision: 2,
+    });
+    expect(
+      await readScoped(
+        database,
+        alice.accountId,
+        'select revision from usercards.private_revision',
+      ),
+    ).toEqual([{ revision: '6' }]);
+
     // Bob's private data has its own revision and his write does not advance Alice's.
     await createCopy(bob);
     expect(
@@ -321,6 +540,6 @@ describe('usercards query surface', () => {
         alice.accountId,
         'select revision from usercards.private_revision',
       ),
-    ).toEqual([{ revision: '2' }]);
+    ).toEqual([{ revision: '6' }]);
   });
 });
