@@ -7,44 +7,219 @@ cards, printing attributes, organization or acquisition provenance. Migration is
 requirement, not an optional import feature. Existing production storage remains intact until the
 converted collection is reconciled and accepted.
 
+This document owns the legacy-to-new mapping and the backup, reconciliation and cutover acceptance
+the conversion must satisfy. Implementing the conversion, changing live data and cutting over are
+separate work that this specification does not authorize. The testing architecture defines how
+representative synthetic legacy records verify these rules; the operations document owns release
+acceptance.
+
 ## Mapping
 
-| Existing information                                 | New representation                                                                                              |
-| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Owned entry with quantity N                          | N stable physical-copy records, each retaining the known printing, language, finish and condition.              |
-| Card and printing references                         | Canonical Catalog identities with an explicit legacy-to-new mapping. Missing references remain reviewable.      |
-| Tags and quantity-bearing assignments                | Stable tags plus associations; intended card/printing quantities remain distinct from physical-copy membership. |
-| Physical location quantities                         | Assignments to individual copies, with at most one location per copy. Conflicts require reconciliation.         |
-| Acquisition lots, source identity and replay records | Provenance and durable replay protection; reimport must not duplicate migrated ownership.                       |
-| Pending imports and review decisions                 | Pending UserCards records, never silently promoted to ownership.                                                |
-| Owner identity                                       | The same verified Cognito subject/account mapping, with private records isolated throughout conversion.         |
+The pinned previous implementation, revision `128c903ff109868acc854f0ff239c8c0f925d803`, is the
+reference for the source shapes in this section. The collection can exist in the production
+account, in a local profile and, as pending work, in browser storage; a complete migration input
+covers every store that holds owner data. A collection CSV, a repository checkout or a browser
+display cache is not a data backup.
+
+### Legacy sources
+
+**Production DynamoDB table `magic-collection-keeper`**, partitioned by the verified Cognito
+subject:
+
+- `USER#<subject>` inventory rows, keyed by a digest of printing, language, condition and finish:
+  one aggregate quantity per row with its printing reference, embedded printing snapshot and
+  timestamps.
+- `OPERATIONS#<subject>` single-add receipts with an input fingerprint and a seven-day expiry.
+- `REVIEWBATCH#<subject>` reviewed-import `BATCH#` records and permanent per-item `ITEM#` receipts.
+- `META#<subject>#<space>` documents in the spaces `tags`, `decks`, `cards`, `assignments`,
+  `totals`, `import-drafts`, `scan-drafts`, `scan-batch-index`, `scan-capture-index`,
+  `import-stages`, `import-receipts`, `draft-tag-actions`, `tag-actions` and `locks`:
+  - owner and pending state in `tags`, `decks`, `assignments`, `totals`, `import-drafts` and
+    `scan-drafts`;
+  - durable operation records in `import-stages`, `import-receipts`, `draft-tag-actions` and
+    `tag-actions`;
+  - per-session lookups in `scan-batch-index` and `scan-capture-index`;
+  - printing snapshots in `cards`; the transient `locks` mutual-exclusion record is not collection
+    data.
+- `PRINTINGS`, `IDENTITIES`, `SEARCH` and `RATE` records: catalog cache and throttling state, never
+  owned cards.
+
+**Local SQLite profile `data/collection.sqlite`**, in WAL mode and owned by the synthetic local
+profile:
+
+- `inventory` aggregate rows, unique per printing, language, condition and finish.
+- `operations` receipts: single-add entries and `review:<owner>:<kind>:<id>` batch/item entries.
+- `documents(owner, space, id, version, value)` records using the same document spaces as above.
+- `card_identities`, `printings` and `api_cache`: catalog cache, never owned cards.
+
+**Owner's browser storage**, where only the pending parts are collection data:
+
+- `keeper-review-v1` indexed reviews with their `keeper-review-journal:<account>` mirror: scanned
+  batches reviewed but not yet saved to the account.
+- `keeper-pending-text:<environment and account key>`: a staged text import.
+- `keeper-catalog-tags-v1:<account>` and `keeper-card-action-v1:<account>`: pending catalog
+  selections and an unresolved card action, which may already have committed on the server.
+- Display snapshots, public catalog and recognition caches, recent searches, home history and
+  session tokens are local state, not collection data.
+
+The table maps those record families onto the new model; the collection groups and conversion rules
+below apply to every row.
+
+| Existing information                                                                                                                                           | New representation                                                                                                    |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Owned entry with quantity N as a collection-group member (`USER#<subject>` or SQLite `inventory` row)                                                          | N stable physical-copy records after the group's effective quantity and assignments are resolved.                     |
+| Collection group (native row plus deck lots sharing printing, language, finish and condition)                                                                  | One effective owned quantity and assignment set; the group override applies once before copies are generated.         |
+| Card and printing references (row printing ID, embedded snapshot, `cards` documents)                                                                           | Canonical Catalog identities with an explicit legacy-to-new mapping. Missing references remain reviewable.            |
+| Tags and quantity-bearing assignments (`tags`, `assignments`, deck lots)                                                                                       | Stable tags plus associations; intended card/printing quantities remain distinct from physical-copy membership.       |
+| Group locations (`assignments` override records and deck lot locations)                                                                                        | Associations to individual copies of the group, with at most one location per copy. Conflicts require reconciliation. |
+| Group quantity overrides (group-keyed `totals` deltas)                                                                                                         | Effective owned quantities that differ from the members' sum, applied exactly once and reconciled before conversion.  |
+| Acquisition lots, source identity and receipts (`decks`, `REVIEWBATCH#`, `operations`, `import-stages`, `import-receipts`, `draft-tag-actions`, `tag-actions`) | Provenance and durable replay protection; a repeated import or recorded action returns its outcome and adds nothing.  |
+| Pending imports and review decisions (`import-drafts`, `scan-drafts`, browser pending keys)                                                                    | Pending UserCards records with their corrections and source identity, never silently promoted to ownership.           |
+| Scan session and capture identities (`scan-batch-index`, `scan-capture-index`)                                                                                 | The session, batch and capture identity a staged capture belongs to; a capture is staged and confirmed once.          |
+| Owner identity (verified Cognito `sub` claim)                                                                                                                  | The same verified subject/account mapping, with private records isolated throughout conversion.                       |
 
 Legacy inventory and metadata can describe overlapping records. The migration must identify the
 authoritative representation before counting; it must not add cached or derived totals together.
 The new individual IDs identify migrated copies, but do not imply historical knowledge of which
 indistinguishable physical card occupied a location. Preserve that uncertainty.
 
+### Legacy collection groups
+
+Stored rows are not the entries the old application displays. The pinned
+`application/tagged-collection.js` merges native inventory rows and deck lots into one group per
+printing, language, finish and condition, and keeps quantity adjustments and assignments under that
+group's identity. The conversion reconstructs these groups before it generates copies.
+
+- **Members.** Native `USER#`/SQLite `inventory` rows plus the deck lots whose printing, language,
+  finish and condition match. A deck lot contributes one allocated row and, when it is owned above
+  its allocated quantity, one retained row.
+- **Identity.** `group:<sha256 of printing|language|finish|condition>` when any member carries
+  provenance, otherwise the single native row's own stored identity. A `totals` override or
+  `assignments` record whose key resolves to no group is orphaned and is reported, never applied.
+- **Effective quantity.** The sum of the members' quantities plus the group's single `totals`
+  delta, applied exactly once however many members share the group. The delta may be negative and
+  can take the group below the sum of its members; no member's stored quantity is rewritten.
+- **Effective assignments.** A saved group assignment is authoritative for the members it covers:
+  its locations replace theirs when it carries the saved `locations_override` marker (without that
+  marker member locations stand) and its classification tags replace theirs. Additive
+  reviewed-capture lots that it did not cover — `additive_default` provenance whose source identity
+  is not among the assignment's recorded `source_ids` — keep their own locations and tags, which add
+  to the override. Without a saved assignment the members' own locations and tags stand.
+  `unallocated_quantity` and `allocation_shortfall` are derived from the effective quantity and the
+  effective assignments.
+- **Attribution.** A group delta cannot be attributed to one acquisition or physical copy. The
+  migration records it against the group as an explicit reconciliation entry, keeps every member's
+  own quantity and provenance unchanged, and leaves the uncertainty visible instead of assigning
+  the adjustment to an arbitrary acquisition.
+
+A group whose effective quantity or locations cannot be reconciled with its members' records is
+reported for owner review like any other conflict.
+
+### Conversion rules
+
+- **Effective quantity.** A group's owned count comes from the reconstructed collection groups: the
+  members' sum plus the group's single `totals` delta, never from a cached aggregate and never with
+  the delta counted twice. Deck lots contribute their owned quantity, not only the currently
+  allocated quantity.
+- **Copy identity and determinism.** The migration assigns new copy IDs and keeps the legacy record
+  identity in the mapping record so counts, conflicts and receipts stay attributable. Converting
+  the same snapshot twice produces the same copies; a rerun adds nothing.
+- **Reference resolution and attributes.** Resolve printing references against Catalog, which owns
+  the card/printing model; confirm copy finish, condition and language against the resolved
+  printing. Unknown or missing attributes stay explicit. An unresolved printing becomes a
+  reviewable entry, never a dropped or invented copy.
+- **Tags and associations.** Preserve legacy tag IDs through an explicit mapping and recompute
+  reference counts instead of copying them. A saved group assignment is the effective
+  classification for the members it covers; their stored tags do not survive it. Card/printing
+  intentions become quantity-bearing associations; allocated copies become copy associations that
+  survive label edits. Keep the distinction between intended quantities and physical copies
+  described in [UserCards](user-cards.md#records-and-associations).
+- **Locations.** An allocation belongs to its group: its quantity maps onto individual copies of the
+  group, and each copy ends with at most one location. An allocation larger than the group's
+  effective quantity, a copy claimed by two locations, or a source allocation that only exists
+  implicitly is a conflict for owner review; nothing is discarded or chosen arbitrarily.
+- **Provenance and replay.** Keep source identity, acquisition provenance and excluded or pending
+  source lines with the copies and pending entries they produced. Reviewed-import item receipts,
+  group adjustments, staging receipts (`import-stages`), confirmed-import receipts
+  (`import-receipts`) and tag-action receipts (`tag-actions`, `draft-tag-actions`) become permanent
+  records with their operation identities; expiring single-add receipts are not durable proof.
+  Reimporting the same source must add no copies, and replaying a recorded action returns its
+  recorded outcome.
+- **Pending entries.** Preserve reviewed rows, corrections, quantities and revisions as pending
+  entries, with staging receipts and the session, batch and capture identities (`scan-batch-index`,
+  `scan-capture-index`) so the same capture cannot be staged or confirmed twice. Confirmation
+  creates copies with the mapped provenance; unresolved readings stay unresolved. Reconcile
+  outstanding browser reviews and card actions against these records: an action that already
+  committed returns its recorded outcome instead of being applied again, and a confirmed review is
+  not restored as pending.
+- **Excluded data.** Caches, cached printing and card identities, search results, throttling state,
+  display snapshots, history, session tokens and the transient inventory `locks` are not migrated.
+  The verified subject remains the isolation key for every private record.
+
 ## Safety and acceptance
 
+The production migration runs once, from a verified backup, in isolated storage, and only after the
+owner authorizes cutover. Each numbered step produces evidence; a step that cannot be completed
+leaves the migration unfinished.
+
 1. Inventory the live source shapes using the pinned old implementation as reference. Include
-   DynamoDB or SQLite records, metadata documents, source receipts and browser-only pending state
-   where present. A collection CSV or Git checkout is not a complete data backup.
+   every DynamoDB partition and document space, the SQLite profile with any `-wal`/`-shm` files,
+   source receipts and the browser-only pending keys above. Record which record kinds are present
+   and their counts; a live shape that differs from the reference is reported, not guessed.
 2. Produce a private, consistent snapshot/export with checksums and an inventory of included data.
-   Verify restoration into isolated storage before attempting conversion. Keep owner/test profiles
-   separate and backups out of Git.
-3. Convert a snapshot in a dry run. Report owned totals by account, printing, language, finish and
-   condition; tag memberships, intended quantities, pending entries and provenance/replay coverage.
-4. Report missing references, duplicate source identities, unknown attributes and incompatible
-   locations explicitly. Do not invent owned cards, discard assignments or choose an arbitrary
-   location to make the totals fit. Retain original values until the owner resolves the conflict.
-5. Rehearse a repeat-safe migration and rollback. Define a write freeze or a verified final-delta
-   procedure so changes made after the snapshot cannot disappear.
+   Use point-in-time recovery or an on-demand backup for DynamoDB and restore it into a separate
+   table; stop the local server and copy the checkpointed SQLite file or `VACUUM INTO` a new one;
+   export the browser pending keys, which clearing site data would destroy. Verify the restore into
+   isolated storage by comparing item and table counts and digests. Keep owner and test profiles
+   separate, and keep snapshots and checksums out of Git.
+3. Convert a restored snapshot in a dry run that writes nothing to production. Report owned totals
+   by account, printing, language, finish and condition after each group override is applied once;
+   group adjustments and their attribution; tag memberships, intended quantities, pending entries,
+   provenance and replay coverage; and the source record behind every converted copy.
+4. Report missing references, duplicate source identities, unknown attributes, unattributable group
+   adjustments, orphaned overrides, assignments or receipts, and incompatible locations explicitly.
+   Do not invent owned cards, discard assignments or choose an arbitrary location to make the
+   totals fit. Retain original values until the owner resolves the conflict.
+5. Rehearse a repeat-safe migration and rollback. Reruns over the same snapshot must produce the
+   same counts and no additional copies. Define a write freeze or a verified final-delta procedure
+   so changes made after the snapshot cannot disappear, and rehearse rollback by serving the
+   previous version against the untouched legacy storage.
 6. Cut over only after backup restoration, reconciliation and explicit production authorization.
-   Retain the old storage and identity mapping for recovery. Deleting it requires a separate decision.
+   Retain the old storage, the legacy-to-new identity mapping and the previous deployment for
+   recovery. Deleting legacy storage requires a separate decision.
+
+### Acceptance before cutover
+
+- A private snapshot covering every store that holds owner data is restored and verified in
+  isolation, and its checksums and contents inventory are recorded.
+- The dry-run report accounts for every legacy owned quantity exactly once per account and
+  printing/language/finish/condition, applies each group override once, and keeps intended
+  quantities, locations and pending entries distinct from ownership.
+- Every missing reference, unknown attribute, duplicate identity, unattributable group adjustment
+  and conflicting allocation is listed for owner review, with no arbitrary resolution and no
+  dropped legacy value.
+- A repeated conversion produces no additional copies and the same reconciliation result, and a
+  repeated source import adds nothing.
+- Rollback has been rehearsed against the untouched legacy storage and the previous deployment.
+- Production cutover has explicit owner authorization, and the backup and legacy storage remain
+  available for recovery.
 
 ## Current evidence
 
-Source inspection confirms aggregate quantities with printing/language/finish/condition, separate
-document metadata and replay records in the old implementation. This establishes a feasible mapping,
-not proof that the live collection has been backed up or migrated. No live data conversion or
-production reconciliation has been performed.
+Source inspection of the pinned reference revision confirms aggregate quantities keyed by
+printing/language/finish/condition in the DynamoDB inventory rows and the SQLite `inventory` table,
+and that the collection service merges those rows with deck lots into groups whose identity carries
+the quantity adjustments and tag assignments. It confirms per-owner document spaces for tags,
+decks, assignments, quantity overrides, printing snapshots, pending drafts and reviewed-capture
+sessions; durable staging, confirmation and tag-action records; per-session batch and capture
+indexes; expiring single-add receipts beside permanent reviewed-import item receipts; and the
+browser-only pending keys listed above. The inspection covered the reference storage adapters and
+database schema, the services that produce and consume the document spaces and the browser
+pending-state modules, and a synthetic execution of the reference service reproduced the
+group-keyed override and assignment behavior. This establishes a feasible mapping, not proof that
+the live collection has been backed up or migrated.
+
+The inspection reads the reference implementation, not the owner's data: no snapshot was taken, no
+restore was verified and no conversion was performed by specifying this mapping. Live contents,
+their reconciliation status and the production cutover remain unknown until the procedure above is
+executed and its evidence recorded.
