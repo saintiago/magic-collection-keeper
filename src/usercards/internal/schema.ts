@@ -4,10 +4,11 @@
  * Private tables live in `usercards_private`; consumers read only the views in `usercards`. Both
  * views are account-scoped at the database boundary: they select the account bound to the
  * connection with `USERCARDS_ACCOUNT_SCOPE_SQL` and return no rows when no account is bound, so a
- * missing context fails closed and one account's scope cannot leak into another transaction on a
- * reused connection. `tests/integration/usercards-query-surface.test.ts` verifies the views
- * against this declaration, so a replacement storage maps its data to exactly these relations and
- * passes the same tests.
+ * missing or cleared context fails closed and one account's scope cannot leak into another
+ * transaction on a reused connection. The `copies` view is a security-barrier view, so a
+ * consumer's own predicate is evaluated after the account filter instead of on foreign rows.
+ * `tests/integration/usercards-query-surface.test.ts` verifies the views against this declaration,
+ * so a replacement storage maps its data to exactly these relations and passes the same tests.
  */
 
 import { finishes } from '../../catalog/index.js';
@@ -105,6 +106,13 @@ const finishValues = finishes.map((finish) => `'${finish}'`).join(', ');
 const conditionValues = copyConditions.map((condition) => `'${condition}'`).join(', ');
 
 /**
+ * The account bound to the connection, or null when none is bound or the setting was cleared.
+ * PostgreSQL keeps a custom setting defined with an empty string after a transaction-local value
+ * is released, so absence is the setting being unset or blank.
+ */
+const boundAccountSql = `nullif(current_setting('${USERCARDS_ACCOUNT_SETTING}', true), '')`;
+
+/**
  * Schema owned by the UserCards provider. Applying it is idempotent. The `copies` relation lists
  * the account's physical copies only; pending import entries have their own records and never
  * appear here.
@@ -132,14 +140,14 @@ create table if not exists ${usercardsPrivateSchema}.copy (
 create index if not exists copy_account_identity_index
   on ${usercardsPrivateSchema}.copy (account_id, copy_id);
 
-create or replace view ${usercardsQuerySchema}.copies as
+create or replace view ${usercardsQuerySchema}.copies with (security_barrier) as
   select copy_id, printing_id, finish, condition
   from ${usercardsPrivateSchema}.copy
-  where account_id = current_setting('${USERCARDS_ACCOUNT_SETTING}', true);
+  where account_id = ${boundAccountSql};
 
 create or replace view ${usercardsQuerySchema}.private_revision as
   select coalesce(state.revision, 0)::text as revision
-  from (select current_setting('${USERCARDS_ACCOUNT_SETTING}', true) as account_id) as bound
+  from (select ${boundAccountSql} as account_id) as bound
   left join ${usercardsPrivateSchema}.account_state as state
     on state.account_id = bound.account_id
   where bound.account_id is not null;

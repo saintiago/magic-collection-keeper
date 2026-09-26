@@ -2,9 +2,10 @@
  * Integration scope: the UserCards query surface against real PostgreSQL semantics. A replacement
  * storage runs these same cases against its own provisioned database: the declared relations and
  * columns, read-only access for consumer roles, account scoping enforced at the database boundary,
- * one account's scope never leaking into another transaction on a reused connection, and a
- * private-data revision that follows the account's real writes. Two synthetic accounts stand in
- * for distinct authenticated users.
+ * consumer predicates that cannot observe the rows the scope excludes, one account's scope never
+ * leaking into another transaction on a reused connection, and a private-data revision that
+ * follows the account's real writes. Two synthetic accounts stand in for distinct authenticated
+ * users.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -178,6 +179,42 @@ describe('usercards query surface', () => {
     }
   });
 
+  it('keeps consumer predicates from evaluating the rows the account filter excludes', async () => {
+    const aliceCopy = await createCopy(alice);
+
+    await database.exec('create role keeper_prober');
+    await database.exec(usercardsReaderGrants('keeper_prober'));
+    await database.exec('set role keeper_prober');
+    try {
+      // Both probes force a sequential plan: there the predicate would run over the base rows and
+      // a failing cast would quote Alice's private copy ID without the security barrier.
+      async function probe(accountId: string | null): Promise<readonly UserCardsSqlRow[]> {
+        return database.sql.transaction(async (statements) => {
+          await statements.query('set local enable_indexscan = off');
+          await statements.query('set local enable_bitmapscan = off');
+          if (accountId !== null) {
+            await statements.query(USERCARDS_ACCOUNT_SCOPE_SQL, { account_id: accountId });
+          }
+          return statements.query('select copy_id from usercards.copies where copy_id::boolean');
+        });
+      }
+
+      await expect(probe(bob.accountId)).resolves.toEqual([]);
+      await expect(probe(null)).resolves.toEqual([]);
+
+      // The same reader sees Alice's copy with Alice's account bound, so the empty probes above
+      // come from the account filter and not from a relation that never returns rows.
+      expect(
+        await database.sql.transaction(async (statements) => {
+          await statements.query(USERCARDS_ACCOUNT_SCOPE_SQL, { account_id: alice.accountId });
+          return statements.query('select copy_id from usercards.copies');
+        }),
+      ).toEqual([{ copy_id: aliceCopy.copyId }]);
+    } finally {
+      await database.exec('reset role');
+    }
+  });
+
   it('fails closed while no account context is bound', async () => {
     await createCopy(alice);
     await createCopy(bob);
@@ -199,10 +236,13 @@ describe('usercards query surface', () => {
 
     // The transaction ended, so the same connection is unscoped again: nothing leaks out of it.
     expect(await database.query('select copy_id from usercards.copies')).toEqual([]);
+    expect(await database.query('select revision from usercards.private_revision')).toEqual([]);
 
-    // Binding without a transaction is transaction-local too: the next statement fails closed.
+    // Binding without a transaction is transaction-local too: the next statement fails closed. A
+    // released setting stays defined as an empty string, which the views treat as no context.
     await database.sql.query(USERCARDS_ACCOUNT_SCOPE_SQL, { account_id: alice.accountId });
     expect(await database.query('select copy_id from usercards.copies')).toEqual([]);
+    expect(await database.query('select revision from usercards.private_revision')).toEqual([]);
 
     const scopedForBob = await readScoped(
       database,
