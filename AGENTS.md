@@ -63,6 +63,10 @@ All documents in `docs/new/` are relevant to the rebuild.
 - [Recognition](docs/new/recognition.md)
 - [Tech stack](docs/new/tech-stack.md)
 - [Testing architecture](docs/new/testing.md)
+- [Rebuild requirements](docs/new/requirements.md)
+- [Collection migration](docs/new/migration.md)
+- [Recognition baseline](docs/new/recognition-preservation.md)
+- [Implementation task inventory](docs/new/tasks/inventory.md)
 
 Search reference:
 
