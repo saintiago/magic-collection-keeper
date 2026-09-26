@@ -217,9 +217,9 @@ export const CATALOG_QUERY_SURFACE: CatalogQuerySurface = {
 };
 
 /**
- * Schema owned by the catalog provider. Applying it is idempotent; publication replaces the rows
- * of the current revision and updates `catalog_private.revision` in one atomic transaction, so the
- * views always expose one mutually consistent revision.
+ * Schema owned by the catalog provider. Applying it is idempotent; one publication updates the
+ * candidate records and `catalog_private.revision` in the same atomic transaction, so the views
+ * always expose one mutually consistent revision.
  */
 export const catalogSchemaSql = `
 create schema if not exists ${catalogPrivateSchema};

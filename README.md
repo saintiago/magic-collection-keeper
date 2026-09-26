@@ -3,7 +3,8 @@
 This repository contains the approved rebuild design and the workspace harness the rebuild is built
 on. The previous application implementation has been removed. Product components from
 docs/architecture.md are rebuilt task by task: Catalog already provides its read contract, its
-published query surface and its contract tests; the remaining components are not implemented yet.
+atomic bulk synchronization and its published query surface with their contract tests; the
+remaining components are not implemented yet.
 
 Start with AGENTS.md for the documentation index and engineering principles.
 The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
@@ -44,6 +45,14 @@ tests are organised as tests/component/<component>/ so one component's tests can
 The build clears `build/` before compiling; caching is disabled so restoring cached artifacts cannot
 leave output from deleted sources behind.
 Nexus uses the same commands for preparation and validation (nexus.project.json).
+
+Synchronization is the finite catalog job of the deployed stack (docs/tech-stack.md#aws-stack): the
+configured source streams one provider snapshot from the private data bucket, and Catalog upserts it
+into a candidate revision through one transaction before making it visible. Application supplies
+the snapshot source and the transaction-capable RDS Data API executor; resource definitions,
+packaging and deployment stay with the deployment tasks listed in docs/tasks/inventory.md. The
+component and integration checks exercise the same statements, provider limits, rollback and
+published relations that the deployed job uses.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without

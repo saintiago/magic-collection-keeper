@@ -297,6 +297,22 @@ function revisionFromRows(rows: GroupedRows): CatalogRevision {
   return revisionFromJson(parseJsonText(revisionJsonSchema, row.payload));
 }
 
+/**
+ * Reads the published revision on its own, or null when nothing is published yet. Synchronization
+ * compares it with the requested snapshot; reads embed the same row in their own statements.
+ */
+export async function readPublishedRevision(
+  sql: CatalogSqlExecutor,
+): Promise<CatalogRevision | null> {
+  const statement = `select ${revisionColumn} as payload
+from catalog.published_revision as revision`;
+  const rows = await readRows(sql, statement, {});
+  const row = rows[0];
+  return row === undefined
+    ? null
+    : revisionFromJson(parseJsonText(revisionJsonSchema, row.payload));
+}
+
 function cardRecords(cards: readonly CardJson[], names: readonly CardNameJson[]): CardRecord[] {
   const namesByCard = new Map<string, CardName[]>();
   for (const name of names) {
