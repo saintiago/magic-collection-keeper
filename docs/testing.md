@@ -16,6 +16,9 @@ guides feedback cost and confidence; it does not impose test counts or percentag
 Keep ordinary internal collaborators real. Substitute dependencies outside the scope being tested.
 Use real PostgreSQL for database behavior; an in-memory repository cannot prove joins, constraints
 or transaction behavior. A browser test with a substituted backend establishes UI behavior only.
+PGlite serves one connection, so a case that needs two writers at once runs beside the server
+harness in `tests/support/postgres-server.ts`, which provisions a local PostgreSQL instance and
+skips itself where the environment cannot start one.
 
 ## Contracts and cooperation
 
@@ -81,7 +84,8 @@ readers see a coherent published revision.
   identity-preserving printing/finish/condition corrections, rollback and revision conflicts.
 - **Tags and associations:** verify rename invariance, card/printing intended quantities, counts of
   distinct copies, specificity changes and atomic location moves, including concurrent moves.
-  Planned deck changes must not move or reserve physical copies.
+  Competing claims of one tag target report a conflict, not an outage. Planned deck changes must not
+  move or reserve physical copies.
 - **Pending imports:** verify save/reload, corrections versus late candidates, account changes and
   the A,A / A,B,A accepted-identity sequence. Unresolved candidates never advance that sequence.
 - **Confirmation and provenance:** test competing confirmation, lost response plus identical retry,

@@ -170,6 +170,43 @@ function insertAssociationStatement(
 }
 
 /**
+ * Serializes the writers of one tag's associations on the tag's own row. A competing writer's claim
+ * is invisible to another writer's duplicate check until it commits, so waiting here makes the
+ * later writer read the committed claim instead of failing the association target unique index and
+ * reporting a recoverable editing conflict as an outage
+ * (docs/user-cards.md#persistence-and-recovery).
+ */
+function lockTagStatement(
+  accountId: string,
+  tagId: string,
+): { statement: string; parameters: Record<string, UserCardsSqlValue> } {
+  return {
+    statement: `select tag_id
+     from usercards_private.tag
+    where account_id = :account_id and tag_id = :tag_id
+    for update`,
+    parameters: { account_id: accountId, tag_id: tagId },
+  };
+}
+
+/** The same claim on the tag of one stored association, resolved from storage. */
+function lockAssociationTagStatement(
+  accountId: string,
+  associationId: string,
+): { statement: string; parameters: Record<string, UserCardsSqlValue> } {
+  return {
+    statement: `select tag_id
+     from usercards_private.tag
+    where account_id = :account_id
+      and tag_id = (select tag_id
+                      from usercards_private.association
+                     where account_id = :account_id and association_id = :association_id)
+    for update`,
+    parameters: { account_id: accountId, association_id: associationId },
+  };
+}
+
+/**
  * A change keeps the association identity and refuses to create a second association of the same
  * tag for the same target, so a refined association replaces its own target instead of doubling it.
  */
@@ -419,6 +456,13 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
       return inTransaction(
         sql,
         async (statements) => {
+          const lock = lockTagStatement(accountId, association.tagId);
+          await readRows(
+            statements,
+            lock.statement,
+            lock.parameters,
+            'The tag could not be locked before storing the association.',
+          );
           const insert = insertAssociationStatement(accountId, association);
           const rows = await readRows(
             statements,
@@ -451,6 +495,13 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
       return inTransaction(
         sql,
         async (statements) => {
+          const lock = lockAssociationTagStatement(accountId, correction.associationId);
+          await readRows(
+            statements,
+            lock.statement,
+            lock.parameters,
+            'The tag could not be locked before changing the association.',
+          );
           const update = correctAssociationStatement(accountId, correction);
           const rows = await readRows(
             statements,

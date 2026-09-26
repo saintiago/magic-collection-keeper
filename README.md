@@ -69,7 +69,8 @@ remain with their own tasks.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without
-a database service. Deployed statements reach Aurora PostgreSQL through the executor Application
+a database service; the cases that need two writers at once start a local PostgreSQL server
+(docs/testing.md). Deployed statements reach Aurora PostgreSQL through the executor Application
 supplies.
 
 Each component from docs/architecture.md owns src/<component>/index.ts as its provider-owned public
