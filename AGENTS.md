@@ -1,17 +1,86 @@
 # Repository guidance
 
-- Always translate the owner's feature requests and corrections into saved, testable requirements in `docs/REQUIREMENTS.md` before or alongside implementation. Keep stable requirement IDs, acceptance criteria, status and evidence links. Record queued requests too; mark superseded decisions explicitly. Do not equate requested, locally implemented or tested behavior with production delivery. Keep use cases and architecture documentation aligned with the latest requirements.
+## Core design principles
 
-- Read README, `docs/SPEC.md`, and the relevant architecture/use-case/operations section before edits. Preserve the owner's data and the separate test profiles.
-- Baseline commands are `npm ci`, `npm run validate:docs`, `npm test`, `npm run test:python`, `npm run build`, and `npm run test:ui`. Use the smallest relevant set while iterating, then the configured baseline before integration. Browser and Python preparation requirements are in `docs/OPERATIONS.md`.
-- Keep dependency direction inward: transports and adapters depend on application/domain, never the reverse. Compose concrete adapters in `server.js` and `cloud.mjs`.
-- Keep inventory ownership separate from cached catalog printings. Derive cloud owner from verified JWT only. Preserve quantity bounds, exact-printing language/finish rules and idempotency.
-- Tag labels are editable metadata, never structural keys. Keep location quantities separate from owned totals; a shortfall is an inline reminder and must not block edits or discard assignments. Preserve source provenance, loose copies and permanent source-import idempotency.
-- Prefer cohesive named functions and plain-object ports. Do not introduce framework layers or generic abstractions without an actual replacement/test seam. Split growing controllers from pure rendering and I/O.
-- Prefer dedicated routes/pages with predictable Back navigation for substantive workflows, card details and large forms. Back returns to the most recent origin (LIFO/browser history, not FIFO). Preserve relevant filters, search, scroll and focus in bounded account-isolated navigation state; support deep links/reload and reject late responses after navigation. Reserve modals for brief confirmations and small focused auxiliary edits. This is a design default, not a mandate to rewrite every existing modal.
-- Scryfall search is currently 2 requests/second; keep the shared limiter, 24-hour cache and 429 cooldown. Recheck official guidance when changing provider behavior. Use bulk data for large ingestion.
-- Camera recognition is fallible. Keep normal capture hands-free after initial camera/audio activation. Preserve stability and single/multiple-card geometry independently of OCR names. Consecutive accepted Oracle identities are suppressed (A,A); a different accepted card permits the original again (A,B,A), and quantity represents consecutive identical physical copies. Preserve candidate review and final explicit ownership confirmation. Never play success for an unresolved capture; throttle error cues per attempted card. Do not label simulated or mocked camera results as physical-device verification.
-- Escape untrusted text in HTML. Never place credentials in source, public config, screenshots, logs or artifacts. Tests must not use the owner's account.
-- Add/update traceable use cases and meaningful E2E tests for changed controls, failures and persistence. Run unit, browser, build and deployed tests appropriate to the change; local mocks do not prove cloud correctness.
-- Format changed JS/CSS/HTML with Prettier. Keep docs synchronized with actual implementation and acknowledge unverified hardware/provider behavior.
-- Deploy application changes through the existing main workflow. Infrastructure uses isolated CloudFormation resources and least privilege. An explicit owner instruction authorizing a concrete infrastructure action satisfies and replaces separate administrator review or confirmation for that action within the requested scope; do not ask redundantly. This does not authorize unrelated or destructive actions, widening the CI role, touching pantry resources, or provisioned/periodic warm compute unless separately requested.
+Apply these principles when shaping documentation, requirements, workflows, architecture, code and tests.
+
+- **KISS:** Prefer the simplest design that meets the need and is easy to understand, debug and
+  maintain.
+- **DRY:** Give each rule or contract one authoritative home. Extract repeated behavior only
+  when the cases share a responsibility.
+- **YAGNI:** Add a capability, setting, state or extension point only when a current requirement
+  needs it.
+- **Avoid premature optimization:** Require evidence of a bottleneck before adding performance
+  complexity to an architecture or implementation.
+- **Composition over inheritance:** Assemble focused behaviors through components and delegation
+  instead of deep inheritance hierarchies. Use inheritance when a genuine subtype relationship is
+  simpler; avoid components that add no clarity.
+
+Account for the full cost of a design choice: implementation, validation, failure handling,
+persistence, tests, documentation and maintenance. Even a small field can create obligations across
+components. When removing a mechanism, remove its dependent validation, state and tests.
+
+Keep specialized guarantees within the component or action that needs them.
+
+## Low coupling and high cohesion
+
+Keep related state and decisions within the owning component.
+
+Components depend on provider-owned public contracts. Compatible internal changes should not force
+consumer changes; routine coordinated redesign indicates a boundary problem.
+
+Each component architecture is independent. Its interface section is the only place that names other
+components, imports their contracts or defines interaction with them. Its internal design uses its
+own responsibilities and state. System composition and flows belong in the high-level architecture.
+
+Contract tests verify individual boundaries. Integration and workflow tests verify cooperation.
+A multi-component flow does not create a special shared contract.
+
+## SOLID principles
+
+Apply these to component responsibilities and public contracts as well as code.
+
+- **Single Responsibility:** Give a component, module or action one coherent reason to change.
+- **Open/Closed:** Keep stable public contracts when adding a supported variation; change the
+  design directly when that is simpler than an extension mechanism.
+- **Liskov Substitution:** Any alternative implementation must honor the behavior promised by its
+  public contract.
+- **Interface Segregation:** Let consumers depend only on the focused capabilities they use.
+- **Dependency Inversion:** Make policy depend on owned public contracts at external boundaries,
+  not on concrete providers.
+
+## Documentation references
+
+The repository owns requirements, acceptance criteria and test guidance. Keep each rule in its
+owning document. Jira tasks reference the relevant document sections and identify scope exclusions;
+they do not define additional behavior or test instructions. Jira Rank owns execution order and
+issue links record dependencies. Discuss undocumented requirements with the owner before adopting
+them; an existing ticket or old implementation does not establish a requirement.
+
+All documents in `docs/` are relevant to the rebuild.
+
+- [Product charter](docs/PRODUCT-CHARTER.md)
+- [Architecture](docs/architecture.md)
+- [Application](docs/application.md)
+- [UserInterface](docs/user-interface.md)
+- [Catalog](docs/catalog.md)
+- [UserCards](docs/user-cards.md)
+- [Search](docs/search.md)
+- [Recognition](docs/recognition.md)
+- [Tech stack](docs/tech-stack.md)
+- [Testing architecture](docs/testing.md)
+- [Build and release operations](docs/operations.md)
+- [Rebuild requirements](docs/requirements.md)
+- [Collection migration](docs/migration.md)
+- [Recognition baseline](docs/recognition-preservation.md)
+- [Implementation task inventory](docs/tasks/inventory.md)
+
+Search reference:
+
+- [Scryfall search syntax](https://scryfall.com/docs/syntax)
+
+Testing background:
+
+- [JavaScript testing best practices](https://github.com/goldbergyoni/javascript-testing-best-practices)
+- [Test pyramid](https://martinfowler.com/bliki/TestPyramid.html)
+- [Playwright best practices](https://playwright.dev/docs/best-practices)
