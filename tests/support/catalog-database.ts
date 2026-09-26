@@ -11,6 +11,7 @@ import {
   CatalogError,
   catalogSchemaSql,
   type CatalogSqlExecutor,
+  type CatalogSqlTransactor,
   type CatalogSqlValue,
 } from '../../src/catalog/index.js';
 
@@ -28,7 +29,7 @@ export async function captureCatalogError(promise: Promise<unknown>): Promise<Ca
 
 export interface CatalogTestDatabase {
   /** Executor in the shape Application supplies to createCatalog. */
-  readonly sql: CatalogSqlExecutor;
+  readonly sql: CatalogSqlTransactor;
   exec(statement: string): Promise<void>;
   query(
     statement: string,
@@ -45,17 +46,33 @@ export async function createCatalogTestDatabase(): Promise<CatalogTestDatabase> 
     await database.close();
     throw error;
   }
-  return {
-    sql: {
-      async query(statement, parameters = {}) {
-        const bound = bindNamedParameters(statement, parameters);
-        const result = await database.query<Record<string, CatalogSqlValue>>(
-          bound.text,
-          bound.values,
-        );
-        return result.rows;
-      },
+  const executor: CatalogSqlExecutor = {
+    async query(statement, parameters = {}) {
+      const bound = bindNamedParameters(statement, parameters);
+      const result = await database.query<Record<string, CatalogSqlValue>>(
+        bound.text,
+        bound.values,
+      );
+      return result.rows;
     },
+  };
+  const sql: CatalogSqlTransactor = {
+    query: executor.query,
+    /** PGlite runs on one connection, so an interrupted transaction is rolled back here. */
+    async transaction(work) {
+      await database.exec('begin');
+      try {
+        const result = await work(executor);
+        await database.exec('commit');
+        return result;
+      } catch (error) {
+        await database.exec('rollback');
+        throw error;
+      }
+    },
+  };
+  return {
+    sql,
     async exec(statement) {
       await database.exec(statement);
     },
@@ -157,7 +174,11 @@ export interface CatalogFixture {
   readonly printings: readonly PrintingFixture[];
 }
 
-/** Replaces the published revision in one transaction, like a catalog synchronization does. */
+/**
+ * Replaces the published revision in one transaction for tests that need published rows without
+ * provider snapshots. Read-contract cases use this fixture writer; synchronization cases publish
+ * through createCatalogSynchronizer.
+ */
 export async function publishCatalog(
   database: CatalogTestDatabase,
   fixture: CatalogFixture,

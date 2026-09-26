@@ -3,12 +3,19 @@
  *
  * Consumers resolve playable identities and exact printings in bounded batches, list a card's
  * printings, and read the declared query surface (CATALOG_QUERY_SURFACE) that Search joins in the
- * deployed database. Other components import Catalog through this module only; its internal
- * modules stay private to the component (docs/architecture.md, .dependency-cruiser.mjs).
+ * deployed database. Application synchronizes the catalog through its own contract: a configured
+ * snapshot source supplies bulk provider text, and one atomic publication replaces the published
+ * revision. Other components import Catalog through this module only; its internal modules stay
+ * private to the component (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
 export { CatalogError, type CatalogFailureCode } from './internal/errors.js';
-export type { CatalogSqlExecutor, CatalogSqlRow, CatalogSqlValue } from './internal/executor.js';
+export type {
+  CatalogSqlExecutor,
+  CatalogSqlRow,
+  CatalogSqlTransactor,
+  CatalogSqlValue,
+} from './internal/executor.js';
 export {
   cardColors,
   cardReferenceSchema,
@@ -47,3 +54,14 @@ export {
   type CatalogResolution,
   type ListCardPrintingsOptions,
 } from './internal/service.js';
+export {
+  CATALOG_SYNCHRONIZATION_LIMITS,
+  type CatalogSnapshot,
+  type CatalogSnapshotSource,
+  type CatalogSynchronizationRequest,
+} from './internal/snapshot.js';
+export {
+  createCatalogSynchronizer,
+  type CatalogSynchronizationDependencies,
+  type CatalogSynchronizer,
+} from './internal/sync.js';
