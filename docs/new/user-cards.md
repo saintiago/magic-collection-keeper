@@ -14,6 +14,34 @@ quantity, confirmation and account-isolation rules for all changes.
 - Receive trusted user context from Application. Scope every referenced private record and operation
   to that user, including reads and retries.
 
+### Provided operations
+
+| Capability | Input | Result |
+| --- | --- | --- |
+| Read private records | Trusted user context and record references or a bounded pending-list query. | Authorized records, revisions and continuation where applicable. |
+| Edit copies, tags or associations | Trusted context, explicit change and expected revision for existing records. | Committed affected records and their revisions, or a conflict. |
+| Stage or review imports | Trusted context, session/entry identity, candidates or reviewed values and expected revision. | Updated pending state; no ownership change. |
+| Confirm imports | Trusted context, operation ID and reviewed entry revisions. | Receipt identifying the resulting copies and committed outcome. |
+| Recover an operation | Trusted context and operation ID. | Recorded outcome or explicit absence; never another user's result. |
+
+Import confirmation carries an operation ID scoped to the account. Replaying identical input returns
+its recorded outcome; reuse with different input fails. Other edits use record identity and revision
+checks. Validation, missing authorized records, revision conflict and temporary unavailability are
+distinct failures. Foreign private references reveal no record contents or existence. No partial
+mutation is reported as success.
+
+### Query surface
+
+Expose read-only copies, tags and associations scoped to trusted user context. Copy rows contain
+copy ID, printing ID, finish, condition and derived ownership/location membership. Association rows
+contain association ID, tag ID, target level, target ID and optional intended quantity. Copy-targeted
+associations have no quantity. Pending entries remain outside the owned-copy relation.
+
+Search reads these relations through the public query contract. The PostgreSQL implementation uses
+protected views with account scoping enforced at the database boundary. Missing context fails
+closed; account context cannot leak between reused connections. Private base tables are inaccessible
+through this read contract. Publish a private-data revision for continuation validation.
+
 ## Records and associations
 
 Each physical copy has a stable ID, one printing reference and its physical attributes. Corrections

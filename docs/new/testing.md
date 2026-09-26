@@ -30,6 +30,18 @@ on both sides that agree with each other but differ from the implementation.
 Contract and workflow describe what a test proves, not additional test layers. Keep cross-component
 scenarios in integration or system tests according to their scope.
 
+For database query contracts, verify each provider's published views against its real writes.
+Test combined queries with small contract-conforming view fixtures, then run a focused integration
+case against the real providers. Include same-printing/copy filtering, duplicate associations,
+account isolation and continuation invalidation. A private table rename must not require Search changes.
+
+For supported Scryfall syntax, keep compatibility cases over a fixed catalog fixture. Verify that
+text expressions and equivalent UI criteria select the same entries, preserve supported operator
+semantics and reject unsupported expressions. Routine tests do not depend on live search results.
+
+Run the same observable contract cases against replacement implementations. Include failure,
+authorization, cancellation and retry behavior where the interface promises them.
+
 ## Keeper's main risks
 
 | Owner | Focused evidence |

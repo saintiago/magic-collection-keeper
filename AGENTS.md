@@ -64,6 +64,10 @@ All documents in `docs/new/` are relevant to the rebuild.
 - [Tech stack](docs/new/tech-stack.md)
 - [Testing architecture](docs/new/testing.md)
 
+Search reference:
+
+- [Scryfall search syntax](https://scryfall.com/docs/syntax)
+
 Testing background:
 
 - [JavaScript testing best practices](https://github.com/goldbergyoni/javascript-testing-best-practices)

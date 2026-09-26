@@ -17,6 +17,23 @@ recognition engines, model artifacts and matching policies across API and deploy
   engine versions and timings. A suggested printing remains editable and distinguishable from
   an evidence-supported printing. Results never confer ownership or physical condition.
 
+### Provided operations
+
+| Operation | Input | Result |
+| --- | --- | --- |
+| Prepare | Session identity, enabled engines and cancellation. | Ready state or preparation failure. |
+| Recognize | Image, session/capture/attempt identity and cancellation. | Initial reading and completion; optional later readings retain the same identity. |
+| Dispose | Session identity. | Releases local resources and prevents further delivery for that session. |
+
+A reading identifies status, ordered candidates, optional suggestion, printing evidence, provisional
+state, disagreement, engine versions and timings. A suggestion must belong to the candidate set.
+Unknown means no usable identity; it is distinct from invalid input, busy, cancellation or unavailable
+inference. Completion means no further reading updates for that attempt.
+
+Catalog resolution can enrich an engine result but cannot turn a representative printing into
+evidence of the observed edition. Preserve raw engine outcomes behind the mapping boundary.
+Transport paths and envelopes can change while these guarantees and engine behavior remain stable.
+
 ## Engines and assets
 
 Retain browser ONNX recognition and the Python visual/OCR pipeline: CollectorVision geometry and

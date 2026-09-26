@@ -16,6 +16,10 @@ Keeper has six logical components. Each owns its state and decisions and exposes
 These boundaries do not imply separate deployments. Components use provider-owned contracts;
 data access and changes remain subject to the owning component's rules.
 
+Each component can be developed and tested against supplied implementations of its required
+interfaces. Replacement must preserve the provided contract's data, errors, authorization,
+ordering and lifecycle guarantees, not merely its method names.
+
 ## Relationships
 
 ```mermaid
@@ -36,6 +40,10 @@ owns its operations and business rules.
 Search combines public card criteria with private associations, such as cards of a particular color
 that the user owns. It evaluates membership and ordering across the complete result before
 pagination. Catalog and UserCards remain authoritative for their data.
+
+The PostgreSQL deployment composes their public, read-only query surfaces in one database.
+Those surfaces are part of the provider contracts; private tables are not. Replacing a storage
+implementation includes maintaining its query surface. The other components remain unchanged.
 
 Backend entry points validate user identity for authenticated access. Private queries and changes
 are authorized against trusted user context, including requests made through Search.

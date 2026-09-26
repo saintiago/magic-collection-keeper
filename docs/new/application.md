@@ -17,6 +17,20 @@ entry points and runtime lifecycle. Business decisions stay with their owning co
 - Translate component results and failures into consistent transport responses without exposing
   storage details, credentials or provider exceptions.
 
+### Construction and request boundary
+
+Receive explicit implementations of the required component contracts, resource settings and
+identity verification. Construction validates compatibility before serving requests. Production
+wiring selects concrete implementations; component tests supply alternatives.
+
+Each backend invocation carries verified account context when required, request identity and a
+cancellation/deadline signal. Operations that promise replay accept a separate operation ID so retries
+can refer to the same action. Invalid authentication never reaches private operations.
+
+Map validation, unauthorized access, missing records, revision conflict, stale continuation, busy
+and unavailable outcomes without collapsing them into an empty success. Do not infer a failed write
+from a lost response. The owning component's operation receipt determines its committed outcome.
+
 ## Configuration and lifecycle
 
 Use explicit construction functions. Configuration identifies environment, resources, credentials

@@ -16,6 +16,20 @@ the user's current activity.
 - Provide CardList with a source, presentation and tools. Sources supply entries and continuation;
   tools invoke the owning component's operations.
 
+### List boundary
+
+A source accepts query context, page size, continuation and cancellation. It returns entries with
+stable keys, typed targets, basic information or explicit unresolved state, and an end/continuation
+indicator. Search pages and UserCards pending entries are adapted to this presentation contract;
+their providers do not import UI types.
+
+Fragment requests identify entry keys and requested information. Results distinguish ready, absent
+and failed information. Tools accept explicit target references and selection context and return
+an operation outcome. Cancellation or an old page response cannot replace the active view.
+
+Construct the UI with supplied source, tool, identity and device capabilities. Tests can replace
+these boundaries while exercising real navigation and presentation behavior.
+
 ## Pages and navigation
 
 Home, catalog/search, collection, tags, tag views, card details and import are dedicated pages.
