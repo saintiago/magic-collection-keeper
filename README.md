@@ -90,6 +90,19 @@ Source cards with unresolved or digital-only printing references remain listed u
 
 Node 24, npm and Python 3.12 are required.
 
+On Windows, install the official Python Software Foundation package once for
+the current user. Keeper selects it explicitly through `py -3.12`, so an
+existing newer default Python remains unchanged:
+
+```powershell
+winget install --exact --id Python.Python.3.12 --source winget --scope user --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+```
+
+On other platforms, install Python 3.12 with the platform's supported package
+manager. `KEEPER_PYTHON` remains available when an explicit Python 3.12
+executable is required. After that one-time host prerequisite, setup and checks
+are unattended:
+
 ```sh
 npm ci
 npm run prepare:validation
