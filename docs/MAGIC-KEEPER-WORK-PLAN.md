@@ -11,7 +11,7 @@ Assessment and preparation execution: 2026-09-20. B-01–B-08 preparation plus B
 
 Delivery speed is the objective. Frameworks, services, workflow engines, restructuring, custom fields and additional agents are acceptable when they improve delivery speed enough to justify their setup and maintenance. Choose the smallest effective solution; retain meaningful correctness checks.
 
-Rank prioritisation is in progress in Nexus, as reported by you. Rank prerequisites ahead of dependent tasks. This plan does not add a dependency-selection feature. Keep blocked work out of Ready.
+Rank prioritisation is in progress in Nexus, as reported by you. Rank prerequisites ahead of dependent tasks. This plan does not add a dependency-selection feature. Keep blocked work out of To Do.
 
 Keeper owns a clean CI/CD process: validate, publish when applicable, verify, report the result for the exact commit. The harness owns repairs, reruns and task completion.
 
@@ -26,6 +26,10 @@ Keep this requested plan in Keeper docs for review and later Jira conversion. Pu
 - GitHub inspection found no main protection/ruleset, auto-merge disabled and dependency/security alerts disabled. Lens access to Keeper was unverified.
 - [Jira KAN](https://malton-family.atlassian.net/jira/software/projects/KAN/boards/2) has Draft, Ready, In Progress, In Review and Done; Epic, Task, Story and Subtask types. The inspected intake query had no eligible tasks.
 - No fresh full test run, physical-device session or end-to-end Keeper harness run was performed. These findings are the audit baseline, not claims about later changes.
+
+## Jira status update — September 25, 2026
+
+KAN now has the same eight status names and categories as HARN: Draft, Idea, To Do, and Waiting for Feedback are not started; Idea Refinement and In Progress are in progress; In Review and Done are done. The former Ready status was renamed To Do, so KAN-5 stayed in its queue status. Keeper's `nexus.project.json` uses To Do for intake and completion rework. Earlier Ready references below describe the September 20 audit and are historical.
 
 ## Preparation execution update — September 20, 2026
 
@@ -133,7 +137,7 @@ Verify the harness service account's KAN access. Use Epics for outcomes and Task
 
 Rank prerequisites ahead of dependent tasks using the Nexus rank prioritisation work. Keep blocked tasks in Draft; do not queue placeholder issues.
 
-**Acceptance:** service-account access is verified; each Ready task has actionable acceptance and satisfied prerequisites. Task creation remains a later step. Use extra fields only if they improve delivery.
+**Acceptance:** service-account access is verified; each To Do task has actionable acceptance and satisfied prerequisites. Task creation remains a later step. Use extra fields only if they improve delivery.
 
 ## Part 3 — Work during harness runs
 
@@ -447,7 +451,7 @@ This matrix prevents duplicate implementation tickets and lost queued requests. 
 1. Me: B-01–08 preparation.
 2. Harness, supervised by me: C-01 using a useful C-04/C-06 improvement.
 3. Harness: CI speed/reliability and test diagnostics first, then product work in your chosen rank order.
-4. Rank prerequisite tasks first; keep blocked tasks out of Ready. C-09 precedes C-10–13; C-14 supplies baseline and final evidence.
+4. Rank prerequisite tasks first; keep blocked tasks out of To Do. C-09 precedes C-10–13; C-14 supplies baseline and final evidence.
 5. You: physical-device checks for C-21 and product decisions for C-23–26.
 
 B tasks are preparation; C tasks are Keeper delivery work. Preserve task IDs and product requirement links when creating Jira tickets. Split broad tasks into independently verifiable deliveries. No tickets have been created by this update.

@@ -110,6 +110,12 @@ These requirements stay regression-protected and must not be recreated as backlo
 
 QUALITY-01 retains the [r130 failure](../tests/performance/R130-RELEASE.md) as historical evidence; an unchanged green rerun is not a repair. The deterministic [post-return redraw regression](../tests/ui/card-actions.spec.js) and failure-safe [LIVE-02 cleanup](../tests/live/capture-import.spec.js) verify the local correction without claiming deployment.
 
+## Jira status alignment — September 25, 2026
+
+| ID | Requirement and acceptance | Status / evidence |
+| --- | --- | --- |
+| B-12 | KAN must have the same eight Jira status names and categories as HARN for every KAN work type. Nexus intake and completion rework use `To Do`; blocked work remains in Draft. | Jira workflow verified on September 25, 2026. Keeper project configuration updated and composed validation passed locally; repository delivery remains pending. |
+
 ## WSL Nexus project configuration — September 25, 2026
 
 | ID   | Requirement and acceptance                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Status / evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -127,4 +133,4 @@ The configuration is loadable, the Jira tracking-field gap is resolved, and host
 
 ## Preparation-to-backlog boundary
 
-The detailed sequencing and future candidate tasks remain in [MAGIC-KEEPER-WORK-PLAN.md](MAGIC-KEEPER-WORK-PLAN.md). B-01–08 are preparation. Part 3 is not authorized by this preparation run, and no Jira backlog tickets are created by it. Rank prerequisites ahead of dependants; keep blocked work out of Ready.
+The detailed sequencing and future candidate tasks remain in [MAGIC-KEEPER-WORK-PLAN.md](MAGIC-KEEPER-WORK-PLAN.md). B-01–08 are preparation. Part 3 is not authorized by this preparation run, and no Jira backlog tickets are created by it. Rank prerequisites ahead of dependants; keep blocked work out of To Do.
