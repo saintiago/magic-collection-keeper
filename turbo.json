@@ -20,8 +20,7 @@
       "outputs": []
     },
     "build": {
-      "inputs": ["$TURBO_DEFAULT$", "!build/**"],
-      "outputs": ["build/**"]
+      "cache": false
     },
     "test": {
       "cache": false

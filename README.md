@@ -39,7 +39,9 @@ Focus a scope with a path filter, for example `npm run test:component -- public-
 tests are organised as tests/component/<component>/ so one component's tests can be selected by path.
 
 `npm run validate` runs every check through Turborepo, which caches only the deterministic checks
-(formatting, linting, type checking, boundaries and the build) and always runs the test suites.
+(formatting, linting, type checking and boundaries) and always runs the test suites and build.
+The build clears `build/` before compiling; caching is disabled so restoring cached artifacts cannot
+leave output from deleted sources behind.
 Nexus uses the same commands for preparation and validation (nexus.project.json).
 
 Each component from docs/architecture.md owns src/<component>/index.ts as its provider-owned public
