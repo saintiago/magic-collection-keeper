@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createBrowserRecognitionPipeline,
   createRecognition,
+  recognitionEngineNames,
   type PreservedRequest,
   type Recognition,
   type RecognitionReading,
@@ -106,6 +107,10 @@ class WorkerStub {
   /** The result the preserved worker reports for one frame; tests replace it per case. */
   static result: (attempt: number) => Record<string, unknown> = (attempt) =>
     serviceReading(attempt);
+  /** The card state the preserved browser geometry check reports for one frame. */
+  static geometryState = 'single';
+  /** Whether the preserved browser geometry check fails to prepare or to inspect a frame. */
+  static failGeometry = false;
   /** Holds frame results back so a case can control which engine answers first. */
   static hold: Promise<void> = Promise.resolve();
   static failPreparation = false;
@@ -114,8 +119,11 @@ class WorkerStub {
   onmessage: ((event: { data: unknown }) => void) | null = null;
   onerror: (() => void) | null = null;
   terminated = false;
+  /** True for the preserved geometry check's worker, which inspects frames without an attempt. */
+  readonly geometry: boolean;
 
-  constructor() {
+  constructor(url?: unknown) {
+    this.geometry = String(url ?? '').includes('card-presence-worker');
     WorkerStub.instances.push(this);
   }
 
@@ -124,13 +132,25 @@ class WorkerStub {
     if (posted.type === 'init') {
       queueMicrotask(() =>
         this.emit(
-          WorkerStub.failPreparation
+          (this.geometry ? WorkerStub.failGeometry : WorkerStub.failPreparation)
             ? { type: 'error', message: 'Worker preparation failed' }
             : { type: 'ready', metrics: { prepareMs: 1 } },
         ),
       );
     }
     if (posted.type === 'frame') {
+      if (this.geometry) {
+        // The preserved geometry check inspects a frame without an attempt identity; the visual
+        // worker always reports the attempt it reads for.
+        queueMicrotask(() =>
+          this.emit(
+            WorkerStub.failGeometry
+              ? { type: 'error', message: 'Card geometry check unavailable' }
+              : { type: 'result', result: { state: WorkerStub.geometryState, elapsedMs: 1 } },
+          ),
+        );
+        return;
+      }
       const attempt = posted.attempt ?? 0;
       void WorkerStub.hold.then(() =>
         this.emit(
@@ -159,6 +179,7 @@ function createCanvas(): HTMLCanvasElement {
     getContext: () => ({
       fillStyle: '',
       fillRect: () => {},
+      drawImage: () => {},
       getImageData: () => ({
         width: pixels.width,
         height: pixels.height,
@@ -285,6 +306,8 @@ describe('preserved recognition pipeline', () => {
   beforeEach(() => {
     WorkerStub.instances = [];
     WorkerStub.result = (attempt) => serviceReading(attempt);
+    WorkerStub.geometryState = 'single';
+    WorkerStub.failGeometry = false;
     WorkerStub.hold = Promise.resolve();
     WorkerStub.failPreparation = false;
     WorkerStub.failRecognition = false;
@@ -696,6 +719,28 @@ print(json.dumps(decide(visual, text, aliases=[("Relampago", "es")])))
     },
   );
 
+  it.each([
+    { cloudEnabled: true, engines: ['browser-onnx', 'python-ocr', 'independent-identity'] },
+    { cloudEnabled: false, engines: ['browser-onnx'] },
+  ])(
+    'names the engines one capability enables and prepares exactly those: $engines',
+    async ({ cloudEnabled, engines }) => {
+      expect(recognitionEngineNames(cloudEnabled)).toEqual(engines);
+      const transport = createTransport({});
+      const recognition = createPreservedRecognition(transport, { cloudEnabled });
+      try {
+        await expect(
+          recognition.prepare({
+            sessionId: 'session-1',
+            engines: recognitionEngineNames(cloudEnabled),
+          }),
+        ).resolves.toMatchObject({ engines });
+      } finally {
+        recognition.dispose({ sessionId: 'session-1' });
+      }
+    },
+  );
+
   it('keeps the preserved independent session call limit', async () => {
     const transport = createTransport({
       cloud: (attempt) =>
@@ -736,11 +781,10 @@ print(json.dumps(decide(visual, text, aliases=[("Relampago", "es")])))
   });
 
   it('runs the local ONNX engine alone when the remote comparison is disabled', async () => {
+    // The preserved browser worker reports a card where its quadrilateral check found one, but no
+    // card count; the component's geometry check establishes it for the frame it read.
     WorkerStub.result = (attempt) =>
-      serviceReading(attempt, {
-        candidates: [bolt],
-        evidence: { topScore: 0.9, visual: { cardPresence: { state: 'single' } } },
-      });
+      serviceReading(attempt, { candidates: [bolt], evidence: { topScore: 0.9 } });
     const transport = createTransport({});
     const recognition = createPreservedRecognition(transport, { cloudEnabled: false });
     await expect(recognition.prepare(localPrepareRequest)).resolves.toMatchObject(
@@ -759,6 +803,7 @@ print(json.dumps(decide(visual, text, aliases=[("Relampago", "es")])))
       candidates: [
         { cardId: bolt.oracle_id, printingId: bolt.id, name: 'Lightning Bolt', score: null },
       ],
+      evidence: { cardPresence: 'single' },
     });
     await attempt.completion;
 
@@ -767,5 +812,91 @@ print(json.dumps(decide(visual, text, aliases=[("Relampago", "es")])))
     expect(transport.independentAttempts).toEqual([]);
 
     recognition.dispose({ sessionId: 'session-1' });
+  });
+
+  it('keeps a browser-only identity unknown while the frame does not hold one card', async () => {
+    WorkerStub.result = (attempt) => serviceReading(attempt, { candidates: [bolt] });
+    WorkerStub.geometryState = 'multiple';
+    const transport = createTransport({});
+    const recognition = createPreservedRecognition(transport, { cloudEnabled: false });
+    await expect(recognition.prepare(localPrepareRequest)).resolves.toMatchObject(
+      localPrepareRequest,
+    );
+    const attempt = recognition.recognize({
+      ...localPrepareRequest,
+      captureId: 'capture-1',
+      attempt: 1,
+      frame: createCanvas(),
+    });
+
+    // Geometry decides independently of the identity the engine matched, and the reading keeps the
+    // geometry it was denied by instead of presenting a candidate.
+    await expect(attempt.initial).resolves.toMatchObject({
+      status: 'unknown',
+      candidates: [],
+      evidence: { cardPresence: 'multiple' },
+    });
+    await attempt.completion;
+    recognition.dispose({ sessionId: 'session-1' });
+  });
+
+  it('leaves a frame without geometry unadmitted when the browser check cannot report one', async () => {
+    WorkerStub.result = (attempt) => serviceReading(attempt, { candidates: [bolt] });
+    WorkerStub.failGeometry = true;
+    const transport = createTransport({});
+    const recognition = createPreservedRecognition(transport, { cloudEnabled: false });
+    try {
+      // A runtime whose geometry check cannot run still prepares its engines, and the frame it
+      // cannot establish admits nothing instead of presenting the candidate it matched.
+      await expect(recognition.prepare(localPrepareRequest)).resolves.toMatchObject(
+        localPrepareRequest,
+      );
+      const attempt = recognition.recognize({
+        ...localPrepareRequest,
+        captureId: 'capture-1',
+        attempt: 1,
+        frame: createCanvas(),
+      });
+      await expect(attempt.initial).resolves.toMatchObject({
+        status: 'unknown',
+        candidates: [],
+        evidence: { cardPresence: null },
+      });
+      await attempt.completion;
+    } finally {
+      recognition.dispose({ sessionId: 'session-1' });
+    }
+  });
+
+  it('keeps a reading that reports its own geometry when the browser check fails', async () => {
+    WorkerStub.failGeometry = true;
+    const transport = createTransport({
+      cloud: (attempt) =>
+        serviceReading(attempt, {
+          candidates: [bolt],
+          evidence: { titleAgrees: false, visual: { cardPresence: { state: 'single' } } },
+        }),
+    });
+    const recognition = createPreservedRecognition(transport);
+    try {
+      await expect(recognition.prepare(prepareRequest)).resolves.toMatchObject(prepareRequest);
+      const attempt = recognition.recognize({
+        ...prepareRequest,
+        captureId: 'capture-1',
+        attempt: 1,
+        frame: createCanvas(),
+      });
+
+      // The remote path establishes the frame's geometry itself, so the cloud runtime keeps
+      // admitting cards without the browser check.
+      await expect(attempt.initial).resolves.toMatchObject({
+        status: 'possible',
+        candidates: [{ printingId: bolt.id }],
+        evidence: { cardPresence: 'single' },
+      });
+      await attempt.completion;
+    } finally {
+      recognition.dispose({ sessionId: 'session-1' });
+    }
   });
 });

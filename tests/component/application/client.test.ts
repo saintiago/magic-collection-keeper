@@ -809,6 +809,102 @@ describe('user cards client', () => {
     expect(confirmed.copies.map((copy) => copy.copyId)).toEqual(['copy-1']);
   });
 
+  it('stages a capture observation and attaches its late alternatives', async () => {
+    const session = {
+      sessionId: 'ui-capture-1',
+      sourceKind: 'capture',
+      sourceId: 'ui-capture-1',
+      sourceReference: null,
+      state: 'pending',
+      pendingEntries: 1,
+      confirmedEntries: 0,
+      discardedEntries: 0,
+      revision: 2,
+    };
+    const storedEntry = {
+      entryId: 'capture-1',
+      sessionId: 'ui-capture-1',
+      position: 1,
+      state: 'pending',
+      printingId: 'printing-1',
+      finish: 'nonfoil',
+      condition: null,
+      quantity: 1,
+      candidates: [
+        { printingId: 'printing-1', provider: 'recognition', evidence: 'engine-ranking' },
+      ],
+      sourceLine: null,
+      revision: 3,
+    };
+    const observation = jsonFetch({
+      privateRevision: 'private-2',
+      outcome: 'admitted',
+      replayed: false,
+      session,
+      entry: storedEntry,
+    });
+    const observationClient = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch: observation.fetch,
+      }),
+    );
+
+    const admitted = await observationClient.stageCaptureObservation({
+      sessionId: 'ui-capture-1',
+      captureId: 'capture-1',
+      printingId: 'printing-1',
+      candidates: [
+        { printingId: 'printing-1', provider: 'recognition', evidence: 'engine-ranking' },
+      ],
+    });
+
+    expect(observation.calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/imports/ui-capture-1/captures',
+    );
+    expect(observation.calls[0]?.init.method).toBe('POST');
+    expect(observation.calls[0]?.init.body).toBe(
+      '{"captureId":"capture-1","printingId":"printing-1","finish":null,"candidates":[{"printingId":"printing-1","provider":"recognition","evidence":"engine-ranking"}]}',
+    );
+    expect(admitted.outcome).toBe('admitted');
+    expect(admitted.entry?.entryId).toBe('capture-1');
+
+    const attached = jsonFetch({
+      privateRevision: 'private-3',
+      session: { ...session, revision: 3 },
+      entry: {
+        ...storedEntry,
+        candidates: [
+          ...storedEntry.candidates,
+          { printingId: 'printing-2', provider: 'recognition', evidence: 'title-evidence' },
+        ],
+      },
+    });
+    const attachmentClient = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch: attached.fetch,
+      }),
+    );
+
+    const entry = await attachmentClient.attachImportCandidates({
+      entryId: 'entry/1',
+      candidates: [
+        { printingId: 'printing-2', provider: 'recognition', evidence: 'title-evidence' },
+      ],
+    });
+
+    expect(attached.calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/imports/entries/entry%2F1/candidates',
+    );
+    expect(attached.calls[0]?.init.body).toBe(
+      '{"candidates":[{"printingId":"printing-2","provider":"recognition","evidence":"title-evidence"}]}',
+    );
+    expect(entry.entry.candidates).toHaveLength(2);
+  });
+
   it('reads the recorded outcome of one confirmation operation', async () => {
     const { fetch, calls } = jsonFetch({ outcome: 'absent' });
     const client = createUserCardsClient(

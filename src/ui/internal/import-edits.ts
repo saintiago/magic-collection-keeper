@@ -3,18 +3,22 @@
  * (docs/user-interface.md#capture-and-review, docs/user-cards.md#import-and-capture-state).
  *
  * The page stages manual lines as pending entries, reviews a pending entry's printing, finish,
- * condition and quantity under the revision it read, discards entries and confirms the reviewed
- * entries under one operation identity. Staging, review and discard quote an entry identity, so a
- * rejected change either conflicts or stays unknown exactly like every other private edit, and a
- * confirmation that lost its response is recovered through the recorded outcome of its operation
- * identity instead of inferring commitment (docs/application.md#construction-and-request-boundary).
- * Nothing here reports ownership: a staged line is a candidate in review, and only a confirmation
- * creates the physical copies.
+ * condition and quantity under the revision it read, stages capture observations with the
+ * provider's admission decision, attaches late recognition alternatives, discards entries and
+ * confirms the reviewed entries under one operation identity. Staging, review and discard quote an
+ * entry identity, so a rejected change either conflicts or stays unknown exactly like every other
+ * private edit, and a confirmation that lost its response is recovered through the recorded
+ * outcome of its operation identity instead of inferring commitment
+ * (docs/application.md#construction-and-request-boundary). Nothing here reports ownership: a
+ * staged line or capture is a candidate in review, and only a confirmation creates the physical
+ * copies.
  */
 
 import type { UserCardsClient } from '../../application/index.js';
 import type { Finish } from '../../catalog/index.js';
 import type {
+  AttachImportCandidatesInput,
+  CaptureStageResult,
   ConfirmImportInput,
   CopyCondition,
   DiscardImportEntryInput,
@@ -33,6 +37,7 @@ import type {
   ListImportEntriesOptions,
   ListImportSessionsOptions,
   ReviewImportEntryInput,
+  StageCaptureInput,
   StageImportEntriesInput,
 } from '../../usercards/index.js';
 
@@ -54,7 +59,9 @@ export type UiImportClient = Pick<
   | 'listImportSessions'
   | 'listImportEntries'
   | 'stageImportEntries'
+  | 'stageCaptureObservation'
   | 'reviewImportEntry'
+  | 'attachImportCandidates'
   | 'discardImportEntry'
   | 'discardImportSession'
   | 'confirmImport'
@@ -71,7 +78,14 @@ export interface UiImportAccess {
   /** One bounded page of one session's pending entries, in capture order. */
   entries(input: ListImportEntriesOptions, signal?: AbortSignal): Promise<ImportEntryListResult>;
   stage(input: StageImportEntriesInput, signal?: AbortSignal): Promise<ImportStageResult>;
+  /** One capture observation, admitted, suppressed or explicitly unresolved. */
+  capture(input: StageCaptureInput, signal?: AbortSignal): Promise<CaptureStageResult>;
   review(input: ReviewImportEntryInput, signal?: AbortSignal): Promise<ImportEntryChangeResult>;
+  /** Late recognition alternatives of one pending entry. */
+  attach(
+    input: AttachImportCandidatesInput,
+    signal?: AbortSignal,
+  ): Promise<ImportEntryChangeResult>;
   discardEntry(
     input: DiscardImportEntryInput,
     signal?: AbortSignal,
@@ -94,7 +108,9 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     'listImportSessions',
     'listImportEntries',
     'stageImportEntries',
+    'stageCaptureObservation',
     'reviewImportEntry',
+    'attachImportCandidates',
     'discardImportEntry',
     'discardImportSession',
     'confirmImport',
@@ -108,7 +124,9 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     sessions: (options, signal) => userCards.listImportSessions(options, signal),
     entries: (input, signal) => userCards.listImportEntries(input, signal),
     stage: (input, signal) => userCards.stageImportEntries(input, signal),
+    capture: (input, signal) => userCards.stageCaptureObservation(input, signal),
     review: (input, signal) => userCards.reviewImportEntry(input, signal),
+    attach: (input, signal) => userCards.attachImportCandidates(input, signal),
     discardEntry: (input, signal) => userCards.discardImportEntry(input, signal),
     discardSession: (input, signal) => userCards.discardImportSession(input, signal),
     confirm: (input, signal) => userCards.confirmImport(input, signal),
@@ -183,6 +201,48 @@ export async function stageImportLines(
     async () => null,
     'The lines were not added to review.',
     'The staging outcome is unknown. The lines may be in review; reload the import before retrying.',
+  );
+}
+
+/**
+ * Stages one capture observation into review. The provider decides the admission: a repeated
+ * observation is suppressed, an unresolved reading stages nothing and the same capture identity
+ * may resolve later, and only an admitted observation adds a pending entry. Staging never changes
+ * ownership, so a committed outcome is an entry in review, and a repeated call with the same
+ * capture identity replays its recorded decision instead of adding the card twice. An outcome
+ * whose response was lost stays unknown, so the capture view retains the observation it submitted
+ * and recovers the recorded decision by replaying exactly that observation
+ * (docs/user-cards.md#import-and-capture-state).
+ */
+export async function stageCaptureObservation(
+  access: UiImportAccess,
+  input: StageCaptureInput,
+  signal?: AbortSignal,
+): Promise<UiChangeCommit<CaptureStageResult>> {
+  return commitUiChange(
+    () => access.capture(input, signal),
+    async () => null,
+    'The capture was not added to review.',
+    'The staging outcome is unknown. The capture may be in review; reload the import before retrying.',
+  );
+}
+
+/**
+ * Attaches late recognition alternatives of one admitted capture. The provider keeps the reviewed
+ * values and only adds alternatives it does not hold yet, so a comparison that arrived after the
+ * capture was staged is reviewable without rewriting the owner's corrections
+ * (docs/user-cards.md#import-and-capture-state).
+ */
+export async function attachImportCandidates(
+  access: UiImportAccess,
+  input: AttachImportCandidatesInput,
+  signal?: AbortSignal,
+): Promise<UiChangeCommit<ImportEntryChangeResult>> {
+  return commitUiChange(
+    () => access.attach(input, signal),
+    async () => null,
+    'The later alternatives were not stored.',
+    'The outcome is unknown. Reload the pending import before retrying.',
   );
 }
 
@@ -316,6 +376,9 @@ export async function recoverConfirmation(
 /** Prefix of the identities this page generates for staged lines and confirmation operations. */
 const importIdentityPrefix = 'ui-import';
 
+/** Prefix of the identities this page generates for capture sessions, captures and attempts. */
+const captureIdentityPrefix = 'ui-capture';
+
 let importSerial = 0;
 
 /**
@@ -324,8 +387,22 @@ let importSerial = 0;
  * refers to the recorded staging or confirmation instead of creating a second one.
  */
 export function uiImportIdentity(): string {
+  return uiIdentity(importIdentityPrefix);
+}
+
+/**
+ * One stable identity for a capture session, one capture inside it or one capture attempt. It is
+ * bounded like every identifier UserCards and Recognition accept, so a repeated delivery of the
+ * same capture refers to its recorded admission instead of staging the card twice.
+ */
+export function uiCaptureIdentity(): string {
+  return uiIdentity(captureIdentityPrefix);
+}
+
+/** One bounded, unique identity of the given family. */
+function uiIdentity(prefix: string): string {
   importSerial += 1;
   const stamp = Date.now().toString(36);
   const noise = Math.random().toString(36).slice(2, 8);
-  return `${importIdentityPrefix}-${stamp}-${importSerial.toString(36)}-${noise}`;
+  return `${prefix}-${stamp}-${importSerial.toString(36)}-${noise}`;
 }

@@ -3,6 +3,7 @@ import {
   recognitionCardPresenceStates,
   type RecognitionCardPresence,
   type RecognitionEngineCandidate,
+  type RecognitionEngineName,
   type RecognitionEngineOutcome,
 } from './model.js';
 import type { RecognitionEnginePipeline, RecognitionEngineRecognizeRequest } from './service.js';
@@ -10,6 +11,7 @@ import { RecognitionError } from './errors.js';
 
 import { createBackendRecognition } from '../browser/backend-recognition.js';
 import { createBrowserRecognition } from '../browser/browser-recognition.js';
+import { createCardPresence, type PreservedCardPresence } from '../browser/card-presence.js';
 import { createHybridRecognition } from '../browser/hybrid-recognition.js';
 import { createIndependentRecognition } from '../browser/independent-recognition.js';
 
@@ -87,10 +89,25 @@ export interface BrowserRecognitionPipelineOptions {
 }
 
 /**
+ * Engine names the preserved pipeline enables for one runtime capability
+ * (docs/recognition.md#interface, docs/recognition.md#engines-and-assets). A caller names exactly
+ * these when it prepares a session: cloud inference runs the Python visual/OCR path and the
+ * independent identity check beside the browser ONNX engine, while a local runtime runs the
+ * browser engine alone. The selection lives here, with the composition that owns it, so
+ * UserInterface prepares the same engines the pipeline accepts instead of repeating the names.
+ */
+export function recognitionEngineNames(cloudEnabled: boolean): readonly RecognitionEngineName[] {
+  return cloudEnabled ? ['browser-onnx', 'python-ocr', 'independent-identity'] : ['browser-onnx'];
+}
+
+/**
  * Composes the preserved browser recognition into the public engine pipeline. The factory fixes
  * the composition of this session's engines: Application constructs it for the runtime's enabled
  * capabilities and supplies the authenticated transport, while the matching policy, candidate
- * interpretation and the independent session call limit stay with the preserved engines.
+ * interpretation and the independent session call limit stay with the preserved engines. The
+ * preserved browser geometry check is composed beside them, so a runtime whose engines report no
+ * card count still establishes the single-card geometry of every attempted frame
+ * (docs/recognition.md#execution).
  */
 export function createBrowserRecognitionPipeline(
   options: BrowserRecognitionPipelineOptions,
@@ -102,9 +119,7 @@ export function createBrowserRecognitionPipeline(
     );
   }
   const cloudEnabled = options?.cloudEnabled !== false;
-  const enabledEngines = cloudEnabled
-    ? ['browser-onnx', 'python-ocr', 'independent-identity']
-    : ['browser-onnx'];
+  const enabledEngines = recognitionEngineNames(cloudEnabled);
   const remoteRequest: PreservedRequest = async (path, init) => {
     const response = await request(path, init);
     if (path === '/api/recognize' || path === '/api/recognize-independent') {
@@ -137,6 +152,12 @@ export function createBrowserRecognitionPipeline(
         }),
       })
     : primary;
+  // The browser ONNX port checks the quadrilateral it reads but reports no card count, so the
+  // frame's geometry is established here with the preserved browser check before the engines read
+  // it: a reading the engines report without geometry then carries the single-card geometry its
+  // frame was admitted with instead of presenting a candidate without it
+  // (docs/recognition.md#execution, docs/user-interface.md#capture-and-review).
+  const presence = createCardPresence();
 
   return {
     async prepare({ engines }) {
@@ -149,19 +170,74 @@ export function createBrowserRecognitionPipeline(
           `This pipeline requires the enabled engines: ${enabledEngines.join(', ')}.`,
         );
       }
-      const ready = readRecord(await engine.prepare());
+      // The preserved engines prepare exactly as they did before the geometry check joined the
+      // session; the frame check then joins the prepared session.
+      const reported = readRecord(await engine.prepare());
+      // A runtime that cannot run the browser check still captures through the engines that report
+      // a frame's geometry themselves, and a frame this check cannot establish is never admitted
+      // (docs/recognition.md#execution).
+      await presence.prepare().catch(() => {});
       return {
-        versions: flattenReport(ready?.versions, readVersionEntry),
-        timings: flattenReport(ready?.timings, readTimingEntry),
+        versions: flattenReport(reported?.versions, readVersionEntry),
+        timings: flattenReport(reported?.timings, readTimingEntry),
       };
     },
-    recognize(frame, request) {
-      return recognizeWithPreservedEngine(engine, frame, request);
+    async recognize(frame, request) {
+      const geometry = await readFramePresence(frame, presence, request.signal);
+      const outcome = await recognizeWithPreservedEngine(engine, frame, {
+        ...request,
+        onReading: (later) => {
+          request.onReading?.(withFramePresence(later, geometry));
+        },
+      });
+      return withFramePresence(outcome, geometry);
     },
     dispose() {
-      engine.dispose?.();
+      try {
+        engine.dispose?.();
+      } finally {
+        presence.dispose();
+      }
     },
   };
+}
+
+/**
+ * Reads the preserved browser geometry check of one captured frame, or null when the check cannot
+ * report a card state. A frame without established geometry admits no candidate, and an engine
+ * that reports the frame's geometry itself is unaffected by the browser check
+ * (docs/recognition.md#execution).
+ */
+async function readFramePresence(
+  frame: HTMLCanvasElement,
+  presence: PreservedCardPresence,
+  signal: AbortSignal,
+): Promise<RecognitionCardPresence | null> {
+  try {
+    const reported: unknown = (await presence.inspect(frame, { signal }))?.state;
+    return recognitionCardPresenceStates.find((known) => known === reported) ?? null;
+  } catch (cause) {
+    // A withdrawn attempt stays cancelled; every other failed check leaves the frame without
+    // geometry rather than presenting a candidate it never admitted.
+    if (signal.aborted) {
+      throw cause;
+    }
+    return null;
+  }
+}
+
+/**
+ * Attaches the geometry the frame was admitted with to one engine outcome that reports none of its
+ * own, so an engine without geometry reporting never presents a candidate without it
+ * (docs/recognition.md#execution).
+ */
+function withFramePresence(
+  outcome: RecognitionEngineOutcome,
+  presence: RecognitionCardPresence | null,
+): RecognitionEngineOutcome {
+  return presence !== null && outcome.evidence.cardPresence === null
+    ? { ...outcome, evidence: { ...outcome.evidence, cardPresence: presence } }
+    : outcome;
 }
 
 /**

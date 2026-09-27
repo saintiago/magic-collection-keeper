@@ -49,6 +49,8 @@ import type {
   AssociationListResult,
   AssociationReadResult,
   AssociationRemovalResult,
+  AttachImportCandidatesInput,
+  CaptureStageResult,
   ChangeAssociationInput,
   ConfirmImportInput,
   CopyChangeResult,
@@ -81,6 +83,7 @@ import type {
   RenameTagInput,
   ReviewImportEntryInput,
   SetCopyLocationInput,
+  StageCaptureInput,
   StageImportEntriesInput,
   Tag,
   TagChangeResult,
@@ -335,9 +338,23 @@ export interface UserCardsClient {
     input: StageImportEntriesInput,
     signal?: AbortSignal,
   ): Promise<ImportStageResult>;
+  /**
+   * Stages one capture observation as a pending entry of its capture session, or reports the
+   * admission decision the session's accepted identity produced
+   * (docs/user-cards.md#import-and-capture-state).
+   */
+  stageCaptureObservation(
+    input: StageCaptureInput,
+    signal?: AbortSignal,
+  ): Promise<CaptureStageResult>;
   /** One pending entry's reviewed values, guarded by the revision the caller read. */
   reviewImportEntry(
     input: ReviewImportEntryInput,
+    signal?: AbortSignal,
+  ): Promise<ImportEntryChangeResult>;
+  /** Late recognition alternatives of one pending entry; reviewed values stay unchanged. */
+  attachImportCandidates(
+    input: AttachImportCandidatesInput,
     signal?: AbortSignal,
   ): Promise<ImportEntryChangeResult>;
   /** Ends one pending entry without creating owned copies. */
@@ -565,6 +582,27 @@ export function createUserCardsClient(request: RequestTransport): UserCardsClien
       return readImportStageResult(payload);
     },
 
+    async stageCaptureObservation(
+      input: StageCaptureInput,
+      signal?: AbortSignal,
+    ): Promise<CaptureStageResult> {
+      const payload = await request(
+        applicationPath(applicationRoutes.importCaptures, { sessionId: input.sessionId }),
+        {
+          method: 'POST',
+          // The session identity is the route; the observation and its alternatives stay the body.
+          body: JSON.stringify({
+            captureId: input.captureId,
+            printingId: input.printingId ?? null,
+            finish: input.finish ?? null,
+            candidates: input.candidates ?? [],
+          }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      return readCaptureStageResult(payload);
+    },
+
     async reviewImportEntry(
       input: ReviewImportEntryInput,
       signal?: AbortSignal,
@@ -580,6 +618,21 @@ export function createUserCardsClient(request: RequestTransport): UserCardsClien
             condition: input.condition,
             quantity: input.quantity,
           }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      return readImportEntryChangeResult(payload);
+    },
+
+    async attachImportCandidates(
+      input: AttachImportCandidatesInput,
+      signal?: AbortSignal,
+    ): Promise<ImportEntryChangeResult> {
+      const payload = await request(
+        applicationPath(applicationRoutes.importEntryCandidates, { entryId: input.entryId }),
+        {
+          method: 'POST',
+          body: JSON.stringify({ candidates: input.candidates }),
           ...(signal === undefined ? {} : { signal }),
         },
       );
@@ -1646,6 +1699,29 @@ function readImportStageResult(payload: unknown): ImportStageResult {
     throw unreadableImports();
   }
   return { privateRevision, session, entries, staged, replayed };
+}
+
+/** The admission decision of one capture observation. */
+function readCaptureStageResult(payload: unknown): CaptureStageResult {
+  const record = readObject(payload);
+  const privateRevision = record?.privateRevision;
+  const outcome = record?.outcome;
+  const replayed = record?.replayed;
+  const session = readImportSession(record?.session);
+  const reported = record?.entry ?? null;
+  const entry = reported === null ? null : readImportEntry(reported);
+  if (
+    record === null ||
+    !isIdentifier(privateRevision) ||
+    (outcome !== 'admitted' && outcome !== 'suppressed' && outcome !== 'unresolved') ||
+    typeof replayed !== 'boolean' ||
+    session === null ||
+    (reported !== null && entry === null) ||
+    (outcome === 'admitted') !== (entry !== null)
+  ) {
+    throw unreadableImports();
+  }
+  return { privateRevision, outcome, replayed, session, entry };
 }
 
 /** Reads one entry change: the committed entry and the session it stays pending in. */
