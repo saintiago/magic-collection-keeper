@@ -402,7 +402,13 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
       return;
     }
     const focus = restored.focusId === null ? null : document.getElementById(restored.focusId);
-    (focus ?? heading).focus({ preventScroll: true });
+    // A page or list may have restored a control without an element id. Use the heading only
+    // when neither the shell's saved target nor focus within the presented page is available.
+    if (focus !== null) {
+      focus.focus({ preventScroll: true });
+    } else if (!main.contains(document.activeElement)) {
+      heading.focus({ preventScroll: true });
+    }
     browser.scrollTo(0, restored.scrollY);
   }
 
@@ -478,7 +484,8 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
       // restoration now, so the departed page may neither keep nor release it, and no listener of
       // it may outlive the view.
       disposeRestoration();
-      return;
+      // Still observe the returned promise: a hook can redirect synchronously and then reject.
+      // The settlement handlers below guard ownership before touching the current view.
     }
     void Promise.resolve(presented).then(
       () => {

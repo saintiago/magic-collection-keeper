@@ -36,7 +36,7 @@ import type {
 import { UI_LIMITS } from '../../src/ui/index.js';
 
 /** State one list retains for its page's history entry; these journeys evaluate text queries. */
-type UiCardListRetainedState = UiCardListStateShape<string>;
+type UiCardListRetainedState = UiCardListStateShape<string | null | undefined>;
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const harnessPath = path.join(repoRoot, 'tests', 'browser', 'card-list.harness.ts');
@@ -99,7 +99,7 @@ async function install(page: Page, id: string, options?: UiCardListInstall): Pro
   );
 }
 
-async function refine(page: Page, id: string, context: string): Promise<void> {
+async function refine(page: Page, id: string, context: string | null | undefined): Promise<void> {
   await page.evaluate(
     (input) => {
       (globalThis as unknown as GlobalControl).keeperCardListControl.refine(
@@ -1289,6 +1289,19 @@ test('retires selected tool reads when a replacement result arrives', async ({ p
   );
   await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeDisabled();
   await settleFragment(page, freshRead.id, [{ key: 'copy:1', status: 'ready', values: ['move'] }]);
+  // The other selected targets are unavailable in the replacement result. Fresh availability for
+  // one entry cannot authorize a subset of the selection: the user must explicitly change it.
+  await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeDisabled();
+  expect((await capture(page, 'a')).selection).toHaveLength(100);
+  expect(
+    await page.evaluate(() =>
+      (globalThis as unknown as GlobalControl).keeperCardListControl.invoke('a', 'move'),
+    ),
+  ).toBeNull();
+  await page.evaluate(() => {
+    (globalThis as unknown as GlobalControl).keeperCardListControl.clearSelection('a');
+  });
+  await page.locator('#list-a [data-ui-select="copy:1"]').check();
   await page.locator('#list-a [data-ui-tool="move"]').click();
   expect((await toolRequests(page)).at(-1)).toMatchObject({
     selection: ['copy:1'],
@@ -1942,3 +1955,92 @@ test('retains the query a refinement intends while its result is unavailable', a
   expect(await capture(page, 'a')).toMatchObject({ context: 'other', position: null, window: 0 });
   expect(errors).toEqual([]);
 });
+
+for (const availability of [false, true]) {
+  test(`partial restoration prevents subset invocation with availability ${availability}`, async ({
+    page,
+  }) => {
+    const errors = await openLists(page);
+    const options: UiCardListInstall = {
+      pageSize: 2,
+      tools: [{ id: 'move', label: 'Move' }],
+      fragments: availability ? ['tools'] : [],
+    };
+    await install(page, 'a', options);
+    await settlePage(page, (await lastRequest(page, 'a')).id, [card('1'), card('2')], 'next');
+    await page.locator('#list-a [data-ui-more]').click();
+    await settlePage(page, (await lastRequest(page, 'a')).id, [card('3'), card('4')]);
+    await page.evaluate(() => {
+      const control = (globalThis as unknown as GlobalControl).keeperCardListControl;
+      control.setSelected('a', 'card:1', true);
+      control.setSelected('a', 'card:4', true);
+    });
+    const retained = await capture(page, 'a');
+    await close(page, 'a');
+    const answered = new Set((await fragmentRequests(page)).map((read) => read.id));
+    await install(page, 'a', { ...options, restored: retained });
+    await settlePage(page, (await lastRequest(page, 'a')).id, [card('1'), card('2')], 'next');
+    await answerToolReads(page, 'a', answered);
+    expect((await capture(page, 'a')).selection).toEqual(['card:1', 'card:4']);
+    const tool = page.locator('#list-a [data-ui-tool="move"]');
+    await expect(tool).toBeDisabled();
+    expect(
+      await page.evaluate(() =>
+        (globalThis as unknown as GlobalControl).keeperCardListControl.invoke('a', 'move'),
+      ),
+    ).toBeNull();
+    expect(await toolRequests(page)).toEqual([]);
+
+    await failPage(page, (await lastRequest(page, 'a')).id, 'Unavailable');
+    await expect(tool).toBeDisabled();
+    expect(
+      await page.evaluate(() =>
+        (globalThis as unknown as GlobalControl).keeperCardListControl.invoke('a', 'move'),
+      ),
+    ).toBeNull();
+    await page.locator('#list-a [data-ui-retry]').click();
+    await settlePage(page, (await lastRequest(page, 'a')).id, [card('3'), card('4')]);
+    if (availability) {
+      await expect(tool).toBeDisabled();
+      const read = (await fragmentRequests(page)).at(-1)!;
+      await failFragment(page, read.id, 'Availability unavailable');
+      await expect(tool).toBeDisabled();
+      await reloadFragment(page, 'a', 'card:4', 'tools');
+      answered.add(read.id);
+      await answerToolReads(page, 'a', answered);
+    }
+    await expect(tool).toBeEnabled();
+    await tool.click();
+    expect((await toolRequests(page)).at(-1)).toMatchObject({
+      selection: ['card:1', 'card:4'],
+      targets: ['card:1', 'card:4'],
+    });
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const context of [null, undefined]) {
+  test(`retains ${String(context)} query context through pending and completed refinement`, async ({
+    page,
+  }) => {
+    const errors = await openLists(page);
+    await install(page, 'a', { context: 'old' });
+    await settlePage(page, (await lastRequest(page, 'a')).id, [card('1'), card('2')], 'old-next');
+    await refine(page, 'a', context);
+    const pending = await capture(page, 'a');
+    expect(pending.context).toBe(context);
+    expect(Object.hasOwn(pending, 'context')).toBe(true);
+    await close(page, 'a');
+    await install(page, 'a', { context: 'fallback', restored: pending });
+    expect(await lastRequest(page, 'a')).toMatchObject({ context, continuation: null });
+    await settlePage(page, (await lastRequest(page, 'a')).id, [card('3'), card('4')]);
+    const completed = await capture(page, 'a');
+    expect(completed.context).toBe(context);
+    await close(page, 'a');
+    await install(page, 'a', { context: 'fallback', restored: completed });
+    expect(await lastRequest(page, 'a')).toMatchObject({ context, continuation: null });
+    await settlePage(page, (await lastRequest(page, 'a')).id, [card('3'), card('4')]);
+    expect(await restoration(page, 'a')).toMatchObject({ status: 'presented' });
+    expect(errors).toEqual([]);
+  });
+}

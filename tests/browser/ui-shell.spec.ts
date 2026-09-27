@@ -39,6 +39,8 @@ function shellBundle(): Promise<string> {
           '  deviceRelease: globalThis.keeperUiDeviceRelease,',
           '  asyncResults: globalThis.keeperUiAsyncResults === true,',
           '  presentedRedirect: globalThis.keeperUiPresentedRedirect,',
+          '  rejectRedirect: globalThis.keeperUiRejectRedirect,',
+          '  listResults: globalThis.keeperUiListResults,',
           '});',
         ].join('\n'),
         resolveDir: repoRoot,
@@ -76,6 +78,8 @@ async function openShell(page: Page, hash: string, start: UiShellStart = {}): Pr
     globals.keeperUiDeviceRelease = flags.deviceRelease;
     globals.keeperUiAsyncResults = flags.asyncResults === true;
     globals.keeperUiPresentedRedirect = flags.presentedRedirect;
+    globals.keeperUiRejectRedirect = flags.rejectRedirect;
+    globals.keeperUiListResults = flags.listResults;
   }, start);
   await loadShell(page);
   return errors;
@@ -896,4 +900,55 @@ async function settleDeviceRelease(page: Page, message?: string): Promise<void> 
       globalThis as unknown as { keeperUiControl: UiShellControl }
     ).keeperUiControl.completeDeviceRelease(failure);
   }, message);
+}
+
+for (const redirect of ['navigate', 'replace'] as const) {
+  test(`a rejected presentation after ${redirect} stays contained in the departed page`, async ({
+    page,
+  }) => {
+    const errors = await openShell(page, '#/', {
+      asyncResults: true,
+      presentedRedirect: redirect,
+      rejectRedirect: true,
+    });
+    await completeAsyncResults(page, 100);
+    await page.locator('#async-result-100').click();
+    await page.goBack();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+    await page.locator('#collection-open').focus();
+    await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+    await expect(page.locator('#collection-open')).toBeFocused();
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const identity of ['identified', 'anonymous'] as const) {
+  for (const control of ['selection', 'fragment'] as const) {
+    test(`shell preserves list-restored ${control} focus in an ${identity} container`, async ({
+      page,
+    }) => {
+      const errors = await openShell(page, '#/', { listResults: identity });
+      const focus = page.locator(
+        control === 'fragment'
+          ? '[data-ui-entry="card:1"] [data-ui-fragment-retry]'
+          : '[data-ui-entry="card:1"] input[type="checkbox"]',
+      );
+      await focus.focus();
+      await expect(focus).toBeFocused();
+      await page.evaluate(() => {
+        (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl.navigate({
+          page: 'collection',
+        });
+      });
+      await expect(page.locator('#collection-marker')).toBeVisible();
+      await page.goBack();
+      await expect(focus).toBeFocused();
+      // A second traversal exercises capture after the shell completed the first restoration.
+      await page.goForward();
+      await expect(page.locator('#collection-marker')).toBeVisible();
+      await page.goBack();
+      await expect(focus).toBeFocused();
+      expect(errors).toEqual([]);
+    });
+  }
 }

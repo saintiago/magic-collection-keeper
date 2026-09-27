@@ -390,7 +390,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   settled?.promise.catch(() => {});
   let entries: readonly UiListEntry[] = [];
   let windowKeys: ReadonlySet<string> = new Set();
-  let activeContext: Context = restored?.context ?? options.context;
+  let activeContext: Context = restored === null ? options.context : restored.context;
   let continuation: string | null = null;
   /** Whether the loaded window carries a continuation that has further results. */
   let continues = false;
@@ -847,7 +847,9 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   /** Whether one tool acts on the whole selection: every selected entry reports it available. */
   function toolAvailable(id: string): boolean {
     const keys = selectedKeys();
-    if (keys.length === 0) {
+    // A selection can name entries whose targets have not arrived yet, including later pages of
+    // a restored window. Neither the button nor programmatic invocation may act on just a subset.
+    if (keys.length === 0 || keys.length !== selected.size) {
       return false;
     }
     if (!readers.has('tools')) {
@@ -2051,7 +2053,7 @@ function readRestoredState<Context>(
     }
   }
   const targets = readSelectedTargets(state.selectedTargets);
-  const restoredContext = state.context === undefined ? context : (state.context as Context);
+  const restoredContext = Object.hasOwn(state, 'context') ? (state.context as Context) : context;
   const scrollTop = state.scrollTop;
   if (typeof scrollTop !== 'number' || !Number.isFinite(scrollTop) || scrollTop < 0) {
     throw new TypeError('A retained list scroll offset is a finite, non-negative number.');

@@ -28,7 +28,7 @@ import {
 } from '../../src/ui/index.js';
 
 /** State one list retains for its page's history entry; the harness lists evaluate text queries. */
-type UiCardListRetainedState = UiCardListStateShape<string>;
+type UiCardListRetainedState = UiCardListStateShape<string | null | undefined>;
 
 /** One list the journey installs. */
 export interface UiCardListInstall {
@@ -52,7 +52,7 @@ export interface UiCardListInstall {
 export interface UiCardListPageRequest {
   readonly id: number;
   readonly list: string;
-  readonly context: string;
+  readonly context: string | null | undefined;
   readonly pageSize: number;
   readonly continuation: string | null;
   readonly aborted: boolean;
@@ -97,7 +97,8 @@ export interface UiCardListRestorationReport {
 export interface UiCardListControl {
   install(id: string, options?: UiCardListInstall): void;
   /** Presents another query context through the list. */
-  refine(id: string, context: string): void;
+  refine(id: string, context: string | null | undefined): void;
+  invoke(id: string, toolId: string): Promise<UiOperationOutcome | null>;
   refresh(id: string): void;
   loadMore(id: string): void;
   setSelected(id: string, key: string, selected: boolean): void;
@@ -132,7 +133,7 @@ interface Pending<Value> {
 interface PageRecord {
   readonly id: number;
   readonly list: string;
-  readonly context: string;
+  readonly context: string | null | undefined;
   readonly pageSize: number;
   readonly continuation: string | null;
   isAborted(): boolean;
@@ -144,7 +145,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     throw new Error('The CardList journey needs its root element.');
   }
   const document = root.ownerDocument;
-  const lists = new Map<string, UiCardList<string>>();
+  const lists = new Map<string, UiCardList<string | null | undefined>>();
   const containers = new Map<string, HTMLElement>();
   const controllers = new Map<string, AbortController>();
   const pages: PageRecord[] = [];
@@ -178,7 +179,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       }));
       const controller = new AbortController();
       controllers.set(id, controller);
-      const installed = createCardList<string>({
+      const installed = createCardList<string | null | undefined>({
         container,
         source: pageSource(id),
         context: options.context ?? 'result',
@@ -210,6 +211,9 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     },
     refine(id, context) {
       list(id).refine(context);
+    },
+    invoke(id, toolId) {
+      return list(id).invoke(toolId);
     },
     refresh(id) {
       list(id).refresh();
@@ -328,7 +332,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     },
   };
 
-  function list(id: string): UiCardList<string> {
+  function list(id: string): UiCardList<string | null | undefined> {
     const installed = lists.get(id);
     if (installed === undefined) {
       throw new Error(`No list ${id} is installed.`);
@@ -353,7 +357,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     return sequence;
   }
 
-  function pageSource(id: string): UiListSource<string> {
+  function pageSource(id: string): UiListSource<string | null | undefined> {
     return {
       load(request) {
         const requestId = next();
@@ -364,7 +368,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
         pages.push({
           id: requestId,
           list: id,
-          context: String(request.context),
+          context: request.context,
           pageSize: request.pageSize,
           continuation: request.continuation,
           isAborted: () => aborted,

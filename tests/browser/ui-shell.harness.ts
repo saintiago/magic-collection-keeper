@@ -10,10 +10,13 @@
 
 import {
   createUserInterface,
+  createCardList,
   uiHref,
   type UiAccount,
   type UiIdentity,
   type UiPageDefinition,
+  type UiView,
+  type UiCardListState,
   type UserInterface,
 } from '../../src/ui/index.js';
 import type { UserInterfaceCapabilities } from '../../src/application/index.js';
@@ -21,6 +24,7 @@ import type { UserInterfaceCapabilities } from '../../src/application/index.js';
 export interface UiShellControl {
   /** Verified account the shell presents, or null while signed out. */
   accountId(): string | null;
+  navigate(view: UiView): void;
   /** Reports a verified sign-in of another account, as the deployment's authentication would. */
   signInAs(accountId: string): void;
   /** Reports a sign-out. */
@@ -53,6 +57,9 @@ export interface UiShellStart {
   readonly deviceRelease?: 'deferred' | 'throw';
   /** Presents the asynchronous Home page instead of the immediate one. */
   readonly asyncResults?: boolean;
+  /** Composes the real CardList with the shell, with or without a container id. */
+  readonly listResults?: 'identified' | 'anonymous';
+  readonly rejectRedirect?: boolean;
   /**
    * Presents the asynchronous page's restored entry by sending the user on to Collection, as a
    * page that redirects while presenting the entry does; `replace` keeps no way back to the entry.
@@ -142,6 +149,8 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       log,
       start.asyncResults === true ? asyncResults : null,
       start.presentedRedirect ?? null,
+      start.rejectRedirect === true,
+      start.listResults,
     ),
   });
 
@@ -153,6 +162,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
   }
 
   return {
+    navigate: (view) => shell.navigate(view),
     accountId: () => account?.accountId ?? null,
     signInAs: (accountId) => {
       report({ accountId, displayName: accountId });
@@ -201,11 +211,15 @@ function fixturePages(
   log: string[],
   asyncResults: AsyncResults | null,
   presentedRedirect: 'navigate' | 'replace' | null,
+  rejectRedirect: boolean,
+  listResults: UiShellStart['listResults'],
 ): readonly UiPageDefinition[] {
   return [
-    asyncResults === null
-      ? homePage(document, log)
-      : asyncHomePage(document, log, asyncResults, presentedRedirect),
+    listResults !== undefined
+      ? listHomePage(document, listResults)
+      : asyncResults === null
+        ? homePage(document, log)
+        : asyncHomePage(document, log, asyncResults, presentedRedirect, rejectRedirect),
     catalogPage(document),
     cardPage(document, log),
     collectionPage(document),
@@ -276,6 +290,7 @@ function asyncHomePage(
   log: string[],
   results: AsyncResults,
   redirect: 'navigate' | 'replace' | null,
+  rejectRedirect: boolean,
 ): UiPageDefinition {
   return {
     page: 'home',
@@ -334,9 +349,12 @@ function asyncHomePage(
         log.push(`async-presented:${redirect}`);
         if (redirect === 'replace') {
           context.replace({ page: 'collection' });
-          return;
+        } else {
+          context.navigate({ page: 'collection' });
         }
-        context.navigate({ page: 'collection' });
+        if (rejectRedirect) {
+          return Promise.reject(new Error('Departed presentation failure'));
+        }
       }
 
       /** Asks for the next page of the result; the journey answers it as the source would. */
@@ -684,6 +702,51 @@ function devicePage(document: Document, log: string[]): UiPageDefinition {
           context.device.release();
           log.push('dispose-release-called');
         },
+      };
+    },
+  };
+}
+
+/** The page delegates capture, restoration and presentation to the real list contract. */
+function listHomePage(document: Document, identity: 'identified' | 'anonymous'): UiPageDefinition {
+  return {
+    page: 'home',
+    mount(container, context) {
+      const host = document.createElement('div');
+      if (identity === 'identified') host.id = 'composed-list';
+      container.append(host);
+      const list = createCardList({
+        container: host,
+        context: 'cards',
+        pageSize: 2,
+        restored: context.restored?.state as UiCardListState<string> | undefined,
+        signal: context.signal,
+        source: {
+          load: () =>
+            Promise.resolve({
+              entries: [
+                {
+                  key: 'card:1',
+                  target: { kind: 'card' as const, cardId: '1' },
+                  basic: { card: { cardId: '1', name: 'One', matchedName: null }, printing: null },
+                  quantity: null,
+                },
+              ],
+              continuation: null,
+            }),
+        },
+        fragments: {
+          tags: {
+            read() {
+              throw new Error('Tags unavailable');
+            },
+          },
+        },
+      });
+      return {
+        capture: () => list.capture(),
+        presented: () => list.restoration?.presented,
+        dispose: () => list.dispose(),
       };
     },
   };

@@ -165,6 +165,15 @@ describe('opaque, account-isolated restoration state', () => {
     expect(store.read('account-a', token)?.state).toBe(state);
   });
 
+  it.each([null, undefined])('preserves opaque nullish page state: %s', (state) => {
+    const store = createViewStateStore();
+    const token = store.open();
+    store.save('account-a', token, snapshot(state));
+
+    expect(store.read('account-a', token)).not.toBeNull();
+    expect(store.read('account-a', token)?.state).toBe(state);
+  });
+
   it('sanitizes only the presentation state the shell owns', () => {
     const store = createViewStateStore();
     const token = store.open();

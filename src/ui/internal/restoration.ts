@@ -132,7 +132,7 @@ export function createViewStateStore(limit: number = UI_LIMITS.viewStates): UiVi
  */
 function readSnapshot(snapshot: UiViewSnapshot): UiViewSnapshot {
   return {
-    state: snapshot?.state ?? null,
+    state: snapshot?.state,
     scrollY: readScroll(snapshot?.scrollY),
     focusId: readFocusId(snapshot?.focusId),
     ...(snapshot?.anchorId == null
