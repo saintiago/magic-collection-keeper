@@ -890,22 +890,23 @@ test('restarts the association list when its continuation went stale', async ({ 
   expect(stale.arguments.continuation).toBe('association-page-2');
   await settle(page, 'fail', stale.id, (await organizationContinuationFailures()).associations);
 
-  // The page reads the sequence again from its first page instead of repeating the unusable cursor.
+  // The list owns the recovery: it reads the sequence again from its first page instead of
+  // repeating the unusable cursor, and the presented rows stay until the fresh page arrives.
   const restart = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 2);
   expect(restart.arguments).toEqual({
     tagId: 'tag-wish',
     pageSize: 50,
     continuation: null,
   });
+  await expect(
+    page.locator('#tag-associations [data-ui-entry="association:association-1"]'),
+  ).toContainText('Lightning Bolt');
   await settle(page, 'settleListAssociations', restart.id, { associations: [association()] });
   await settleCatalog(page, 2, { printings: [boltPrinting] });
   await settleCatalog(page, 3, { cards: [boltCard] });
   await expect(
     page.locator('#tag-associations [data-ui-entry="association:association-1"]'),
   ).toContainText('Lightning Bolt');
-  await expect(page.locator('#tag-associations-status')).toHaveText(
-    'The associations changed; the list was reloaded from the start.',
-  );
   expect(errors).toEqual([]);
 });
 

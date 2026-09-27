@@ -739,6 +739,7 @@ function listHomePage(document: Document, identity: 'identified' | 'anonymous'):
         source: {
           load: () =>
             Promise.resolve({
+              status: 'page' as const,
               entries: [
                 {
                   key: 'card:1',

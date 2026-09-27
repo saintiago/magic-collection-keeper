@@ -3,10 +3,10 @@
  * docs/user-interface.md#cardlist).
  *
  * Pages adapt Search results and UserCards pending entries into this presentation contract; the
- * providers do not import it. A source supplies bounded pages and their continuation, a fragment
- * request enriches entry keys with separately loading information, and a tool invokes the owning
- * component's operation for explicit targets. CardList implements the asynchronous presentation
- * over these contracts.
+ * providers do not import it. A source supplies bounded pages and their continuation or reports
+ * that the sequence it was asked to continue is invalidated, a fragment request enriches entry keys
+ * with separately loading information, and a tool invokes the owning component's operation for
+ * explicit targets. CardList implements the asynchronous presentation over these contracts.
  */
 
 /** Typed reference of one entry at the presentation levels. */
@@ -76,9 +76,20 @@ export interface UiListPage {
   readonly continuation: string | null;
 }
 
+/**
+ * Outcome of one source read: the page it supplies, or the report that the sequence the request
+ * names can no longer be continued and must restart from its beginning, so CardList never repeats
+ * the rejected continuation. A read that merely failed temporarily rejects instead, keeping the
+ * position it asked for. Source bindings translate each provider's own failure semantics into this
+ * contract, and CardList never interprets provider error codes
+ * (docs/user-interface.md#list-boundary, docs/user-interface.md#cardlist).
+ */
+export type UiListRead =
+  ({ readonly status: 'page' } & UiListPage) | { readonly status: 'invalidated' };
+
 /** A source supplies entries, the end of the result and access to further pages. */
 export interface UiListSource<Context = unknown> {
-  load(request: UiListRequest<Context>): Promise<UiListPage>;
+  load(request: UiListRequest<Context>): Promise<UiListRead>;
 }
 
 /**

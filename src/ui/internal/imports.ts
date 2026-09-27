@@ -25,6 +25,7 @@ import type {
   ConfirmImportEntryInput,
   CopyCondition,
   ImportEntry,
+  ImportEntryListResult,
   ImportReceipt,
   ImportSession,
   ImportSessionListResult,
@@ -53,7 +54,7 @@ import {
   uiImportSourceLabel,
   type UiImportLine,
 } from './import-edits.js';
-import { type UiChangeCommit } from './failure.js';
+import { isUiInvalidatedContinuation, type UiChangeCommit } from './failure.js';
 import { UI_LIMITS } from './limits.js';
 import type {
   UiEntryTarget,
@@ -1393,14 +1394,25 @@ function importPage(): UiPageDefinition {
       function pendingSource(): UiListSource<string> {
         return {
           async load(request) {
-            const page = await access.entries(
-              {
-                sessionId: request.context,
-                pageSize: request.pageSize,
-                ...(request.continuation === null ? {} : { continuation: request.continuation }),
-              },
-              request.signal,
-            );
+            let page: ImportEntryListResult;
+            try {
+              page = await access.entries(
+                {
+                  sessionId: request.context,
+                  pageSize: request.pageSize,
+                  ...(request.continuation === null ? {} : { continuation: request.continuation }),
+                },
+                request.signal,
+              );
+            } catch (cause) {
+              if (request.continuation !== null && isUiInvalidatedContinuation(cause)) {
+                // The session's private revision changed after the continuation was read: the
+                // list restarts the pending entries from their first page instead of repeating a
+                // continuation the provider keeps refusing (docs/user-cards.md#interface).
+                return { status: 'invalidated' };
+              }
+              throw cause;
+            }
             const read = await resolvePending(catalog, page.entries);
             const presented = request.context;
             if (request.signal.aborted || closed || presented !== sessionId) {
@@ -1408,6 +1420,7 @@ function importPage(): UiPageDefinition {
               // cannot change the page's own records or the session it presents
               // (docs/user-interface.md#pages-and-navigation).
               return {
+                status: 'page',
                 entries: read.map((record) => pendingListEntry(entryKeyOf(record), record)),
                 continuation: page.continuation,
               };
@@ -1437,6 +1450,7 @@ function importPage(): UiPageDefinition {
             boundByWindow(records);
             adoptSession(page.session);
             return {
+              status: 'page',
               entries: read.map((record) => pendingListEntry(entryKeyOf(record), record)),
               continuation: page.continuation,
             };

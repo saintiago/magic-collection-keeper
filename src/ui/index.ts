@@ -87,6 +87,7 @@ export {
   type UiFragmentResult,
   type UiListEntry,
   type UiListPage,
+  type UiListRead,
   type UiListRequest,
   type UiListSource,
   type UiOperationOutcome,

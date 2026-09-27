@@ -5,10 +5,11 @@
  * The cases bundle the real CardList with the controlled sources, fragment readers and tools of
  * card-list.harness.ts and drive them in Chromium: bounded pages, basic information with the
  * entries, a refresh that keeps usable content, empty versus failed results, independent fragment
- * loading and retry, response ordering, selection through enrichment and refinement, tool outcomes,
- * a bounded working set with bounded fragment batches, retired obsolete work, retained keyboard
- * focus, grouped copies, two independent lists and the capture and restoration of one list's own
- * state through its public contract.
+ * loading and retry, response ordering, selection through enrichment and refinement, the read
+ * recovery of an invalidated sequence and a failed restart, tool outcomes, a bounded working set
+ * with bounded fragment batches, retired obsolete work, retained keyboard focus, grouped copies,
+ * two independent lists and the capture and restoration of one list's own state through its public
+ * contract.
  */
 
 import path from 'node:path';
@@ -174,6 +175,12 @@ async function failPage(page: Page, id: number, message: string): Promise<void> 
     },
     { id, message },
   );
+}
+
+async function invalidatePage(page: Page, id: number): Promise<void> {
+  await page.evaluate((requestId) => {
+    (globalThis as unknown as GlobalControl).keeperCardListControl.invalidatePage(requestId);
+  }, id);
 }
 
 async function fragmentRequests(page: Page): Promise<readonly UiCardListFragmentRequest[]> {
@@ -1443,6 +1450,95 @@ test('keeps the intended state through repeated interruption, with the edits bes
   expect(errors).toEqual([]);
 });
 
+test('restarts an invalidated continuation and keeps the usable window and selection', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 2 });
+  await settlePage(page, (await onlyRequest(page, 'a')).id, [card('1'), card('2')], 'next');
+  await page.locator('#list-a [data-ui-select="card:1"]').check();
+
+  // The further page belongs to a sequence the source no longer accepts.
+  await page.locator('#list-a [data-ui-more]').click();
+  const continued = await lastRequest(page, 'a');
+  expect(continued).toMatchObject({ continuation: 'next', aborted: false });
+  await invalidatePage(page, continued.id);
+
+  // The list asks again from the beginning of the sequence, never with the rejected continuation,
+  // and the presented window and its selection stay until the replacement arrives.
+  const restarted = await lastRequest(page, 'a');
+  expect(restarted).toMatchObject({ continuation: null, aborted: false });
+  expect(restarted.id).not.toBe(continued.id);
+  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(2);
+  await expect(page.locator('#list-a [data-ui-select="card:1"]')).toBeChecked();
+  await expect(page.locator('#list-a [data-ui-status]')).toHaveText('');
+  const requests = await pageRequests(page);
+  expect(requests).toHaveLength(3);
+  expect(requests[1]).toMatchObject({ id: continued.id, continuation: 'next', aborted: false });
+
+  await settlePage(page, restarted.id, [card('1'), card('3')], 'restarted-next');
+  await expect(page.locator('#list-a [data-ui-entry="card:3"]')).toBeVisible();
+  await expect(page.locator('#list-a [data-ui-entry="card:2"]')).toHaveCount(0);
+  await expect(page.locator('#list-a [data-ui-select="card:1"]')).toBeChecked();
+  expect(await state(page, 'a')).toMatchObject({
+    entries: ['card:1', 'card:3'],
+    selection: ['card:1'],
+    hasMore: true,
+    error: null,
+  });
+  expect(errors).toEqual([]);
+});
+
+test('a failed restart stays recoverable at the sequence it restarted', async ({ page }) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 2 });
+  await settlePage(page, (await onlyRequest(page, 'a')).id, [card('1'), card('2')], 'next');
+  await page.locator('#list-a [data-ui-more]').click();
+  const continued = await lastRequest(page, 'a');
+  await invalidatePage(page, continued.id);
+  const restarted = await lastRequest(page, 'a');
+  await failPage(page, restarted.id, 'Results unavailable');
+
+  // The window stays usable and the failure is reported; the retry control repeats the restart's
+  // own first page instead of the continuation the source rejected.
+  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(2);
+  await expect(page.locator('#list-a [data-ui-status]')).toHaveText('Results unavailable');
+  await expect(page.locator('#list-a [data-ui-retry]')).toBeVisible();
+  expect(await state(page, 'a')).toMatchObject({ error: 'Results unavailable', loading: false });
+
+  await page.locator('#list-a [data-ui-retry]').click();
+  const retried = await lastRequest(page, 'a');
+  expect(retried).toMatchObject({ continuation: null, aborted: false });
+  await settlePage(page, retried.id, [card('3'), card('4')]);
+  await expect(page.locator('#list-a [data-ui-entry="card:3"]')).toBeVisible();
+  await expect(page.locator('#list-a [data-ui-status]')).toHaveText('');
+  expect(await state(page, 'a')).toMatchObject({ entries: ['card:3', 'card:4'], error: null });
+  expect(errors).toEqual([]);
+});
+
+test('reports an invalidated first page instead of restarting in a loop', async ({ page }) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 2 });
+  const first = await onlyRequest(page, 'a');
+  await invalidatePage(page, first.id);
+
+  // There is no earlier position to restart from, so the list reports the failure once and waits
+  // for the retry control instead of asking again by itself.
+  await expect(page.locator('#list-a [data-ui-status]')).toHaveText(
+    'The list changed while it was read.',
+  );
+  await expect(page.locator('#list-a [data-ui-retry]')).toBeVisible();
+  expect(await pageRequests(page)).toHaveLength(1);
+
+  await page.locator('#list-a [data-ui-retry]').click();
+  const retried = await lastRequest(page, 'a');
+  expect(retried).toMatchObject({ continuation: null, aborted: false });
+  await settlePage(page, retried.id, [card('1')]);
+  await expect(page.locator('#list-a [data-ui-entry="card:1"]')).toBeVisible();
+  await expect(page.locator('#list-a [data-ui-status]')).toHaveText('');
+  expect(errors).toEqual([]);
+});
+
 test('reports a failed restoration, retries the retained position and starts fresh on refresh', async ({
   page,
 }) => {
@@ -1507,6 +1603,38 @@ test('reports a failed restoration, retries the retained position and starts fre
   await expect.poll(() => restoration(page, 'a')).toMatchObject({ status: 'interrupted' });
   await settlePage(page, fresh.id, [card('1'), card('2')]);
   expect(await state(page, 'a')).toMatchObject({ entries: ['card:1', 'card:2'], error: null });
+});
+
+test('restarts a retained window whose continuation was invalidated', async ({ page }) => {
+  const errors = await openLists(page);
+  await install(page, 'a', {
+    pageSize: 2,
+    restored: {
+      context: 'result',
+      window: 2,
+      position: { continuation: 'stale', offset: 0 },
+      selection: ['card:9'],
+      selectedTargets: [],
+      scrollTop: 0,
+      focus: null,
+    },
+  });
+  const first = await onlyRequest(page, 'a');
+  expect(first).toMatchObject({ continuation: 'stale' });
+  await invalidatePage(page, first.id);
+
+  // The rejected position is not asked for again: the list reacquires the window it intended from
+  // the beginning of the sequence it was told to restart.
+  const restarted = await lastRequest(page, 'a');
+  expect(restarted).toMatchObject({ continuation: null, aborted: false });
+  await settlePage(page, restarted.id, [card('1'), card('2')], 'next');
+  expect(await restoration(page, 'a')).toEqual({ status: 'presented', message: null });
+  expect(await capture(page, 'a')).toMatchObject({
+    window: 2,
+    position: { continuation: null, offset: 0 },
+    selection: ['card:9'],
+  });
+  expect(errors).toEqual([]);
 });
 
 test('keeps more than a hundred selected identities across visits', async ({ page }) => {

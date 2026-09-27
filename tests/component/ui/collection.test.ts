@@ -174,12 +174,15 @@ describe('collection search access', () => {
     const access = createCollectionSearchAccess(search, catalog);
     const signal = new AbortController().signal;
 
-    const page = await access.source.load({
+    const read = await access.source.load({
       context: { text: 'bolt', level: 'copy' },
       pageSize: 50,
       continuation: 'cursor-1',
       signal,
     });
+    if (read.status !== 'page') {
+      throw new Error('The collection source did not report a page.');
+    }
 
     expect(requests).toEqual([
       {
@@ -190,8 +193,8 @@ describe('collection search access', () => {
         continuation: 'cursor-1',
       },
     ]);
-    expect(page.continuation).toBe('cursor-2');
-    expect(page.entries).toEqual<readonly UiListEntry[]>([
+    expect(read.continuation).toBe('cursor-2');
+    expect(read.entries).toEqual<readonly UiListEntry[]>([
       {
         key: 'card:card-bolt',
         target: { kind: 'card', cardId: 'card-bolt' },
@@ -216,7 +219,7 @@ describe('collection search access', () => {
         quantity: { copies: 1, intended: null },
       },
     ]);
-    expect(page.entries.map((presented) => uiEntryKey(presented.target))).toEqual([
+    expect(read.entries.map((presented) => uiEntryKey(presented.target))).toEqual([
       'card:card-bolt',
       'copy:copy-1',
     ]);

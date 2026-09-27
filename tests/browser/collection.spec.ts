@@ -537,6 +537,32 @@ test('an initial printing-list failure is reported and retried from the card lev
   expect(errors).toEqual([]);
 });
 
+test('an invalidated printing continuation restarts the card printing list', async ({ page }) => {
+  const errors = await openCollection(page, '#/cards/card-1');
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  const first = await printingsRequest(page);
+  await settlePrintings(page, first!.id, [printingRecord('printing-1')], 'cursor-2');
+
+  await page.locator('#card-printings [data-ui-more]').click();
+  const stale = await printingsRequest(page, 1);
+  expect(stale?.options.continuation).toBe('cursor-2');
+  await failPrintings(page, stale!.id, {
+    code: 'stale-continuation',
+    message: 'The catalog changed during printing lookup.',
+  });
+
+  // The list restarts the card's printings from its first page instead of repeating the cursor the
+  // catalog keeps refusing, and the presented printing stays until the fresh page arrives.
+  const restart = await printingsRequest(page, 2);
+  expect(restart?.options.continuation).toBeUndefined();
+  await expect(page.locator('#card-printings a')).toHaveCount(1);
+  await settlePrintings(page, restart!.id, [printingRecord('printing-3')], null);
+  await expect(page.locator('#card-printing-printing-3')).toBeVisible();
+  await expect(page.locator('#card-printings a')).toHaveCount(1);
+  await expect(page.locator('#card-printings [data-ui-more]')).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
 test('a failed card-level restore keeps the printing window it was holding', async ({ page }) => {
   const errors = await openCollection(page, '#/cards/card-1');
   await settleCard(page, 'card-1', { cards: [cardRecord()] });

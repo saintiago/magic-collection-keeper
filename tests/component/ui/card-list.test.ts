@@ -74,7 +74,7 @@ function placeholderContainer(): HTMLElement {
 function options(overrides: Partial<UiCardListOptions<string>>): UiCardListOptions<string> {
   return {
     container: placeholderContainer(),
-    source: { load: () => Promise.resolve({ entries: [], continuation: null }) },
+    source: { load: () => Promise.resolve({ status: 'page', entries: [], continuation: null }) },
     context: 'result',
     pageSize: 2,
     ...overrides,

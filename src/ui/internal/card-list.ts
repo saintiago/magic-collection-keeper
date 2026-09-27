@@ -10,6 +10,13 @@
  * obsolete page never replaces the active view, and closing the page cancels its lists' work
  * (docs/user-interface.md#pages-and-navigation).
  *
+ * The list also owns read recovery (docs/user-interface.md#cardlist): a source answer that reports
+ * the requested sequence as invalidated restarts it from its first page, keeping the presented
+ * window, selection and page-owned drafts until the replacement arrives and never appending the
+ * new sequence to the rejected one. A read that merely failed temporarily keeps the position it
+ * asked for, and the retry control repeats that position — or the first page of a restart that
+ * failed — without an automatic retry loop.
+ *
  * Basic information renders with the entries. Images, ownership, tags and tool availability are
  * fragments: each kind loads and fails independently of the basic information and of the other
  * kinds, read in bounded batches over the active window and selected tool targets. A failed
@@ -40,6 +47,7 @@ import {
   type UiFragmentResult,
   type UiListEntry,
   type UiListPage,
+  type UiListRead,
   type UiListSource,
   type UiOperationOutcome,
   type UiTool,
@@ -293,7 +301,10 @@ export interface UiCardList<Context = unknown> {
   refine(context: Context): void;
   /** Reloads the active result from its first page, keeping the window until it arrives. */
   refresh(): void;
-  /** Repeats the failed request of the active result; never another query's continuation. */
+  /**
+   * Repeats the failed request of the active result — the position a temporary failure kept, or
+   * the first page of a sequence whose restart failed; never another query's continuation.
+   */
   retry(): void;
   /**
    * Re-reads one fragment of one entry (also tool availability of a selected entry retired by
@@ -529,7 +540,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     error = null;
     failed = null;
     renderStatus();
-    let request: Promise<UiListPage>;
+    let request: Promise<UiListRead>;
     try {
       request = source.load({
         context: activeContext,
@@ -547,7 +558,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       return;
     }
     Promise.resolve(request).then(
-      (page) => settlePage(current, nextContinuation, offset, page),
+      (read) => settleRead(current, nextContinuation, offset, read),
       (cause) =>
         settleFailure(
           current,
@@ -558,7 +569,15 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     );
   }
 
-  function settlePage(
+  /**
+   * Accepts one source answer. A page settles the request it answered. A report that the requested
+   * sequence was invalidated restarts the sequence from its first page, so the rejected
+   * continuation is never repeated, while the presented window, the selection and the page-owned
+   * drafts stay until the replacement arrives (docs/user-interface.md#cardlist). A report that
+   * names no continuation cannot restart anything, so it fails at the position it asked for and
+   * the retry control repeats it.
+   */
+  function settleRead(
     current: number,
     requested: string | null,
     offset: number,
@@ -567,16 +586,39 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (disposed || current !== generation) {
       return;
     }
-    const read = readCardListPage(value, pageSize);
-    if (!read.ok) {
+    const read = readCardListRead(value, pageSize);
+    if (read.status === 'invalidated') {
+      if (requested === null) {
+        settleFailure(current, requested, offset, 'The list changed while it was read.');
+        return;
+      }
+      // The answer arrived and is dropped with its sequence; the restart asks again from the
+      // beginning of the result rather than from the continuation the source rejected.
+      pending = null;
+      startRequest(null);
+      return;
+    }
+    if (read.status === 'unreadable') {
       settleFailure(current, requested, offset, read.problem);
+      return;
+    }
+    settlePage(current, requested, offset, read.page);
+  }
+
+  function settlePage(
+    current: number,
+    requested: string | null,
+    offset: number,
+    page: UiListPage,
+  ): void {
+    if (disposed || current !== generation) {
       return;
     }
     pending = null;
     loading = false;
     error = null;
     failed = null;
-    const supplied = read.page.entries;
+    const supplied = page.entries;
     const presented = offset === 0 ? supplied : supplied.slice(offset);
     const previousLength = entries.length;
     if (requested === null) {
@@ -589,7 +631,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       appendWindow(presented);
     }
     rememberPositions(requested, supplied);
-    continuation = read.page.continuation;
+    continuation = page.continuation;
     continues = continuation !== null;
     renderStatus();
     requestFragments();
@@ -1631,40 +1673,51 @@ function entryIdentity(entry: UiListEntry): string {
   return JSON.stringify([entry.key, entry.target, entry.basic]);
 }
 
-/** One source page: at most the requested entries, their keys unique and their information read. */
-function readCardListPage(
-  value: unknown,
-  pageSize: number,
-):
-  | { readonly ok: true; readonly page: UiListPage }
-  | { readonly ok: false; readonly problem: string } {
-  const page = readObject(value);
-  const entries = page?.entries;
-  if (page === null || !Array.isArray(entries)) {
-    return unreadablePage('The list source did not report entries.');
+/** One source answer, read as the page it supplies, its invalidation or the problem it carries. */
+type CardListRead =
+  | { readonly status: 'page'; readonly page: UiListPage }
+  | { readonly status: 'invalidated' }
+  | { readonly status: 'unreadable'; readonly problem: string };
+
+/**
+ * One source answer: a page of at most the requested entries with unique keys and readable
+ * information, or the report that the requested sequence is invalidated
+ * (docs/user-interface.md#list-boundary).
+ */
+function readCardListRead(value: unknown, pageSize: number): CardListRead {
+  const report = readObject(value);
+  if (report?.status === 'invalidated') {
+    return { status: 'invalidated' };
+  }
+  if (report?.status !== 'page') {
+    return unreadableRead('The list source reported neither a page nor an invalidated sequence.');
+  }
+  const entries = report.entries;
+  if (!Array.isArray(entries)) {
+    return unreadableRead('The list source did not report entries.');
   }
   if (entries.length > pageSize) {
-    return unreadablePage(`The list source returned more than the ${pageSize} requested entries.`);
+    return unreadableRead(`The list source returned more than the ${pageSize} requested entries.`);
   }
-  const continuation = page.continuation;
+  const continuation = report.continuation;
   if (continuation !== undefined && continuation !== null && typeof continuation !== 'string') {
-    return unreadablePage('The list source reported an unreadable continuation.');
+    return unreadableRead('The list source reported an unreadable continuation.');
   }
   const read: UiListEntry[] = [];
   const keys = new Set<string>();
   for (const candidate of entries) {
     const entry = readEntry(candidate);
     if (entry === null) {
-      return unreadablePage('The list source reported an unreadable entry.');
+      return unreadableRead('The list source reported an unreadable entry.');
     }
     if (keys.has(entry.key)) {
-      return unreadablePage('The list source reported one entry key twice.');
+      return unreadableRead('The list source reported one entry key twice.');
     }
     keys.add(entry.key);
     read.push(entry);
   }
   return {
-    ok: true,
+    status: 'page',
     page: {
       entries: read,
       continuation:
@@ -1673,8 +1726,8 @@ function readCardListPage(
   };
 }
 
-function unreadablePage(problem: string): { readonly ok: false; readonly problem: string } {
-  return { ok: false, problem };
+function unreadableRead(problem: string): CardListRead {
+  return { status: 'unreadable', problem };
 }
 
 function readEntry(value: unknown): UiListEntry | null {

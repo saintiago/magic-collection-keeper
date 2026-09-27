@@ -1,7 +1,8 @@
 /**
- * Failure classification of the UserInterface's private changes
+ * Failure classification of the UserInterface's private changes and of the read failures the list
+ * sources translate into their presentation contract
  * (docs/user-interface.md#browsing-and-organization,
- * docs/application.md#construction-and-request-boundary).
+ * docs/user-interface.md#list-boundary, docs/application.md#construction-and-request-boundary).
  *
  * A rejected change either establishes that the operation did not run — the request was refused
  * before it could commit — or leaves its outcome open because the response was lost, the service
@@ -9,6 +10,10 @@
  * definite failure and recover the second through a read of the record, so a lost response is
  * never presented as a saved change. The classification and the resulting outcome live here, so
  * every view that changes a private record presents the same statuses.
+ *
+ * A rejected bounded read whose continuation bound the provider's revisions reports the same
+ * outcome under Catalog's and Search's `stale-continuation` and under UserCards' `conflict`, so the
+ * source bindings share one test for it instead of each interpreting those codes on its own.
  */
 
 /** Outcome of one private change as a view presents it. */
@@ -76,6 +81,17 @@ export function readUiFailureCode(cause: unknown): string | null {
   }
   const code = Reflect.get(cause, 'code');
   return typeof code === 'string' && code.length > 0 ? code : null;
+}
+
+/**
+ * True when a rejected read reported that the revision its continuation named changed: the
+ * sequence is invalidated and must restart from its first page rather than repeat the rejected
+ * continuation (docs/user-interface.md#list-boundary). Only a source binding asks this, so CardList
+ * itself stays independent of provider failure codes.
+ */
+export function isUiInvalidatedContinuation(cause: unknown): boolean {
+  const code = readUiFailureCode(cause);
+  return code === 'conflict' || code === 'stale-continuation';
 }
 
 /** Message of one rejected operation, or the fallback when the cause carries none. */
