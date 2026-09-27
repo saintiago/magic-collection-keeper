@@ -221,12 +221,13 @@ function canonicalName(name: string): string {
 
 /**
  * Identity of one line inside its source, without its quantity: a changed quantity is the same
- * line, while a line that now names another printing or edition is a different one.
+ * line, while a line that now names another printing, edition or language is a different one.
  */
 function lineContent(line: {
   readonly name: string | null;
   readonly set: string | null;
   readonly collectorNumber: string | null;
+  readonly language: string | null;
   readonly finish: Finish | null;
   readonly printingId: string | null;
 }): string {
@@ -237,6 +238,7 @@ function lineContent(line: {
         canonicalName(line.name ?? ''),
         (line.set ?? '').toLowerCase(),
         (line.collectorNumber ?? '').toLowerCase(),
+        (line.language ?? '').toLowerCase(),
         finish,
       ].join('\u0000')
     : ['printing', line.printingId, finish].join('\u0000');
@@ -329,7 +331,14 @@ function parsePastedList(text: string): readonly ParsedSourceRow[] {
       finish,
       quantity,
       printingId: null,
-      content: lineContent({ name, set, collectorNumber, finish, printingId: null }),
+      content: lineContent({
+        name,
+        set,
+        collectorNumber,
+        language: null,
+        finish,
+        printingId: null,
+      }),
     });
   }
   return rows;
@@ -506,7 +515,14 @@ function parseMoxfieldDeck(document: unknown): readonly ParsedSourceRow[] {
         finish,
         quantity: line.data.quantity,
         printingId,
-        content: lineContent({ name: card.name, set, collectorNumber, finish, printingId }),
+        content: lineContent({
+          name: card.name,
+          set,
+          collectorNumber,
+          language,
+          finish,
+          printingId,
+        }),
       });
     }
   }
@@ -540,6 +556,7 @@ function parseReviewedWizardsLines(entries: readonly unknown[]): readonly Parsed
     const { name, quantity } = parsed.data;
     const set = parsed.data.set ?? null;
     const collectorNumber = parsed.data.collectorNumber ?? null;
+    const language = parsed.data.language ?? null;
     const finish = parsed.data.finish ?? null;
     return {
       kind: 'line',
@@ -548,11 +565,11 @@ function parseReviewedWizardsLines(entries: readonly unknown[]): readonly Parsed
       section: parsed.data.section ?? null,
       set,
       collectorNumber,
-      language: parsed.data.language ?? null,
+      language,
       finish,
       quantity,
       printingId: null,
-      content: lineContent({ name, set, collectorNumber, finish, printingId: null }),
+      content: lineContent({ name, set, collectorNumber, language, finish, printingId: null }),
     };
   });
 }

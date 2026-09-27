@@ -833,7 +833,7 @@ async function reconcileSourceLines(
   const recordedByKey = new Map(recorded.map((record) => [record.sourceLineKey, record]));
 
   const lines: SourceLineStageEntry[] = new Array<SourceLineStageEntry>(plan.lines.length);
-  const fresh: NewStagedImportEntry[] = [];
+  const fresh: { readonly index: number; readonly entry: NewStagedImportEntry }[] = [];
   for (const [sourceLineKey, group] of groups) {
     const record = recordedByKey.get(sourceLineKey) ?? null;
     const pending = (record?.pendingQuantity ?? 0) > 0;
@@ -879,11 +879,13 @@ async function reconcileSourceLines(
           candidates: line.candidates,
         }),
       };
-      fresh.push(entry);
+      fresh.push({ index, entry });
       lines[index] = { outcome: 'staged', entryId: entry.entryId, sessionId: plan.sessionId };
     }
   }
-  return { lines, fresh };
+  // Group traversal determines quantity coverage; session positions follow the offered rows.
+  fresh.sort((left, right) => left.index - right.index);
+  return { lines, fresh: fresh.map(({ entry }) => entry) };
 }
 
 function bumpSessionStatement(accountId: string, sessionId: string): Statement {

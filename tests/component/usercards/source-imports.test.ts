@@ -15,6 +15,7 @@ import {
   createUserCards,
   type ImportReceipt,
   type MoxfieldDeckSource,
+  type ReviewedWizardsLine,
   type SourceImportOperations,
   type SourceImportResult,
   type TrustedUserContext,
@@ -640,6 +641,155 @@ describe('usercards source imports', () => {
     expect(unavailable.code).toBe('unavailable');
     expect(await countCopies(database, alice.accountId)).toBe(0);
   });
+
+  /** Offers the same named rows through each parser, without explicit printing references. */
+  async function stageNamedRows(
+    format: 'moxfield' | 'wizards-precon' | 'pasted-list',
+    entries: readonly ReviewedWizardsLine[],
+  ): Promise<SourceImportResult> {
+    if (format === 'moxfield') {
+      return stageDeck({
+        mainboard: entries.map((entry) => ({
+          quantity: entry.quantity,
+          card: {
+            name: entry.name,
+            set: entry.set ?? 'm11',
+            cn: entry.collectorNumber ?? '149',
+            ...(entry.language === undefined ? {} : { lang: entry.language ?? '' }),
+          },
+        })),
+      });
+    }
+    return sourceImports.stageSourceImport(
+      alice,
+      format === 'pasted-list'
+        ? {
+            format,
+            sourceId: 'ordered-paste',
+            text: entries.map((entry) => `${entry.quantity} ${entry.name}`).join('\n'),
+          }
+        : {
+            format,
+            sourceId: 'wizards:mkm:deadly-disguise:regular:en',
+            reference: 'https://magic.wizards.com/en/news/feature/deadly-disguise-decklist',
+            entries,
+          },
+    );
+  }
+
+  describe.each(['moxfield', 'wizards-precon'] as const)('%s language reconciliation', (format) => {
+    it.each(['pending', 'confirmed'] as const)(
+      'keeps a changed language separate from %s coverage and reconciles mixed-language quantities',
+      async (state) => {
+        const line = (language: string, quantity: number): ReviewedWizardsLine => ({
+          name: 'Lightning Bolt',
+          set: 'm11',
+          collectorNumber: '149',
+          language,
+          quantity,
+        });
+        const first = await stageNamedRows(format, [line('en', 2)]);
+        if (state === 'confirmed') {
+          await userCards.reviewImportEntry(alice, {
+            entryId: first.rows[0]?.entryId as string,
+            expectedRevision: 1,
+            printingId: m11Printing.printingId,
+            finish: 'nonfoil',
+            condition: null,
+            quantity: 2,
+          });
+          await confirmSession(first.session.sessionId, 'english-acquisition');
+        }
+
+        const spanish = await stageNamedRows(format, [line('es', 3)]);
+        expect(spanish.session.sessionId).toBe(first.session.sessionId);
+        expect(spanish.staged).toBe(1);
+        expect(spanish.rows[0]).toMatchObject({ outcome: 'staged', line: { language: 'es' } });
+        expect(spanish.rows[0]?.entryId).not.toBe(first.rows[0]?.entryId);
+        const equivalent = await stageNamedRows(format, [line('ES', 3)]);
+        expect(equivalent.staged).toBe(0);
+        expect(equivalent.rows[0]).toMatchObject({
+          outcome: 'pending',
+          entryId: spanish.rows[0]?.entryId,
+        });
+
+        const mixed = await stageNamedRows(format, [
+          line('en', 1),
+          line('es', 2),
+          line('en', 3),
+          line('es', 4),
+        ]);
+        expect(mixed.staged).toBe(2);
+        expect(mixed.rows.map((row) => row.outcome)).toEqual([
+          state === 'confirmed' ? 'acquired' : 'pending',
+          'pending',
+          'staged',
+          'staged',
+        ]);
+        const reloaded = await userCards.listImportEntries(alice, {
+          sessionId: first.session.sessionId,
+        });
+        expect(
+          reloaded.entries.map((entry) => [entry.sourceLine?.language, entry.quantity]),
+        ).toEqual([...(state === 'pending' ? [['en', 2]] : []), ['es', 3], ['en', 2], ['es', 3]]);
+        expect(reloaded.entries.every((entry) => entry.printingId === null)).toBe(true);
+
+        const reordered = await stageNamedRows(format, [
+          line('es', 4),
+          line('en', 3),
+          line('es', 2),
+          line('en', 1),
+        ]);
+        expect(reordered.staged).toBe(0);
+        expect(await countCopies(database, alice.accountId)).toBe(state === 'confirmed' ? 2 : 0);
+      },
+    );
+  });
+
+  it.each(['moxfield', 'wizards-precon', 'pasted-list'] as const)(
+    '%s preserves interleaved duplicate order on reload and when appending uncovered quantities',
+    async (format) => {
+      const rows = (quantities: readonly [number, number, number]) => [
+        { name: 'Lightning Bolt', quantity: quantities[0] },
+        { name: 'Counterspell', quantity: quantities[1] },
+        { name: 'Lightning Bolt', quantity: quantities[2] },
+      ];
+      const first = await stageNamedRows(format, rows([1, 2, 3]));
+      const reloaded = await userCards.listImportEntries(alice, {
+        sessionId: first.session.sessionId,
+      });
+      expect(reloaded.entries.map((entry) => entry.entryId)).toEqual(
+        first.rows.map((row) => row.entryId),
+      );
+      expect(
+        reloaded.entries.map((entry) => [entry.position, entry.sourceLine?.name, entry.quantity]),
+      ).toEqual([
+        [1, 'Lightning Bolt', 1],
+        [2, 'Counterspell', 2],
+        [3, 'Lightning Bolt', 3],
+      ]);
+
+      const grown = await stageNamedRows(format, rows([5, 3, 2]));
+      expect(grown.staged).toBe(3);
+      const appended = await userCards.listImportEntries(alice, {
+        sessionId: first.session.sessionId,
+      });
+      expect(appended.entries.map((entry) => entry.entryId)).toEqual(
+        [...first.rows, ...grown.rows].map((row) => row.entryId),
+      );
+      expect(appended.entries.map((entry) => [entry.position, entry.quantity])).toEqual([
+        [1, 1],
+        [2, 2],
+        [3, 3],
+        [4, 1],
+        [5, 1],
+        [6, 2],
+      ]);
+      const replayed = await stageNamedRows(format, rows([5, 3, 2]));
+      expect(replayed.staged).toBe(0);
+      expect(await countCopies(database, alice.accountId)).toBe(0);
+    },
+  );
 
   it('stages nothing when a source is imported again and adds nothing twice', async () => {
     const first = await stageDeck({ mainboard: [boltLine(2), counterLine(1)] });
