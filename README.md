@@ -48,6 +48,8 @@ npm run build            # compile the component public entry points into build/
 
 Focus a scope with a path filter, for example `npm run test:component -- public-contracts`. Component
 tests are organised as tests/component/<component>/ so one component's tests can be selected by path.
+Vitest shares a two-worker pool across component and integration suites to keep simultaneous
+PostgreSQL-in-WebAssembly startups from exhausting setup deadlines on hosts with many CPUs.
 The Python runner provisions the pinned `src/recognition/python/requirements-tests.txt` wheels into
 the ignored `.recognition-python/` environment once so the retained engine regressions run without
 extra setup. The check requires the complete 27-regression suite: when the dependencies are missing

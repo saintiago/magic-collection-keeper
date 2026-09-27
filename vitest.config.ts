@@ -11,6 +11,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
+    // Concurrent PGlite startups exhaust setup deadlines when workers scale with host CPU count.
+    // Share a bounded pool across both projects, including focused npm test commands.
+    maxWorkers: 2,
     projects: [
       {
         test: {
