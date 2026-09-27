@@ -115,7 +115,7 @@ function homePage(recent: UiRecentCards): UiPageDefinition {
       return {
         capture: () => ({
           query: input.value,
-          selection: [...list.selection],
+          selection: list.selectedIdentities,
           loaded: list.entries.length,
           continuation: list.position?.continuation ?? null,
           offset: list.position?.offset ?? 0,
@@ -234,7 +234,7 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
           level: level.value,
           owned: owned.checked,
           finish: finish.value === '' ? null : finish.value,
-          selection: [...list.selection],
+          selection: list.selectedIdentities,
           // The entries the presented window held, so the way back presents the same window of the
           // same result instead of its first page (docs/user-interface.md#pages-and-navigation).
           loaded: list.entries.length,

@@ -69,6 +69,7 @@ export interface UiCardListToolRequest {
 
 /** The installed list's own window, selection and load state. */
 export interface UiCardListState {
+  readonly selectedIdentities: readonly string[];
   readonly entries: readonly string[];
   readonly selection: readonly string[];
   readonly hasMore: boolean;
@@ -206,6 +207,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       return {
         entries: installed.entries.map((entry) => entry.key),
         selection: [...installed.selection],
+        selectedIdentities: installed.selectedIdentities,
         hasMore: installed.hasMore,
         loading: installed.loading,
         error: installed.error,

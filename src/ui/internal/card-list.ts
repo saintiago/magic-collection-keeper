@@ -217,7 +217,15 @@ export interface UiCardList<Context = unknown> {
   readonly entries: readonly UiListEntry[];
   /** Source position of the first retained entry; null for an empty window. */
   readonly position: UiListPosition | null;
-  /** Selected keys in result order, including entries retired by paging beyond the window. */
+  /**
+   * All selected identities in selection order, including keys awaiting loading or outside the
+   * window. Use these for history capture; selectionLimit bounds them when configured.
+   */
+  readonly selectedIdentities: readonly string[];
+  /**
+   * Selected keys with known targets in result order, including targets retired by paging.
+   * Tools use this actionable subset; unloaded identities remain in selectedIdentities.
+   */
   readonly selection: readonly string[];
   /**
    * Whether the active result continues past the loaded window and may be paged now. False while
@@ -408,6 +416,9 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     },
     get selection() {
       return selectedKeys();
+    },
+    get selectedIdentities() {
+      return [...selected];
     },
     get hasMore() {
       return pagingAvailable();

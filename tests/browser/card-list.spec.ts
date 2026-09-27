@@ -356,6 +356,7 @@ test('loads bounded pages and presents basic information with the entries', asyn
   );
   expect(await state(page, 'a')).toEqual({
     entries: ['copy:1', 'copy:2'],
+    selectedIdentities: [],
     selection: [],
     hasMore: true,
     loading: false,
@@ -734,6 +735,7 @@ test('keeps two lists independent in query, window, selection and failure state'
 
   expect(await state(page, 'b')).toEqual({
     entries: ['copy:2', 'copy:3'],
+    selectedIdentities: [],
     selection: [],
     hasMore: false,
     loading: false,
@@ -1372,5 +1374,53 @@ test('selection limits count unloaded and retired keys and allow clearing them',
   await settlePage(page, refreshed.id, [card('100'), card('101')]);
   await expect(page.locator('#list-a [data-ui-select="card:100"]')).toBeChecked();
   await expect(page.locator('#list-a [data-ui-select="card:101"]')).toBeDisabled();
+  expect(errors).toEqual([]);
+});
+
+test('retained selection identities survive loading and refresh without inventing tool targets', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', {
+    pageSize: 2,
+    selectionLimit: 2,
+    tools: [{ id: 'save', label: 'Save' }],
+  });
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as GlobalControl).keeperCardListControl;
+    control.setSelected('a', 'card:1', true);
+    control.setSelected('a', 'card:2', true);
+    control.setSelected('a', 'card:3', true);
+  });
+  expect(await state(page, 'a')).toMatchObject({
+    selectedIdentities: ['card:1', 'card:2'],
+    selection: [],
+  });
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await settlePage(page, (await pageRequests(page))[0]!.id, [card('1')]);
+  expect(await state(page, 'a')).toMatchObject({
+    selectedIdentities: ['card:1', 'card:2'],
+    selection: ['card:1'],
+  });
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  const invocation = (await toolRequests(page))[0]!;
+  expect(invocation).toMatchObject({ targets: ['card:1'], selection: ['card:1'] });
+  await settleTool(page, invocation.id, { status: 'committed', message: null });
+  await refresh(page, 'a');
+  await settlePage(page, (await pageRequests(page))[1]!.id, [card('2')]);
+  expect(await state(page, 'a')).toMatchObject({
+    selectedIdentities: ['card:1', 'card:2'],
+    selection: ['card:2'],
+  });
+  await page.evaluate(() => {
+    (globalThis as unknown as GlobalControl).keeperCardListControl.setSelected(
+      'a',
+      'card:1',
+      false,
+    );
+  });
+  expect((await state(page, 'a')).selectedIdentities).toEqual(['card:2']);
+  await page.getByRole('button', { name: 'Clear selection', exact: true }).click();
+  expect(await state(page, 'a')).toMatchObject({ selectedIdentities: [], selection: [] });
   expect(errors).toEqual([]);
 });

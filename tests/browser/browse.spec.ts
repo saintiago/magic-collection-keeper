@@ -1011,3 +1011,82 @@ for (const level of ['card', 'printing'] as const) {
     });
   }
 }
+
+for (const level of ['card', 'printing'] as const) {
+  test(`repeated returns retain an evicted ${level} selection until explicitly cleared`, async ({
+    page,
+  }) => {
+    const errors = await openBrowse(page, `#/catalog?level=${level}`);
+    const resultPage = (offset: number): SearchPage =>
+      searchPage(
+        Array.from({ length: 50 }, (_, index) => {
+          const id = offset + index;
+          return level === 'card'
+            ? cardEntry(`card-${id}`, { name: `Card ${id}` })
+            : printingEntry(`printing-${id}`, `card-${id}`, `Card ${id}`);
+        }),
+        { totalCount: 550, continuation: offset < 500 ? `cursor-${offset + 50}` : null },
+      );
+    let requestIndex = 0;
+    for (let offset = 0; offset < 550; offset += 50) {
+      if (offset > 0) await page.getByRole('button', { name: 'Load more' }).click();
+      await settleSearch(page, (await searchRequest(page, requestIndex++)).id, resultPage(offset));
+      if (offset === 0)
+        await page.getByRole('checkbox', { name: /^Select Card 0(?: \(|$)/ }).check();
+    }
+    const count = page.locator('[data-ui-selection-count]');
+    await expect(page.getByRole('checkbox', { name: /^Select Card 0(?: \(|$)/ })).toHaveCount(0);
+    for (let visit = 0; visit < 2; visit += 1) {
+      await page.locator('[data-ui-open]').last().click();
+      await page.goBack();
+      for (let offset = 50; offset < 550; offset += 50) {
+        const request = await searchRequest(page, requestIndex++);
+        expect(request.request.continuation).toBe(`cursor-${offset}`);
+        await settleSearch(page, request.id, resultPage(offset));
+      }
+      await expect(count).toHaveText('1 of 100 selected');
+    }
+    // Reload the selected row to prove the retained identity still drives its checkbox.
+    await page.getByRole('button', { name: 'Refresh results', exact: true }).click();
+    await settleSearch(page, (await searchRequest(page, requestIndex++)).id, resultPage(0));
+    await expect(page.getByRole('checkbox', { name: /^Select Card 0(?: \(|$)/ })).toBeChecked();
+    await page.getByRole('button', { name: 'Clear selection', exact: true }).click();
+    await page.locator('[data-ui-open]').first().click();
+    await page.goBack();
+    await settleSearch(page, (await searchRequest(page, requestIndex)).id, resultPage(0));
+    await expect(page.getByRole('checkbox', { name: /^Select Card 0(?: \(|$)/ })).not.toBeChecked();
+    await expect(count).toHaveText('0 of 100 selected');
+    expect(errors).toEqual([]);
+  });
+
+  test(`leaving pending ${level} restoration retains selection and respects later deselection`, async ({
+    page,
+  }) => {
+    const errors = await openBrowse(page, `#/catalog?level=${level}`);
+    const entries = [
+      level === 'card'
+        ? cardEntry('card-bolt', { name: 'Lightning Bolt' })
+        : printingEntry('printing-bolt', 'card-bolt', 'Lightning Bolt'),
+    ];
+    await settleSearch(page, (await searchRequest(page)).id, searchPage(entries));
+    const checkbox = page.getByLabel('Select Lightning Bolt');
+    await checkbox.check();
+    await page.locator('[data-ui-open]').click();
+    await page.goBack();
+    const pending = await searchRequest(page, 1);
+    await page.goForward();
+    await expect(page.locator('#card-level')).toContainText('card-bolt/');
+    await page.goBack();
+    await settleSearch(page, (await searchRequest(page, 2)).id, searchPage(entries));
+    await expect(checkbox).toBeChecked();
+    await checkbox.uncheck();
+    await page.goForward();
+    await page.goBack();
+    await settleSearch(page, (await searchRequest(page, 3)).id, searchPage(entries));
+    // Even a late response to the abandoned restoration cannot resurrect deselected state.
+    await settleSearch(page, pending.id, searchPage(entries));
+    await expect(checkbox).not.toBeChecked();
+    await expect(page.locator('[data-ui-selection-count]')).toHaveText('0 of 100 selected');
+    expect(errors).toEqual([]);
+  });
+}
