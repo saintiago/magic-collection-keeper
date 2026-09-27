@@ -201,6 +201,32 @@ async function settlePrintings(
   );
 }
 
+async function failPrintings(page: Page, id: number, message: string): Promise<void> {
+  await page.evaluate(
+    ({ id: requestId, value }) => {
+      (
+        globalThis as unknown as { keeperCollectionControl: UiCollectionControl }
+      ).keeperCollectionControl.failPrintings(requestId, value);
+    },
+    { id, value: message },
+  );
+}
+
+async function failCopyRead(
+  page: Page,
+  id: number,
+  failure: { readonly code: string; readonly message: string },
+): Promise<void> {
+  await page.evaluate(
+    ({ id: requestId, value }) => {
+      (
+        globalThis as unknown as { keeperCollectionControl: UiCollectionControl }
+      ).keeperCollectionControl.failCopyRead(requestId, value as never);
+    },
+    { id, value: failure },
+  );
+}
+
 async function settleCorrection(
   page: Page,
   id: number,
@@ -340,6 +366,13 @@ function printingRecord(printingId = 'printing-1', cardId = 'card-1'): PrintingR
   };
 }
 
+/** One bounded page of a card's published printings, as the Catalog contract returns it. */
+function printingBatch(pageIndex: number): readonly PrintingRecord[] {
+  return Array.from({ length: 100 }, (_, index) =>
+    printingRecord(`printing-${(pageIndex - 1) * 100 + index + 2}`),
+  );
+}
+
 function storedCopy(overrides: Partial<PhysicalCopy> = {}): PhysicalCopy {
   return {
     copyId: 'copy-1',
@@ -424,12 +457,12 @@ test('the card level lists published printings and opens one printing level', as
   expect(first?.cardId).toBe('card-1');
   await settlePrintings(page, first!.id, [printingRecord('printing-1')], 'cursor-2');
   await expect(page.locator('#card-printings a')).toHaveCount(1);
-  await page.getByRole('button', { name: 'More printings' }).click();
+  await page.locator('#card-printings [data-ui-more]').click();
   const second = await printingsRequest(page, 1);
   expect(second?.options.continuation).toBe('cursor-2');
   await settlePrintings(page, second!.id, [printingRecord('printing-2')], null);
   await expect(page.locator('#card-printings a')).toHaveCount(2);
-  await expect(page.locator('#card-printings-more')).toBeHidden();
+  await expect(page.locator('#card-printings [data-ui-more]')).toBeHidden();
 
   await page.locator('#card-printing-printing-2').click();
   await expect(page).toHaveURL(/#\/cards\/card-1\/printing-2$/);
@@ -438,6 +471,110 @@ test('the card level lists published printings and opens one printing level', as
   await expect(page.locator('#printing-name')).toHaveText('Lightning Bolt');
   await expect(page.locator('#printing-line')).toHaveText('M11 149 · en');
   await expect(page.locator('#printing-card-link')).toHaveAttribute('href', '#/cards/card-1');
+  expect(errors).toEqual([]);
+});
+
+test('returning to a card level re-presents the printing window it held', async ({ page }) => {
+  const errors = await openCollection(page, '#/cards/card-1');
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  const first = await printingsRequest(page);
+  await settlePrintings(page, first!.id, [printingRecord('printing-1')], 'cursor-2');
+  await page.locator('#card-printings [data-ui-more]').click();
+  const second = await printingsRequest(page, 1);
+  await settlePrintings(page, second!.id, [printingRecord('printing-2')], null);
+  await expect(page.locator('#card-printings a')).toHaveCount(2);
+
+  // A printing of the second page is opened; Back returns to the window it was opened from.
+  await page.locator('#card-printing-printing-2').click();
+  await expect(page).toHaveURL(/#\/cards\/card-1\/printing-2$/);
+  await settlePrinting(page, 'printing-2', { printings: [printingRecord('printing-2')] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await expect(page.locator('#printing-name')).toHaveText('Lightning Bolt');
+
+  await page.goBack();
+  // The retained window is re-acquired from its own position, so the second page loads again.
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  const restoredFirst = await printingsRequest(page, 2);
+  expect(restoredFirst?.options.continuation).toBeUndefined();
+  await settlePrintings(page, restoredFirst!.id, [printingRecord('printing-1')], 'cursor-2');
+  const restoredSecond = await printingsRequest(page, 3);
+  expect(restoredSecond?.options.continuation).toBe('cursor-2');
+  await settlePrintings(page, restoredSecond!.id, [printingRecord('printing-2')], null);
+  await expect(page.locator('#card-printings a')).toHaveCount(2);
+  await expect(page.locator('#card-printing-printing-2')).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test('an initial printing-list failure is reported and retried from the card level', async ({
+  page,
+}) => {
+  const errors = await openCollection(page, '#/cards/card-1');
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  const failed = await printingsRequest(page);
+  await failPrintings(page, failed!.id, 'The catalog is unavailable.');
+
+  // A failure is not the end of the list: it stays presented beside its retry.
+  await expect(page.locator('#card-printings [data-ui-status]')).toHaveText(
+    'The catalog is unavailable.',
+  );
+  await expect(page.locator('#card-printings [data-ui-retry]')).toBeVisible();
+  await expect(page.locator('#card-printings [data-ui-more]')).toBeHidden();
+
+  await page.locator('#card-printings [data-ui-retry]').click();
+  const retried = await printingsRequest(page, 1);
+  await settlePrintings(page, retried!.id, [printingRecord('printing-1')], null);
+  await expect(page.locator('#card-printings a')).toHaveCount(1);
+  await expect(page.locator('#card-printings [data-ui-status]')).toHaveText('');
+  expect(errors).toEqual([]);
+});
+
+test('a failed card-level restore keeps the printing window it was holding', async ({ page }) => {
+  const errors = await openCollection(page, '#/cards/card-1');
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(
+    page,
+    (await printingsRequest(page))!.id,
+    [printingRecord('printing-1')],
+    'cursor-2',
+  );
+  await page.locator('#card-printings [data-ui-more]').click();
+  await settlePrintings(
+    page,
+    (await printingsRequest(page, 1))!.id,
+    [printingRecord('printing-2')],
+    null,
+  );
+  await page.locator('#card-printing-printing-2').click();
+  await settlePrinting(page, 'printing-2', { printings: [printingRecord('printing-2')] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await expect(page.locator('#printing-name')).toHaveText('Lightning Bolt');
+
+  // The entry that held the window comes back while the catalog is unavailable.
+  await page.goBack();
+  const catalogReads = await page.evaluate(() =>
+    (
+      globalThis as unknown as { keeperCollectionControl: UiCollectionControl }
+    ).keeperCollectionControl.catalogRequests(),
+  );
+  await page.evaluate(
+    (id) => {
+      (
+        globalThis as unknown as { keeperCollectionControl: UiCollectionControl }
+      ).keeperCollectionControl.failCatalog(id, 'The catalog is unavailable.');
+    },
+    catalogReads[catalogReads.length - 1]!.id,
+  );
+  await expect(page.locator('#card-details-failure')).toHaveText('The catalog is unavailable.');
+
+  // Leaving the failed view keeps the retained window; returning presents it again.
+  await page.getByRole('link', { name: 'Home' }).click();
+  await page.goBack();
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  const restoredFirst = await printingsRequest(page, 2);
+  await settlePrintings(page, restoredFirst!.id, [printingRecord('printing-1')], 'cursor-2');
+  const restoredSecond = await printingsRequest(page, 3);
+  await settlePrintings(page, restoredSecond!.id, [printingRecord('printing-2')], null);
+  await expect(page.locator('#card-printings a')).toHaveCount(2);
   expect(errors).toEqual([]);
 });
 
@@ -671,5 +808,171 @@ test('leaving and returning keeps the collection selection and the unsaved copy 
   await settleSearch(page, restored.id, searchPage([copyEntry('copy-1', 'printing-1')]));
   await expect(page.getByLabel('Select Lightning Bolt (M11 149)')).toBeChecked();
   await expect(page.locator('[data-ui-selection-count]')).toHaveText('1 selected');
+  expect(errors).toEqual([]);
+});
+
+test('a returned copy keeps the printing, language and finish its draft intends', async ({
+  page,
+}) => {
+  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], 'cursor-2');
+
+  // A second page offers a foil-only printing of another language.
+  const foilOnly = { ...printingRecord('printing-2'), language: 'es', finishes: ['foil'] as const };
+  await page.locator('#copy-printings-more').click();
+  await settlePrintings(page, (await printingsRequest(page, 1))!.id, [foilOnly], null);
+  await page.locator('#copy-language').selectOption('es');
+  await page.locator('#copy-printing-choice').selectOption('printing-2');
+  await page.locator('#copy-finish-choice').selectOption('foil');
+
+  // Leaving for the card level and returning keeps the draft while its data loads again.
+  await page.locator('#copy-card-link').click();
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(
+    page,
+    (await printingsRequest(page, 2))!.id,
+    [printingRecord()],
+    'cursor-2',
+  );
+  await page.goBack();
+  await settleCopyRead(page, (await copyRead(page, 1)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(
+    page,
+    (await printingsRequest(page, 3))!.id,
+    [printingRecord()],
+    'cursor-2',
+  );
+
+  // The first page knows neither the printing, its language nor its finish: the draft stays.
+  await expect(page.locator('#copy-language')).toHaveValue('es');
+  await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-2');
+  await expect(page.locator('#copy-finish-choice')).toHaveValue('foil');
+  await expect(page.locator('#copy-condition-choice')).toHaveValue('NM');
+
+  // Once its record loads again the intended printing is presented by its published data.
+  await page.locator('#copy-printings-more').click();
+  await settlePrintings(page, (await printingsRequest(page, 4))!.id, [foilOnly], null);
+  await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-2');
+  await expect(page.locator('#copy-printing-choice option:checked')).toHaveText('M11 149 · es');
+  await expect(page.locator('#copy-finish-choice')).toHaveValue('foil');
+  expect(errors).toEqual([]);
+});
+
+test('an initial printing-list failure is reported and retried from the copy level', async ({
+  page,
+}) => {
+  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  const failed = await printingsRequest(page);
+  await failPrintings(page, failed!.id, 'The printings could not be loaded.');
+
+  // The failure stays presented beside its retry, and the copy's own printing stays correctable.
+  await expect(page.locator('#copy-printings-status')).toHaveText(
+    'The printings could not be loaded.',
+  );
+  await expect(page.locator('#copy-printings-more')).toHaveText('Retry printings');
+  await expect(page.locator('#copy-printings-more')).toBeVisible();
+  await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-1');
+
+  await page.locator('#copy-printings-more').click();
+  const retried = await printingsRequest(page, 1);
+  await settlePrintings(page, retried!.id, [printingRecord('printing-2')], null);
+  await expect(page.locator('#copy-printings-status')).toHaveText('');
+  await expect(page.locator('#copy-printings-more')).toBeHidden();
+  await expect(page.locator('#copy-printing-choice option')).toHaveCount(2);
+  expect(errors).toEqual([]);
+});
+
+test('the copy printing window stays bounded while the user pages through it', async ({ page }) => {
+  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(page, (await printingsRequest(page))!.id, printingBatch(1), 'cursor-1');
+
+  // Six bounded catalog pages are offered one after another.
+  for (let pageIndex = 2; pageIndex <= 6; pageIndex += 1) {
+    await page.locator('#copy-printings-more').click();
+    const request = await printingsRequest(page, pageIndex - 1);
+    expect(request?.options.continuation).toBe(`cursor-${pageIndex - 1}`);
+    const next = pageIndex === 6 ? null : `cursor-${pageIndex}`;
+    await settlePrintings(page, request!.id, printingBatch(pageIndex), next);
+  }
+
+  // The window retires the oldest printings beyond the working set, keeping the copy's own one.
+  await expect(page.locator('#copy-printing-choice option')).toHaveCount(501);
+  await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-1');
+  expect(errors).toEqual([]);
+});
+
+test('a failed reload is reported as a failure, not as a missing copy', async ({ page }) => {
+  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], null);
+
+  await page.locator('#copy-reload').click();
+  await failCopyRead(page, (await copyRead(page, 1)).id, {
+    code: 'unavailable',
+    message: 'The service could not be reached.',
+  });
+
+  // An unavailable read does not establish that the account lost the copy.
+  await expect(page.locator('#copy-status')).toHaveText('The service could not be reached.');
+  await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · nonfoil · near mint');
+  expect(errors).toEqual([]);
+});
+
+test('an older reload never replaces the state a save committed', async ({ page }) => {
+  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], null);
+
+  // A reload is started first and answers with the state a later save superseded.
+  await page.locator('#copy-condition-choice').selectOption('LP');
+  await page.locator('#copy-reload').click();
+  const reload = await copyRead(page, 1);
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  const saved = await correction(page);
+  await settleCorrection(page, saved.id, [storedCopy({ condition: 'LP', revision: 5 })]);
+  await expect(page.locator('#copy-status')).toHaveText('Saved.');
+  await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · nonfoil · lightly played');
+
+  // The earlier reload arrives after the save: it presents neither older state nor its feedback.
+  await settleCopyRead(page, reload.id, [storedCopy({ condition: 'NM', revision: 4 })]);
+  await expect(page.locator('#copy-status')).toHaveText('Saved.');
+  await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · nonfoil · lightly played');
+  await expect(page.locator('#copy-condition-choice')).toHaveValue('LP');
+  expect(errors).toEqual([]);
+});
+
+test('overlapping reloads present the newest recorded state', async ({ page }) => {
+  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], null);
+
+  await page.locator('#copy-reload').click();
+  const first = await copyRead(page, 1);
+  await page.locator('#copy-reload').click();
+  const second = await copyRead(page, 2);
+  await settleCopyRead(page, second.id, [storedCopy({ condition: 'LP', revision: 5 })]);
+  await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · nonfoil · lightly played');
+
+  // The older response answers after the newer one: the presented state and feedback survive.
+  await settleCopyRead(page, first.id, [storedCopy({ condition: 'NM', revision: 4 })]);
+  await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · nonfoil · lightly played');
+  await expect(page.locator('#copy-status')).toHaveText('Reloaded the copy.');
   expect(errors).toEqual([]);
 });

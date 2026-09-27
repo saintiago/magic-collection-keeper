@@ -316,7 +316,7 @@ describe('copy corrections', () => {
     expect(outcome.copy?.revision).toBe(5);
   });
 
-  it('reports a lost response that was not applied from the copy it reads back', async () => {
+  it('keeps a lost response uncertain when the read shows the revision it quoted', async () => {
     const stored = copy({ revision: 4 });
     const access = copyAccess({
       correct: () => Promise.reject(new Error('The service could not be reached.')),
@@ -325,8 +325,69 @@ describe('copy corrections', () => {
 
     const outcome = await correctCopy(access, correction());
 
-    expect(outcome.status).toBe('failed');
+    // The unchanged revision does not establish a failure: the change may still commit.
+    expect(outcome.status).toBe('unknown');
     expect(outcome.copy).toEqual(stored);
+  });
+
+  it('keeps a lost response uncertain when already matching attributes did not move', async () => {
+    const stored = copy({ revision: 4, finish: 'foil', condition: 'LP' });
+    const access = copyAccess({
+      correct: () => Promise.reject(new Error('The service could not be reached.')),
+      read: () => Promise.resolve({ copies: [stored], missing: [] }),
+    });
+
+    const outcome = await correctCopy(access, correction());
+
+    // Observing the requested attributes alone does not establish the operation's commitment.
+    expect(outcome.status).toBe('unknown');
+    expect(outcome.copy).toEqual(stored);
+  });
+
+  it('keeps a lost response uncertain when the recorded state shows other attributes', async () => {
+    const stored = copy({ revision: 6, condition: 'HP' });
+    const access = copyAccess({
+      correct: () => Promise.reject(new Error('The service could not be reached.')),
+      read: () => Promise.resolve({ copies: [stored], missing: [] }),
+    });
+
+    const outcome = await correctCopy(access, correction());
+
+    expect(outcome.status).toBe('unknown');
+    expect(outcome.copy).toEqual(stored);
+  });
+
+  it('recovers a cancelled change that the recorded state shows committed', async () => {
+    const corrected = copy({ finish: 'foil', condition: 'LP', revision: 5 });
+    const access = copyAccess({
+      correct: () =>
+        Promise.reject(
+          Object.assign(new Error('The invocation was cancelled.'), { code: 'cancelled' }),
+        ),
+      read: () => Promise.resolve({ copies: [corrected], missing: [] }),
+    });
+
+    const outcome = await correctCopy(access, correction());
+
+    // A cancellation after dispatch leaves the commitment open, so it is recovered like a lost
+    // response instead of being reported as a definite failure.
+    expect(outcome.status).toBe('committed');
+    expect(outcome.copy).toEqual(corrected);
+  });
+
+  it('reports a copy the recovery read no longer finds instead of a failed write', async () => {
+    const access = copyAccess({
+      correct: () => Promise.reject(new Error('The service could not be reached.')),
+      read: () => Promise.resolve({ copies: [], missing: ['copy-1'] }),
+    });
+
+    const outcome = await correctCopy(access, correction());
+
+    expect(outcome).toEqual({
+      status: 'failed',
+      message: 'This copy is no longer in the collection.',
+      copy: null,
+    });
   });
 
   it('reports an unknown outcome when neither the change nor the copy can be read', async () => {

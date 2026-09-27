@@ -3,21 +3,26 @@
  * docs/user-interface.md#browsing-and-organization, docs/user-cards.md#records-and-associations).
  *
  * One URL names the level the page presents: the card, one printing of it or one physical copy.
- * The card and printing levels present the published catalog information the view names; the copy
- * level reads the account's actual copy through the private UserCards contract and resolves the
- * printing it references, so a corrected copy is presented with the printing it now carries. The
- * copy level corrects printing and language (the printing the copy references), finish and
- * condition as one change quoted by the revision the page read: a conflict or a failed change
- * keeps the unsaved draft for review and retry, a lost response is recovered from the copy's
- * recorded state, and a saved outcome is presented only after the change reported it committed
- * (docs/user-interface.md#browsing-and-organization). The draft is page state the page keeps for
- * its history entry, so leaving and returning keeps what a retry needs. Every provider value
- * renders as text.
+ * The card level presents the published card and its published printings through the list boundary,
+ * whose bounded window, continuation, failure and restoration belong to the list and travel with
+ * the page's own state (docs/user-interface.md#cardlist,
+ * docs/user-interface.md#state-ownership-and-restoration). The printing level presents one
+ * published version of the card. The copy level reads the account's actual copy through the private
+ * UserCards contract and resolves the printing it references, so a corrected copy is presented with
+ * the printing it now carries. The copy level corrects printing and language (the printing the copy
+ * references), finish and condition as one change quoted by the revision the page read: a conflict
+ * or a failed change keeps the unsaved draft for review and retry, a lost response is recovered from
+ * the copy's recorded state, and a saved outcome is presented only after the change reported it
+ * committed (docs/user-interface.md#browsing-and-organization). The draft is page state the page
+ * keeps for its history entry, and a value the draft names stays presented while its catalog data is
+ * still unavailable: the controls never replace the user's intended printing, language or finish
+ * merely because the record that names it has not loaded. Every provider value renders as text.
  */
 
 import type { CardRecord, Catalog, Finish, PrintingRecord } from '../../catalog/index.js';
 import type { PhysicalCopy } from '../../usercards/index.js';
 
+import { createCardList, type UiCardList } from './card-list.js';
 import {
   correctCopy,
   createCopyAccess,
@@ -25,7 +30,13 @@ import {
   type UiCopyCorrection,
 } from './copy-edits.js';
 import { UI_LIMITS } from './limits.js';
-import { controlLabel, readPageState } from './page-support.js';
+import type { UiListEntry, UiListSource } from './list.js';
+import {
+  controlLabel,
+  openEntryPresentation,
+  readListState,
+  readPageState,
+} from './page-support.js';
 import type { UiPageDefinition } from './pages.js';
 import { uiCatalogFinishes, uiHref, type UiView } from './routes.js';
 
@@ -40,11 +51,29 @@ interface UiCopyDraft {
   readonly condition: string;
 }
 
-/** One card's published printings, as the page loaded them so far. */
-interface PrintingsState {
+/**
+ * One card's published printings as the copy form loaded them so far: the bounded window the form
+ * offers, the continuation of the page after it, whether a request is in flight and the failure of
+ * the last request. A failure is not the end of the list.
+ */
+interface UiPrintingsWindow {
   readonly printings: Map<string, PrintingRecord>;
   continuation: string | null;
   loading: boolean;
+  error: string | null;
+}
+
+/** Outcome of one read of the corrected copy: the recorded copy, its absence or a failed read. */
+type UiCopyReadResult =
+  | { readonly work: number; readonly status: 'read'; readonly copy: PhysicalCopy }
+  | { readonly work: number; readonly status: 'missing' }
+  | { readonly work: number; readonly status: 'failed'; readonly message: string };
+
+/** What one level of the page presents: its content and the restoration its own list reports. */
+interface UiLevelPresentation {
+  readonly nodes: readonly Node[];
+  /** Presentation of the level's retained list, or null when the level composes none. */
+  readonly restoration: Promise<void> | null;
 }
 
 export function createCardDetailsPage(): UiPageDefinition {
@@ -71,6 +100,8 @@ export function createCardDetailsPage(): UiPageDefinition {
       const copies = createCopyAccess(context.capabilities.userCards);
       /** The copy form's state, kept whether or not the form is presented at this moment. */
       let draft = readCopyDraft(restored);
+      /** The card level's printing list; the page keeps the state the list itself captured. */
+      let printings: UiCardList<string> | null = null;
       const presented = Promise.withResolvers<void>();
       // A page whose presentation the shell never awaits must still not surface a rejection.
       presented.promise.catch(() => {});
@@ -86,16 +117,40 @@ export function createCardDetailsPage(): UiPageDefinition {
       void render();
 
       return {
-        capture: () => (draft === null ? null : { draft }),
+        capture: captureState,
         presented: () => presented.promise,
       };
 
-      /** Loads and presents the level the view names, or a failure the user can retry. */
+      /**
+       * State this page retains for its history entry
+       * (docs/user-interface.md#state-ownership-and-restoration): the copy form's draft, or the
+       * card level's printing list exactly as the list captured it. The page never rebuilds a list
+       * snapshot from loaded rows, and a view whose list is not composed yet — still loading or a
+       * failed restore — keeps the state its entry handed back instead of overwriting it with a
+       * partially presented view.
+       */
+      function captureState(): unknown | null {
+        if (cardView.copyId !== null) {
+          return draft === null ? null : { draft };
+        }
+        return printings === null ? restored : { list: printings.capture() };
+      }
+
+      /**
+       * Loads and presents the level the view names, or a failure the user can retry. The page
+       * reports its presentation once the level's own work settled: the card level reports after
+       * the retained printing window is presented again, so the shell restores the entry's
+       * interaction over the presented printings
+       * (docs/user-interface.md#state-ownership-and-restoration).
+       */
       async function render(): Promise<void> {
         status.textContent = 'Loading card details…';
         content.replaceChildren();
+        printings?.dispose();
+        printings = null;
+        let level: UiLevelPresentation;
         try {
-          const nodes =
+          level =
             cardView.copyId !== null
               ? await copyLevel(cardView.copyId)
               : cardView.printingId !== null
@@ -104,9 +159,8 @@ export function createCardDetailsPage(): UiPageDefinition {
           if (closed) {
             return;
           }
-          content.replaceChildren(...nodes);
+          content.replaceChildren(...level.nodes);
           status.textContent = '';
-          presented.resolve();
         } catch (cause) {
           if (closed) {
             return;
@@ -114,6 +168,24 @@ export function createCardDetailsPage(): UiPageDefinition {
           content.replaceChildren(...failurePanel(cause));
           status.textContent = '';
           presented.reject(cause);
+          return;
+        }
+        if (level.restoration === null) {
+          presented.resolve();
+          return;
+        }
+        try {
+          await level.restoration;
+        } catch (cause) {
+          // The retained printing window could not be presented: the page reports the interrupted
+          // restoration while the list keeps the failure and its retry.
+          if (!closed) {
+            presented.reject(cause);
+          }
+          return;
+        }
+        if (!closed) {
+          presented.resolve();
         }
       }
 
@@ -129,104 +201,98 @@ export function createCardDetailsPage(): UiPageDefinition {
       }
 
       /** The card level: the playable identity and its published printings. */
-      async function cardLevel(): Promise<readonly Node[]> {
+      async function cardLevel(): Promise<UiLevelPresentation> {
         const card = await resolveCard(catalog, cardView.cardId);
         return card === null
-          ? [missingPanel('The catalog does not publish this card.')]
+          ? { nodes: [missingPanel('The catalog does not publish this card.')], restoration: null }
           : cardContent(card);
       }
 
       /** The printing level: one published version of one card. */
-      async function printingLevel(printingId: string): Promise<readonly Node[]> {
+      async function printingLevel(printingId: string): Promise<UiLevelPresentation> {
         const resolution = await catalog.resolve([{ kind: 'printing', printingId }]);
         const printing = resolution.printings.get(printingId) ?? null;
         if (printing === null) {
-          return [missingPanel('The catalog does not publish this printing.')];
+          return {
+            nodes: [missingPanel('The catalog does not publish this printing.')],
+            restoration: null,
+          };
         }
         const card = await resolveCard(catalog, printing.cardId);
         return card === null
-          ? [missingPanel('The catalog does not publish the card of this printing.')]
-          : printingContent(card, printing);
+          ? {
+              nodes: [missingPanel('The catalog does not publish the card of this printing.')],
+              restoration: null,
+            }
+          : { nodes: printingContent(card, printing), restoration: null };
       }
 
       /**
        * The physical-copy level: the account's actual copy, its current attributes and the change
        * that corrects printing and language, finish and condition.
        */
-      async function copyLevel(copyId: string): Promise<readonly Node[]> {
+      async function copyLevel(copyId: string): Promise<UiLevelPresentation> {
         const read = await copies.read([copyId], context.signal);
         const copy = read.copies[0] ?? null;
         if (copy === null) {
-          return [missingPanel('This account has no physical copy with that identity.')];
+          return {
+            nodes: [missingPanel('This account has no physical copy with that identity.')],
+            restoration: null,
+          };
         }
         const resolution = await catalog.resolve([
           { kind: 'printing', printingId: copy.printingId },
         ]);
         const printing = resolution.printings.get(copy.printingId) ?? null;
         const card = await resolveCard(catalog, printing?.cardId ?? cardView.cardId);
-        return copyContent(copy, card, printing);
+        return { nodes: copyContent(copy, card, printing), restoration: null };
       }
 
-      function cardContent(card: CardRecord): readonly Node[] {
-        const printings: PrintingsState = {
-          printings: new Map(),
-          continuation: null,
-          loading: false,
-        };
-        const list = document.createElement('ul');
-        list.id = 'card-printings';
-        const more = button('card-printings-more', 'More printings');
-        const printingsStatus = line('card-printings-status', '');
-        const paint = (): void => {
-          list.replaceChildren(
-            ...[...printings.printings.values()].map((printing) => printingItem(printing)),
-          );
-          more.hidden = printings.continuation === null;
-          more.disabled = printings.loading;
-        };
-        more.addEventListener('click', () => {
-          void loadPrintings(catalog, card.cardId, printings, context.signal).then(
-            () => {
-              printingsStatus.textContent = '';
-              paint();
-            },
-            (cause: unknown) => {
-              printingsStatus.textContent = readMessage(
-                cause,
-                'The printings could not be loaded.',
-              );
-            },
-          );
+      /**
+       * The card level's content: the published printings are one bounded list over the Catalog
+       * contract, so its window, continuation, failure and retry stay the list's own business and
+       * the page keeps the state it captured for the history entry (docs/user-interface.md#cardlist).
+       */
+      function cardContent(card: CardRecord): UiLevelPresentation {
+        const host = document.createElement('div');
+        host.id = 'card-printings';
+        const list = createCardList<string>({
+          container: host,
+          source: printingsSource(card),
+          context: card.cardId,
+          pageSize: UI_LIMITS.printingPage,
+          restored: readListState<string>(restored),
+          presentation: openEntryPresentation(document, 'card-printing'),
+          signal: context.signal,
         });
-        paint();
-        void loadPrintings(catalog, card.cardId, printings, context.signal).then(
-          paint,
-          (cause: unknown) => {
-            printingsStatus.textContent = readMessage(cause, 'The printings could not be loaded.');
-            paint();
-          },
-        );
-        return [
-          heading('card-name', card.name),
-          line('card-type', card.typeLine ?? 'Type not published'),
-          line('card-text', card.rulesText ?? 'No rules text published.'),
-          line('card-printings-label', 'Published printings'),
-          list,
-          more,
-          printingsStatus,
-          collectionLinks(card),
-        ];
+        printings = list;
+        return {
+          nodes: [
+            heading('card-name', card.name),
+            line('card-type', card.typeLine ?? 'Type not published'),
+            line('card-text', card.rulesText ?? 'No rules text published.'),
+            line('card-printings-label', 'Published printings'),
+            host,
+            collectionLinks(card),
+          ],
+          restoration: list.restoration?.presented ?? null,
+        };
       }
 
-      function printingItem(printing: PrintingRecord): HTMLLIElement {
-        const item = document.createElement('li');
-        const anchor = link(
-          `card-printing-${encodeURIComponent(printing.printingId)}`,
-          viewOfCard(printing.cardId, printing.printingId, null),
-          printingLine(printing),
-        );
-        item.append(anchor);
-        return item;
+      /** One card's published printings as a bounded list source over the Catalog contract. */
+      function printingsSource(card: CardRecord): UiListSource<string> {
+        return {
+          async load(request) {
+            const page = await catalog.listCardPrintings(card.cardId, {
+              pageSize: request.pageSize,
+              ...(request.continuation === null ? {} : { continuation: request.continuation }),
+            });
+            return {
+              entries: page.printings.map((printing) => printingEntry(card, printing)),
+              continuation: page.continuation,
+            };
+          },
+        };
       }
 
       function printingContent(card: CardRecord, printing: PrintingRecord): readonly Node[] {
@@ -259,16 +325,26 @@ export function createCardDetailsPage(): UiPageDefinition {
         printing: PrintingRecord | null,
       ): readonly Node[] {
         let saved = copy;
+        /**
+         * Sequence of the newest copy-state work of this form: feedback of a request a later
+         * operation superseded is not presented, so an obsolete reload never overwrites the
+         * outcome of a save that followed it.
+         */
+        let work = 0;
         const cardId = printing?.cardId ?? cardView.cardId;
-        const printings: PrintingsState = {
+        const window: UiPrintingsWindow = {
           printings: new Map(printing === null ? [] : [[printing.printingId, printing]]),
           continuation: null,
           loading: false,
+          error: null,
         };
         const savedLine = line('copy-saved', '');
         const copyStatus = line('copy-status', '');
         copyStatus.setAttribute('role', 'status');
         copyStatus.setAttribute('aria-live', 'polite');
+        const printingsStatus = line('copy-printings-status', '');
+        printingsStatus.setAttribute('role', 'status');
+        printingsStatus.setAttribute('aria-live', 'polite');
         const language = document.createElement('select');
         language.id = 'copy-language';
         const printingChoice = document.createElement('select');
@@ -307,6 +383,7 @@ export function createCardDetailsPage(): UiPageDefinition {
           line('copy-id', `Copy ${copy.copyId}`),
           form,
           copyStatus,
+          printingsStatus,
         );
         paintSaved();
         paint();
@@ -315,15 +392,7 @@ export function createCardDetailsPage(): UiPageDefinition {
           paint();
         });
         more.addEventListener('click', () => {
-          void loadPrintings(catalog, cardId, printings, context.signal).then(
-            () => {
-              copyStatus.textContent = '';
-              paint();
-            },
-            (cause: unknown) => {
-              copyStatus.textContent = readMessage(cause, 'The printings could not be loaded.');
-            },
-          );
+          void loadMorePrintings();
         });
         reload.addEventListener('click', () => {
           void reloadCopy();
@@ -333,13 +402,9 @@ export function createCardDetailsPage(): UiPageDefinition {
           void saveCopy();
         });
         if (card !== null) {
-          void loadPrintings(catalog, cardId, printings, context.signal).then(
-            () => paint(),
-            () => {
-              // The published printings are an offer: the copy's own printing stays correctable
-              // even when the catalog list cannot be read.
-            },
-          );
+          // The published printings are an offer: the copy's own printing stays correctable even
+          // when the catalog list cannot be read.
+          void loadMorePrintings();
         }
         return [
           section,
@@ -350,9 +415,10 @@ export function createCardDetailsPage(): UiPageDefinition {
         ];
 
         /**
-         * Presents the draft in the controls, narrowed by the choices that are available: the
-         * language narrows the printings, the printing decides the finishes that exist, and an
-         * unavailable value falls back to one that exists. The effective values become the draft.
+         * Presents the draft in the controls. The draft keeps the intended values: a printing,
+         * language or finish whose catalog data has not loaded stays the presented choice, named by
+         * its identity until its record arrives, and the controls fall back only for a value outside
+         * the published vocabulary. The effective values become the draft.
          */
         function paint(): void {
           const wanted = draft ?? {
@@ -362,11 +428,16 @@ export function createCardDetailsPage(): UiPageDefinition {
             condition: saved.condition ?? 'unknown',
           };
           const languages = new Set<string>();
-          for (const known of printings.printings.values()) {
+          for (const known of window.printings.values()) {
             languages.add(known.language);
           }
-          languages.add(printing?.language ?? wanted.language);
-          const chosenLanguage = languages.has(wanted.language) ? wanted.language : '';
+          if (printing !== null) {
+            languages.add(printing.language);
+          }
+          if (wanted.language.length > 0) {
+            // The intended language stays selectable while the printing that names it is loading.
+            languages.add(wanted.language);
+          }
           language.replaceChildren(
             option(document, '', 'Any language'),
             ...[...languages]
@@ -374,25 +445,30 @@ export function createCardDetailsPage(): UiPageDefinition {
               .sort()
               .map((code) => option(document, code, code)),
           );
+          const chosenLanguage = wanted.language;
           language.value = chosenLanguage;
 
-          const choices = [...printings.printings.values()].filter(
+          const wantedPrintingId =
+            wanted.printingId.length > 0 ? wanted.printingId : saved.printingId;
+          const choices = [...window.printings.values()].filter(
             (known) => chosenLanguage === '' || known.language === chosenLanguage,
           );
-          const chosenPrinting = printings.printings.get(wanted.printingId) ?? null;
+          const chosenPrinting = window.printings.get(wantedPrintingId) ?? null;
           if (chosenPrinting !== null && !choices.includes(chosenPrinting)) {
-            // The copy's own printing stays reachable even when the language facet excludes it.
+            // The intended printing stays reachable even when the language facet excludes it.
             choices.push(chosenPrinting);
           }
           printingChoice.replaceChildren(
+            // An intended printing whose record has not loaded stays the selected choice, named by
+            // its identity, instead of being replaced by one that happens to be loaded.
+            ...(chosenPrinting === null
+              ? [option(document, wantedPrintingId, `Printing ${wantedPrintingId}`)]
+              : []),
             ...choices.map((known) => option(document, known.printingId, printingLine(known))),
           );
-          const printingId = choices.some((known) => known.printingId === wanted.printingId)
-            ? wanted.printingId
-            : (choices[0]?.printingId ?? '');
-          printingChoice.value = printingId;
+          printingChoice.value = wantedPrintingId;
 
-          const selected = printings.printings.get(printingId) ?? null;
+          const selected = window.printings.get(wantedPrintingId) ?? null;
           const finishes =
             selected === null || selected.finishes.length === 0
               ? uiCatalogFinishes
@@ -418,17 +494,20 @@ export function createCardDetailsPage(): UiPageDefinition {
 
           draft = {
             language: chosenLanguage,
-            printingId,
+            printingId: wantedPrintingId,
             finish: finishValue,
             condition: conditionValue,
           };
-          more.hidden = printings.continuation === null;
-          more.disabled = printings.loading;
+          // A failed request keeps its retry reachable: only the end of the list hides the control
+          // (docs/user-interface.md#browsing-and-organization).
+          more.hidden = window.continuation === null && window.error === null;
+          more.disabled = window.loading;
+          more.textContent = window.error === null ? 'More printings' : 'Retry printings';
         }
 
         /** The attributes the account stores now, distinct from the unsaved draft. */
         function paintSaved(): void {
-          const stored = printings.printings.get(saved.printingId) ?? null;
+          const stored = window.printings.get(saved.printingId) ?? null;
           savedLine.textContent = `${stored === null ? `Printing ${saved.printingId}` : printingLine(stored)} · ${saved.finish} · ${conditionLabel(saved.condition)}`;
           printingLink.href = uiHref(viewOfCard(cardId, saved.printingId, null));
         }
@@ -467,6 +546,7 @@ export function createCardDetailsPage(): UiPageDefinition {
             copyStatus.textContent = 'Choose a printing, a finish and a condition before saving.';
             return;
           }
+          const current = ++work;
           save.disabled = true;
           copyStatus.textContent = 'Saving…';
           const outcome = await correctCopy(copies, input, context.signal);
@@ -475,44 +555,122 @@ export function createCardDetailsPage(): UiPageDefinition {
           }
           save.disabled = false;
           if (outcome.copy !== null) {
-            saved = outcome.copy;
-            paintSaved();
-            paint();
+            presentCopy(outcome.copy);
           }
-          copyStatus.textContent = outcome.message ?? 'Saved.';
+          if (current === work) {
+            copyStatus.textContent = outcome.message ?? 'Saved.';
+          }
           if (outcome.status === 'conflict') {
             // The copy changed meanwhile: its current state is offered for review while the draft
             // the user wrote stays in the form for the retry.
-            await readCurrent();
+            const reread = await readCurrent();
+            if (!closed && reread.work === work && reread.status !== 'read') {
+              copyStatus.textContent = readProblem(reread);
+            }
           }
         }
 
         async function reloadCopy(): Promise<void> {
           copyStatus.textContent = 'Reloading…';
-          const found = await readCurrent();
-          if (closed) {
+          const result = await readCurrent();
+          if (closed || result.work !== work) {
+            // A newer operation owns the feedback; the obsolete reload presents nothing.
             return;
           }
           copyStatus.textContent =
-            found === null ? 'This copy is no longer in the collection.' : 'Reloaded the copy.';
+            result.status === 'read' ? 'Reloaded the copy.' : readProblem(result);
         }
 
-        /** Re-reads the copy the page corrects; the unsaved draft stays untouched. */
-        async function readCurrent(): Promise<PhysicalCopy | null> {
+        /**
+         * Re-reads the copy the page corrects; the unsaved draft stays untouched. The presented
+         * state never regresses, and a read that failed stays distinct from a copy the account no
+         * longer holds, so a caller never reports an unavailable read as absence
+         * (docs/user-cards.md#interface, docs/user-interface.md#state-ownership-and-restoration).
+         */
+        async function readCurrent(): Promise<UiCopyReadResult> {
+          const current = ++work;
           try {
             const read = await copies.read([saved.copyId], context.signal);
             const found = read.copies[0] ?? null;
-            if (found !== null) {
-              saved = found;
-              paintSaved();
-              paint();
+            if (found === null) {
+              return { work: current, status: 'missing' };
             }
-            return found;
+            presentCopy(found);
+            return { work: current, status: 'read', copy: found };
           } catch (cause) {
-            if (!closed) {
-              copyStatus.textContent = readMessage(cause, 'The copy could not be reloaded.');
+            return {
+              work: current,
+              status: 'failed',
+              message: readMessage(cause, 'The copy could not be reloaded.'),
+            };
+          }
+        }
+
+        /**
+         * Presents the recorded state one read or write reported, unless the page presents a newer
+         * revision already: a response that arrives after a newer operation never replaces the state
+         * the user is looking at.
+         */
+        function presentCopy(found: PhysicalCopy): void {
+          if (found.revision < saved.revision) {
+            return;
+          }
+          saved = found;
+          paintSaved();
+          paint();
+        }
+
+        /** The problem one copy read reports; only a failed read carries a message of its own. */
+        function readProblem(result: Exclude<UiCopyReadResult, { status: 'read' }>): string {
+          return result.status === 'failed'
+            ? result.message
+            : 'This copy is no longer in the collection.';
+        }
+
+        /**
+         * Loads the next page of the card's published printings into the bounded window the form
+         * offers, or reports the failure beside the retry the same control offers. The window keeps
+         * the printing the copy records and the intended draft; the rest of the working set is
+         * bounded, so repeated pagination never retains every visited printing.
+         */
+        async function loadMorePrintings(): Promise<void> {
+          if (window.loading || context.signal.aborted) {
+            return;
+          }
+          window.loading = true;
+          paint();
+          try {
+            const page = await catalog.listCardPrintings(cardId, {
+              pageSize: UI_LIMITS.printingPage,
+              ...(window.continuation === null ? {} : { continuation: window.continuation }),
+            });
+            for (const known of page.printings) {
+              window.printings.set(known.printingId, known);
             }
-            return null;
+            window.continuation = page.continuation;
+            window.error = null;
+            retirePrintings();
+          } catch (cause) {
+            window.error = readMessage(cause, 'The printings could not be loaded.');
+          } finally {
+            window.loading = false;
+          }
+          if (closed) {
+            return;
+          }
+          printingsStatus.textContent = window.error ?? '';
+          paint();
+        }
+
+        /** Retires the oldest printings beyond the working set, keeping the presented choices. */
+        function retirePrintings(): void {
+          const kept = new Set([saved.printingId, draft?.printingId ?? '']);
+          const keys = [...window.printings.keys()];
+          const surplus = keys.slice(0, Math.max(0, keys.length - UI_LIMITS.listWindow));
+          for (const key of surplus) {
+            if (!kept.has(key)) {
+              window.printings.delete(key);
+            }
           }
         }
       }
@@ -611,6 +769,24 @@ export function createCardDetailsPage(): UiPageDefinition {
   };
 }
 
+/** One published printing as the card level's list presents it. */
+function printingEntry(card: CardRecord, printing: PrintingRecord): UiListEntry {
+  return {
+    key: printing.printingId,
+    target: { kind: 'printing', printingId: printing.printingId },
+    basic: {
+      card: { cardId: card.cardId, name: card.name, matchedName: null },
+      printing: {
+        printingId: printing.printingId,
+        edition: printing.edition,
+        collectorNumber: printing.collectorNumber,
+        language: printing.language,
+      },
+    },
+    quantity: null,
+  };
+}
+
 /** One printing as the page presents it: its edition, collector number and language. */
 function printingLine(printing: PrintingRecord): string {
   return `${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
@@ -650,34 +826,6 @@ function option(document: Document, value: string, label: string): HTMLOptionEle
 async function resolveCard(catalog: Catalog, cardId: string): Promise<CardRecord | null> {
   const resolution = await catalog.resolve([{ kind: 'card', cardId }]);
   return resolution.cards.get(cardId) ?? null;
-}
-
-/**
- * Loads the next page of one card's published printings into the state the page presents; the
- * pages stay bounded and the printings already presented stay available.
- */
-async function loadPrintings(
-  catalog: Catalog,
-  cardId: string,
-  state: PrintingsState,
-  signal: AbortSignal,
-): Promise<void> {
-  if (state.loading || signal.aborted) {
-    return;
-  }
-  state.loading = true;
-  try {
-    const page = await catalog.listCardPrintings(cardId, {
-      pageSize: UI_LIMITS.printingPage,
-      ...(state.continuation === null ? {} : { continuation: state.continuation }),
-    });
-    for (const printing of page.printings) {
-      state.printings.set(printing.printingId, printing);
-    }
-    state.continuation = page.continuation;
-  } finally {
-    state.loading = false;
-  }
 }
 
 /** The copy draft a history entry kept, or null when this visit restored none. */
