@@ -100,8 +100,10 @@ describe('bounded, account-isolated restoration state', () => {
 
   it('keeps one view state per account and token', () => {
     const store = createViewStateStore();
-    const token = store.save(
+    const token = store.open();
+    store.save(
       'account-a',
+      token,
       snapshot(
         { query: 'bolt', selection: ['card:1', 'copy:2'], filtered: true },
         {
@@ -121,10 +123,34 @@ describe('bounded, account-isolated restoration state', () => {
 
   it('never restores a snapshot for another account', () => {
     const store = createViewStateStore();
-    const token = store.save('account-a', snapshot({ query: 'bolt' }));
+    const token = store.open();
+    store.save('account-a', token, snapshot({ query: 'bolt' }));
 
     expect(store.read('account-b', token)).toBeNull();
     expect(store.read('account-a', 'unknown-token')).toBeNull();
+  });
+
+  it('replaces the state of one entry when the entry is left again', () => {
+    const store = createViewStateStore();
+    const token = store.open();
+    store.save('account-a', token, snapshot({ query: 'initial' }));
+    store.save('account-a', token, snapshot({ query: 'latest', bolt: true }));
+
+    expect(store.size).toBe(1);
+    expect(store.read('account-a', token)?.state).toEqual({ query: 'latest', bolt: true });
+  });
+
+  it('mints tokens that never collide with another store lifetime', () => {
+    const surviving = createViewStateStore();
+    const reloaded = createViewStateStore();
+    const survivingToken = surviving.open();
+
+    expect(reloaded.open()).not.toBe(survivingToken);
+    expect(surviving.owns(survivingToken)).toBe(true);
+    expect(reloaded.owns(survivingToken)).toBe(false);
+    reloaded.save('account-a', survivingToken, snapshot({ query: 'after reload' }));
+
+    expect(reloaded.read('account-a', survivingToken)).toBeNull();
   });
 
   it.each([
@@ -151,16 +177,19 @@ describe('bounded, account-isolated restoration state', () => {
     ['a nested value', { filter: { color: 'blue' } as never }],
   ])('drops state outside the bounds: %s', (_name, state) => {
     const store = createViewStateStore();
-    const token = store.save('account-a', snapshot(state as UiRestorationState));
+    const token = store.open();
+    store.save('account-a', token, snapshot(state as UiRestorationState));
 
     expect(store.read('account-a', token)?.state).toBeNull();
   });
 
   it('evicts the oldest snapshot beyond the declared bound', () => {
     const store = createViewStateStore(3);
-    const tokens = ['first', 'second', 'third', 'fourth'].map((value) =>
-      store.save('account-a', snapshot({ query: value })),
-    );
+    const tokens = ['first', 'second', 'third', 'fourth'].map((value) => {
+      const token = store.open();
+      store.save('account-a', token, snapshot({ query: value }));
+      return token;
+    });
 
     expect(store.size).toBe(3);
     expect(store.read('account-a', tokens[0] ?? '')).toBeNull();
@@ -175,7 +204,8 @@ describe('bounded, account-isolated restoration state', () => {
 
   it('clears every snapshot when the session ends', () => {
     const store = createViewStateStore();
-    const token = store.save('account-a', snapshot({ query: 'bolt' }));
+    const token = store.open();
+    store.save('account-a', token, snapshot({ query: 'bolt' }));
 
     store.clear();
 

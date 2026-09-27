@@ -4,8 +4,10 @@
  *
  * The cases bundle the shell with the page, identity and device substitutes of
  * ui-shell.harness.ts and drive them in Chromium: deep links and reload, nested Back with
- * restored query, selection, focus and scroll, a late result of a closed page, sign-out and
- * account changes with private presentation state, and a brief dialog.
+ * restored query, selection, focus and scroll, browser-driven traversals that capture the entry
+ * they leave, token lifetime across reload, a late result, dialog or device release of a closed
+ * page, delayed, rejected and completed sign-out, a redirect that happens while a page mounts, and
+ * a brief dialog.
  */
 
 import path from 'node:path';
@@ -13,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 
 import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
+
+import type { UiShellControl, UiShellStart } from './ui-shell.harness.js';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const harnessPath = path.join(repoRoot, 'tests', 'browser', 'ui-shell.harness.ts');
@@ -29,6 +33,7 @@ function shellBundle(): Promise<string> {
           `import { installUiShell } from ${JSON.stringify(harnessPath)};`,
           "globalThis.keeperUiControl = installUiShell(document.getElementById('ui-root'), {",
           '  signedOut: globalThis.keeperUiStartSignedOut === true,',
+          '  deferredSignOut: globalThis.keeperUiDeferredSignOut === true,',
           '});',
         ].join('\n'),
         resolveDir: repoRoot,
@@ -50,12 +55,7 @@ function shellBundle(): Promise<string> {
 }
 
 /** Serves a fresh document for the shell, enters it at `hash` and loads the bundled UI. */
-interface ShellStart {
-  readonly signedOut?: boolean;
-}
-
-/** Serves a fresh document for the shell, enters it at `hash` and loads the bundled UI. */
-async function openShell(page: Page, hash: string, start: ShellStart = {}): Promise<string[]> {
+async function openShell(page: Page, hash: string, start: UiShellStart = {}): Promise<string[]> {
   const errors: string[] = [];
   page.on('pageerror', (error) => {
     errors.push(String(error));
@@ -64,11 +64,11 @@ async function openShell(page: Page, hash: string, start: ShellStart = {}): Prom
     route.fulfill({ contentType: 'text/html', body: shellPage }),
   );
   await page.goto(`http://keeper-ui.test/${hash}`);
-  if (start.signedOut === true) {
-    await page.evaluate(() => {
-      (globalThis as unknown as { keeperUiStartSignedOut: boolean }).keeperUiStartSignedOut = true;
-    });
-  }
+  await page.evaluate((flags) => {
+    const globals = globalThis as unknown as Record<string, boolean>;
+    globals.keeperUiStartSignedOut = flags.signedOut === true;
+    globals.keeperUiDeferredSignOut = flags.deferredSignOut === true;
+  }, start);
   await loadShell(page);
   return errors;
 }
@@ -90,6 +90,38 @@ async function accountId(page: Page): Promise<string | null> {
       globalThis as unknown as { keeperUiControl: { accountId(): string | null } }
     ).keeperUiControl.accountId(),
   );
+}
+
+/** Reports a verified account change inside the installed shell. */
+async function signInAs(page: Page, accountIdValue: string): Promise<void> {
+  await page.evaluate((value) => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.signInAs(value);
+  }, accountIdValue);
+}
+
+/** Completes the sign-out the shell awaits, as the deployment's authentication would. */
+async function completeSignOut(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.completeSignOut();
+  });
+}
+
+/** Rejects the sign-out the shell awaits, as an authentication outage would. */
+async function failSignOut(page: Page, message: string): Promise<void> {
+  await page.evaluate((text) => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.failSignOut(text);
+  }, message);
+}
+
+/** Releases the shell and its listeners. */
+async function disposeShell(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.dispose();
+  });
 }
 
 test('a deep link presents its view and a reload keeps it', async ({ page }) => {
@@ -219,4 +251,158 @@ test('a brief dialog reports the user decision', async ({ page }) => {
   await page.getByRole('button', { name: 'Rename', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.locator('#home-dialog-answer')).toHaveText('confirmed');
+});
+
+test('edits between repeated Back and Forward traversals are kept', async ({ page }) => {
+  await openShell(page, '#/');
+  await page.getByLabel('Search cards').fill('initial');
+  await page.getByRole('link', { name: 'Open printing' }).click();
+  await expect(page.locator('#card-level')).toHaveText('card-1/printing-1/-');
+
+  // The browser traverses, not the shell: leaving Home must capture what the page holds now.
+  await page.goBack();
+  await expect(page.getByLabel('Search cards')).toHaveValue('initial');
+  await page.getByLabel('Search cards').fill('latest');
+  await page.getByLabel('Select Bolt').check();
+  await page.evaluate(() => window.scrollTo(0, 800));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(800);
+
+  await page.goForward();
+  await expect(page.locator('#card-level')).toHaveText('card-1/printing-1/-');
+
+  await page.goBack();
+  await expect(page.getByLabel('Search cards')).toHaveValue('latest');
+  await expect(page.getByLabel('Select Bolt')).toBeChecked();
+  await expect(page.getByLabel('Select Bolt')).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(800);
+  expect(await notes(page)).toContain('home-restored');
+});
+
+test('a reload never lets a new capture reach a surviving history entry', async ({ page }) => {
+  await openShell(page, '#/');
+  await page.getByLabel('Search cards').fill('before reload');
+  await page.getByRole('link', { name: 'Collection' }).click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+  await page.getByRole('link', { name: 'Home' }).click();
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+  await page.getByLabel('Search cards').fill('second entry');
+  await page.getByRole('link', { name: 'Collection' }).click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+
+  await page.reload();
+  await loadShell(page);
+
+  await page.getByRole('link', { name: 'Home' }).click();
+  await page.getByLabel('Search cards').fill('after reload');
+  await page.getByRole('link', { name: 'Collection' }).click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+
+  // The entry the user left after the reload restores its own state...
+  await page.goBack();
+  await expect(page.getByLabel('Search cards')).toHaveValue('after reload');
+
+  // ...while every entry the reload made stateless restores nothing, not the new snapshot.
+  await page.goBack();
+  await page.goBack();
+  await expect(page.getByLabel('Search cards')).toHaveValue('');
+  await page.goBack();
+  await page.goBack();
+  await expect(page.getByLabel('Search cards')).toHaveValue('');
+});
+
+test('a delayed sign-out withdraws the private page and completes', async ({ page }) => {
+  await openShell(page, '#/', { deferredSignOut: true });
+  await page.getByLabel('Search cards').fill('private query');
+
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('#ui-root main')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeDisabled();
+
+  await completeSignOut(page);
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await expect(page.getByLabel('Search cards')).toHaveCount(0);
+  expect(await notes(page)).toEqual(expect.arrayContaining(['session-ended', 'device-released']));
+});
+
+test('a rejected sign-out returns a live page with working controls', async ({ page }) => {
+  await openShell(page, '#/', { deferredSignOut: true });
+  await page.getByLabel('Search cards').fill('private query');
+
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('#ui-root main')).toBeHidden();
+  await failSignOut(page, 'Authentication unavailable');
+
+  await expect(page.getByText('Authentication unavailable')).toBeVisible();
+  await expect(page.getByLabel('Search cards')).toHaveValue('private query');
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Go to collection' }).click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+});
+
+test('a page without a state handle keeps focus and scroll for the way back', async ({ page }) => {
+  await openShell(page, '#/collection');
+  await expect(page.locator('#collection-marker')).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, 500));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(500);
+
+  await page.getByRole('link', { name: 'Open tags' }).click();
+  await expect(page.getByRole('heading', { name: 'Tags' })).toBeVisible();
+
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Collection' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open tags' })).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(500);
+});
+
+test('a page that redirects while mounting leaves the destination in charge', async ({ page }) => {
+  await openShell(page, '#/tags/redirect');
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+  await expect(page.locator('#tag-marker')).toHaveCount(0);
+  expect(await notes(page)).toEqual(
+    expect.arrayContaining(['redirect-mounted', 'redirect-disposed']),
+  );
+
+  await page.getByLabel('Search cards').fill('kept');
+  await page.getByRole('link', { name: 'Collection' }).click();
+  await page.goBack();
+
+  await expect(page.getByLabel('Search cards')).toHaveValue('kept');
+});
+
+test('a closed page cannot open a dialog or release the device of the new view', async ({
+  page,
+}) => {
+  await openShell(page, '#/cards/card-1');
+  await expect(page.locator('#card-level')).toHaveText('card-1/-/-');
+
+  await page.getByRole('link', { name: 'Collection' }).click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+
+  await expect.poll(() => notes(page)).toContain('card-dialog:false');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await notes(page)).not.toContain('device-released');
+});
+
+test('an account change ends the previous page dialog and device access', async ({ page }) => {
+  await openShell(page, '#/cards/card-1');
+  await expect(page.locator('#card-level')).toHaveText('card-1/-/-');
+
+  await signInAs(page, 'bob');
+  await expect(page.getByRole('heading', { name: 'Card details' })).toBeVisible();
+
+  await expect.poll(() => notes(page)).toContain('card-dialog:false');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  // The account change released the device once; the closed page's delayed attempt changed nothing.
+  expect((await notes(page)).filter((note) => note === 'device-released')).toHaveLength(1);
+});
+
+test('a disposed shell ignores the delayed work of its last page', async ({ page }) => {
+  await openShell(page, '#/cards/card-1');
+  await expect(page.locator('#card-level')).toHaveText('card-1/-/-');
+
+  await disposeShell(page);
+  await expect(page.locator('#ui-root')).toBeEmpty();
+
+  await expect.poll(() => notes(page)).toContain('card-dialog:false');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 });

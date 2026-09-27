@@ -25,17 +25,25 @@ export interface UiShellControl {
   signInAs(accountId: string): void;
   /** Reports a sign-out. */
   signOut(): void;
+  /** Completes the sign-out the shell awaits, reporting the verified sign-out as the deployment would. */
+  completeSignOut(): void;
+  /** Rejects the sign-out the shell awaits, as an authentication outage would. */
+  failSignOut(message: string): void;
   /** Notes the harness recorded, oldest first. */
   log(): string[];
   /** Releases the shell and its listeners. */
   dispose(): void;
 }
 
+export interface UiShellStart {
+  /** Starts without a verified account instead of signed in as the first account. */
+  readonly signedOut?: boolean;
+  /** Holds each sign-out until the journey completes or rejects it through the control. */
+  readonly deferredSignOut?: boolean;
+}
+
 /** Installs the shell into `root`; its identity starts signed in unless `signedOut` is set. */
-export function installUiShell(
-  root: Element | null,
-  start: { readonly signedOut?: boolean } = {},
-): UiShellControl {
+export function installUiShell(root: Element | null, start: UiShellStart = {}): UiShellControl {
   if (root === null) {
     throw new Error('The shell journey needs its root element.');
   }
@@ -44,6 +52,7 @@ export function installUiShell(
   let account: UiAccount | null =
     start.signedOut === true ? null : { accountId: 'alice', displayName: 'Alice' };
   const listeners = new Set<(account: UiAccount | null) => void>();
+  let pendingSignOut: { resolve(): void; reject(cause: Error): void } | null = null;
 
   const identity: UiIdentity = {
     current: () => account,
@@ -51,7 +60,13 @@ export function installUiShell(
       report({ accountId: 'bob', displayName: 'Bob' });
     },
     signOut: () => {
-      report(null);
+      if (start.deferredSignOut !== true) {
+        report(null);
+        return;
+      }
+      return new Promise<void>((resolve, reject) => {
+        pendingSignOut = { resolve, reject };
+      });
     },
     subscribe: (listener) => {
       listeners.add(listener);
@@ -111,6 +126,17 @@ export function installUiShell(
     signOut: () => {
       report(null);
     },
+    completeSignOut: () => {
+      const pending = pendingSignOut;
+      pendingSignOut = null;
+      report(null);
+      pending?.resolve();
+    },
+    failSignOut: (message) => {
+      const pending = pendingSignOut;
+      pendingSignOut = null;
+      pending?.reject(new Error(message));
+    },
     log: () => [...log],
     dispose: () => {
       shell.dispose();
@@ -125,6 +151,7 @@ function fixturePages(document: Document, log: string[]): readonly UiPageDefinit
     catalogPage(document),
     cardPage(document, log),
     collectionPage(document),
+    redirectPage(document, log),
   ];
 }
 
@@ -156,6 +183,13 @@ function homePage(document: Document, log: string[]): UiPageDefinition {
       const edit = document.createElement('button');
       edit.type = 'button';
       edit.textContent = 'Edit tag';
+      // The page itself navigates, so a journey can prove the shell still honours its context.
+      const go = document.createElement('button');
+      go.type = 'button';
+      go.textContent = 'Go to collection';
+      go.addEventListener('click', () => {
+        context.navigate({ page: 'collection' });
+      });
       const answer = document.createElement('p');
       answer.id = 'home-dialog-answer';
       answer.textContent = 'no dialog';
@@ -171,7 +205,7 @@ function homePage(document: Document, log: string[]): UiPageDefinition {
             answer.textContent = confirmed ? 'confirmed' : 'cancelled';
           });
       });
-      container.append(query, guard, bolt, lead, open, edit, answer, tail);
+      container.append(query, guard, bolt, lead, open, edit, go, answer, tail);
 
       const restored = context.restored?.state ?? null;
       if (restored !== null) {
@@ -220,17 +254,33 @@ function cardPage(document: Document, log: string[]): UiPageDefinition {
       late.id = 'card-late';
       container.append(level, late);
       log.push('card-mounted');
+      const view = container.ownerDocument.defaultView;
       context.signal.addEventListener('abort', () => {
         log.push('card-aborted');
+        // Work a closed page still holds must reach neither the new view nor its resources.
+        view?.setTimeout(() => {
+          late.textContent = 'Card loaded';
+          log.push('card-loaded');
+          context.device.release();
+          log.push('card-device-released');
+          void context.dialogs
+            .confirm({
+              title: 'Card detail',
+              message: 'Detail of the closed card view',
+              confirmLabel: 'Confirm',
+              cancelLabel: 'Cancel',
+            })
+            .then((confirmed) => log.push(`card-dialog:${confirmed}`));
+        }, 150);
       });
-      container.ownerDocument.defaultView?.setTimeout(() => {
-        late.textContent = 'Card loaded';
-        log.push('card-loaded');
-      }, 150);
     },
   };
 }
 
+/**
+ * Collection returns no handle at all, yet the shell still owns its focus and scroll; the page is
+ * long enough and holds a link, so a journey can leave it scrolled and focused and return.
+ */
 function collectionPage(document: Document): UiPageDefinition {
   return {
     page: 'collection',
@@ -238,7 +288,40 @@ function collectionPage(document: Document): UiPageDefinition {
       const marker = document.createElement('p');
       marker.id = 'collection-marker';
       marker.textContent = 'Collection page';
+      const lead = document.createElement('div');
+      lead.style.height = '600px';
+      const open = document.createElement('a');
+      open.id = 'collection-open';
+      open.href = uiHref({ page: 'tags' });
+      open.textContent = 'Open tags';
+      const tail = document.createElement('div');
+      tail.style.height = '3000px';
+      container.append(marker, lead, open, tail);
+    },
+  };
+}
+
+/**
+ * A tag view that presents Home while mounting and still returns its own handle, so a journey can
+ * prove the page that redirected away owns no handle of the view it replaced.
+ */
+function redirectPage(document: Document, log: string[]): UiPageDefinition {
+  return {
+    page: 'tag',
+    mount(container, context) {
+      const marker = document.createElement('p');
+      marker.id = 'tag-marker';
+      marker.textContent = 'Tag view';
       container.append(marker);
+      if (context.view.page !== 'tag' || context.view.tagId !== 'redirect') {
+        return;
+      }
+      log.push('redirect-mounted');
+      context.replace({ page: 'home' });
+      return {
+        capture: () => ({ from: 'redirect' }),
+        dispose: () => log.push('redirect-disposed'),
+      };
     },
   };
 }

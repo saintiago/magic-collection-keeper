@@ -2,11 +2,13 @@
  * Bounded, account-isolated presentation state the UserInterface keeps for history entries
  * (docs/user-interface.md#pages-and-navigation).
  *
- * Navigating away captures the page's own query and selection state beside the scroll offset and
- * the focused element, and puts an opaque token in that history entry. Returning through history
- * reads the token back, so no view content is serialized into the URL or the history entry. Each
- * snapshot belongs to one account: a snapshot is never restored for another account, and the store
- * is cleared when the presented account changes.
+ * A history entry carries an opaque token instead of view content: the shell opens the token when
+ * it presents the entry and saves the page's own query and selection state beside the scroll offset
+ * and the focused element when the user leaves, so returning through history reads that entry's own
+ * state back and no view content is serialized into the URL or the history entry. Each snapshot
+ * belongs to one account: a snapshot is never restored for another account, and the store is
+ * cleared when the presented account changes. A token names the lifetime of the store that opened
+ * it, so a history entry that survives a reload never reads another store's snapshot.
  */
 
 import { UI_LIMITS } from './limits.js';
@@ -29,14 +31,35 @@ export interface UiViewSnapshot {
 
 /** The bounded presentation state the shell keeps for the history entries of one account. */
 export interface UiViewStateStore {
-  /** Keeps one view's state and returns the token to place in that history entry. */
-  save(accountId: string, snapshot: UiViewSnapshot): string;
+  /** Opens the token one presented history entry carries; the entry keeps no state until saved. */
+  open(): string;
+  /** Whether a token belongs to this store's lifetime; another lifetime's tokens never restore. */
+  owns(token: string): boolean;
+  /** Keeps one view's state under the token of the history entry the user is leaving. */
+  save(accountId: string, token: string, snapshot: UiViewSnapshot): void;
   /** State one history entry keeps for the account, or null when it kept none. */
   read(accountId: string, token: string): UiViewSnapshot | null;
   /** Removes every snapshot; the presented account changed or the session ended. */
   clear(): void;
   /** Snapshots currently kept. */
   readonly size: number;
+}
+
+/** Prefix of the opaque per-entry tokens the shell puts in a history entry. */
+const UI_VIEW_TOKEN_PREFIX = 'ui-view-';
+
+let storeSerial = 0;
+
+/**
+ * One alphanumeric lifetime id, distinct for every store the page creates. The delimiter keeps a
+ * token of one lifetime from ever reading as a token of another, so history that survives a reload
+ * shares no token with the new store.
+ */
+function storeLifetime(): string {
+  storeSerial += 1;
+  const stamp = Date.now().toString(36);
+  const noise = Math.random().toString(36).slice(2, 8);
+  return `${stamp}${storeSerial.toString(36)}${noise}`;
 }
 
 /**
@@ -47,19 +70,31 @@ export function createViewStateStore(limit: number = UI_LIMITS.viewStates): UiVi
   if (!Number.isSafeInteger(limit) || limit < 1) {
     throw new TypeError('The view state store requires a positive, finite entry limit.');
   }
+  const prefix = `${UI_VIEW_TOKEN_PREFIX}${storeLifetime()}-`;
   const snapshots = new Map<
     string,
     { readonly accountId: string; readonly view: UiViewSnapshot }
   >();
   let sequence = 0;
+  const owns = (token: string): boolean =>
+    typeof token === 'string' && token.startsWith(prefix) && token.length > prefix.length;
   return {
-    save(accountId, snapshot) {
+    open() {
+      sequence += 1;
+      // Tokens stay opaque and unique inside this store; they never carry view content.
+      return `${prefix}${sequence}`;
+    },
+    owns,
+    save(accountId, token, snapshot) {
       if (typeof accountId !== 'string' || accountId.length === 0) {
         throw new TypeError('A view snapshot belongs to one verified account.');
       }
+      // A token of another store lifetime cannot name the entry that was left, so it keeps nothing.
+      if (!owns(token)) {
+        return;
+      }
       const view = readSnapshot(snapshot);
-      // Tokens stay opaque and unique inside this store; they never carry view content.
-      const token = `ui-view-${++sequence}`;
+      snapshots.delete(token);
       while (snapshots.size >= limit) {
         const oldest = snapshots.keys().next().value;
         if (oldest === undefined) {
@@ -68,7 +103,6 @@ export function createViewStateStore(limit: number = UI_LIMITS.viewStates): UiVi
         snapshots.delete(oldest);
       }
       snapshots.set(token, { accountId, view });
-      return token;
     },
     read(accountId, token) {
       const kept = snapshots.get(token);

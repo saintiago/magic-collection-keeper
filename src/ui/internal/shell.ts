@@ -11,7 +11,7 @@
 
 import type { UserInterfaceCapabilities } from '../../application/index.js';
 
-import { createDialogs } from './dialogs.js';
+import { createDialogs, type UiDialogs } from './dialogs.js';
 import type { UiDevice } from './device.js';
 import { readAccount, type UiAccount, type UiIdentity } from './identity.js';
 import type { UiPageContext, UiPageDefinition, UiPageHandle } from './pages.js';
@@ -76,6 +76,10 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   }
   const browser: Window = candidates;
   const history = browser.history;
+  const previousScrollRestoration = history.scrollRestoration;
+  // The shell owns restoration (docs/user-interface.md#pages-and-navigation): the browser's own
+  // restoration would move the departing page before a traversal can capture its scroll offset.
+  history.scrollRestoration = 'manual';
   const store = createViewStateStore();
   const dialogs = createDialogs(root);
 
@@ -107,6 +111,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   let pageHandle: UiPageHandle | null = null;
   let generation = 0;
   let disposed = false;
+  let signOutPending = false;
   let lastHref = '';
   let lastToken: string | null = null;
 
@@ -140,7 +145,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
       return;
     }
     rememberCurrent();
-    history.pushState({ ...readState(history), uiView: null }, '', uiHref(target));
+    history.pushState({ ...readState(history), uiView: store.open() }, '', uiHref(target));
     render();
   }
 
@@ -149,7 +154,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
       return;
     }
     rememberCurrent();
-    history.replaceState({ ...readState(history), uiView: null }, '', uiHref(target));
+    history.replaceState({ ...readState(history), uiView: store.open() }, '', uiHref(target));
     render();
   }
 
@@ -173,6 +178,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     unsubscribe();
     store.clear();
     releaseDevice();
+    history.scrollRestoration = previousScrollRestoration;
     root.replaceChildren();
   }
 
@@ -201,15 +207,42 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     render();
   }
 
+  /**
+   * Withdraws the private presentation and asks the deployment to sign out. The presented page
+   * stays live underneath: it returns unchanged when identity keeps the verified account, and its
+   * work is aborted and its state cleared only when identity reports the change.
+   */
   function requestSignOut(): void {
+    if (disposed || signOutPending) {
+      return;
+    }
+    signOutPending = true;
+    signOutButton.disabled = true;
+    main.hidden = true;
+    status.textContent = 'Signing out…';
+    void finishSignOut();
+  }
+
+  async function finishSignOut(): Promise<void> {
+    let message: string | null = null;
+    try {
+      await identity.signOut();
+    } catch (cause) {
+      message = readMessage(cause, 'Sign-out failed. Please retry.');
+    }
     if (disposed) {
       return;
     }
-    capabilities.request.endSession();
-    releaseDevice();
-    store.clear();
-    closePage();
-    void runIdentity(() => identity.signOut(), 'Sign-out failed. Please retry.');
+    signOutPending = false;
+    signOutButton.disabled = false;
+    const reported = readAccount(identity.current());
+    if (reported === null || reported.accountId !== account?.accountId) {
+      applyAccount(reported);
+      return;
+    }
+    // Identity still reports the signed-in account, so the page was never closed and is live.
+    main.hidden = false;
+    status.textContent = message ?? '';
   }
 
   function requestSignIn(): void {
@@ -238,8 +271,12 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     const current = account;
     status.textContent = '';
     header.hidden = current === null;
+    main.hidden = false;
     const target = current === null ? null : readUiView(browser.location.href);
     view = target;
+    const token = current === null ? null : entryToken();
+    lastHref = browser.location.href;
+    lastToken = token;
     renderAccountLabel();
     updateNavigation(target?.page ?? null);
     if (current === null) {
@@ -247,20 +284,32 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     } else if (target === null) {
       renderPanel(plainHeading('Page not found'), unknownRouteContent());
     } else {
-      renderPage(current, target);
+      renderPage(current, target, token);
     }
-    lastHref = browser.location.href;
-    lastToken = readToken(history.state);
+  }
+
+  /**
+   * Token of the presented history entry, opened when the entry carries none or one that a previous
+   * page load opened. Every presented entry then owns a token of this store, so leaving it — by a
+   * link or by the browser's own Back and Forward — captures the state of the entry it holds.
+   */
+  function entryToken(): string {
+    const carried = readToken(history.state);
+    if (carried !== null && store.owns(carried)) {
+      return carried;
+    }
+    const token = store.open();
+    history.replaceState({ ...readState(history), uiView: token }, '');
+    return token;
   }
 
   /** Presents one page: its heading, its container and the lifecycle of its implementation. */
-  function renderPage(current: UiAccount, target: UiView): void {
+  function renderPage(current: UiAccount, target: UiView, token: string | null): void {
     const heading = plainHeading(uiViewTitle(target));
     const container = document.createElement('div');
     container.dataset.uiPage = target.page;
     main.replaceChildren(heading, container);
     const currentGeneration = generation;
-    const token = readToken(history.state);
     const restored = token === null ? null : store.read(current.accountId, token);
     const controller = new AbortController();
     pageController = controller;
@@ -268,7 +317,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
       view: target,
       account: current,
       capabilities,
-      device,
+      device: pageDevice(currentGeneration),
       signal: controller.signal,
       restored,
       navigate: (next) => {
@@ -286,9 +335,15 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
           back();
         }
       },
-      dialogs,
+      dialogs: pageDialogs(currentGeneration),
     };
-    pageHandle = pages.get(target.page)?.mount(container, context) ?? null;
+    const handle = pages.get(target.page)?.mount(container, context) ?? null;
+    if (generation !== currentGeneration) {
+      // The page presented another view while mounting; that view owns the shell's handle now.
+      handle?.dispose?.();
+      return;
+    }
+    pageHandle = handle;
     restoreInteraction(heading, restored);
   }
 
@@ -307,6 +362,29 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     const focus = restored.focusId === null ? null : document.getElementById(restored.focusId);
     (focus ?? heading).focus({ preventScroll: true });
     browser.scrollTo(0, restored.scrollY);
+  }
+
+  /** Dialogs of one presented page; a page the shell has left can no longer open one. */
+  function pageDialogs(currentGeneration: number): UiDialogs {
+    return {
+      confirm(options) {
+        if (disposed || generation !== currentGeneration) {
+          return Promise.resolve(false);
+        }
+        return dialogs.confirm(options);
+      },
+    };
+  }
+
+  /** Device capability of one presented page; a page the shell has left can no longer release it. */
+  function pageDevice(currentGeneration: number): UiDevice {
+    return {
+      release() {
+        if (!disposed && generation === currentGeneration) {
+          releaseDevice();
+        }
+      },
+    };
   }
 
   function signedOutHeading(): HTMLHeadingElement {
@@ -356,18 +434,22 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     }
   }
 
-  /** Keeps the state of the presented view in the history entry the user is leaving. */
+  /**
+   * Keeps the state of the presented view in the history entry the user is leaving, under the token
+   * that entry carries — with the page's own state when it keeps one and the shell-owned scroll and
+   * focus otherwise. A browser-driven traversal reaches the shell only after the destination entry
+   * is current, so the departing entry's token, never the destination's, receives the snapshot.
+   */
   function rememberCurrent(): void {
     const current = account;
-    if (current === null || pageHandle === null) {
+    if (current === null || view === null || lastToken === null) {
       return;
     }
-    const token = store.save(current.accountId, {
-      state: pageHandle.capture?.() ?? null,
+    store.save(current.accountId, lastToken, {
+      state: pageHandle?.capture?.() ?? null,
       scrollY: browser.scrollY,
       focusId: document.activeElement?.id ?? null,
     });
-    history.replaceState({ ...readState(history), uiView: token }, '');
   }
 
   /** Closes the presented page: its work is cancelled and its container is left behind. */
@@ -397,6 +479,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     if (browser.location.href === lastHref && readToken(history.state) === lastToken) {
       return;
     }
+    rememberCurrent();
     render();
   }
 
