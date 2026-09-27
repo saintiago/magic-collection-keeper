@@ -160,9 +160,10 @@ distinct, individually selectable copies group by printing for the bulk changes 
 explicit selected identities, and each entry opens the card, printing or copy details it names. The
 card-details page presents the published catalog information of the named level and corrects one
 physical copy's printing and language, finish and condition under the revision it read: a conflict
-or a failed edit keeps the unsaved change for review and retry, a lost response is recovered from
-the copy's recorded state, and a saved outcome is presented only once the change reported it
-committed. The remaining dedicated pages and capture build on that in their own tasks.
+or a failed edit keeps the unsaved change for review and retry. After a lost response, the outcome
+stays unknown while the current copy is read for review and revision-guarded retry; matching
+attributes cannot establish commitment. A saved outcome is presented only once the change reports
+it committed. The remaining dedicated pages and capture build on that in their own tasks.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without

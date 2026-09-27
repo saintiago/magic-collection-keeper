@@ -11,9 +11,9 @@
  * UserCards contract and resolves the printing it references, so a corrected copy is presented with
  * the printing it now carries. The copy level corrects printing and language (the printing the copy
  * references), finish and condition as one change quoted by the revision the page read: a conflict
- * or a failed change keeps the unsaved draft for review and retry, a lost response is recovered from
- * the copy's recorded state, and a saved outcome is presented only after the change reported it
- * committed (docs/user-interface.md#browsing-and-organization). The draft is page state the page
+ * or a failed change keeps the unsaved draft for review and retry. After a lost response the current
+ * copy is read for review while the outcome stays unknown; a saved outcome requires the change's
+ * confirmed commitment (docs/user-interface.md#browsing-and-organization). The draft is page state the page
  * keeps for its history entry, and a value the draft names stays presented while its catalog data is
  * still unavailable: the controls never replace the user's intended printing, language or finish
  * merely because the record that names it has not loaded. Every provider value renders as text.

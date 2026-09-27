@@ -5,11 +5,9 @@
  * The collection and card-details views correct physical copies through the private UserCards
  * contract Application supplies. One correction quotes the revision the view read, so a copy that
  * changed meanwhile conflicts instead of being overwritten, and a correction that cannot be
- * confirmed — a lost response, a busy service or a cancellation after dispatch — is recovered
- * from the copy's recorded state instead of being reported as saved or failed. Observing the
- * copy's attributes alone does not establish the operation's outcome, so the recovery presents the
- * change as committed only when the recorded state carries the requested attributes at a revision
- * the correction advanced; every other observation stays unknown, never a definite failure
+ * confirmed — a lost response, a busy service or a cancellation after dispatch — stays unknown.
+ * Recovery reads the current copy for review, but neither its attributes nor its revision identify
+ * which operation changed it. Only the correction's successful response establishes commitment
  * (docs/application.md#construction-and-request-boundary). A bulk change names every selected copy
  * explicitly, reads each copy's revision itself and reports the counts it actually committed; a
  * partial change is never reported as success
@@ -93,8 +91,8 @@ export interface UiCopyCorrectionOutcome {
 
 /**
  * Corrects one copy and reports what the component committed. A revision conflict and a definite
- * failure are reported as such; a response that was lost on its way back is recovered from the
- * copy's recorded state, whose revision the committed change advanced.
+ * failure are reported as such; a lost response leaves the outcome unknown while a recovery read
+ * supplies the current copy for review and revision-guarded retry.
  */
 export async function correctCopy(
   access: UiCopyAccess,
@@ -119,26 +117,23 @@ export async function correctCopy(
         copy: null,
       };
     }
-    return recoverCorrection(access, input, signal);
+    return recoverCorrection(access, input.copyId, signal);
   }
 }
 
 /**
- * The recorded state of the copy one uncertain correction addressed. The read observes the copy;
- * it does not establish the operation's outcome, so only a recorded state that carries the
- * requested attributes at a revision the correction advanced beyond the one it quoted counts as
- * the committed change. Every other observation — an unchanged revision, other attributes or an
- * unreadable copy — stays unknown: the operation may still commit, and the revision-guarded retry
- * remains available (docs/application.md#construction-and-request-boundary).
+ * Observes the copy after an uncertain correction without inferring the operation's outcome.
+ * Another operation can advance the revision, produce matching attributes or remove the copy.
+ * The read supplies current state for review; retry still quotes a revision.
  */
 async function recoverCorrection(
   access: UiCopyAccess,
-  input: UiCopyCorrection,
+  copyId: string,
   signal?: AbortSignal,
 ): Promise<UiCopyCorrectionOutcome> {
   let copy: PhysicalCopy | null;
   try {
-    const read = await access.read([input.copyId], signal);
+    const read = await access.read([copyId], signal);
     copy = read.copies[0] ?? null;
   } catch {
     return {
@@ -147,16 +142,12 @@ async function recoverCorrection(
       copy: null,
     };
   }
-  if (copy === null) {
-    // The read answered: the account holds no such copy any more, so nothing is left to retry.
-    return { status: 'failed', message: 'This copy is no longer in the collection.', copy: null };
-  }
-  if (copy.revision > input.expectedRevision && matchesCorrection(copy, input)) {
-    return { status: 'committed', message: null, copy };
-  }
   return {
     status: 'unknown',
-    message: 'The outcome is unknown. Reload the copy before retrying.',
+    message:
+      copy === null
+        ? 'The outcome is unknown. This copy is no longer in the collection.'
+        : 'The outcome is unknown. Reload the copy before retrying.',
     copy,
   };
 }
@@ -302,20 +293,11 @@ async function readCopies(
   return copies;
 }
 
-/** Whether one recovered copy carries the attributes the change requested. */
-function matchesCorrection(copy: PhysicalCopy, input: UiCopyCorrection): boolean {
-  return (
-    copy.printingId === input.printingId &&
-    copy.finish === input.finish &&
-    copy.condition === input.condition
-  );
-}
-
 /**
  * Failure codes that establish the change was not applied: the request was rejected before it
  * could commit, so the view reports a definite failure instead of recovering a recorded outcome.
  * A cancellation, a timeout, a busy service, an unavailable service and every other outcome after
- * dispatch leave the change's commitment open and are recovered from the copy's recorded state.
+ * dispatch leave the change's commitment open; reading the copy cannot resolve that uncertainty.
  */
 function isDefiniteFailure(code: string): boolean {
   return (

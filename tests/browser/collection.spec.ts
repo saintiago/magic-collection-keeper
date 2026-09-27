@@ -667,7 +667,9 @@ test('a conflict keeps the unsaved change for review and a retry saves it', asyn
   expect(errors).toEqual([]);
 });
 
-test('a lost response is recovered from the copy the page reads back', async ({ page }) => {
+test('a lost response stays unknown while current attributes and a guarded retry remain available', async ({
+  page,
+}) => {
   const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
   await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
   await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
@@ -683,9 +685,23 @@ test('a lost response is recovered from the copy the page reads back', async ({ 
 
   const recovered = await copyRead(page, 1);
   await settleCopyRead(page, recovered.id, [storedCopy({ finish: 'foil', revision: 5 })]);
-  await expect(page.locator('#copy-status')).toHaveText('Saved.');
+  await expect(page.locator('#copy-status')).toHaveText(
+    'The outcome is unknown. Reload the copy before retrying.',
+  );
   await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · foil · near mint');
+  await expect(page.locator('#copy-finish-choice')).toHaveValue('foil');
   await expect(page.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+
+  await page.getByRole('button', { name: 'Reload copy' }).click();
+  await settleCopyRead(page, (await copyRead(page, 2)).id, [storedCopy({ revision: 6 })]);
+  await expect(page.locator('#copy-status')).toHaveText('Reloaded the copy.');
+  await expect(page.locator('#copy-finish-choice')).toHaveValue('foil');
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  const retry = await correction(page, 1);
+  expect(retry.input.expectedRevision).toBe(6);
+  expect(retry.input.finish).toBe('foil');
+  await settleCorrection(page, retry.id, [storedCopy({ finish: 'foil', revision: 7 })]);
+  await expect(page.locator('#copy-status')).toHaveText('Saved.');
   expect(errors).toEqual([]);
 });
 
@@ -744,38 +760,51 @@ test('bulk changes act on the explicit selected copy identities', async ({ page 
   expect(errors).toEqual([]);
 });
 
-test('a partially applied bulk change is never reported as saved', async ({ page }) => {
-  const errors = await openCollection(page, '#/collection?level=copy');
-  const request = await searchRequest(page);
-  await settleSearch(
-    page,
-    request.id,
-    searchPage([copyEntry('copy-1', 'printing-1'), copyEntry('copy-2', 'printing-1')]),
-  );
-  await page.locator('[data-ui-group-select]').check();
-  await page.getByLabel('Condition to apply').selectOption('DMG');
-  await page.getByRole('button', { name: 'Apply condition' }).click();
+for (const failure of ['conflict', 'unavailable'] as const) {
+  test(`a bulk change with a ${failure} response is never reported as saved`, async ({ page }) => {
+    const errors = await openCollection(page, '#/collection?level=copy');
+    const request = await searchRequest(page);
+    await settleSearch(
+      page,
+      request.id,
+      searchPage([copyEntry('copy-1', 'printing-1'), copyEntry('copy-2', 'printing-1')]),
+    );
+    await page.locator('[data-ui-group-select]').check();
+    await page.getByLabel('Condition to apply').selectOption('DMG');
+    await page.getByRole('button', { name: 'Apply condition' }).click();
 
-  const revisionRead = await copyRead(page);
-  await settleCopyRead(page, revisionRead.id, [
-    storedCopy({ copyId: 'copy-1', revision: 2 }),
-    storedCopy({ copyId: 'copy-2', revision: 7 }),
-  ]);
-  const first = await correction(page);
-  await settleCorrection(page, first.id, [storedCopy({ copyId: 'copy-1', condition: 'DMG' })]);
-  const second = await correction(page, 1);
-  await failCorrection(page, second.id, {
-    code: 'conflict',
-    message: 'The copy changed after this revision; reload it before correcting it.',
+    const revisionRead = await copyRead(page);
+    await settleCopyRead(page, revisionRead.id, [
+      storedCopy({ copyId: 'copy-1', revision: 2 }),
+      storedCopy({ copyId: 'copy-2', revision: 7 }),
+    ]);
+    const first = await correction(page);
+    await settleCorrection(page, first.id, [storedCopy({ copyId: 'copy-1', condition: 'DMG' })]);
+    const second = await correction(page, 1);
+    await failCorrection(page, second.id, {
+      code: failure,
+      message: failure === 'conflict' ? 'The copy changed.' : 'The response was lost.',
+    });
+
+    const outcome = page.locator('[data-ui-outcome]');
+    if (failure === 'unavailable') {
+      await settleCopyRead(page, (await copyRead(page, 1)).id, [
+        storedCopy({ copyId: 'copy-2', condition: 'DMG', revision: 8 }),
+      ]);
+      await expect(outcome).toHaveAttribute('data-ui-outcome-status', 'unknown');
+      await expect(outcome).toHaveText(
+        '1 of 2 copies have an unknown outcome. Reload them before retrying.',
+      );
+    } else {
+      await expect(outcome).toHaveAttribute('data-ui-outcome-status', 'conflict');
+      await expect(outcome).toHaveText(
+        '1 of 2 copies changed since they were read. Reload and review the change.',
+      );
+    }
+    await expect(page.locator('[data-ui-group-select]')).toBeChecked();
+    expect(errors).toEqual([]);
   });
-
-  const outcome = page.locator('[data-ui-outcome]');
-  await expect(outcome).toHaveAttribute('data-ui-outcome-status', 'conflict');
-  await expect(outcome).toHaveText(
-    '1 of 2 copies changed since they were read. Reload and review the change.',
-  );
-  expect(errors).toEqual([]);
-});
+}
 
 test('leaving and returning keeps the collection selection and the unsaved copy draft', async ({
   page,
