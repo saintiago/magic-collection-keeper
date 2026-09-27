@@ -48,6 +48,7 @@ record dependencies. This index groups tasks by subject and does not prescribe e
 - [KAN-19: Build the UI shell, identity and history navigation](https://malton-family.atlassian.net/browse/KAN-19)
 - [KAN-20: Build bounded asynchronous CardList and card tools](https://malton-family.atlassian.net/browse/KAN-20)
 - [KAN-34: Separate navigation history from CardList state and loading](https://malton-family.atlassian.net/browse/KAN-34)
+- [KAN-36: Own list read recovery inside CardList](https://malton-family.atlassian.net/browse/KAN-36)
 - [KAN-21: Build Home and catalog/search browsing](https://malton-family.atlassian.net/browse/KAN-21)
 - [KAN-22: Build collection and card/printing/copy details](https://malton-family.atlassian.net/browse/KAN-22)
 - [KAN-23: Build tags, wishlist, deck and location workflows](https://malton-family.atlassian.net/browse/KAN-23)

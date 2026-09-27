@@ -128,6 +128,10 @@ public settings and diagnostic failures contain no secrets or private record con
 - **CardList:** control response ordering and independent fragment failure/retry. Use a large
   source to verify bounded requests/rendering, stable selection during enrichment and refinement,
   empty versus failed results, and independent state in two lists.
+- **List read recovery:** verify temporary failures retry the same position, while invalidated
+  continuations restart the sequence through CardList. Cover failed restarts, retained-state
+  restoration, late responses and preservation of selection and drafts. Exercise source bindings
+  against actual provider failure semantics; a page must not need its own restart callback.
 - **State ownership:** exercise navigation with page-owned state without depending on its shape,
   and list capture/restoration through its public contract with available and delayed source data.
   Cover repeated interruption during initial and subsequent loading, edits during restoration,
