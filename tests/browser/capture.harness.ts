@@ -94,7 +94,7 @@ export interface UiCaptureReading {
   readonly titleCorroborated?: boolean;
   readonly provisional?: boolean;
   /** A later comparison of the same attempt, delivered before the attempt completes. */
-  readonly later?: Omit<UiCaptureReading, 'later'>;
+  readonly later?: Omit<UiCaptureReading, 'later'> | Omit<UiCaptureReading, 'later'>[];
 }
 
 /** Synthetic scenes the camera can present; each paints a distinct frame. */
@@ -498,8 +498,21 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
           return Promise.resolve(early);
         }
         attempt.onReading?.(early);
+        const comparisons = Array.isArray(script.later) ? [...script.later] : [script.later];
         return new Promise<RecognitionEngineOutcome>((resolve) => {
-          laterCompletions.push(() => resolve(outcome(script.later!)));
+          const deliver = (): void => {
+            const reading = comparisons.shift();
+            if (reading === undefined) {
+              throw new Error('A scripted comparison is required.');
+            }
+            if (comparisons.length === 0) {
+              resolve(outcome(reading));
+            } else {
+              attempt.onReading?.(outcome(reading));
+              laterCompletions.push(deliver);
+            }
+          };
+          laterCompletions.push(deliver);
         });
       },
       dispose() {

@@ -20,12 +20,22 @@ import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 
+import { createCatalog } from '../../src/catalog/index.js';
 import { RECOGNITION_LIMITS } from '../../src/recognition/index.js';
-import type { ImportEntry, ImportSession } from '../../src/usercards/index.js';
+import {
+  createUserCards,
+  type AttachImportCandidatesInput,
+  type ImportEntry,
+  type ImportSession,
+  type StageCaptureInput,
+} from '../../src/usercards/index.js';
+import { publishCatalog } from '../support/catalog-database.js';
+import { createUserCardsTestDatabase } from '../support/usercards-database.js';
 import type {
   UiCaptureControl,
   UiCaptureEntriesRequest,
   UiCaptureRequest,
+  UiCaptureReading,
   UiCaptureSessionsRequest,
 } from './capture.harness.js';
 
@@ -745,5 +755,364 @@ test('geometry decides admission independently of the identity the engine report
     'idle',
   );
   expect(await control(page, 'captures')).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('repeated lost responses retain the capture and its final alternatives through completion', async ({
+  page,
+}) => {
+  const database = await createUserCardsTestDatabase();
+  try {
+    await publishCatalog(database, {
+      revisionId: 'capture-recovery',
+      cards: [
+        { cardId: 'card-bolt', name: 'Lightning Bolt' },
+        { cardId: 'card-ring', name: 'Sol Ring' },
+      ],
+      printings: ['bolt', 'ring'].map((name) => ({
+        printingId: `printing-${name}`,
+        cardId: `card-${name}`,
+        edition: 'TST',
+        collectorNumber: name === 'bolt' ? '149' : '264',
+        language: 'en',
+        finishes: ['nonfoil', 'foil'],
+        physical: true,
+      })),
+    });
+    const userCards = createUserCards({
+      sql: database.sql,
+      catalog: createCatalog({ sql: database.sql }),
+    });
+    const account = { accountId: 'alice' };
+    const errors = await openCapture(page);
+    await settleSessions(page, 0, []);
+    await control(page, 'scriptReading', {
+      candidates: [hostName('bolt')],
+      printingId: 'printing-bolt',
+      provisional: true,
+      later: { candidates: [hostName('bolt'), hostName('ring')], printingId: 'printing-bolt' },
+    });
+    await page.click('#import-camera-start');
+    const first = await requested<StageCaptureInput>(page, 'captures');
+    const admitted = await userCards.stageCaptureObservation(account, first.arguments);
+    expect(admitted.outcome).toBe('admitted');
+    if (admitted.entry === null) {
+      throw new Error('Expected an admitted entry.');
+    }
+    const reviewed = await userCards.reviewImportEntry(account, {
+      entryId: admitted.entry.entryId,
+      expectedRevision: admitted.entry.revision,
+      printingId: 'printing-ring',
+      finish: 'foil',
+      condition: 'LP',
+      quantity: 3,
+    });
+    await control(page, 'fail', first.id, { code: 'unavailable', message: 'Response lost.' });
+    await expect(page.locator('#import-camera-status')).toContainText('staging outcome is unknown');
+    await control(page, 'completeLater');
+    const finalReplay = await requested<StageCaptureInput>(page, 'captures', 1);
+    expect(finalReplay.arguments).toEqual(first.arguments);
+    expect((await userCards.stageCaptureObservation(account, finalReplay.arguments)).replayed).toBe(
+      true,
+    );
+    await control(page, 'fail', finalReplay.id, {
+      code: 'unavailable',
+      message: 'Replay response lost.',
+    });
+    const recover = page.getByRole('button', { name: 'Recover capture' });
+    await expect(recover).toBeEnabled();
+
+    // A changed camera scene cannot replace the outstanding capture with a new identity.
+    await page.clock.install();
+    await control(page, 'show', 'empty');
+    await page.clock.runFor(2000);
+    expect(await control<readonly unknown[]>(page, 'recognitions')).toHaveLength(1);
+    expect(await control<readonly unknown[]>(page, 'captures')).toHaveLength(2);
+    await recover.focus();
+    await page.keyboard.press('Enter');
+    const rejectedReplay = await requested<StageCaptureInput>(page, 'captures', 2);
+    expect(rejectedReplay.arguments).toEqual(first.arguments);
+    // A definite rejection of a retry still says nothing about the first committed request.
+    await control(page, 'fail', rejectedReplay.id, {
+      code: 'conflict',
+      message: 'Retry rejected.',
+    });
+    await expect(page.locator('#import-camera-status')).toContainText('staging outcome is unknown');
+    await recover.tap();
+    const replay = await requested<StageCaptureInput>(page, 'captures', 3);
+    expect(replay.arguments).toEqual(first.arguments);
+    const recovered = await userCards.stageCaptureObservation(account, replay.arguments);
+    expect(recovered.entry?.entryId).toBe(admitted.entry?.entryId);
+    await control(page, 'settleCapture', replay.id, recovered);
+    const attached = await requested<AttachImportCandidatesInput>(page, 'attachments');
+    expect(attached.arguments.entryId).toBe(admitted.entry?.entryId);
+    expect(attached.arguments.candidates?.map((candidate) => candidate.printingId)).toEqual([
+      'printing-bolt',
+      'printing-ring',
+    ]);
+    const stored = await userCards.attachImportCandidates(account, attached.arguments);
+    await control(page, 'fail', attached.id, {
+      code: 'unavailable',
+      message: 'Attachment response lost.',
+    });
+    await expect(page.locator('#import-camera-status')).toContainText(
+      'later alternatives are not yet verified',
+    );
+    await recover.tap();
+    const attachmentReplay = await requested<AttachImportCandidatesInput>(page, 'attachments', 1);
+    expect(attachmentReplay.arguments).toEqual(attached.arguments);
+    const repeated = await userCards.attachImportCandidates(account, attachmentReplay.arguments);
+    expect(repeated.entry).toEqual(stored.entry);
+    await control(page, 'settleAttach', attachmentReplay.id, repeated);
+    await expect(recover).toBeHidden();
+    await expect(page.locator('#import-camera-status')).toHaveAttribute(
+      'data-ui-capture-cue',
+      'accepted',
+    );
+    const entries = await userCards.listImportEntries(account, {
+      sessionId: first.arguments.sessionId,
+    });
+    expect(entries.entries).toHaveLength(1);
+    expect(entries.entries[0]?.candidates).toEqual(
+      expect.arrayContaining([...(attached.arguments.candidates ?? [])]),
+    );
+    expect(entries.entries[0]).toMatchObject({
+      printingId: reviewed.entry.printingId,
+      finish: 'foil',
+      condition: 'LP',
+      quantity: 3,
+    });
+    expect(errors).toEqual([]);
+  } finally {
+    await database.close();
+  }
+});
+
+const unusableComparisons: { name: string; reading: UiCaptureReading }[] = [
+  { name: 'unresolved identity', reading: { status: 'unknown', cardPresence: 'single' } },
+  { name: 'missing geometry', reading: { candidates: [hostName('ring')], cardPresence: null } },
+  { name: 'multiple cards', reading: { candidates: [hostName('ring')], cardPresence: 'multiple' } },
+  { name: 'empty frame', reading: { status: 'unknown', cardPresence: 'none' } },
+  {
+    name: 'ambiguous geometry',
+    reading: { candidates: [hostName('ring')], cardPresence: 'ambiguous' },
+  },
+];
+for (const { name, reading } of unusableComparisons) {
+  test(`an unknown staging outcome survives a final comparison with ${name}`, async ({ page }) => {
+    const errors = await openCapture(page);
+    await settleSessions(page, 0, []);
+    await control(page, 'scriptReading', {
+      candidates: [hostName('bolt')],
+      printingId: 'printing-bolt',
+      provisional: true,
+      later: reading,
+    });
+    await page.click('#import-camera-start');
+    const first = await requested<StageCaptureInput>(page, 'captures');
+    await control(page, 'fail', first.id, { code: 'unavailable', message: 'Response lost.' });
+    await control(page, 'completeLater');
+    const replay = await requested<StageCaptureInput>(page, 'captures', 1);
+    expect(replay.arguments).toEqual(first.arguments);
+    await control(page, 'fail', replay.id, {
+      code: 'unavailable',
+      message: 'Replay response lost.',
+    });
+    await expect(page.locator('#import-camera-status')).toContainText('staging outcome is unknown');
+    await expect(page.locator('#import-camera-status')).not.toContainText('no card was counted');
+    await page.getByRole('button', { name: 'Recover capture' }).click();
+    const recovered = await requested<StageCaptureInput>(page, 'captures', 2);
+    expect(recovered.arguments).toEqual(first.arguments);
+    await control(page, 'settleCapture', recovered.id, {
+      outcome: 'admitted',
+      replayed: true,
+      session: captureSession(),
+      entry: captureEntry(),
+    });
+    await expect(page.locator('#import-camera-status')).toHaveText(
+      'The earlier capture was already accepted into review.',
+    );
+    expect(await control(page, 'attachments')).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const outcome of ['admitted', 'suppressed'] as const) {
+  test(`a capture without later readings can recover its ${outcome} decision after camera stop`, async ({
+    page,
+  }) => {
+    const errors = await openCapture(page);
+    await settleSessions(page, 0, []);
+    await control(page, 'scriptReading', {
+      candidates: [hostName('bolt')],
+      printingId: 'printing-bolt',
+    });
+    await page.click('#import-camera-start');
+    const first = await requested<StageCaptureInput>(page, 'captures');
+    // Stop while the write is still in flight; releasing the camera must not discard that write.
+    await page.click('#import-camera-stop');
+    await expect(page.getByRole('button', { name: 'Recover capture' })).toBeDisabled();
+    expect((await control<{ liveTracks: number }>(page, 'camera')).liveTracks).toBe(0);
+    await control(page, 'fail', first.id, { code: 'unavailable', message: 'Response lost.' });
+    await expect(page.locator('#import-camera-status')).toContainText('staging outcome is unknown');
+    await expect(page.locator('#import-camera-start')).toBeDisabled();
+    await page.getByRole('button', { name: 'Recover capture' }).click();
+    const replay = await requested<StageCaptureInput>(page, 'captures', 1);
+    expect(replay.arguments).toEqual(first.arguments);
+    await control(page, 'settleCapture', replay.id, {
+      outcome,
+      replayed: true,
+      session: captureSession(),
+      entry: outcome === 'admitted' ? captureEntry() : null,
+    });
+    await expect(page.getByRole('button', { name: 'Recover capture' })).toBeHidden();
+    await expect(page.locator('#import-camera-start')).toBeEnabled();
+    await expect(page.locator('#import-camera-status')).toHaveAttribute(
+      'data-ui-capture-cue',
+      outcome === 'admitted' ? 'accepted' : 'repeat',
+    );
+    expect(await control(page, 'attachments')).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+}
+
+test('sign-out cancels capture recovery and prevents a late replay from attaching alternatives', async ({
+  page,
+}) => {
+  const errors = await openCapture(page);
+  await settleSessions(page, 0, []);
+  await control(page, 'scriptReading', {
+    candidates: [hostName('bolt')],
+    printingId: 'printing-bolt',
+    provisional: true,
+    later: { candidates: [hostName('ring')], printingId: 'printing-ring' },
+  });
+  await page.click('#import-camera-start');
+  const first = await requested<StageCaptureInput>(page, 'captures');
+  await control(page, 'fail', first.id, { code: 'unavailable', message: 'Response lost.' });
+  await control(page, 'completeLater');
+  const replay = await requested<StageCaptureInput>(page, 'captures', 1);
+  await control(page, 'signOut');
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  const requests = await control<readonly UiCaptureRequest<StageCaptureInput>[]>(page, 'captures');
+  expect(requests[1]?.aborted).toBe(true);
+  await control(page, 'settleCapture', replay.id, {
+    outcome: 'admitted',
+    replayed: true,
+    session: captureSession(),
+    entry: captureEntry(),
+  });
+  expect(await control(page, 'attachments')).toEqual([]);
+  expect(await control<readonly unknown[]>(page, 'sessions')).toHaveLength(2);
+  expect(errors).toEqual([]);
+});
+
+test('a definite first attachment rejection does not leave capture waiting for recovery', async ({
+  page,
+}) => {
+  const errors = await openCapture(page);
+  await settleSessions(page, 0, []);
+  await control(page, 'scriptReading', {
+    candidates: [hostName('bolt')],
+    printingId: 'printing-bolt',
+    provisional: true,
+    later: { candidates: [hostName('ring')], printingId: 'printing-ring' },
+  });
+  await page.click('#import-camera-start');
+  const first = await requested<StageCaptureInput>(page, 'captures');
+  await control(page, 'settleCapture', first.id, {
+    outcome: 'admitted',
+    replayed: false,
+    session: captureSession(),
+    entry: captureEntry(),
+  });
+  await control(page, 'completeLater');
+  const attachment = await requested<AttachImportCandidatesInput>(page, 'attachments');
+  await control(page, 'fail', attachment.id, {
+    code: 'invalid-request',
+    message: 'No more alternatives fit in this entry.',
+  });
+  await expect(page.locator('#import-camera-status')).toHaveText(
+    'No more alternatives fit in this entry.',
+  );
+  await expect(page.getByRole('button', { name: 'Recover capture' })).toBeHidden();
+  await expect(page.locator('#import-camera-status')).toHaveAttribute(
+    'data-ui-capture-cue',
+    'accepted',
+  );
+  await page.click('#import-camera-stop');
+  await expect(page.locator('#import-camera-start')).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
+test('all comparisons accumulated during unknown staging attach in order after recovery', async ({
+  page,
+}) => {
+  const errors = await openCapture(page);
+  await settleSessions(page, 0, []);
+  await control(page, 'scriptReading', {
+    candidates: [hostName('bolt')],
+    printingId: 'printing-bolt',
+    provisional: true,
+    later: [
+      { candidates: [hostName('ring')], printingId: 'printing-ring', provisional: true },
+      { candidates: [hostName('bolt'), hostName('ring')], printingId: 'printing-bolt' },
+    ],
+  });
+  await page.click('#import-camera-start');
+  const first = await requested<StageCaptureInput>(page, 'captures');
+  await control(page, 'fail', first.id, { code: 'unavailable', message: 'Response lost.' });
+  for (const index of [1, 2]) {
+    await control(page, 'completeLater');
+    const replay = await requested<StageCaptureInput>(page, 'captures', index);
+    expect(replay.arguments).toEqual(first.arguments);
+    await control(page, 'fail', replay.id, {
+      code: 'unavailable',
+      message: 'Replay response lost.',
+    });
+  }
+  await page.getByRole('button', { name: 'Recover capture' }).click();
+  const replay = await requested<StageCaptureInput>(page, 'captures', 3);
+  expect(replay.arguments).toEqual(first.arguments);
+  await control(page, 'settleCapture', replay.id, {
+    outcome: 'admitted',
+    replayed: true,
+    session: captureSession(),
+    entry: captureEntry(),
+  });
+  const earlier = await requested<AttachImportCandidatesInput>(page, 'attachments');
+  expect(earlier.arguments.candidates).toEqual([
+    { printingId: 'printing-ring', provider: 'recognition', evidence: 'title-evidence' },
+  ]);
+  await control(page, 'fail', earlier.id, {
+    code: 'unavailable',
+    message: 'Attachment response lost.',
+  });
+  await page.getByRole('button', { name: 'Recover capture' }).click();
+  const rejected = await requested<AttachImportCandidatesInput>(page, 'attachments', 1);
+  expect(rejected.arguments).toEqual(earlier.arguments);
+  await control(page, 'fail', rejected.id, { code: 'conflict', message: 'Retry rejected.' });
+  await expect(page.locator('#import-camera-status')).toContainText(
+    'later alternatives are not yet verified',
+  );
+  await page.getByRole('button', { name: 'Recover capture' }).click();
+  const repeated = await requested<AttachImportCandidatesInput>(page, 'attachments', 2);
+  expect(repeated.arguments).toEqual(earlier.arguments);
+  await control(page, 'settleAttach', repeated.id, {
+    session: captureSession(),
+    entry: captureEntry(),
+  });
+  const final = await requested<AttachImportCandidatesInput>(page, 'attachments', 3);
+  expect(final.arguments.entryId).toBe('capture-1');
+  expect(final.arguments.candidates).toEqual([
+    { printingId: 'printing-bolt', provider: 'recognition', evidence: 'title-evidence' },
+    { printingId: 'printing-ring', provider: 'recognition', evidence: 'engine-ranking' },
+  ]);
+  await control(page, 'settleAttach', final.id, {
+    session: captureSession(),
+    entry: captureEntry(),
+  });
+  await expect(page.getByRole('button', { name: 'Recover capture' })).toBeHidden();
+  expect(await control<readonly unknown[]>(page, 'captures')).toHaveLength(4);
   expect(errors).toEqual([]);
 });

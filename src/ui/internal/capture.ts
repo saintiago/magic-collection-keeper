@@ -16,6 +16,8 @@
  * comparison that finds no usable identity never retracts an accepted capture. An observation
  * whose staging response was lost stays retained and is recovered by replaying it identically, so
  * the provider returns its recorded decision instead of the same capture staging changed content.
+ * Recovery retains late alternatives and pauses new attempts until the writes resolve; its control
+ * remains available after Recognition completes or the camera stops.
  * The session releases the camera and the Recognition session when it stops, and the page disposes
  * it when the view closes, so sign-out leaves no private capture state or outstanding work behind.
  */
@@ -55,6 +57,10 @@ const uiCaptureNameLength = 120;
 /** Status text of an attempt whose frame reported no usable identity to stage. */
 const captureUnresolved =
   'The card could not be identified. Hold it still to retry; no card was counted.';
+
+/** A lost staging response does not establish whether the capture was admitted. */
+const captureStagingUnknown =
+  'The staging outcome is unknown. The capture may be in review; use Recover capture to check it.';
 
 /** Status text of a reading whose frame never established the geometry that admits a capture. */
 const captureGeometryMissing =
@@ -122,6 +128,8 @@ interface UiCaptureAttempt {
    * the identical replay of this observation is what recovers a lost staging outcome.
    */
   staging: StageCaptureInput | null;
+  /** Usable later readings, retained until their alternatives are attached to the admitted entry. */
+  alternatives: { readonly reading: RecognitionReading; uncertain: boolean }[];
 }
 
 /** The recognition alternatives of one reading as the review stores them. */
@@ -199,9 +207,11 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
   const startButton = captureButton(document, 'import-camera-start', 'Start camera');
   const stopButton = captureButton(document, 'import-camera-stop', 'Stop camera');
   stopButton.hidden = true;
+  const recoverButton = captureButton(document, 'import-camera-recover', 'Recover capture');
+  recoverButton.hidden = true;
   const element = document.createElement('section');
   element.id = 'import-capture';
-  element.append(heading, status, preview, startButton, stopButton);
+  element.append(heading, status, preview, startButton, stopButton, recoverButton);
 
   let camera: UiCamera | null = null;
   let recognition: Recognition<HTMLCanvasElement> | null = null;
@@ -218,6 +228,10 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
   let timer: number | null = null;
   let analysis: HTMLCanvasElement | null = null;
   let current: UiCaptureAttempt | null = null;
+  // A submitted write belongs to the view, not to the camera or Recognition lifetime. New
+  // attempts wait until it is resolved; stopping the camera still leaves explicit recovery.
+  let pending: UiCaptureAttempt | null = null;
+  let saving = false;
 
   if (typeof device.openCamera === 'function') {
     say('Start the camera to capture cards hands-free.', null);
@@ -240,14 +254,28 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
   });
   stopButton.addEventListener('click', () => {
     stopCapture();
-    say('Capture stopped. Start the camera to scan more cards.', null);
+    if (pending === null) {
+      say('Capture stopped. Start the camera to scan more cards.', null);
+    }
+  });
+
+  recoverButton.addEventListener('click', () => {
+    if (pending !== null && !busy && !saving && !closed) {
+      void saveCapture(pending);
+    }
   });
 
   return { element, stop: stopCapture, dispose: dispose };
 
+  function paintRecovery(): void {
+    recoverButton.hidden = pending === null;
+    recoverButton.disabled = busy || saving;
+    startButton.disabled = starting || pending !== null;
+  }
+
   /** Starts the capture session: camera permission, then the hands-free capture loop. */
   async function startCapture(): Promise<void> {
-    if (running || starting || closed) {
+    if (running || starting || closed || pending !== null) {
       return;
     }
     const open = device.openCamera;
@@ -320,7 +348,9 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
     prepared = false;
     preparing = null;
     current = null;
-    admission = createCaptureAdmission();
+    if (pending === null) {
+      admission = createCaptureAdmission();
+    }
     clearTimer();
     session?.abort();
     if (scanner !== null && held !== null) {
@@ -342,6 +372,7 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
     startButton.hidden = false;
     startButton.disabled = false;
     stopButton.hidden = true;
+    paintRecovery();
   }
 
   function dispose(): void {
@@ -400,7 +431,7 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
     if (signature !== null) {
       admission.observe(signature, now);
     }
-    if (!busy && admission.ready(now)) {
+    if (!busy && pending === null && admission.ready(now)) {
       void attempt(now);
     }
     schedule();
@@ -439,6 +470,7 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       staged: false,
       entryId: null,
       staging: null,
+      alternatives: [],
     };
     current = record;
     const frame = readFrame();
@@ -478,7 +510,7 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       await started.completion;
       await handled;
     } catch (cause) {
-      if (!closed && current === record) {
+      if (!closed && current === record && pending !== record) {
         settle(
           record,
           'unavailable',
@@ -489,6 +521,7 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       if (current === record) {
         busy = false;
       }
+      paintRecovery();
     }
   }
 
@@ -509,6 +542,25 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       return;
     }
     const presence = reading.evidence.cardPresence;
+    const observation =
+      presence === 'single'
+        ? uiCaptureObservation(record.sessionId, record.captureId, reading)
+        : null;
+    if (record.staging !== null) {
+      // Keep every usable comparison before replaying: that response may be lost too. Even an
+      // unusable comparison must recover the prior write before it can report any admission.
+      if (observation !== null) {
+        record.alternatives.push({ reading, uncertain: false });
+      }
+      await saveCapture(record);
+      if (closed || !running || current !== record || pending === record || observation !== null) {
+        return;
+      }
+      // A recorded suppression/unresolved outcome has no entry for this comparison to explain.
+      if (record.entryId === null) {
+        return;
+      }
+    }
     if (presence !== 'single') {
       if (record.entryId !== null) {
         // The review already holds this capture's entry, so the later comparison explains its own
@@ -524,7 +576,6 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       settle(record, 'guidance', captureGeometryGuidance(presence));
       return;
     }
-    const observation = uiCaptureObservation(record.sessionId, record.captureId, reading);
     if (observation === null) {
       if (record.entryId !== null) {
         say(lateMessage(reading), null);
@@ -534,76 +585,111 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       return;
     }
     if (!record.staged) {
-      // The observation the attempt submits is retained until the provider reports its decision, so
-      // a lost outcome is recovered through an identical replay instead of the same capture
-      // identity staging changed content
-      // (docs/application.md#construction-and-request-boundary).
-      const submitted = record.staging ?? observation;
-      const commit = await stageCaptureObservation(access, submitted, controller?.signal);
-      if (closed || !running || current !== record) {
-        return;
-      }
-      if (commit.status !== 'committed' || commit.record === null) {
-        if (commit.status === 'unknown') {
-          // The staging may have committed; its observation stays retained so the next reading
-          // recovers the recorded decision, and the review is refreshed instead of inferring an
-          // entry.
-          record.staging = submitted;
-          options.reviewChanged({ kind: 'unknown' });
+      record.staging = observation;
+      await saveCapture(record, reading);
+    } else if (record.entryId !== null) {
+      record.alternatives.push({ reading, uncertain: false });
+      await saveCapture(record);
+    }
+  }
+
+  /**
+   * Resolves the submitted observation and then drains its later readings in delivery order.
+   * Each request keeps its original input until acknowledged. Recognition completion and camera
+   * stop cannot discard it, and replay never relies on a session refresh to infer an entry ID.
+   */
+  async function saveCapture(
+    record: UiCaptureAttempt,
+    initialReading?: RecognitionReading,
+  ): Promise<void> {
+    pending = record;
+    saving = true;
+    paintRecovery();
+    try {
+      if (record.staging !== null) {
+        const commit = await stageCaptureObservation(access, record.staging, options.signal);
+        if (closed) {
+          return;
         }
-        settle(record, 'unavailable', commit.message ?? 'The capture was not added to review.');
+        if (commit.status !== 'committed' || commit.record === null) {
+          if (initialReading !== undefined && commit.status !== 'unknown') {
+            // Only a definite rejection of the first submission establishes that it did not write.
+            record.staging = null;
+            settle(record, 'unavailable', commit.message ?? 'The capture was not added to review.');
+          } else {
+            options.reviewChanged({ kind: 'unknown' });
+            settle(record, 'unavailable', captureStagingUnknown);
+          }
+          return;
+        }
+        record.staging = null;
+        record.entryId = commit.record.entry?.entryId ?? null;
+        // An explicitly unresolved decision is not recorded by the provider, so a later reading
+        // can still resolve the capture. Suppression and admission are authoritative decisions.
+        record.staged = commit.record.outcome !== 'unresolved';
+        settle(
+          record,
+          captureOutcome(commit.record),
+          initialReading === undefined
+            ? recoveredMessage(commit.record)
+            : captureMessage(initialReading, commit.record),
+        );
+        options.reviewChanged({
+          kind: 'staged',
+          session: commit.record.session,
+          entryId: record.entryId,
+        });
+      }
+      if (record.entryId === null) {
+        record.alternatives = [];
         return;
       }
-      record.staging = null;
-      record.entryId = commit.record.entry?.entryId ?? null;
-      // An explicitly unresolved decision is not recorded by the provider, so the same capture may
-      // resolve through a later reading instead of being treated as already staged
-      // (docs/user-cards.md#import-and-capture-state).
-      record.staged = commit.record.outcome !== 'unresolved';
-      settle(
-        record,
-        captureOutcome(commit.record),
-        submitted === observation
-          ? captureMessage(reading, commit.record)
-          : recoveredMessage(commit.record),
-      );
-      options.reviewChanged({
-        kind: 'staged',
-        session: commit.record.session,
-        entryId: record.entryId,
-      });
-      if (submitted === observation) {
-        return;
+      while (record.alternatives.length > 0) {
+        const alternative = record.alternatives[0];
+        if (alternative === undefined) {
+          break;
+        }
+        const { reading } = alternative;
+        const commit = await attachImportCandidates(
+          access,
+          { entryId: record.entryId, candidates: [...uiCaptureCandidates(reading)] },
+          options.signal,
+        );
+        if (closed) {
+          return;
+        }
+        if (commit.status !== 'committed' || commit.record === null) {
+          if (commit.status === 'unknown') {
+            alternative.uncertain = true;
+            options.reviewChanged({ kind: 'unknown' });
+          } else if (!alternative.uncertain) {
+            // A first request that was definitely rejected has no lost outcome to recover.
+            record.alternatives.shift();
+            say(commit.message ?? 'The later alternatives could not be stored.', null);
+            return;
+          }
+          say(
+            'The capture is in review, but its later alternatives are not yet verified. Use Recover capture to retry.',
+            null,
+          );
+          return;
+        }
+        record.alternatives.shift();
+        options.reviewChanged({
+          kind: 'attached',
+          session: commit.record.session,
+          entryId: record.entryId,
+        });
+        // Alternatives never retract the acceptance, so this update carries no cue of its own.
+        say(lateMessage(reading), null);
       }
-      // The reading that recovered the decision still carries alternatives beside the observation
-      // the provider admitted, so they are attached instead of being lost with the replay.
+    } finally {
+      saving = false;
+      if (record.staging === null && record.alternatives.length === 0) {
+        pending = null;
+      }
+      paintRecovery();
     }
-    if (record.entryId === null) {
-      return;
-    }
-    const commit = await attachImportCandidates(
-      access,
-      { entryId: record.entryId, candidates: [...uiCaptureCandidates(reading)] },
-      controller?.signal,
-    );
-    if (closed || !running || current !== record) {
-      return;
-    }
-    if (commit.status === 'unknown') {
-      options.reviewChanged({ kind: 'unknown' });
-      say(commit.message ?? 'The later alternatives may be stored. Reload the import.', null);
-      return;
-    } else if (commit.status === 'committed' && commit.record !== null) {
-      options.reviewChanged({
-        kind: 'attached',
-        session: commit.record.session,
-        entryId: record.entryId,
-      });
-      // Alternatives never retract the acceptance, so this update carries no cue of its own.
-      say(lateMessage(reading), null);
-      return;
-    }
-    say(commit.message ?? 'The later alternatives could not be stored.', null);
   }
 
   /** Presents one attempt's outcome and the cue it earns, at most once each. */
