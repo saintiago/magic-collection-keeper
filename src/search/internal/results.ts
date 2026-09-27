@@ -1,5 +1,5 @@
 import type { CardId, LanguageCode, PrintingId } from '../../catalog/index.js';
-import type { CopyId } from '../../usercards/index.js';
+import type { CopyId, TagId } from '../../usercards/index.js';
 
 import type { SearchRevisions } from './model.js';
 
@@ -83,4 +83,50 @@ export interface SearchPage {
   readonly continuation: string | null;
   /** Revisions this page was evaluated against; its continuation is bound to them. */
   readonly revisions: SearchRevisions;
+}
+
+/**
+ * Explicit entry reference a private count read covers. A page's entries name one of these; a
+ * caller that enriches a page asks for the counts of the entries it presents without changing the
+ * query that selected them (docs/search.md#request-and-result).
+ */
+export type SearchCountReference = SearchEntryTarget;
+
+/** Stable key of one count reference; it is the entry key of the same target. */
+export function searchCountKey(reference: SearchCountReference): string {
+  return searchEntryKey(reference);
+}
+
+/**
+ * Private counts of one reference the account holds. A count is exact: an unavailable evaluation
+ * fails instead of reporting zero, and an owned count of zero means the account holds none.
+ */
+export interface SearchCount {
+  /** Owned physical copies of the reference. */
+  readonly owned: number;
+  /** Distinct physical locations holding those copies. */
+  readonly locations: number;
+  /**
+   * Intended or required quantity the read's tag associates with the reference, or null when the
+   * tag associates none. It keeps the query evaluation's meaning: a card association covers its
+   * card and a printing association covers one of the card's printings.
+   */
+  readonly intended: number | null;
+}
+
+/** Result of one private count read, keyed by the entry key of every requested reference. */
+export interface SearchCountResult {
+  readonly privateRevision: string;
+  readonly counts: ReadonlyMap<string, SearchCount>;
+}
+
+/**
+ * One private count request: the explicit references it answers and the tag whose intended
+ * quantities it reports. The read never changes which entries a query selects; it enriches the
+ * entries a caller presents with the private counts of exactly those references.
+ */
+export interface SearchCountInput {
+  readonly references: readonly SearchCountReference[];
+  /** Tag whose intended quantities the read reports; absent or null reports no intent. */
+  readonly tagId?: TagId | null;
 }

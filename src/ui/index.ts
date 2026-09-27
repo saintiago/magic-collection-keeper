@@ -25,6 +25,7 @@ export {
   uiCopyConditions,
   type UiCopyAccess,
   type UiCopyChange,
+  type UiCopyClient,
   type UiCopyCorrection,
   type UiCopyCorrectionOutcome,
   type UiCopyRead,
@@ -74,12 +75,33 @@ export {
   type UiToolSelection,
 } from './internal/list.js';
 export type { UiPageContext, UiPageDefinition, UiPageHandle } from './internal/pages.js';
+export { createOrganizationPages } from './internal/organization.js';
 export { createRecentCards, type UiRecentCards } from './internal/recent.js';
 export {
   createViewStateStore,
   type UiViewSnapshot,
   type UiViewStateStore,
 } from './internal/restoration.js';
+export {
+  addAssociation,
+  addToTagTool,
+  createTag,
+  createTagAccess,
+  moveCopyById,
+  removeAssociation,
+  renameTag,
+  saveAssociation,
+  uiAssociationLevelLabel,
+  uiAssociationLevelsByTagKind,
+  uiTagKindLabel,
+  uiTagKinds,
+  type AssociationCorrection,
+  type AssociationRemoval,
+  type UiChangeOutcome,
+  type UiTagAccess,
+  type UiTagClient,
+  type UiTagKind,
+} from './internal/tag-edits.js';
 export {
   readUiCatalogFinish,
   readUiCatalogLevel,
@@ -102,12 +124,17 @@ export {
   collectionSearchRequest,
   createCatalogSearchAccess,
   createCollectionSearchAccess,
+  createEntryOwnershipReader,
+  createSearchCounts,
   searchListEntry,
   uiEntryKey,
+  uiEntryTargetOfKey,
   type UiCatalogQuery,
   type UiCatalogSearchAccess,
   type UiCollectionQuery,
   type UiCollectionSearchAccess,
+  type UiCountsAccess,
+  type UiEntryCounts,
 } from './internal/search-source.js';
 export {
   createUserInterface,

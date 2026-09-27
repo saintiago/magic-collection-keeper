@@ -36,6 +36,8 @@ import {
   type UserInterface,
 } from '../../src/ui/index.js';
 
+import { unusedUserCards } from './unused-usercards.js';
+
 /** One Search request the catalog page issued. */
 export interface UiBrowseSearchRequest {
   readonly id: number;
@@ -162,6 +164,7 @@ export function installBrowseHarness(
         pendingSearches.set(id, { resolve, reject });
       });
     },
+    counts: () => Promise.reject(new Error('The browsing journeys read no private counts.')),
   };
   const catalog: Catalog = {
     resolve(references) {
@@ -186,12 +189,9 @@ export function installBrowseHarness(
     request,
     catalog,
     search,
-    // The browsing journeys present no private copy, so the contract is only present to satisfy
+    // The browsing journeys present no private record, so the contract is only present to satisfy
     // the capabilities Application supplies.
-    userCards: {
-      readCopies: () => Promise.reject(new Error('The browsing journeys read no copies.')),
-      correctCopy: () => Promise.reject(new Error('The browsing journeys correct no copies.')),
-    },
+    userCards: unusedUserCards,
     createRecognition: () => {
       throw new Error('The browsing journeys do not run recognition.');
     },

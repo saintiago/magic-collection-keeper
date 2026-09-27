@@ -65,6 +65,21 @@ describe('component replacement at Application', () => {
       ).status,
     ).toBe(200);
     expect(search.execute).toHaveBeenCalledOnce();
+    const counts = await application.handle({
+      method: 'POST',
+      path: '/api/search/counts',
+      body: JSON.stringify({ references: [{ kind: 'card', cardId: 'bolt' }] }),
+      authentication: { claims: claimsFor(testAccount) },
+    });
+    expect(counts.status).toBe(200);
+    expect(search.counts).toHaveBeenCalledWith(
+      { references: [{ kind: 'card', cardId: 'bolt' }] },
+      expect.objectContaining({ accountId: testAccount }),
+    );
+    expect(JSON.parse(counts.body)).toEqual({
+      privateRevision: 'private-revision-1',
+      counts: [],
+    });
     await expect(application.synchronizeCatalog({ dataset: 'default_cards' })).resolves.toEqual(
       testRevision,
     );

@@ -37,6 +37,8 @@ import {
   type UserInterface,
 } from '../../src/ui/index.js';
 
+import { unusedUserCards } from './unused-usercards.js';
+
 /** One Search request the collection view issued. */
 export interface UiCollectionSearchRequest {
   readonly id: number;
@@ -203,6 +205,7 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
         pendingSearches.set(id, { resolve, reject });
       });
     },
+    counts: () => Promise.reject(new Error('The collection journeys read no private counts.')),
   };
   const catalog: Catalog = {
     resolve(references) {
@@ -221,6 +224,7 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
     },
   };
   const userCards: UserCardsClient = {
+    ...unusedUserCards,
     readCopies(copyIds, signal) {
       const id = next();
       copyReads.push({

@@ -69,6 +69,11 @@ export {
 } from './internal/continuation.js';
 export {
   searchEntryKey,
+  searchCountKey,
+  type SearchCount,
+  type SearchCountInput,
+  type SearchCountReference,
+  type SearchCountResult,
   type SearchEntry,
   type SearchEntryCard,
   type SearchEntryPrinting,

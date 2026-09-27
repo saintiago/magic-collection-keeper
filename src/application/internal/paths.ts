@@ -13,6 +13,8 @@ export const applicationRoutes = {
   preservedCard: '/api/card',
   /** New query model (`POST`) and the preserved lookup subset (`GET`) share one path. */
   search: '/api/search',
+  /** Private counts of explicit references; it never changes a query's membership. */
+  searchCounts: '/api/search/counts',
   copies: '/api/collection/copies',
   copiesRead: '/api/collection/copies/read',
   copyCorrections: '/api/collection/copies/:copyId/corrections',
@@ -20,6 +22,8 @@ export const applicationRoutes = {
   tags: '/api/collection/tags',
   tagsRead: '/api/collection/tags/read',
   tagRename: '/api/collection/tags/:tagId/rename',
+  /** Bounded page of one tag's associations, ordered by stable association identity. */
+  tagAssociations: '/api/collection/tags/:tagId/associations',
   associations: '/api/collection/associations',
   associationsRead: '/api/collection/associations/read',
   associationChanges: '/api/collection/associations/:associationId/changes',

@@ -56,6 +56,8 @@ export interface UiEntryImage {
 export interface UiEntryOwnership {
   /** Physical copies of the entry the account owns. */
   readonly owned: number;
+  /** Intended quantity for the presented tag, when this fragment reads one. */
+  readonly intended?: number | null;
   /** Physical locations holding those copies, or null when the count is unavailable. */
   readonly locations: number | null;
 }
@@ -299,6 +301,8 @@ export interface UiCardList<Context = unknown> {
    * is retired instead of answering the fresh one.
    */
   reloadFragment(key: string, kind: UiFragmentKind): void;
+  /** Re-reads one kind across the active working set, superseding its outstanding reads. */
+  reloadFragments(kind: UiFragmentKind): void;
   /** Marks one entry selected; a key may be selected before its entry is loaded. */
   setSelected(key: string, selected: boolean): void;
   /** Unselects every entry. */
@@ -499,6 +503,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     refresh,
     retry,
     reloadFragment,
+    reloadFragments,
     setSelected,
     clearSelection,
     invoke,
@@ -1215,6 +1220,20 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     pumpFragments(kind);
   }
 
+  function reloadFragments(kind: UiFragmentKind): void {
+    if (disposed || !readers.has(kind)) {
+      return;
+    }
+    // Invalidate the whole batch before pumping so no request mixes old and fresh tokens.
+    for (const key of fragmentRequestKeys(kind)) {
+      invalidateFragment(key, kind);
+      setFragmentState(key, kind, { status: 'loading', values: null, message: null });
+      fragmentQueue(kind).pending.add(key);
+    }
+    retireObsoleteFragments();
+    pumpFragments(kind);
+  }
+
   /**
    * Reads the pending entries of one kind in bounded batches; one read is in flight per kind and
    * the entries requested meanwhile wait for their own batch.
@@ -1885,7 +1904,9 @@ function readFragmentValues(
       if (ownership === null || typeof owned !== 'number' || locations === undefined) {
         return unreadable;
       }
-      return { ok: true, values: { owned, locations } satisfies UiEntryOwnership };
+      const intended = readCount(ownership.intended ?? null);
+      if (intended === undefined) return unreadable;
+      return { ok: true, values: { owned, locations, intended } satisfies UiEntryOwnership };
     }
     case 'tags': {
       const tags = readItems(value as readonly unknown[]);

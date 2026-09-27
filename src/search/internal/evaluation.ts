@@ -14,6 +14,7 @@ import {
   type SearchQuery,
   type SearchResultLevel,
 } from './model.js';
+import type { SearchCountReference } from './results.js';
 
 /**
  * One page read over the published Catalog and UserCards relations
@@ -40,6 +41,153 @@ const relations = {
 export interface SearchPageStatement {
   readonly statement: string;
   readonly parameters: Readonly<Record<string, SearchSqlValue>>;
+}
+
+/**
+ * One private count read over the published surfaces
+ * (docs/search.md#request-and-result, docs/search.md#evaluation-and-grouping).
+ *
+ * Every requested reference is answered exactly: the account's owned copies of it, the distinct
+ * physical locations holding those copies, and the intended quantity one tag associates with it
+ * under the same covering rule the query evaluation uses. The read takes explicit references, so a
+ * caller enriches the entries it presents without changing the query that selected them; the
+ * account scope of the statement's execution decides whose copies and associations are counted.
+ * The statement also reports the private revision it read, and every value travels as a named
+ * parameter.
+ */
+export function countsStatement(
+  references: readonly SearchCountReference[],
+  tagId: string | null,
+): SearchPageStatement {
+  const parameters: Record<string, SearchSqlValue> = {};
+  let parameterCount = 0;
+  const bind = (value: SearchSqlValue): string => {
+    const name = `search_count_${parameterCount}`;
+    parameterCount += 1;
+    parameters[name] = value;
+    return `:${name}`;
+  };
+  const tag = tagId === null ? null : bind(tagId);
+
+  const rows = references.map((reference) => {
+    switch (reference.kind) {
+      case 'card':
+        return countRowSql('card', bind(reference.cardId), tag);
+      case 'printing':
+        return countRowSql('printing', bind(reference.printingId), tag);
+      case 'copy':
+        return countRowSql('copy', bind(reference.copyId), tag);
+    }
+  });
+
+  const statement = `with counted as (
+${rows.join('\nunion all\n')}
+)
+select
+  'count' as row_kind,
+  ref_kind,
+  ref_id,
+  owned,
+  locations,
+  intended,
+  null::text as private_revision
+from counted
+union all
+select
+  'revision' as row_kind,
+  null::text as ref_kind,
+  null::text as ref_id,
+  null::int as owned,
+  null::int as locations,
+  null::int as intended,
+  (select revision from ${relations.privateRevision}) as private_revision`;
+  return { statement, parameters };
+}
+
+/**
+ * One reference's counts: owned copies of the card, printing or copy the reference names, the
+ * distinct locations holding them, and the named tag's intended quantity covering the reference.
+ */
+function countRowSql(
+  kind: SearchCountReference['kind'],
+  reference: string,
+  tag: string | null,
+): string {
+  const copyMatch =
+    kind === 'card'
+      ? `printing.card_id = ${reference}`
+      : kind === 'printing'
+        ? `copy.printing_id = ${reference}`
+        : `copy.copy_id = ${reference}`;
+  const joinPrintings =
+    kind === 'copy'
+      ? ''
+      : ` join ${relations.printings} as printing on printing.printing_id = copy.printing_id`;
+  const card =
+    kind === 'card'
+      ? reference
+      : kind === 'printing'
+        ? printingCardSql('intent_printing', reference)
+        : copyCardSql('intent_copy', reference);
+  const printing =
+    kind === 'card'
+      ? null
+      : kind === 'printing'
+        ? reference
+        : `(select intent_copy.printing_id from ${relations.copies} as intent_copy` +
+          ` where intent_copy.copy_id = ${reference})`;
+  return (
+    `select '${kind}' as ref_kind, ${reference} as ref_id,\n` +
+    `  (select count(*)::int from ${relations.copies} as copy${joinPrintings}` +
+    ` where copy.owned and ${copyMatch}) as owned,\n` +
+    `  (select count(distinct copy.location_id)::int from ${relations.copies} as copy${joinPrintings}` +
+    ` where copy.owned and copy.location_id is not null and ${copyMatch}) as locations,\n` +
+    `  ${intentRowSql(card, printing, tag)} as intended`
+  );
+}
+
+/**
+ * The intended quantity one tag associates with the reference, under the covering rule the query
+ * evaluation uses: a card association covers its card and every printing of it, a printing
+ * association covers that printing and the copies of it, and a copy reference is covered through
+ * its own printing. No association summing to nothing reports null, never zero.
+ */
+function intentRowSql(card: string, printing: string | null, tag: string | null): string {
+  if (tag === null) {
+    return 'null::int';
+  }
+  const coversCard =
+    printing === null
+      ? `(association.target_level = 'printing' and exists (` +
+        `select 1 from ${relations.printings} as intent_printing` +
+        ` where intent_printing.printing_id = association.target_id` +
+        ` and intent_printing.card_id = ${card}))`
+      : `(association.target_level = 'printing' and association.target_id = ${printing})`;
+  return (
+    `(select sum(association.quantity)::int from ${relations.associations} as association` +
+    ` where association.tag_id = ${tag} and association.quantity is not null` +
+    ` and ((association.target_level = 'card' and association.target_id = ${card})` +
+    ` or ${coversCard}))`
+  );
+}
+
+/** The card a copy reference belongs to, read through its printing. */
+function copyCardSql(alias: string, copyId: string): string {
+  const printing = `${alias}_printing`;
+  return (
+    `(select ${printing}.card_id from ${relations.copies} as ${alias}` +
+    ` join ${relations.printings} as ${printing}` +
+    ` on ${printing}.printing_id = ${alias}.printing_id` +
+    ` where ${alias}.copy_id = ${copyId})`
+  );
+}
+
+/** The card a printing reference belongs to. */
+function printingCardSql(alias: string, printingId: string): string {
+  return (
+    `(select ${alias}.card_id from ${relations.printings} as ${alias}` +
+    ` where ${alias}.printing_id = ${printingId})`
+  );
 }
 
 /**

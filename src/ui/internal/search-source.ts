@@ -14,13 +14,15 @@
 import type { SearchClient } from '../../application/index.js';
 import type { Catalog, Finish, PrintingRecord, PrintingReference } from '../../catalog/index.js';
 import type {
+  SearchCount,
+  SearchCountReference,
   SearchCriterion,
   SearchEntry,
   SearchPage,
   SearchRequestInput,
 } from '../../search/index.js';
 
-import type { UiEntryImage } from './card-list.js';
+import type { UiEntryImage, UiEntryOwnership } from './card-list.js';
 import type { UiEntryTarget, UiFragmentReader, UiListEntry, UiListSource } from './list.js';
 import type { UiCatalogLevel, UiCollectionLevel } from './routes.js';
 
@@ -108,6 +110,126 @@ export function uiEntryKey(target: UiEntryTarget): string {
     case 'copy':
       return `copy:${target.copyId}`;
   }
+}
+
+/** The typed target one entry key names, or null when the key names no entry of this level. */
+export function uiEntryTargetOfKey(key: string): UiEntryTarget | null {
+  const separator = key.indexOf(':');
+  if (separator <= 0 || separator === key.length - 1) {
+    return null;
+  }
+  const identity = key.slice(separator + 1);
+  switch (key.slice(0, separator)) {
+    case 'card':
+      return { kind: 'card', cardId: identity };
+    case 'printing':
+      return { kind: 'printing', printingId: identity };
+    case 'copy':
+      return { kind: 'copy', copyId: identity };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Private counts of one presented entry: the account's owned copies of it, the distinct physical
+ * locations holding those copies, and the intended quantity one tag associates with it
+ * (docs/user-interface.md#browsing-and-organization, docs/search.md#request-and-result).
+ */
+export interface UiEntryCounts {
+  readonly owned: number;
+  readonly locations: number;
+  readonly intended: number | null;
+}
+
+/**
+ * Reads the private counts of explicit presented entries through the Search contract. A page asks
+ * for the entries it presents in one bounded read, so enriching a result never changes which
+ * entries its query selected and an unowned entry keeps its place with an exact zero.
+ */
+export interface UiCountsAccess {
+  /** Counts of the requested entries keyed by entry key; a failed read rejects as one batch. */
+  ofBatch(
+    targets: readonly UiEntryTarget[],
+    tagId: string | null,
+    signal: AbortSignal,
+  ): Promise<ReadonlyMap<string, UiEntryCounts>>;
+}
+
+/** Builds the counts access over the Search contract. */
+export function createSearchCounts(search: SearchClient): UiCountsAccess {
+  if (typeof search?.counts !== 'function') {
+    throw new TypeError('The organization views read private counts through Search.');
+  }
+  return {
+    async ofBatch(targets, tagId, signal) {
+      if (targets.length === 0) {
+        return new Map();
+      }
+      const result = await search.counts(
+        {
+          references: targets.map((target) => referenceOfTarget(target)),
+          ...(tagId === null ? {} : { tagId }),
+        },
+        signal,
+      );
+      return new Map([...result.counts].map(([key, count]) => [key, readCount(count)] as const));
+    },
+  };
+}
+
+function referenceOfTarget(target: UiEntryTarget): SearchCountReference {
+  switch (target.kind) {
+    case 'card':
+      return { kind: 'card', cardId: target.cardId };
+    case 'printing':
+      return { kind: 'printing', printingId: target.printingId };
+    case 'copy':
+      return { kind: 'copy', copyId: target.copyId };
+  }
+}
+
+function readCount(count: SearchCount): UiEntryCounts {
+  return { owned: count.owned, locations: count.locations, intended: count.intended };
+}
+
+/**
+ * Ownership fragment of a list whose entry keys name card, printing or copy targets directly: the
+ * entries' own keys are the references the counts read answers. A failed count read fails the
+ * fragment, so an unavailable count is never presented as zero.
+ */
+export function createEntryOwnershipReader(
+  counts: UiCountsAccess,
+  referenceOfKey: (key: string) => UiEntryTarget | null = uiEntryTargetOfKey,
+  tagId: () => string | null = () => null,
+): UiFragmentReader<UiEntryOwnership> {
+  return {
+    async read(request) {
+      const references = new Map<string, UiEntryTarget>();
+      for (const key of request.keys) {
+        const target = referenceOfKey(key);
+        if (target !== null) {
+          references.set(key, target);
+        }
+      }
+      const read = await counts.ofBatch([...references.values()], tagId(), request.signal);
+      return request.keys.map((key) => {
+        const target = references.get(key) ?? null;
+        const count = target === null ? undefined : read.get(uiEntryKey(target));
+        return count === undefined
+          ? { key, status: 'absent' as const, values: null }
+          : {
+              key,
+              status: 'ready' as const,
+              values: {
+                owned: count.owned,
+                locations: count.locations,
+                intended: count.intended,
+              } satisfies UiEntryOwnership,
+            };
+      });
+    },
+  };
 }
 
 /** One Search entry as the list boundary presents it. */

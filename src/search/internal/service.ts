@@ -7,18 +7,20 @@ import {
   verifySearchContinuation,
 } from './continuation.js';
 import { SearchError } from './errors.js';
-import { pageStatement, type SearchPageStatement } from './evaluation.js';
+import { countsStatement, pageStatement, type SearchPageStatement } from './evaluation.js';
 import type { SearchSqlExecutor, SearchSqlRow } from './executor.js';
 import { requiresTrustedContext, type SearchQuery, type SearchRequestInput } from './model.js';
-import { normalizeSearchRequest } from './request.js';
+import { normalizeSearchCountRequest, normalizeSearchRequest } from './request.js';
 import {
   searchEntryKey,
   type SearchEntry,
   type SearchEntryQuantity,
   type SearchEntryTarget,
+  type SearchCountInput,
+  type SearchCountResult,
   type SearchPage,
 } from './results.js';
-import { readSearchRows, type SearchEntryRow } from './rows.js';
+import { readSearchCountRows, readSearchRows, type SearchEntryRow } from './rows.js';
 
 /**
  * Search evaluation (docs/search.md#required-query-contracts,
@@ -36,6 +38,15 @@ import { readSearchRows, type SearchEntryRow } from './rows.js';
 export interface Search {
   /** Evaluates one request into the page of the complete result it names. */
   execute(request: SearchRequestInput, context?: TrustedUserContext | null): Promise<SearchPage>;
+  /**
+   * Reads the account's private counts of explicit references: owned copies, the distinct physical
+   * locations holding them and one tag's intended quantity covering each reference. The read
+   * enriches presented entries without changing any query's membership.
+   */
+  counts(
+    request: SearchCountInput,
+    context?: TrustedUserContext | null,
+  ): Promise<SearchCountResult>;
 }
 
 export interface SearchDependencies {
@@ -128,6 +139,30 @@ export function createSearch(dependencies: SearchDependencies): Search {
           : null,
         revisions: page.revisions,
       };
+    },
+
+    /**
+     * Reads one private count query. A count read always describes the account's private records,
+     * so it needs usable trusted context and reads inside the account scope; a reference the
+     * evaluation cannot count fails the read instead of reporting an inferred zero.
+     */
+    async counts(
+      request: SearchCountInput,
+      context: TrustedUserContext | null = null,
+    ): Promise<SearchCountResult> {
+      const query = normalizeSearchCountRequest(request);
+      const accountId = readTrustedAccountId(context);
+      if (accountId === null) {
+        throw new SearchError('unauthorized', 'Private counts require authenticated context.');
+      }
+      const statement = countsStatement(query.references, query.tagId);
+      let rows: readonly SearchSqlRow[];
+      try {
+        rows = await withAccountScope(accountId, (scoped) => readRows(statement, scoped));
+      } catch (cause) {
+        throw evaluationFailure(cause);
+      }
+      return readSearchCountRows(rows, query.references);
     },
   };
 }

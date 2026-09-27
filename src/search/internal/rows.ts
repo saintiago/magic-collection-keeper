@@ -8,6 +8,12 @@ import {
   type SearchQuery,
   type SearchRevisions,
 } from './model.js';
+import {
+  searchCountKey,
+  type SearchCount,
+  type SearchCountReference,
+  type SearchCountResult,
+} from './results.js';
 
 /**
  * Reads the rows of one page statement (docs/search.md#request-and-result). The statement returns
@@ -39,6 +45,20 @@ const revisionRowSchema = z.object({
   catalog_revision: identifier,
   private_revision: identifier.nullable(),
   total_count: z.number().int().min(0),
+});
+
+const countRowSchema = z.object({
+  row_kind: z.literal('count'),
+  ref_kind: z.enum(['card', 'printing', 'copy']),
+  ref_id: identifier,
+  owned: z.number().int().min(0),
+  locations: z.number().int().min(0),
+  intended: z.number().int().min(0).nullable(),
+});
+
+const countRevisionRowSchema = z.object({
+  row_kind: z.literal('revision'),
+  private_revision: identifier,
 });
 
 /** Basic information of the printing one entry represents; null at card level. */
@@ -152,4 +172,63 @@ function unreadable(): SearchError {
     'unavailable',
     'Search returned a result that does not match its read contract.',
   );
+}
+
+/**
+ * Reads one count statement: every requested reference is answered exactly, and a reference the
+ * statement did not count is an unavailable read instead of an inferred zero. The private
+ * revision the read observed accompanies the counts.
+ */
+export function readSearchCountRows(
+  rows: readonly SearchSqlRow[],
+  references: readonly SearchCountReference[],
+): SearchCountResult {
+  let privateRevision: string | null = null;
+  const counts = new Map<string, SearchCount>();
+  for (const row of rows) {
+    if (row.row_kind === 'count') {
+      const parsed = countRowSchema.safeParse(row);
+      if (!parsed.success) {
+        throw unreadable();
+      }
+      const reference = countReference(parsed.data.ref_kind, parsed.data.ref_id);
+      counts.set(searchCountKey(reference), {
+        owned: parsed.data.owned,
+        locations: parsed.data.locations,
+        intended: parsed.data.intended,
+      });
+      continue;
+    }
+    const parsed = countRevisionRowSchema.safeParse(row);
+    if (!parsed.success) {
+      throw unreadable();
+    }
+    privateRevision = parsed.data.private_revision;
+  }
+  if (privateRevision === null) {
+    throw new SearchError(
+      'unavailable',
+      'The bound account’s private-data revision could not be read.',
+    );
+  }
+  for (const reference of references) {
+    if (!counts.has(searchCountKey(reference))) {
+      throw unreadable();
+    }
+  }
+  return { privateRevision, counts };
+}
+
+function countReference(
+  kind: 'card' | 'printing' | 'copy',
+  referenceId: string,
+): SearchCountReference {
+  switch (kind) {
+    case 'card':
+      return { kind, cardId: referenceId };
+    case 'printing':
+      return { kind, printingId: referenceId };
+    case 'copy':
+      return { kind, copyId: referenceId };
+  }
 }

@@ -111,6 +111,7 @@ export {
 export {
   createUserCards,
   type AssociationChangeResult,
+  type AssociationListResult,
   type AssociationReadResult,
   type AssociationRemovalResult,
   type ChangeAssociationInput,
@@ -121,6 +122,7 @@ export {
   type CreateAssociationInput,
   type CreateCopiesInput,
   type CreateTagInput,
+  type ListAssociationsOptions,
   type RemoveAssociationInput,
   type RenameTagInput,
   type SetCopyLocationInput,

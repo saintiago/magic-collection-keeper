@@ -183,6 +183,16 @@ export interface OrganizationStore {
   correctTag(accountId: string, correction: TagCorrection): Promise<TagCorrectionOutcome>;
   /** Reads the associations among `associationIds` that belong to `accountId`. */
   readAssociations(accountId: string, associationIds: readonly string[]): Promise<AssociationsData>;
+  /**
+   * Reads up to `limit` associations of `accountId` for `tagId`, ordered by association identity
+   * and starting at `offset`. A tag the account does not own contributes no row.
+   */
+  listAssociations(
+    accountId: string,
+    tagId: string,
+    offset: number,
+    limit: number,
+  ): Promise<AssociationsData>;
   /** Stores `association` for `accountId` unless the tag already associates that target. */
   insertAssociation(
     accountId: string,
