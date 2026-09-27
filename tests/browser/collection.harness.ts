@@ -109,7 +109,10 @@ export interface UiCollectionControl {
   failCatalog(id: number, message: string): void;
   printingsRequests(): readonly UiCollectionPrintingsRequest[];
   settlePrintings(id: number, page: CardPrintingsPage): void;
-  failPrintings(id: number, message: string): void;
+  failPrintings(
+    id: number,
+    failure: { readonly code: ApplicationFailureCode; readonly message: string },
+  ): void;
   copyReads(): readonly UiCollectionCopyRead[];
   settleCopyRead(
     id: number,
@@ -364,14 +367,7 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
     printingsRequests: () =>
       printings.map((entry) => ({ ...entry, options: { ...entry.options } })),
     settlePrintings: (id, page) => settle(pendingPrintings, id, page, 'printings'),
-    failPrintings: (id, message) => {
-      const waiting = pendingPrintings.get(id);
-      if (waiting === undefined) {
-        throw new Error(`No printings request ${id} is waiting.`);
-      }
-      pendingPrintings.delete(id);
-      waiting.reject(new Error(message));
-    },
+    failPrintings: (id, failure) => fail(pendingPrintings, id, failure, 'printings'),
     copyReads: () =>
       copyReads.map(({ record, isAborted }) => ({ ...record, aborted: isAborted() })),
     settleCopyRead: (id, result) =>

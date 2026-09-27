@@ -18,9 +18,11 @@ import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 
+import type { ApplicationFailureCode } from '../../src/application/index.js';
 import type { CardRecord, PrintingRecord } from '../../src/catalog/index.js';
 import type { SearchEntry, SearchPage } from '../../src/search/index.js';
 import type { PhysicalCopy } from '../../src/usercards/index.js';
+import { organizationContinuationFailures } from '../support/organization-pagination.js';
 import type {
   UiCollectionControl,
   UiCollectionCorrection,
@@ -201,14 +203,18 @@ async function settlePrintings(
   );
 }
 
-async function failPrintings(page: Page, id: number, message: string): Promise<void> {
+async function failPrintings(
+  page: Page,
+  id: number,
+  failure: { readonly code: ApplicationFailureCode; readonly message: string },
+): Promise<void> {
   await page.evaluate(
     ({ id: requestId, value }) => {
       (
         globalThis as unknown as { keeperCollectionControl: UiCollectionControl }
       ).keeperCollectionControl.failPrintings(requestId, value);
     },
-    { id, value: message },
+    { id, value: failure },
   );
 }
 
@@ -511,7 +517,10 @@ test('an initial printing-list failure is reported and retried from the card lev
   const errors = await openCollection(page, '#/cards/card-1');
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
   const failed = await printingsRequest(page);
-  await failPrintings(page, failed!.id, 'The catalog is unavailable.');
+  await failPrintings(page, failed!.id, {
+    code: 'unavailable',
+    message: 'The catalog is unavailable.',
+  });
 
   // A failure is not the end of the list: it stays presented beside its retry.
   await expect(page.locator('#card-printings [data-ui-status]')).toHaveText(
@@ -900,7 +909,10 @@ test('an initial printing-list failure is reported and retried from the copy lev
   await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
   const failed = await printingsRequest(page);
-  await failPrintings(page, failed!.id, 'The printings could not be loaded.');
+  await failPrintings(page, failed!.id, {
+    code: 'unavailable',
+    message: 'The printings could not be loaded.',
+  });
 
   // The failure stays presented beside its retry, and the copy's own printing stays correctable.
   await expect(page.locator('#copy-printings-status')).toHaveText(
@@ -937,6 +949,76 @@ test('the copy printing window stays bounded while the user pages through it', a
 
   // The window retires the oldest printings beyond the working set, keeping the copy's own one.
   await expect(page.locator('#copy-printing-choice option')).toHaveCount(501);
+  await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-1');
+  expect(errors).toEqual([]);
+});
+
+test('an expired catalog page restarts the copy printing offer from its first page', async ({
+  page,
+}) => {
+  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], 'cursor-2');
+  await page.locator('#copy-condition-choice').selectOption('MP');
+
+  // The catalog published a revision since that page was read, so the cursor is unusable.
+  await page.locator('#copy-printings-more').click();
+  const expired = await printingsRequest(page, 1);
+  expect(expired?.options.continuation).toBe('cursor-2');
+  await failPrintings(page, expired!.id, (await organizationContinuationFailures()).printings);
+
+  // The offer reads the printing list again from its first page instead of repeating the cursor,
+  // and the copy's own printing together with the unsaved draft stay in the form.
+  const restarted = await printingsRequest(page, 2);
+  expect(restarted?.cardId).toBe('card-1');
+  expect(restarted?.options.continuation).toBeUndefined();
+  await settlePrintings(page, restarted!.id, [printingRecord()], 'cursor-3');
+  await expect(page.locator('#copy-printings-status')).toHaveText('');
+  await expect(page.locator('#copy-printings-more')).toHaveText('More printings');
+  await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-1');
+  await expect(page.locator('#copy-condition-choice')).toHaveValue('MP');
+
+  // The restarted page's continuation is the one further pages are read with.
+  await page.locator('#copy-printings-more').click();
+  const next = await printingsRequest(page, 3);
+  expect(next?.options.continuation).toBe('cursor-3');
+  await settlePrintings(page, next!.id, [printingRecord('printing-2')], null);
+  await expect(page.locator('#copy-printing-choice option')).toHaveCount(2);
+  await expect(page.locator('#copy-printings-more')).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
+test('a failed restart of the copy printing offer keeps its retry on the first page', async ({
+  page,
+}) => {
+  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], 'cursor-2');
+
+  await page.locator('#copy-printings-more').click();
+  const expired = await printingsRequest(page, 1);
+  await failPrintings(page, expired!.id, (await organizationContinuationFailures()).printings);
+  const restarted = await printingsRequest(page, 2);
+  await failPrintings(page, restarted!.id, {
+    code: 'unavailable',
+    message: 'The printings could not be loaded.',
+  });
+
+  // The unusable cursor is not retained: the retry the failure leaves behind starts the list again.
+  await expect(page.locator('#copy-printings-status')).toHaveText(
+    'The printings could not be loaded.',
+  );
+  await expect(page.locator('#copy-printings-more')).toHaveText('Retry printings');
+  await page.locator('#copy-printings-more').click();
+  const retried = await printingsRequest(page, 3);
+  expect(retried?.options.continuation).toBeUndefined();
+  await settlePrintings(page, retried!.id, [printingRecord('printing-2')], null);
+  await expect(page.locator('#copy-printings-status')).toHaveText('');
+  await expect(page.locator('#copy-printings-more')).toBeHidden();
   await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-1');
   expect(errors).toEqual([]);
 });
