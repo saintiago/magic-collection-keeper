@@ -105,15 +105,33 @@ export function createBrowserRecognitionPipeline(
   const enabledEngines = cloudEnabled
     ? ['browser-onnx', 'python-ocr', 'independent-identity']
     : ['browser-onnx'];
+  const remoteRequest: PreservedRequest = async (path, init) => {
+    const response = await request(path, init);
+    if (path === '/api/recognize' || path === '/api/recognize-independent') {
+      const reading = readRecord(response);
+      // These retained Python envelopes mean inference failed, not an unresolved identity.
+      // Reject before hydration drops the reason and composition treats them as successful
+      // readings. The retained fallback/race then decides whether another engine succeeded;
+      // this also covers the backend's preparation request through the same endpoints.
+      if (
+        reading?.status === 'unknown' &&
+        (reading.reason === 'visual_unavailable' ||
+          readRecord(reading.evidence)?.independentUnavailable === true)
+      ) {
+        throw new RecognitionError('unavailable', 'Recognition is unavailable. Please retry.');
+      }
+    }
+    return response;
+  };
   const primary = createHybridRecognition({
     local: createBrowserRecognition({ request }),
-    cloud: cloudEnabled ? createBackendRecognition({ request }) : null,
+    cloud: cloudEnabled ? createBackendRecognition({ request: remoteRequest }) : null,
   });
   const engine = cloudEnabled
     ? createIndependentRecognition({
         primary,
         independent: createBackendRecognition({
-          request,
+          request: remoteRequest,
           endpoint: '/api/recognize-independent',
           provider: 'bedrock-independent',
         }),

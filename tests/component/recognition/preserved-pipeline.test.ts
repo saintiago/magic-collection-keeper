@@ -108,6 +108,8 @@ class WorkerStub {
     serviceReading(attempt);
   /** Holds frame results back so a case can control which engine answers first. */
   static hold: Promise<void> = Promise.resolve();
+  static failPreparation = false;
+  static failRecognition = false;
 
   onmessage: ((event: { data: unknown }) => void) | null = null;
   onerror: (() => void) | null = null;
@@ -120,12 +122,22 @@ class WorkerStub {
   postMessage(message: unknown): void {
     const posted = message as { type: string; attempt?: number };
     if (posted.type === 'init') {
-      queueMicrotask(() => this.emit({ type: 'ready', metrics: { prepareMs: 1 } }));
+      queueMicrotask(() =>
+        this.emit(
+          WorkerStub.failPreparation
+            ? { type: 'error', message: 'Worker preparation failed' }
+            : { type: 'ready', metrics: { prepareMs: 1 } },
+        ),
+      );
     }
     if (posted.type === 'frame') {
       const attempt = posted.attempt ?? 0;
       void WorkerStub.hold.then(() =>
-        this.emit({ type: 'result', result: WorkerStub.result(attempt) }),
+        this.emit(
+          WorkerStub.failRecognition
+            ? { type: 'error', message: 'Worker inference failed' }
+            : { type: 'result', result: WorkerStub.result(attempt) },
+        ),
       );
     }
   }
@@ -221,6 +233,51 @@ function deferred<T>(): { readonly promise: Promise<T>; resolve: (value: T) => v
   return { promise, resolve };
 }
 
+/** Actual retained service envelopes, with controlled providers and no live model calls. */
+function pythonServiceReadings(): Record<string, Record<string, unknown>> {
+  return JSON.parse(
+    execFileSync(
+      process.env['KEEPER_PYTHON'] ?? 'python3',
+      [
+        '-c',
+        `
+import json, sys
+sys.path.insert(0, "src/recognition/python")
+from service import RecognitionService
+from independent_service import IndependentRecognitionService
+printing = json.load(sys.stdin)
+class Broken:
+    version = {"adapter": "controlled-failure"}
+    def inspect(self, image):
+        raise RuntimeError("private provider detail")
+    def read(self, *args):
+        raise RuntimeError("private provider detail")
+class Visual:
+    version = {"adapter": "controlled-visual"}
+    def __init__(self, supported):
+        self.supported = supported
+    def inspect(self, image):
+        return {"identity_supported": self.supported, "candidates": [printing]}
+class Unknown:
+    version = {"adapter": "controlled-unknown"}
+    def read(self, image):
+        return {"uncertain": True}
+def independent(reader):
+    return IndependentRecognitionService(reader, lambda image: {"state": "single"}, {}, {}).recognize(None)
+print(json.dumps({
+    "visualUnavailable": RecognitionService(Broken(), Broken()).recognize(None),
+    "independentUnavailable": independent(Broken()),
+    "visualUnknown": RecognitionService(Visual(False), Broken()).recognize(None),
+    "independentUnknown": independent(Unknown()),
+    "ocrUnavailable": RecognitionService(Visual(True), Broken()).recognize(None),
+}))
+`,
+      ],
+      { input: JSON.stringify(bolt), encoding: 'utf8' },
+    ),
+  ) as Record<string, Record<string, unknown>>;
+}
+
 describe('preserved recognition pipeline', () => {
   let originalWorker: typeof Worker | undefined;
   let originalDocument: Document | undefined;
@@ -229,6 +286,8 @@ describe('preserved recognition pipeline', () => {
     WorkerStub.instances = [];
     WorkerStub.result = (attempt) => serviceReading(attempt);
     WorkerStub.hold = Promise.resolve();
+    WorkerStub.failPreparation = false;
+    WorkerStub.failRecognition = false;
     // The preserved worker and the remote warm-up frame are the only browser environment the
     // composition needs; the engines themselves run for real.
     originalWorker = globalThis.Worker;
@@ -247,6 +306,142 @@ describe('preserved recognition pipeline', () => {
       globalThis.document = originalDocument;
     } else {
       delete (globalThis as { document?: Document }).document;
+    }
+  });
+
+  it.each(['visualUnavailable', 'independentUnavailable', 'both', 'throwing'])(
+    'reports unavailable when all inference paths fail (%s)',
+    async (failure) => {
+      const responses = pythonServiceReadings();
+      expect(responses['visualUnavailable']).toMatchObject({ reason: 'visual_unavailable' });
+      expect(responses['independentUnavailable']).toMatchObject({
+        evidence: { independentUnavailable: true },
+      });
+      WorkerStub.failRecognition = true;
+      const transport = createTransport({
+        cloud: (attempt) => {
+          if (attempt === 100000) return serviceReading(attempt);
+          if (failure === 'visualUnavailable' || failure === 'both')
+            return { ...responses['visualUnavailable'], attempt };
+          throw new Error('Visual service unavailable');
+        },
+        independent: (attempt) => {
+          if (failure === 'independentUnavailable' || failure === 'both')
+            return { ...responses['independentUnavailable'], attempt };
+          throw new Error('Independent service unavailable');
+        },
+      });
+      const recognition = createPreservedRecognition(transport);
+      try {
+        await recognition.prepare(prepareRequest);
+        const readings: RecognitionReading[] = [];
+        const attempt = recognition.recognize({
+          ...prepareRequest,
+          captureId: 'capture-1',
+          attempt: 1,
+          frame: createCanvas(),
+          onReading: (reading) => readings.push(reading),
+        });
+        await expect(attempt.initial).rejects.toMatchObject({ code: 'unavailable' });
+        await attempt.completion;
+        expect(readings).toEqual([]);
+        expect(transport.recognizeAttempts).toContain(1);
+        expect(transport.independentAttempts).toEqual([1]);
+      } finally {
+        recognition.dispose({ sessionId: 'session-1' });
+      }
+    },
+  );
+
+  it('rejects failed remote warm-up after local preparation fails and permits retry', async () => {
+    const responses = pythonServiceReadings();
+    WorkerStub.failPreparation = true;
+    let remoteFailed = true;
+    const transport = createTransport({
+      cloud: (attempt) =>
+        remoteFailed
+          ? { ...responses['visualUnavailable'], attempt }
+          : serviceReading(attempt, { candidates: [bolt] }),
+    });
+    const recognition = createPreservedRecognition(transport);
+    try {
+      await expect(recognition.prepare(prepareRequest)).rejects.toMatchObject({
+        code: 'unavailable',
+      });
+      expect(WorkerStub.instances.every((worker) => worker.terminated)).toBe(true);
+      expect(transport.recognizeAttempts).toEqual([100000]);
+      remoteFailed = false;
+      await expect(recognition.prepare(prepareRequest)).resolves.toMatchObject(prepareRequest);
+      const attempt = recognition.recognize({
+        ...prepareRequest,
+        captureId: 'capture-retry',
+        attempt: 1,
+        frame: createCanvas(),
+      });
+      await expect(attempt.initial).resolves.toMatchObject({
+        status: 'possible',
+        candidates: [{ printingId: bolt.id }],
+      });
+      await attempt.completion;
+    } finally {
+      recognition.dispose({ sessionId: 'session-1' });
+    }
+  });
+
+  it.each([
+    { succeeds: 'local', expected: 'possible' },
+    { succeeds: 'visual', expected: 'possible' },
+    { succeeds: 'independent', expected: 'possible' },
+    { succeeds: 'localUnknown', expected: 'unknown' },
+    { succeeds: 'visualUnknown', expected: 'unknown' },
+    { succeeds: 'independentUnknown', expected: 'unknown' },
+    { succeeds: 'ocrUnavailable', expected: 'possible' },
+  ])('preserves $succeeds when other paths fail', async ({ succeeds, expected }) => {
+    const responses = pythonServiceReadings();
+    WorkerStub.failRecognition = !['local', 'localUnknown'].includes(succeeds);
+    WorkerStub.result = (attempt) =>
+      serviceReading(attempt, { candidates: succeeds === 'local' ? [bolt] : [] });
+    const transport = createTransport({
+      cloud: (attempt) => {
+        if (attempt === 100000) return serviceReading(attempt);
+        if (succeeds === 'visual') return serviceReading(attempt, { candidates: [bolt] });
+        return {
+          ...responses[
+            ['visualUnknown', 'ocrUnavailable'].includes(succeeds) ? succeeds : 'visualUnavailable'
+          ],
+          attempt,
+        };
+      },
+      independent: (attempt) =>
+        succeeds === 'independent'
+          ? serviceReading(attempt, { candidates: [bolt] })
+          : {
+              ...responses[succeeds === 'independentUnknown' ? succeeds : 'independentUnavailable'],
+              attempt,
+            },
+    });
+    const recognition = createPreservedRecognition(transport);
+    try {
+      await recognition.prepare(prepareRequest);
+      const readings: RecognitionReading[] = [];
+      const attempt = recognition.recognize({
+        ...prepareRequest,
+        captureId: 'capture-1',
+        attempt: 1,
+        frame: createCanvas(),
+        onReading: (reading) => readings.push(reading),
+      });
+      const initial = await attempt.initial;
+      await attempt.completion;
+      for (const reading of [initial, ...readings]) {
+        expect(reading.status).toBe(expected);
+        expect(reading.candidates.map((candidate) => candidate.printingId)).toEqual(
+          expected === 'possible' ? [bolt.id] : [],
+        );
+      }
+      expect(readings.at(-1)?.provisional ?? initial.provisional).toBe(false);
+    } finally {
+      recognition.dispose({ sessionId: 'session-1' });
     }
   });
 
