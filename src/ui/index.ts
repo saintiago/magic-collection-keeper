@@ -12,6 +12,19 @@
  * private to the component (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
+export {
+  createCardList,
+  groupCardListEntries,
+  type UiCardList,
+  type UiCardListFragments,
+  type UiCardListGroup,
+  type UiCardListOptions,
+  type UiCardListPresentation,
+  type UiCardListTool,
+  type UiEntryImage,
+  type UiEntryOwnership,
+  type UiEntryTag,
+} from './internal/card-list.js';
 export type { UiDevice } from './internal/device.js';
 export type { UiDialogOptions, UiDialogs } from './internal/dialogs.js';
 export type { UiAccount, UiIdentity } from './internal/identity.js';
