@@ -154,21 +154,29 @@ describe('usercards confirmation races', () => {
     const rows = await connection.query(
       `select count(distinct provenance.copy_id)::int as count
          from usercards_private.copy_provenance as provenance
+         join usercards_private.import_receipt_acquisition as covered
+           on covered.account_id = provenance.account_id
+          and covered.acquisition_id = provenance.acquisition_id
          join usercards_private.import_receipt as receipt
-           on receipt.acquisition_id = provenance.acquisition_id
+           on receipt.account_id = covered.account_id
+          and receipt.operation_id = covered.operation_id
         where provenance.account_id = $1 and receipt.session_id = $2`,
       [alice.accountId, sessionId],
     );
     return Number(rows[0]?.count);
   }
 
+  /** Acquisitions the session's recorded confirmations covered, one per acquired source entry. */
   async function acquisitionCount(
     connection: PostgresConnection,
     sessionId: string,
   ): Promise<number> {
     const rows = await connection.query(
-      `select count(distinct receipt.acquisition_id)::int as count
-         from usercards_private.import_receipt as receipt
+      `select count(distinct covered.acquisition_id)::int as count
+         from usercards_private.import_receipt_acquisition as covered
+         join usercards_private.import_receipt as receipt
+           on receipt.account_id = covered.account_id
+          and receipt.operation_id = covered.operation_id
         where receipt.account_id = $1 and receipt.session_id = $2`,
       [alice.accountId, sessionId],
     );
@@ -291,7 +299,8 @@ describe('usercards confirmation races', () => {
     );
     expect(secondOutcome).toMatchObject({ code: 'conflict' });
     expect(await sessionCopyCount(contender, 'session-2')).toBe(2);
-    expect(await acquisitionCount(contender, 'session-2')).toBe(1);
+    // One acquisition per confirmed source entry; the refused confirmation added none.
+    expect(await acquisitionCount(contender, 'session-2')).toBe(2);
   });
 
   it('returns one recorded outcome when the same operation is confirmed concurrently', async () => {
@@ -338,5 +347,149 @@ describe('usercards confirmation races', () => {
     expect(secondResult.copies).toEqual(firstResult.copies);
     expect(await sessionCopyCount(contender, 'session-3')).toBe(1);
     expect(await acquisitionCount(contender, 'session-3')).toBe(1);
+  });
+
+  it('commits nothing when two sessions claim one operation identity', async () => {
+    if (fixture === undefined) {
+      throw new Error(`A local PostgreSQL server is unavailable. ${unavailable}`.trim());
+    }
+    const { holder, contender } = fixture;
+    const cards = createUserCards({ sql: contender.transactor(), catalog });
+    for (const [sessionId, entryId, finish] of [
+      ['session-4', 'line-4', 'foil'],
+      ['session-5', 'line-5', 'nonfoil'],
+    ] as const) {
+      await cards.stageImportEntries(alice, {
+        sessionId,
+        source: { kind: 'text', id: `${sessionId}-source` },
+        entries: [
+          {
+            entryId,
+            printingId: m11Printing.printingId,
+            finish,
+            condition: 'NM',
+            quantity: 1,
+          },
+        ],
+      });
+    }
+
+    const held = heldWriter(holder);
+    const winner = held.cards.confirmImport(alice, {
+      operationId: 'operation-shared',
+      sessionId: 'session-4',
+      entries: [{ entryId: 'line-4', expectedRevision: 1 }],
+    });
+    await waitFor(held.claimed, 'session lock');
+
+    // The contender reserves the same operation identity and waits for the holder's receipt, which
+    // keeps the row until it commits.
+    const reservation = sessionLockWatcher();
+    const contenderCards = createUserCards({
+      sql: contender.transactor({
+        onStatement: (statement) => {
+          if (statement.includes('insert into usercards_private.import_receipt')) {
+            reservation.onStatement();
+          }
+        },
+      }),
+      catalog,
+    });
+    const loser = contenderCards.confirmImport(alice, {
+      operationId: 'operation-shared',
+      sessionId: 'session-5',
+      entries: [{ entryId: 'line-5', expectedRevision: 1 }],
+    });
+    await waitFor(reservation.reached, 'operation reservation');
+    held.release();
+
+    const winnerResult = await winner;
+    expect(winnerResult.replayed).toBe(false);
+    expect(winnerResult.copies).toHaveLength(1);
+    const loserOutcome = await loser.then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(loserOutcome).toMatchObject({ code: 'conflict' });
+
+    // The losing confirmation committed nothing: no copy, acquisition or closed entry.
+    expect(await sessionCopyCount(contender, 'session-5')).toBe(0);
+    expect(await acquisitionCount(contender, 'session-5')).toBe(0);
+    const receipts = await contender.query(
+      `select operation_id, session_id
+         from usercards_private.import_receipt
+        where account_id = $1 and session_id in ('session-4', 'session-5')
+        order by session_id`,
+      [alice.accountId],
+    );
+    expect(receipts).toEqual([{ operation_id: 'operation-shared', session_id: 'session-4' }]);
+    const losing = await cards.listImportEntries(alice, { sessionId: 'session-5' });
+    expect(losing.entries.map((entry) => entry.state)).toEqual(['pending']);
+    expect(await acquisitionCount(contender, 'session-4')).toBe(1);
+  });
+
+  it('replays a source entry another session acquired concurrently', async () => {
+    if (fixture === undefined) {
+      throw new Error(`A local PostgreSQL server is unavailable. ${unavailable}`.trim());
+    }
+    const { holder, contender } = fixture;
+    const cards = createUserCards({ sql: contender.transactor(), catalog });
+    const content = {
+      printingId: m11Printing.printingId,
+      finish: 'foil' as const,
+      condition: 'LP' as const,
+      quantity: 1,
+    };
+    for (const [sessionId, entryId] of [
+      ['session-6', 'line-6'],
+      ['session-7', 'line-7'],
+    ] as const) {
+      await cards.stageImportEntries(alice, {
+        sessionId,
+        source: { kind: 'text', id: 'list-race' },
+        entries: [{ entryId, ...content }],
+      });
+    }
+
+    const held = heldWriter(holder);
+    const first = held.cards.confirmImport(alice, {
+      operationId: 'operation-6',
+      sessionId: 'session-6',
+      entries: [{ entryId: 'line-6', expectedRevision: 1 }],
+    });
+    await waitFor(held.claimed, 'session lock');
+
+    // The contender holds its own session and waits for the acquisition row the holder keeps until
+    // it commits, then replays that recorded acquisition instead of adding the source entry twice.
+    const acquisitionClaim = sessionLockWatcher();
+    const contenderCards = createUserCards({
+      sql: contender.transactor({
+        onStatement: (statement) => {
+          if (statement.includes('insert into usercards_private.import_acquisition')) {
+            acquisitionClaim.onStatement();
+          }
+        },
+      }),
+      catalog,
+    });
+    const second = contenderCards.confirmImport(alice, {
+      operationId: 'operation-7',
+      sessionId: 'session-7',
+      entries: [{ entryId: 'line-7', expectedRevision: 1 }],
+    });
+    await waitFor(acquisitionClaim.reached, 'acquisition claim');
+    held.release();
+
+    const firstResult = await first;
+    const secondResult = await second;
+    expect(firstResult.replayed).toBe(false);
+    expect(secondResult.replayed).toBe(true);
+    expect(secondResult.copies).toEqual(firstResult.copies);
+    expect(await sessionCopyCount(contender, 'session-6')).toBe(1);
+    expect(await sessionCopyCount(contender, 'session-7')).toBe(1);
+    expect(await acquisitionCount(contender, 'session-6')).toBe(1);
+    expect(await acquisitionCount(contender, 'session-7')).toBe(1);
+    const entries = await cards.listImportEntries(alice, { sessionId: 'session-7' });
+    expect(entries.entries).toEqual([]);
   });
 });

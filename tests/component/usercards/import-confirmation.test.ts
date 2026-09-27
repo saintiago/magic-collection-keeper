@@ -21,7 +21,7 @@ import {
   createUserCardsTestDatabase,
   type UserCardsTestDatabase,
 } from '../../support/usercards-database.js';
-import { failRevisionStatements } from './harness.js';
+import { boundedResponses, dataApiResponseBytes, failRevisionStatements } from './harness.js';
 
 const alice: TrustedUserContext = { accountId: 'cognito-alice' };
 const bob: TrustedUserContext = { accountId: 'cognito-bob' };
@@ -54,6 +54,24 @@ const m10Printing = {
   physical: true,
 };
 
+const counterspell = {
+  cardId: 'oracle-counterspell',
+  name: 'Counterspell',
+  colors: ['U'],
+  colorIdentity: ['U'],
+  manaValue: 2,
+};
+
+const counterspellPrinting = {
+  printingId: 'printing-7ed-67-en',
+  cardId: counterspell.cardId,
+  edition: '7ED',
+  collectorNumber: '67',
+  language: 'en',
+  finishes: ['nonfoil'],
+  physical: true,
+};
+
 /** Counts the account's stored copies, so "staging is not ownership" is asserted directly. */
 async function countCopies(database: UserCardsTestDatabase, accountId: string): Promise<number> {
   const rows = await database.query(
@@ -72,8 +90,8 @@ describe('usercards import confirmation', () => {
     database = await createUserCardsTestDatabase();
     await publishCatalog(database, {
       revisionId: 'revision-1',
-      cards: [lightningBolt],
-      printings: [m11Printing, m10Printing],
+      cards: [lightningBolt, counterspell],
+      printings: [m11Printing, m10Printing, counterspellPrinting],
     });
     catalog = createCatalog({ sql: database.sql });
     userCards = createUserCards({ sql: database.sql, catalog });
@@ -353,6 +371,228 @@ describe('usercards import confirmation', () => {
     expect(await countCopies(database, alice.accountId)).toBe(5);
   });
 
+  it('confirms every admitted capture of one session, including a repeat after another card', async () => {
+    const admissions = [
+      ['capture-1', m11Printing.printingId],
+      ['capture-2', counterspellPrinting.printingId],
+      ['capture-3', m11Printing.printingId],
+    ] as const;
+    for (const [captureId, printingId] of admissions) {
+      const staged = await userCards.stageCaptureObservation(alice, {
+        sessionId: 'capture-session',
+        captureId,
+        printingId,
+      });
+      expect(staged.outcome).toBe('admitted');
+    }
+
+    // Each admitted capture is its own acquisition, whether or not it repeats a card identity.
+    const confirmed = [];
+    for (const [captureId] of admissions) {
+      confirmed.push(
+        await userCards.confirmImport(alice, {
+          operationId: `operation-${captureId}`,
+          sessionId: 'capture-session',
+          entries: [{ entryId: captureId, expectedRevision: 1 }],
+        }),
+      );
+    }
+    expect(confirmed.map((result) => result.replayed)).toEqual([false, false, false]);
+    expect(confirmed.every((result) => result.copies.length === 1)).toBe(true);
+    expect(
+      new Set(confirmed.flatMap((result) => result.copies.map((copy) => copy.copyId))).size,
+    ).toBe(3);
+    expect(await countCopies(database, alice.accountId)).toBe(3);
+
+    const closed = await userCards.listImportEntries(alice, { sessionId: 'capture-session' });
+    expect(closed.entries).toEqual([]);
+    expect(closed.session).toMatchObject({
+      state: 'confirmed',
+      pendingEntries: 0,
+      confirmedEntries: 3,
+    });
+  });
+
+  it('adds a repeated source once however confirmations are partitioned', async () => {
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-1',
+      source: { kind: 'moxfield', id: 'deck-1' },
+      entries: [
+        {
+          entryId: 'line-1',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 1,
+        },
+        {
+          entryId: 'line-2',
+          printingId: counterspellPrinting.printingId,
+          finish: 'nonfoil',
+          condition: 'NM',
+          quantity: 1,
+        },
+      ],
+    });
+    const together = await userCards.confirmImport(alice, {
+      operationId: 'operation-together',
+      sessionId: 'session-1',
+      entries: [
+        { entryId: 'line-1', expectedRevision: 1 },
+        { entryId: 'line-2', expectedRevision: 1 },
+      ],
+    });
+    expect(together.copies).toHaveLength(2);
+
+    // The identical source imported again and confirmed line by line adds no copy.
+    const reimported = [
+      ['session-2', 'line-3', m11Printing.printingId, 'foil', 'LP'],
+      ['session-3', 'line-4', counterspellPrinting.printingId, 'nonfoil', 'NM'],
+    ] as const;
+    for (const [sessionId, entryId, printingId, finish, condition] of reimported) {
+      await userCards.stageImportEntries(alice, {
+        sessionId,
+        source: { kind: 'moxfield', id: 'deck-1' },
+        entries: [{ entryId, printingId, finish, condition, quantity: 1 }],
+      });
+    }
+    for (const [sessionId, entryId] of reimported) {
+      const repeated = await userCards.confirmImport(alice, {
+        operationId: `operation-${entryId}`,
+        sessionId,
+        entries: [{ entryId, expectedRevision: 1 }],
+      });
+      expect(repeated.replayed).toBe(true);
+      expect(repeated.copies).toHaveLength(1);
+    }
+    expect(await countCopies(database, alice.accountId)).toBe(2);
+
+    // The source's second copy of a card is a source entry of its own, and only it adds a copy.
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-4',
+      source: { kind: 'moxfield', id: 'deck-2' },
+      entries: [
+        {
+          entryId: 'line-5',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 1,
+        },
+        {
+          entryId: 'line-6',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 1,
+        },
+      ],
+    });
+    const firstOfTwo = await userCards.confirmImport(alice, {
+      operationId: 'operation-line-5',
+      sessionId: 'session-4',
+      entries: [{ entryId: 'line-5', expectedRevision: 1 }],
+    });
+    expect(firstOfTwo.replayed).toBe(false);
+    expect(firstOfTwo.copies).toHaveLength(1);
+    const secondOfTwo = await userCards.confirmImport(alice, {
+      operationId: 'operation-line-6',
+      sessionId: 'session-4',
+      entries: [{ entryId: 'line-6', expectedRevision: 1 }],
+    });
+    expect(secondOfTwo.replayed).toBe(false);
+    expect(secondOfTwo.copies).toHaveLength(1);
+    expect(await countCopies(database, alice.accountId)).toBe(4);
+
+    // Reimporting that source with its two identical lines replays both source entries.
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-5',
+      source: { kind: 'moxfield', id: 'deck-2' },
+      entries: [7, 8].map((index) => ({
+        entryId: `line-${index}`,
+        printingId: m11Printing.printingId,
+        finish: 'foil' as const,
+        condition: 'LP' as const,
+        quantity: 1,
+      })),
+    });
+    const repeated = await userCards.confirmImport(alice, {
+      operationId: 'operation-deck-2-repeat',
+      sessionId: 'session-5',
+      entries: [
+        { entryId: 'line-7', expectedRevision: 1 },
+        { entryId: 'line-8', expectedRevision: 1 },
+      ],
+    });
+    expect(repeated.replayed).toBe(true);
+    expect(repeated.copies).toHaveLength(2);
+    expect(await countCopies(database, alice.accountId)).toBe(4);
+  });
+
+  it('keeps a recorded outcome unchanged when its copies are corrected later', async () => {
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-review',
+      source: { kind: 'text', id: 'list-review' },
+      entries: [
+        {
+          entryId: 'line-1',
+          printingId: m11Printing.printingId,
+          finish: 'nonfoil',
+          condition: null,
+          quantity: 1,
+        },
+      ],
+    });
+    const request = {
+      operationId: 'operation-review',
+      sessionId: 'session-review',
+      entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+    };
+    const confirmed = await userCards.confirmImport(alice, request);
+    expect(confirmed.copies).toMatchObject([
+      {
+        printingId: m11Printing.printingId,
+        finish: 'nonfoil',
+        condition: null,
+        revision: 1,
+      },
+    ]);
+
+    const [copy] = confirmed.copies;
+    if (copy === undefined) {
+      throw new Error('Expected a confirmed copy.');
+    }
+    const corrected = await userCards.correctCopy(alice, {
+      copyId: copy.copyId,
+      expectedRevision: copy.revision,
+      printingId: m10Printing.printingId,
+      finish: 'nonfoil',
+      condition: 'LP',
+    });
+    expect(corrected.copies[0]).toMatchObject({
+      copyId: copy.copyId,
+      printingId: m10Printing.printingId,
+      condition: 'LP',
+      revision: 2,
+    });
+
+    // Identical retry and recovery still report what the confirmation committed.
+    const retry = await userCards.confirmImport(alice, request);
+    expect(retry.replayed).toBe(true);
+    expect(retry.copies).toEqual(confirmed.copies);
+    const recovered = await userCards.recoverImportOperation(alice, request.operationId);
+    expect(recovered).toEqual({
+      outcome: 'recorded',
+      receipt: {
+        operationId: confirmed.operationId,
+        sessionId: confirmed.sessionId,
+        sourceKind: confirmed.sourceKind,
+        sourceId: confirmed.sourceId,
+        copies: confirmed.copies,
+      },
+    });
+  });
+
   it('recovers a recorded outcome and reports its absence without revealing another account', async () => {
     await stageDeck();
     const confirmed = await userCards.confirmImport(alice, {
@@ -497,4 +737,89 @@ describe('usercards import confirmation', () => {
       outcome: 'absent',
     });
   });
+
+  it('recovers a confirmation larger than one transport response', async () => {
+    // The RDS Data API returns at most 1 MiB per statement; the deployed transport rejects more.
+    const responseLimit = 1024 * 1024;
+    const bounded = createUserCards({
+      sql: boundedResponses(database.sql, responseLimit),
+      catalog,
+    });
+    const entries = Array.from({ length: 50 }, (_, index) => ({
+      entryId: `bulk-${index}`,
+      printingId: index % 2 === 0 ? m11Printing.printingId : counterspellPrinting.printingId,
+      finish: 'nonfoil' as const,
+      condition: 'NM' as const,
+      quantity: 100,
+    }));
+    await bounded.stageImportEntries(alice, {
+      sessionId: 'session-maximum',
+      source: { kind: 'text', id: 'list-maximum' },
+      entries,
+    });
+    const confirmed = await bounded.confirmImport(alice, {
+      operationId: 'operation-maximum',
+      sessionId: 'session-maximum',
+      entries: entries.map((entry) => ({ entryId: entry.entryId, expectedRevision: 1 })),
+    });
+    expect(confirmed.copies).toHaveLength(5000);
+
+    // Reading that outcome in one statement, without the component's paging, does not fit the
+    // transport's response bound.
+    const unbounded = await database.query(
+      `select 'copy' as row_kind,
+              (row_number() over (order by provenance.copy_id))::int as row_position,
+              to_jsonb(provenance)::text as payload
+         from (select provenance.copy_id,
+                      provenance.printing_id,
+                      provenance.finish,
+                      provenance.condition,
+                      provenance.revision
+                 from usercards_private.import_receipt_acquisition as covered
+                 join usercards_private.copy_provenance as provenance
+                   on provenance.account_id = covered.account_id
+                  and provenance.acquisition_id = covered.acquisition_id
+                where covered.account_id = $1
+                  and covered.operation_id = $2) as provenance`,
+      [alice.accountId, 'operation-maximum'],
+    );
+    expect(unbounded).toHaveLength(5000);
+    expect(dataApiResponseBytes(unbounded)).toBeGreaterThan(responseLimit);
+
+    const recovered = await bounded.recoverImportOperation(alice, 'operation-maximum');
+    expect(recovered).toMatchObject({ outcome: 'recorded' });
+    if (recovered.outcome !== 'recorded') {
+      throw new Error('Expected a recorded outcome.');
+    }
+    expect(recovered.receipt.copies).toHaveLength(5000);
+    expect(recovered.receipt.copies.map((copy) => copy.copyId).sort()).toEqual(
+      confirmed.copies.map((copy) => copy.copyId).sort(),
+    );
+
+    // An identical retry and a repeated import of the same source return the same complete outcome.
+    const retry = await bounded.confirmImport(alice, {
+      operationId: 'operation-maximum',
+      sessionId: 'session-maximum',
+      entries: entries.map((entry) => ({ entryId: entry.entryId, expectedRevision: 1 })),
+    });
+    expect(retry.replayed).toBe(true);
+    expect(retry.copies).toHaveLength(5000);
+
+    await bounded.stageImportEntries(alice, {
+      sessionId: 'session-maximum-repeat',
+      source: { kind: 'text', id: 'list-maximum' },
+      entries: entries.map((entry, index) => ({ ...entry, entryId: `repeat-${index}` })),
+    });
+    const repeated = await bounded.confirmImport(alice, {
+      operationId: 'operation-maximum-repeat',
+      sessionId: 'session-maximum-repeat',
+      entries: entries.map((_, index) => ({
+        entryId: `repeat-${index}`,
+        expectedRevision: 1,
+      })),
+    });
+    expect(repeated.replayed).toBe(true);
+    expect(repeated.copies).toHaveLength(5000);
+    expect(await countCopies(database, alice.accountId)).toBe(5000);
+  }, 180_000);
 });

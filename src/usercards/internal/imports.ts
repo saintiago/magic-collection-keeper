@@ -6,14 +6,19 @@
  * copies relation. Every mutation runs in one transaction that locks the session row first, so the
  * capture order, the consecutive-identity admission sequence, the reviewed revisions and the
  * confirmation receipts of one import serialize instead of racing. A staged capture records its
- * admission decision permanently, a replayed confirmation returns the recorded outcome of its
- * operation or acquisition, and an acquisition keeps the source identity that stops the same
- * acquisition from being added twice.
+ * admission decision permanently, and a confirmation reserves its account-scoped operation
+ * identity before it changes any record, so an operation conflict commits nothing.
+ *
+ * Replay protection is durable per acquisition source and source entry: an acquisition records the
+ * reviewed content of one entry and its occurrence among the source's entries with that content, so
+ * a repeated import recognizes the source entries it already acquired however a caller partitions
+ * its confirmations, while two identical lines or a card captured twice around another card stay
+ * distinct acquisitions (docs/user-cards.md#source-imports). Each recorded operation keeps the
+ * copies it reported as immutable provenance, read back in transport-safe pages.
  */
 
 import { randomUUID } from 'node:crypto';
 
-import type { Finish } from '../../catalog/index.js';
 import { ensureOwnedTag, storeCopiesWithOwnedTag } from './copies.js';
 import { UserCardsError } from './errors.js';
 import type {
@@ -27,8 +32,10 @@ import {
   type ImportCandidate,
   type ImportEntry,
   type ImportSession,
+  type PhysicalCopy,
 } from './model.js';
 import {
+  copyFromRow,
   copiesFromRows,
   importCandidatePayloadSql,
   importEntriesFromRows,
@@ -70,6 +77,12 @@ import type {
 interface Statement {
   readonly statement: string;
   readonly parameters: Record<string, UserCardsSqlValue>;
+}
+
+/** The durable content key of one entry: its reviewed content and its occurrence in its source. */
+interface EntryKey {
+  readonly entryFingerprint: string;
+  readonly occurrence: number;
 }
 
 /** One stored session as its mutations need it: the source identity, sequence state and revision. */
@@ -727,66 +740,142 @@ function readReceiptStatement(accountId: string, operationId: string): Statement
   return {
     statement: `select receipt.session_id,
               receipt.input_fingerprint,
-              acquisition.acquisition_id,
-              acquisition.source_kind,
-              acquisition.source_id
+              session.source_kind,
+              session.source_id
      from usercards_private.import_receipt as receipt
-     join usercards_private.import_acquisition as acquisition
-       on acquisition.acquisition_id = receipt.acquisition_id
+     join usercards_private.import_session as session
+       on session.account_id = receipt.account_id
+      and session.session_id = receipt.session_id
     where receipt.account_id = :account_id and receipt.operation_id = :operation_id`,
     parameters: { account_id: accountId, operation_id: operationId },
   };
 }
 
-function readAcquisitionStatement(
-  accountId: string,
-  sourceKind: string,
-  sourceId: string,
-  contentFingerprint: string,
-): Statement {
+/**
+ * The recorded outcome of one reviewed request, whatever operation identity first ran it. An
+ * identical request replayed under a different operation identity returns that outcome instead of
+ * changing records again (docs/user-cards.md#interface).
+ */
+function readReceiptByInputStatement(accountId: string, inputFingerprint: string): Statement {
   return {
-    statement: `select acquisition_id, source_kind, source_id
-     from usercards_private.import_acquisition
+    statement: `select receipt.operation_id
+     from usercards_private.import_receipt as receipt
     where account_id = :account_id
-      and source_kind = :source_kind
-      and source_id = :source_id
-      and content_fingerprint = :content_fingerprint`,
+      and input_fingerprint = :input_fingerprint
+    order by receipt.created_at, receipt.operation_id
+    limit 1`,
     parameters: {
       account_id: accountId,
-      source_kind: sourceKind,
-      source_id: sourceId,
-      content_fingerprint: contentFingerprint,
+      input_fingerprint: inputFingerprint,
     },
   };
 }
 
-/** Claims the acquisition of this source and content, or reports that another change holds it. */
-function claimAcquisitionStatement(
+/**
+ * The occurrence of each requested entry among its session's entries with the same reviewed
+ * content, counted in capture order. Together with the entry fingerprint it identifies the source
+ * entry an acquisition belongs to, so a duplicate line or a scan of the same card twice stays a
+ * separate acquisition while a repeated import of that source recognizes what it already acquired.
+ */
+function entryOccurrencesStatement(
   accountId: string,
-  plan: ConfirmationPlan,
+  sessionId: string,
+  entryIds: readonly string[],
+): Statement {
+  const references = placeholdersFor(entryIds, 'occurrence');
+  return {
+    statement: `select requested.entry_id,
+       (select count(*)::int
+          from usercards_private.import_entry as peer
+         where peer.account_id = requested.account_id
+           and peer.session_id = requested.session_id
+           and peer.position <= requested.position
+           and peer.printing_id is not distinct from requested.printing_id
+           and peer.finish is not distinct from requested.finish
+           and peer.condition is not distinct from requested.condition
+           and peer.quantity = requested.quantity) as occurrence
+     from usercards_private.import_entry as requested
+    where requested.account_id = :account_id
+      and requested.session_id = :session_id
+      and requested.entry_id in (${references.list})`,
+    parameters: {
+      account_id: accountId,
+      session_id: sessionId,
+      ...references.parameters,
+    },
+  };
+}
+
+/** The acquisitions already recorded for the requested reviewed entries of one source. */
+function recordedAcquisitionsStatement(
+  accountId: string,
   sourceKind: string,
   sourceId: string,
+  keys: readonly EntryKey[],
+): Statement {
+  const parameters: Record<string, UserCardsSqlValue> = {
+    account_id: accountId,
+    source_kind: sourceKind,
+    source_id: sourceId,
+  };
+  const values = keys
+    .map((key, index) => {
+      parameters[`fingerprint_${index}`] = key.entryFingerprint;
+      parameters[`occurrence_${index}`] = key.occurrence;
+      return `(:fingerprint_${index}::text, :occurrence_${index}::int)`;
+    })
+    .join(',\n       ');
+  return {
+    statement: `select acquisition.acquisition_id,
+              acquisition.entry_fingerprint,
+              acquisition.occurrence
+     from usercards_private.import_acquisition as acquisition
+     join (values ${values}) as requested (entry_fingerprint, occurrence)
+       on requested.entry_fingerprint = acquisition.entry_fingerprint
+      and requested.occurrence = acquisition.occurrence
+    where acquisition.account_id = :account_id
+      and acquisition.source_kind = :source_kind
+      and acquisition.source_id = :source_id`,
+    parameters,
+  };
+}
+
+/** Records the acquisition of one source entry the account has not acquired from that source. */
+function claimAcquisitionStatement(
+  accountId: string,
+  sourceKind: string,
+  sourceId: string,
+  entry: ConfirmedImportEntry,
+  occurrence: number,
 ): Statement {
   return {
     statement: `insert into usercards_private.import_acquisition
-       (acquisition_id, account_id, source_kind, source_id, content_fingerprint)
-     values (:acquisition_id, :account_id, :source_kind, :source_id, :content_fingerprint)
-     on conflict (account_id, source_kind, source_id, content_fingerprint) do nothing
+       (acquisition_id, account_id, source_kind, source_id, entry_fingerprint, occurrence, entry_id)
+     values (:acquisition_id, :account_id, :source_kind, :source_id, :entry_fingerprint,
+             :occurrence, :entry_id)
+     on conflict (account_id, source_kind, source_id, entry_fingerprint, occurrence) do nothing
      returning acquisition_id`,
     parameters: {
       acquisition_id: randomUUID(),
       account_id: accountId,
       source_kind: sourceKind,
       source_id: sourceId,
-      content_fingerprint: plan.contentFingerprint,
+      entry_fingerprint: entry.entryFingerprint,
+      occurrence,
+      entry_id: entry.entryId,
     },
   };
+}
+
+/** The durable key of one reviewed entry inside its acquisition source. */
+function entryKey(entryFingerprint: string, occurrence: number): string {
+  return `${entryFingerprint}\u0000${occurrence}`;
 }
 
 function provenanceStatement(
   accountId: string,
   acquisitionId: string,
-  copies: readonly { readonly copyId: string; readonly entryId: string }[],
+  copies: readonly (PhysicalCopy & { readonly entryId: string })[],
 ): Statement {
   const parameters: Record<string, UserCardsSqlValue> = {
     account_id: accountId,
@@ -796,40 +885,71 @@ function provenanceStatement(
     .map((copy, index) => {
       parameters[`copy_id_${index}`] = copy.copyId;
       parameters[`entry_id_${index}`] = copy.entryId;
-      return `(:copy_id_${index}, :account_id, :acquisition_id, :entry_id_${index})`;
+      parameters[`printing_id_${index}`] = copy.printingId;
+      parameters[`finish_${index}`] = copy.finish;
+      parameters[`condition_${index}`] = copy.condition;
+      parameters[`revision_${index}`] = copy.revision;
+      return (
+        `(:copy_id_${index}, :account_id, :acquisition_id, :entry_id_${index}, ` +
+        `:printing_id_${index}, :finish_${index}, :condition_${index}, :revision_${index})`
+      );
     })
     .join(',\n       ');
   return {
     statement: `insert into usercards_private.copy_provenance
-       (copy_id, account_id, acquisition_id, entry_id)
+       (copy_id, account_id, acquisition_id, entry_id, printing_id, finish, condition, revision)
      values ${values}
      returning copy_id`,
     parameters,
   };
 }
 
-function insertReceiptStatement(
-  accountId: string,
-  plan: ConfirmationPlan,
-  acquisitionId: string,
-): Statement {
+/**
+ * Reserves the account-scoped operation identity before any record changes. The insert is the first
+ * mutation of a confirmation, so an operation conflict leaves every record untouched.
+ */
+function insertReceiptStatement(accountId: string, plan: ConfirmationPlan): Statement {
   return {
     statement: `insert into usercards_private.import_receipt
-       (operation_id, account_id, acquisition_id, session_id, input_fingerprint)
-     values (:operation_id, :account_id, :acquisition_id, :session_id, :input_fingerprint)
+       (operation_id, account_id, session_id, input_fingerprint)
+     values (:operation_id, :account_id, :session_id, :input_fingerprint)
      on conflict (account_id, operation_id) do nothing
      returning operation_id`,
     parameters: {
       operation_id: plan.operationId,
       account_id: accountId,
-      acquisition_id: acquisitionId,
       session_id: plan.sessionId,
       input_fingerprint: plan.inputFingerprint,
     },
   };
 }
 
-/** Marks the reviewed entries of a recorded acquisition as confirmed without creating copies. */
+/** The acquisitions one operation's confirmation covered, as the recorded outcome it returns. */
+function insertReceiptAcquisitionsStatement(
+  accountId: string,
+  operationId: string,
+  acquisitionIds: readonly string[],
+): Statement {
+  const parameters: Record<string, UserCardsSqlValue> = {
+    account_id: accountId,
+    operation_id: operationId,
+  };
+  const values = acquisitionIds
+    .map((acquisitionId, index) => {
+      parameters[`acquisition_id_${index}`] = acquisitionId;
+      return `(:account_id, :operation_id, :acquisition_id_${index})`;
+    })
+    .join(',\n       ');
+  return {
+    statement: `insert into usercards_private.import_receipt_acquisition
+       (account_id, operation_id, acquisition_id)
+     values ${values}
+     returning acquisition_id`,
+    parameters,
+  };
+}
+
+/** Closes the reviewed entries of one confirmation, whether they created copies or replayed. */
 function confirmEntriesStatement(
   accountId: string,
   sessionId: string,
@@ -850,49 +970,97 @@ function confirmEntriesStatement(
   };
 }
 
-/** The copies one acquisition created, read through their own provenance records. */
-function acquisitionCopiesStatement(accountId: string, acquisitionId: string): Statement {
+/**
+ * One bounded page of the copies a recorded operation covered, as the immutable provenance of
+ * their own acquisition recorded them when they were created. A later correction of a physical
+ * copy changes the copy, never this recorded outcome.
+ */
+function receiptCopiesStatement(
+  accountId: string,
+  operationId: string,
+  limit: number,
+  offset: number,
+): Statement {
   return {
     statement: `select 'copy' as row_kind,
-  (row_number() over (order by copy.copy_id))::int as row_position,
-  to_jsonb(copy)::text as payload
-from usercards_private.copy_provenance as provenance
-join usercards_private.copy as copy
-  on copy.copy_id = provenance.copy_id
-where provenance.account_id = :account_id
-  and provenance.acquisition_id = :acquisition_id
+  (row_number() over (order by provenance.copy_id))::int as row_position,
+  to_jsonb(provenance)::text as payload
+from (select provenance.copy_id,
+             provenance.printing_id,
+             provenance.finish,
+             provenance.condition,
+             provenance.revision
+        from usercards_private.import_receipt_acquisition as covered
+        join usercards_private.copy_provenance as provenance
+          on provenance.account_id = covered.account_id
+         and provenance.acquisition_id = covered.acquisition_id
+       where covered.account_id = :account_id
+         and covered.operation_id = :operation_id
+       order by provenance.copy_id
+       limit :limit offset :offset) as provenance
 order by row_kind, row_position`,
-    parameters: { account_id: accountId, acquisition_id: acquisitionId },
+    parameters: { account_id: accountId, operation_id: operationId, limit, offset },
   };
 }
 
-/** One recorded outcome: the operation, the session that referred to it and the acquisition. */
+/**
+ * One recorded outcome: the operation, the session that referred to it and the copies it reported,
+ * read in transport-safe pages so an outcome larger than one response stays complete. The copies
+ * come from the immutable provenance of the acquisitions the operation covered, so later physical
+ * corrections never change what the operation recorded.
+ */
 async function readReceipt(
   statements: UserCardsSqlExecutor,
   accountId: string,
   operationId: string,
-  sessionId: string,
-  acquisitionId: string,
-  sourceKind: string,
-  sourceId: string,
-): Promise<ImportReceiptData> {
-  const copiesRequest = acquisitionCopiesStatement(accountId, acquisitionId);
-  const rows = groupRows(
+): Promise<ImportReceiptData | null> {
+  const recordedRequest = readReceiptStatement(accountId, operationId);
+  const recorded = (
     await readRows(
       statements,
-      copiesRequest.statement,
-      copiesRequest.parameters,
+      recordedRequest.statement,
+      recordedRequest.parameters,
+      'The recorded operation could not be read.',
+    )
+  )[0];
+  if (recorded === undefined) {
+    return null;
+  }
+  const pageSize = USERCARDS_LIMITS.maxReceiptCopiesPerRead;
+  const copies: UserCardsSqlRow[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const request = receiptCopiesStatement(accountId, operationId, pageSize, offset);
+    const page = await readRows(
+      statements,
+      request.statement,
+      request.parameters,
       'The recorded confirmation could not be read.',
-    ),
-    ['copy'] as const,
-  );
+    );
+    copies.push(...page);
+    if (page.length < pageSize) {
+      break;
+    }
+  }
   return {
     operationId,
-    sessionId,
-    sourceKind,
-    sourceId,
-    copies: copiesFromRows(rows.copy),
+    sessionId: textValue(recorded.session_id),
+    sourceKind: textValue(recorded.source_kind),
+    sourceId: textValue(recorded.source_id),
+    copies: copiesFromRows(copies),
   };
+}
+
+/** The recorded outcome of one operation that must exist, because this transaction recorded it. */
+async function requireReceipt(
+  statements: UserCardsSqlExecutor,
+  accountId: string,
+  operationId: string,
+): Promise<ImportReceiptData> {
+  const receipt = await readReceipt(statements, accountId, operationId);
+  if (receipt === null) {
+    throw new UserCardsError('unavailable', 'UserCards did not report the recorded confirmation.');
+  }
+  return receipt;
 }
 
 /** One session that must exist, because a mutation just read or wrote it in this transaction. */
@@ -986,21 +1154,10 @@ function candidateKey(printingId: string, provider: string, evidence: string): s
   return `${printingId}\u0000${provider}\u0000${evidence}`;
 }
 
-function acquisitionLookupStatement(
-  accountId: string,
-  plan: ConfirmationPlan,
-  sourceKind: string,
-  sourceId: string,
-): Statement {
-  return readAcquisitionStatement(accountId, sourceKind, sourceId, plan.contentFingerprint);
-}
-
 /** The state of the requested entries: still reviewable, already confirmed, or neither. */
 interface ConfirmationClassification {
   /** Requested entries that are still pending at the revision the caller reviewed. */
   readonly pending: readonly ConfirmedImportEntry[];
-  /** Requested entries this account already confirmed. */
-  readonly confirmed: readonly string[];
   /** A requested entry is not this account's or not in this session. */
   readonly missing: boolean;
   /** A requested entry was discarded, or changed after the caller read it. */
@@ -1027,7 +1184,6 @@ async function classifyConfirmation(
   );
   const stored = new Map(rows.map((row) => [textValue(row.entry_id), row] as const));
   const pending: ConfirmedImportEntry[] = [];
-  const confirmed: string[] = [];
   let missing = false;
   let stale = false;
   let unresolved = false;
@@ -1038,108 +1194,104 @@ async function classifyConfirmation(
       continue;
     }
     const state = textValue(row.state);
-    if (state === 'pending') {
-      if (
-        requested.state !== 'pending' ||
-        integerValue(row.revision) !== requested.expectedRevision
-      ) {
-        stale = true;
-      } else if (requested.copy.printingId === null || requested.copy.finish === null) {
-        unresolved = true;
-      } else {
-        pending.push(requested);
-      }
-    } else if (state === 'confirmed') {
-      // Confirmed since the caller read it: only its recorded acquisition may accept it again.
-      confirmed.push(requested.entryId);
-    } else {
+    if (
+      state !== 'pending' ||
+      requested.state !== 'pending' ||
+      integerValue(row.revision) !== requested.expectedRevision
+    ) {
+      // The entry is confirmed or discarded, or changed after the caller read it.
       stale = true;
+    } else if (requested.copy.printingId === null || requested.copy.finish === null) {
+      unresolved = true;
+    } else {
+      pending.push(requested);
     }
   }
-  return { pending, confirmed, missing, stale, unresolved };
+  return { pending, missing, stale, unresolved };
 }
 
-interface RecordedAcquisition {
-  readonly acquisitionId: string;
-  readonly sourceKind: string;
-  readonly sourceId: string;
+/** One reviewed entry with the durable key its acquisition source is recognized by. */
+interface KeyedImportEntry {
+  readonly entry: ConfirmedImportEntry;
+  /** Occurrence of the entry among the session's entries with the same reviewed content. */
+  readonly occurrence: number;
+  readonly key: string;
 }
 
 /**
- * Replay protection for one acquisition: the source and content were already confirmed, so the
- * requested entries become confirmed without new copies and this operation is recorded against the
- * acquisition that already holds the outcome (docs/user-cards.md#persistence-and-recovery).
+ * The occurrence of each reviewed entry among its session's entries with the same reviewed
+ * content, in capture order. Two identical lines, or a card scanned twice around another card, get
+ * distinct occurrences and stay distinct acquisitions, while a repeated import of the same source
+ * declares the same occurrences again.
  */
-async function replayAcquisition(
+async function readEntryKeys(
   statements: UserCardsSqlExecutor,
   accountId: string,
-  plan: ConfirmationPlan,
-  acquisition: RecordedAcquisition,
+  sessionId: string,
   pending: readonly ConfirmedImportEntry[],
-): Promise<ConfirmationOutcome> {
-  const entryIds = pending.map((entry) => entry.entryId);
-  let privateRevision: string;
-  if (entryIds.length === 0) {
-    privateRevision = await currentRevision(statements, accountId);
-  } else {
-    const confirmation = confirmEntriesStatement(accountId, plan.sessionId, entryIds);
-    const confirmed = await readRows(
-      statements,
-      confirmation.statement,
-      confirmation.parameters,
-      'The reviewed entries could not be confirmed.',
-    );
-    if (confirmed.length !== entryIds.length) {
-      return { outcome: 'stale-entry' };
+): Promise<readonly KeyedImportEntry[]> {
+  const request = entryOccurrencesStatement(
+    accountId,
+    sessionId,
+    pending.map((entry) => entry.entryId),
+  );
+  const rows = await readRows(
+    statements,
+    request.statement,
+    request.parameters,
+    'The reviewed entries could not be read.',
+  );
+  const occurrences = new Map(
+    rows.map((row) => [textValue(row.entry_id), integerValue(row.occurrence)] as const),
+  );
+  return pending.map((entry) => {
+    const occurrence = occurrences.get(entry.entryId);
+    if (occurrence === undefined) {
+      throw new UserCardsError('unavailable', 'UserCards did not report the reviewed entries.');
     }
-    const bump = bumpSessionStatement(accountId, plan.sessionId);
-    await readRows(
-      statements,
-      bump.statement,
-      bump.parameters,
-      'The import session could not be updated.',
-    );
-    privateRevision = await advanceRevision(statements, accountId);
-  }
+    return {
+      entry,
+      occurrence,
+      key: entryKey(entry.entryFingerprint, occurrence),
+    };
+  });
+}
 
-  const receiptInsert = insertReceiptStatement(accountId, plan, acquisition.acquisitionId);
-  const recorded = (
-    await readRows(
-      statements,
-      receiptInsert.statement,
-      receiptInsert.parameters,
-      'The confirmation receipt could not be stored.',
-    )
-  )[0];
-  if (recorded === undefined) {
-    // Another change recorded this operation first; only identical input may replay it.
-    const request = readReceiptStatement(accountId, plan.operationId);
-    const stored = (
-      await readRows(
-        statements,
-        request.statement,
-        request.parameters,
-        'The recorded operation could not be read.',
-      )
-    )[0];
-    if (stored === undefined || textValue(stored.input_fingerprint) !== plan.inputFingerprint) {
-      return { outcome: 'operation-conflict' };
-    }
+/** The acquisitions already recorded for the given durable keys of one source. */
+async function readRecordedAcquisitions(
+  statements: UserCardsSqlExecutor,
+  accountId: string,
+  sourceKind: string,
+  sourceId: string,
+  keys: readonly KeyedImportEntry[],
+): Promise<ReadonlyMap<string, string>> {
+  if (keys.length === 0) {
+    return new Map();
   }
-  return {
-    outcome: 'confirmed',
-    replayed: true,
-    privateRevision,
-    receipt: await readReceipt(
-      statements,
-      accountId,
-      plan.operationId,
-      plan.sessionId,
-      acquisition.acquisitionId,
-      acquisition.sourceKind,
-      acquisition.sourceId,
+  const request = recordedAcquisitionsStatement(
+    accountId,
+    sourceKind,
+    sourceId,
+    keys.map(({ entry, occurrence }) => ({
+      entryFingerprint: entry.entryFingerprint,
+      occurrence,
+    })),
+  );
+  const rows = await readRows(
+    statements,
+    request.statement,
+    request.parameters,
+    'The recorded acquisitions could not be read.',
+  );
+  return new Map(
+    rows.map(
+      (row) =>
+        [
+          entryKey(textValue(row.entry_fingerprint), integerValue(row.occurrence)),
+          textValue(row.acquisition_id),
+        ] as const,
     ),
-  };
+  );
 }
 
 /** Reads and writes the private pending imports of one account. */
@@ -1458,6 +1610,15 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
           if (rows[0] === undefined) {
             return { outcome: 'conflict' as const };
           }
+          // A review changes the pending state a whole-import discard removes, so it advances the
+          // session revision that discard validates.
+          const bump = bumpSessionStatement(accountId, located);
+          await readRows(
+            statements,
+            bump.statement,
+            bump.parameters,
+            'The import session could not be updated.',
+          );
           const privateRevision = await advanceRevision(statements, accountId);
           return {
             outcome: 'updated' as const,
@@ -1519,6 +1680,15 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
               insert.statement,
               insert.parameters,
               'The recognition alternatives could not be stored.',
+            );
+            // Later alternatives are part of the pending state a whole-import discard removes, so
+            // that discard quotes the session revision they published.
+            const bump = bumpSessionStatement(accountId, located);
+            await readRows(
+              statements,
+              bump.statement,
+              bump.parameters,
+              'The import session could not be updated.',
             );
             privateRevision = await advanceRevision(statements, accountId);
           }
@@ -1626,7 +1796,7 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
       return inTransaction(
         sql,
         async (statements) => {
-          // The session row serializes confirmations of one import: entry state, source identity and
+          // The session row serializes the changes of one import: entry state, source identity and
           // revision cannot change under this transaction.
           const lock = lockSessionStatement(accountId, plan.sessionId);
           const locked = await readRows(
@@ -1642,31 +1812,47 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
           const sourceKind = textValue(stored.source_kind);
           const sourceId = textValue(stored.source_id);
 
-          const recordedRequest = readReceiptStatement(accountId, plan.operationId);
-          const recorded = (
+          const operationRequest = readReceiptStatement(accountId, plan.operationId);
+          const operation = (
             await readRows(
               statements,
-              recordedRequest.statement,
-              recordedRequest.parameters,
+              operationRequest.statement,
+              operationRequest.parameters,
               'The recorded operation could not be read.',
             )
           )[0];
-          if (recorded !== undefined) {
-            if (textValue(recorded.input_fingerprint) !== plan.inputFingerprint) {
+          if (operation !== undefined) {
+            if (textValue(operation.input_fingerprint) !== plan.inputFingerprint) {
               return { outcome: 'operation-conflict' as const };
             }
             return {
               outcome: 'confirmed' as const,
               replayed: true,
               privateRevision: await currentRevision(statements, accountId),
-              receipt: await readReceipt(
+              receipt: await requireReceipt(statements, accountId, plan.operationId),
+            };
+          }
+
+          // The same reviewed request confirmed under another operation identity returns that
+          // operation's recorded outcome instead of changing records again.
+          const identicalRequest = readReceiptByInputStatement(accountId, plan.inputFingerprint);
+          const identical = (
+            await readRows(
+              statements,
+              identicalRequest.statement,
+              identicalRequest.parameters,
+              'The recorded request could not be read.',
+            )
+          )[0];
+          if (identical !== undefined) {
+            return {
+              outcome: 'confirmed' as const,
+              replayed: true,
+              privateRevision: await currentRevision(statements, accountId),
+              receipt: await requireReceipt(
                 statements,
                 accountId,
-                plan.operationId,
-                textValue(recorded.session_id),
-                textValue(recorded.acquisition_id),
-                textValue(recorded.source_kind),
-                textValue(recorded.source_id),
+                textValue(identical.operation_id),
               ),
             };
           }
@@ -1682,159 +1868,184 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
             return { outcome: 'unresolved-entry' as const };
           }
 
-          const lookup = acquisitionLookupStatement(accountId, plan, sourceKind, sourceId);
-          const acquisition = (
-            await readRows(
-              statements,
-              lookup.statement,
-              lookup.parameters,
-              'The recorded acquisition could not be read.',
-            )
-          )[0];
-          if (acquisition !== undefined) {
-            return replayAcquisition(
-              statements,
-              accountId,
-              plan,
-              {
-                acquisitionId: textValue(acquisition.acquisition_id),
-                sourceKind: textValue(acquisition.source_kind),
-                sourceId: textValue(acquisition.source_id),
-              },
-              classification.pending,
-            );
-          }
+          // Each reviewed entry is recognized by the durable key of its source entry: an
+          // acquisition this source already holds is replayed, and only a source entry the account
+          // has not acquired creates copies.
+          const keys = await readEntryKeys(
+            statements,
+            accountId,
+            plan.sessionId,
+            classification.pending,
+          );
+          const recorded = await readRecordedAcquisitions(
+            statements,
+            accountId,
+            sourceKind,
+            sourceId,
+            keys,
+          );
 
-          if (classification.confirmed.length > 0) {
-            // Content that is already owned is only acceptable under its recorded acquisition.
-            return { outcome: 'stale-entry' as const };
-          }
-
-          const claim = claimAcquisitionStatement(accountId, plan, sourceKind, sourceId);
-          const claimed = (
-            await readRows(
-              statements,
-              claim.statement,
-              claim.parameters,
-              'The acquisition could not be recorded.',
-            )
-          )[0];
-          if (claimed === undefined) {
-            // Another change recorded the same acquisition first: replay its outcome.
-            const concurrentLookup = acquisitionLookupStatement(
-              accountId,
-              plan,
-              sourceKind,
-              sourceId,
-            );
-            const concurrent = (
+          // Reserve the account-scoped operation identity before changing any record, so an
+          // operation conflict commits no copy, acquisition or entry closure.
+          const reservation = insertReceiptStatement(accountId, plan);
+          const reserved = await readRows(
+            statements,
+            reservation.statement,
+            reservation.parameters,
+            'The confirmation receipt could not be stored.',
+          );
+          if (reserved.length === 0) {
+            // Another confirmation of this account reserved the operation first; only identical
+            // input may replay it, and nothing of this request has changed yet.
+            const conflictingRequest = readReceiptStatement(accountId, plan.operationId);
+            const conflicting = (
               await readRows(
                 statements,
-                concurrentLookup.statement,
-                concurrentLookup.parameters,
-                'The recorded acquisition could not be read.',
+                conflictingRequest.statement,
+                conflictingRequest.parameters,
+                'The recorded operation could not be read.',
               )
             )[0];
-            if (concurrent === undefined) {
+            if (conflicting === undefined) {
               throw new UserCardsError(
                 'unavailable',
-                'UserCards did not report the recorded acquisition.',
+                'UserCards did not report the recorded confirmation.',
               );
             }
-            return replayAcquisition(
-              statements,
-              accountId,
-              plan,
-              {
-                acquisitionId: textValue(concurrent.acquisition_id),
-                sourceKind: textValue(concurrent.source_kind),
-                sourceId: textValue(concurrent.source_id),
-              },
-              classification.pending,
-            );
+            if (textValue(conflicting.input_fingerprint) !== plan.inputFingerprint) {
+              return { outcome: 'operation-conflict' as const };
+            }
+            return {
+              outcome: 'confirmed' as const,
+              replayed: true,
+              privateRevision: await currentRevision(statements, accountId),
+              receipt: await requireReceipt(statements, accountId, plan.operationId),
+            };
           }
 
-          const acquisitionId = textValue(claimed.acquisition_id);
-          const resolved: {
-            readonly entry: ConfirmedImportEntry;
-            readonly printingId: string;
-            readonly finish: Finish;
-          }[] = [];
-          for (const entry of classification.pending) {
+          const covered = new Set<string>();
+          let ownedTagId: string | null = null;
+          let acquired = false;
+          for (const { entry, occurrence, key } of keys) {
+            const alreadyAcquired = recorded.get(key);
+            if (alreadyAcquired !== undefined) {
+              covered.add(alreadyAcquired);
+              continue;
+            }
+            const claim = claimAcquisitionStatement(
+              accountId,
+              sourceKind,
+              sourceId,
+              entry,
+              occurrence,
+            );
+            const claimed = (
+              await readRows(
+                statements,
+                claim.statement,
+                claim.parameters,
+                'The acquisition could not be recorded.',
+              )
+            )[0];
+            if (claimed === undefined) {
+              // A competing confirmation of another session acquired the same source entry first:
+              // this entry replays that recorded acquisition instead of adding it twice.
+              const concurrent = await readRecordedAcquisitions(
+                statements,
+                accountId,
+                sourceKind,
+                sourceId,
+                [{ entry, occurrence, key }],
+              );
+              const concurrentlyAcquired = concurrent.get(key);
+              if (concurrentlyAcquired === undefined) {
+                throw new UserCardsError(
+                  'unavailable',
+                  'UserCards did not record the acquisition.',
+                );
+              }
+              covered.add(concurrentlyAcquired);
+              continue;
+            }
+            acquired = true;
+            const acquisitionId = textValue(claimed.acquisition_id);
+            covered.add(acquisitionId);
+            ownedTagId ??= await ensureOwnedTag(statements, accountId);
             const { printingId, finish } = entry.copy;
             if (printingId === null || finish === null) {
-              return { outcome: 'unresolved-entry' as const };
+              throw new UserCardsError(
+                'unavailable',
+                'UserCards did not report the reviewed entry content.',
+              );
             }
-            resolved.push({ entry, printingId, finish });
-          }
-          const copies = resolved.flatMap(({ entry, printingId, finish }) =>
-            Array.from({ length: entry.copy.quantity }, () => ({
+            const copies = Array.from({ length: entry.copy.quantity }, () => ({
               copyId: randomUUID(),
               entryId: entry.entryId,
               printingId,
               finish,
               condition: entry.copy.condition,
-            })),
-          );
-          // One confirmation commits atomically, while each statement stays inside the deployed
-          // write transport's bound however many copies the reviewed entries carry.
-          const ownedTagId = await ensureOwnedTag(statements, accountId);
-          const storedCopies: UserCardsSqlRow[] = [];
-          for (const batch of batches(copies)) {
-            storedCopies.push(
-              ...(await storeCopiesWithOwnedTag(statements, accountId, ownedTagId, batch)),
-            );
-            const provenance = provenanceStatement(accountId, acquisitionId, batch);
-            await readRows(
-              statements,
-              provenance.statement,
-              provenance.parameters,
-              'The copy provenance could not be stored.',
-            );
-          }
-          const entryIds = resolved.map(({ entry }) => entry.entryId);
-          if (entryIds.length > 0) {
-            const confirmation = confirmEntriesStatement(accountId, plan.sessionId, entryIds);
-            const confirmed = await readRows(
-              statements,
-              confirmation.statement,
-              confirmation.parameters,
-              'The reviewed entries could not be confirmed.',
-            );
-            if (confirmed.length !== entryIds.length) {
-              return { outcome: 'stale-entry' as const };
+            }));
+            // One confirmation commits atomically, while each statement stays inside the deployed
+            // write transport's bound however many copies the reviewed entries carry.
+            for (const batch of batches(copies)) {
+              const stored = await storeCopiesWithOwnedTag(
+                statements,
+                accountId,
+                ownedTagId,
+                batch,
+              );
+              const provenance = provenanceStatement(
+                accountId,
+                acquisitionId,
+                stored.map((row) => ({ ...copyFromRow(row), entryId: entry.entryId })),
+              );
+              await readRows(
+                statements,
+                provenance.statement,
+                provenance.parameters,
+                'The copy provenance could not be stored.',
+              );
             }
-            const bump = bumpSessionStatement(accountId, plan.sessionId);
-            await readRows(
-              statements,
-              bump.statement,
-              bump.parameters,
-              'The import session could not be updated.',
+          }
+
+          const entryIds = keys.map(({ entry }) => entry.entryId);
+          const confirmation = confirmEntriesStatement(accountId, plan.sessionId, entryIds);
+          const confirmed = await readRows(
+            statements,
+            confirmation.statement,
+            confirmation.parameters,
+            'The reviewed entries could not be confirmed.',
+          );
+          if (confirmed.length !== entryIds.length) {
+            throw new UserCardsError(
+              'unavailable',
+              'UserCards did not confirm the reviewed entries.',
             );
           }
-          const receiptInsert = insertReceiptStatement(accountId, plan, acquisitionId);
-          const receipt = (
+          const bump = bumpSessionStatement(accountId, plan.sessionId);
+          await readRows(
+            statements,
+            bump.statement,
+            bump.parameters,
+            'The import session could not be updated.',
+          );
+          for (const batch of batches([...covered])) {
+            const outcome = insertReceiptAcquisitionsStatement(accountId, plan.operationId, batch);
             await readRows(
               statements,
-              receiptInsert.statement,
-              receiptInsert.parameters,
-              'The confirmation receipt could not be stored.',
-            )
-          )[0];
-          if (receipt === undefined) {
-            return { outcome: 'operation-conflict' as const };
+              outcome.statement,
+              outcome.parameters,
+              'The recorded outcome could not be stored.',
+            );
           }
+          const privateRevision = await advanceRevision(statements, accountId);
           return {
             outcome: 'confirmed' as const,
-            replayed: false,
-            privateRevision: await advanceRevision(statements, accountId),
-            receipt: {
-              operationId: plan.operationId,
-              sessionId: plan.sessionId,
-              sourceKind,
-              sourceId,
-              copies: copiesFromRows(storedCopies),
-            },
+            // A confirmation whose source entries are all already acquired returned their recorded
+            // outcome instead of committing a new acquisition.
+            replayed: !acquired,
+            privateRevision,
+            receipt: await requireReceipt(statements, accountId, plan.operationId),
           };
         },
         'The confirmation could not be committed.',
@@ -1842,27 +2053,7 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
     },
 
     async recover(accountId, operationId): Promise<ImportReceiptData | null> {
-      const request = readReceiptStatement(accountId, operationId);
-      const recorded = (
-        await readRows(
-          sql,
-          request.statement,
-          request.parameters,
-          'The recorded operation could not be read.',
-        )
-      )[0];
-      if (recorded === undefined) {
-        return null;
-      }
-      return readReceipt(
-        sql,
-        accountId,
-        operationId,
-        textValue(recorded.session_id),
-        textValue(recorded.acquisition_id),
-        textValue(recorded.source_kind),
-        textValue(recorded.source_id),
-      );
+      return readReceipt(sql, accountId, operationId);
     },
   };
 }

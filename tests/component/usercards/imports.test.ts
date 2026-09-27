@@ -508,6 +508,119 @@ describe('usercards pending imports', () => {
     expect(second?.entryId).toBe('line-2');
   });
 
+  it('refuses a whole-import discard that would drop a newer review or alternative', async () => {
+    const staged = await userCards.stageImportEntries(alice, {
+      sessionId: 'session-1',
+      source: { kind: 'text', id: 'list-1' },
+      entries: [{ entryId: 'line-1', printingId: m11Printing.printingId, quantity: 1 }],
+    });
+    const entry = staged.entries[0];
+    if (entry === undefined) {
+      throw new Error('Expected a staged pending entry.');
+    }
+
+    // A review changes the pending state a whole-import discard removes.
+    const reviewed = await userCards.reviewImportEntry(alice, {
+      entryId: entry.entryId,
+      expectedRevision: entry.revision,
+      printingId: m10Printing.printingId,
+      finish: 'nonfoil',
+      condition: 'LP',
+      quantity: 3,
+    });
+    const staleReview = await captureUserCardsError(
+      userCards.discardImportSession(alice, {
+        sessionId: 'session-1',
+        expectedRevision: staged.session.revision,
+      }),
+    );
+    expect(staleReview.code).toBe('conflict');
+    expect(
+      (await userCards.listImportEntries(alice, { sessionId: 'session-1' })).entries[0],
+    ).toMatchObject({
+      printingId: m10Printing.printingId,
+      condition: 'LP',
+      quantity: 3,
+      state: 'pending',
+    });
+
+    // A late recognition alternative is part of the same pending state.
+    const alternative = {
+      printingId: m11Printing.printingId,
+      provider: 'browser-onnx',
+      evidence: 'visual',
+    };
+    const attached = await userCards.attachImportCandidates(alice, {
+      entryId: entry.entryId,
+      candidates: [alternative],
+    });
+    const staleAlternative = await captureUserCardsError(
+      userCards.discardImportSession(alice, {
+        sessionId: 'session-1',
+        expectedRevision: reviewed.session.revision,
+      }),
+    );
+    expect(staleAlternative.code).toBe('conflict');
+    expect(
+      (await userCards.listImportEntries(alice, { sessionId: 'session-1' })).entries[0]?.candidates,
+    ).toEqual([alternative]);
+
+    // The discard of the reviewed state it read still clears the import.
+    const cleared = await userCards.discardImportSession(alice, {
+      sessionId: 'session-1',
+      expectedRevision: attached.session.revision,
+    });
+    expect(cleared.session).toMatchObject({ state: 'discarded', pendingEntries: 0 });
+  });
+
+  it('stages a batch whose references exceed one catalog resolution', async () => {
+    const bulkPrintings = Array.from({ length: 104 }, (_, index) => ({
+      printingId: `printing-bulk-${index}-en`,
+      cardId: `oracle-bulk-${index}`,
+      edition: 'BLK',
+      collectorNumber: String(index + 1),
+      language: 'en',
+      finishes: ['nonfoil'],
+      physical: true,
+    }));
+    await publishCatalog(database, {
+      revisionId: 'revision-2',
+      cards: [
+        lightningBolt,
+        counterspell,
+        ...bulkPrintings.map((printing, index) => ({
+          cardId: printing.cardId,
+          name: `Bulk ${index}`,
+          colors: [],
+          colorIdentity: [],
+          manaValue: 1,
+        })),
+      ],
+      printings: [m11Printing, m10Printing, staPrinting, counterspellPrinting, ...bulkPrintings],
+    });
+
+    // Thirteen lines with eight alternatives each reference 104 distinct printings beside their own.
+    const staged = await userCards.stageImportEntries(alice, {
+      sessionId: 'session-bulk',
+      source: { kind: 'text', id: 'list-bulk' },
+      entries: Array.from({ length: 13 }, (_, index) => ({
+        entryId: `line-bulk-${index}`,
+        printingId: m11Printing.printingId,
+        finish: 'nonfoil' as const,
+        quantity: 1,
+        candidates: bulkPrintings.slice(index * 8, index * 8 + 8).map((printing) => ({
+          printingId: printing.printingId,
+          provider: 'lambda',
+          evidence: 'visual',
+        })),
+      })),
+    });
+
+    expect(staged).toMatchObject({ staged: 13, replayed: false });
+    expect(staged.entries).toHaveLength(13);
+    expect(staged.entries.every((entry) => entry.candidates.length === 8)).toBe(true);
+  });
+
   it("keeps one account's pending imports, review and discard out of another account", async () => {
     await stageCapture('session-1', 'capture-1', m11Printing.printingId);
 

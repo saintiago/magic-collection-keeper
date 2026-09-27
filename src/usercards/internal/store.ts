@@ -345,11 +345,18 @@ export interface ReviewedEntryCopy {
   readonly quantity: number;
 }
 
-/** One reviewed entry a confirmation covers, with the state and copy data the caller read. */
+/**
+ * One reviewed entry a confirmation covers, with the state and copy data the caller read. The
+ * entry fingerprint digests that reviewed content, so a later import of the same source recognizes
+ * the entry it already acquired without depending on how confirmations were partitioned
+ * (docs/user-cards.md#source-imports).
+ */
 export interface ConfirmedImportEntry {
   readonly entryId: string;
   readonly expectedRevision: number;
   readonly state: ImportEntry['state'];
+  /** Digest of the reviewed copy attributes and quantity of this entry. */
+  readonly entryFingerprint: string;
   readonly copy: ReviewedEntryCopy;
 }
 
@@ -357,10 +364,11 @@ export interface ConfirmationPlan {
   /** Operation identity scoped to the account, so a retry refers to the same action. */
   readonly operationId: string;
   readonly sessionId: string;
-  /** Digest of the confirmation request; reuse with a different request is refused. */
+  /**
+   * Digest of the confirmation request. Reuse with a different request is refused, while the same
+   * request under another operation identity returns the recorded outcome.
+   */
   readonly inputFingerprint: string;
-  /** Digest of the reviewed content the acquisition carries; it identifies an acquisition. */
-  readonly contentFingerprint: string;
   readonly entries: readonly ConfirmedImportEntry[];
 }
 
@@ -450,8 +458,10 @@ export interface ImportStore {
     expectedRevision: number,
   ): Promise<ImportSessionDiscardOutcome>;
   /**
-   * Confirms reviewed entries, creating individual copies with their provenance, or returns the
-   * acquisition's recorded outcome when this source, operation or content was already confirmed.
+   * Confirms reviewed entries, creating individual copies with their provenance for every source
+   * entry the account has not acquired yet. Entries whose acquisition source already holds that
+   * source entry are confirmed under the recorded outcome instead of creating copies again, so a
+   * repeated import adds nothing however the caller partitions its confirmations.
    */
   confirm(accountId: string, plan: ConfirmationPlan): Promise<ConfirmationOutcome>;
   /** Reads the recorded outcome of one operation, or `null` when the account has none. */

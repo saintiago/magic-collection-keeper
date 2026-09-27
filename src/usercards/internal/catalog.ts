@@ -1,4 +1,5 @@
 import {
+  CATALOG_LIMITS,
   CatalogError,
   type Catalog,
   type CatalogReference,
@@ -28,9 +29,10 @@ export async function resolveCatalog(
 }
 
 /**
- * Resolves the distinct printings of one request in a single catalog read. A reference the catalog
- * does not publish is a missing reference: the component never stores one
- * (docs/user-cards.md#records-and-associations).
+ * Resolves the distinct printings of one request in catalog reads that never exceed the provider's
+ * published resolution bound, so a valid staging batch is resolved completely instead of failing as
+ * a temporary catalog failure. A reference the catalog does not publish is a missing reference: the
+ * component never stores one (docs/user-cards.md#records-and-associations).
  */
 export async function resolvePrintings(
   catalog: Catalog,
@@ -40,17 +42,20 @@ export async function resolvePrintings(
   if (distinct.length === 0) {
     return new Map();
   }
-  const resolution = await resolveCatalog(
-    catalog,
-    distinct.map((printingId) => ({ kind: 'printing', printingId }) as const),
-  );
   const printings = new Map<string, PrintingRecord>();
-  for (const printingId of distinct) {
-    const printing = resolution.printings.get(printingId);
-    if (printing === undefined) {
-      throw new UserCardsError('not-found', 'The printing is not available in the catalog.');
+  for (let start = 0; start < distinct.length; start += CATALOG_LIMITS.maxResolutionReferences) {
+    const batch = distinct.slice(start, start + CATALOG_LIMITS.maxResolutionReferences);
+    const resolution = await resolveCatalog(
+      catalog,
+      batch.map((printingId) => ({ kind: 'printing', printingId }) as const),
+    );
+    for (const printingId of batch) {
+      const printing = resolution.printings.get(printingId);
+      if (printing === undefined) {
+        throw new UserCardsError('not-found', 'The printing is not available in the catalog.');
+      }
+      printings.set(printingId, printing);
     }
-    printings.set(printingId, printing);
   }
   return printings;
 }

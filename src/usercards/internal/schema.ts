@@ -359,31 +359,49 @@ create table if not exists ${usercardsPrivateSchema}.import_acquisition (
   account_id text not null check (length(account_id) between 1 and ${identifierLength}),
   source_kind text not null check (length(source_kind) between 1 and ${identifierLength}),
   source_id text not null check (length(source_id) between 1 and ${identifierLength}),
-  content_fingerprint text not null check (length(content_fingerprint) between 1 and ${fingerprintLength}),
+  entry_fingerprint text not null check (length(entry_fingerprint) between 1 and ${fingerprintLength}),
+  occurrence integer not null check (occurrence >= 1),
+  entry_id text not null check (length(entry_id) between 1 and ${identifierLength}),
   committed_at timestamptz not null default now(),
-  unique (account_id, source_kind, source_id, content_fingerprint)
+  unique (account_id, source_kind, source_id, entry_fingerprint, occurrence),
+  foreign key (account_id, entry_id)
+    references ${usercardsPrivateSchema}.import_entry (account_id, entry_id)
 );
 
 create table if not exists ${usercardsPrivateSchema}.import_receipt (
   operation_id text not null check (length(operation_id) between 1 and ${identifierLength}),
   account_id text not null check (length(account_id) between 1 and ${identifierLength}),
-  acquisition_id text not null,
   session_id text not null check (length(session_id) between 1 and ${identifierLength}),
   input_fingerprint text not null check (length(input_fingerprint) between 1 and ${fingerprintLength}),
   created_at timestamptz not null default now(),
   primary key (account_id, operation_id),
+  foreign key (account_id, session_id)
+    references ${usercardsPrivateSchema}.import_session (account_id, session_id)
+);
+
+create index if not exists import_receipt_input_index
+  on ${usercardsPrivateSchema}.import_receipt (account_id, input_fingerprint);
+
+create table if not exists ${usercardsPrivateSchema}.import_receipt_acquisition (
+  account_id text not null check (length(account_id) between 1 and ${identifierLength}),
+  operation_id text not null check (length(operation_id) between 1 and ${identifierLength}),
+  acquisition_id text not null,
+  primary key (account_id, operation_id, acquisition_id),
+  foreign key (account_id, operation_id)
+    references ${usercardsPrivateSchema}.import_receipt (account_id, operation_id),
   foreign key (acquisition_id)
     references ${usercardsPrivateSchema}.import_acquisition (acquisition_id)
 );
-
-create index if not exists import_receipt_acquisition_index
-  on ${usercardsPrivateSchema}.import_receipt (account_id, acquisition_id);
 
 create table if not exists ${usercardsPrivateSchema}.copy_provenance (
   copy_id text primary key check (length(copy_id) between 1 and ${identifierLength}),
   account_id text not null check (length(account_id) between 1 and ${identifierLength}),
   acquisition_id text not null,
   entry_id text not null check (length(entry_id) between 1 and ${identifierLength}),
+  printing_id text not null check (length(printing_id) between 1 and ${identifierLength}),
+  finish text not null check (finish in (${finishValues})),
+  condition text check (condition in (${conditionValues})),
+  revision integer not null check (revision >= 1),
   created_at timestamptz not null default now(),
   foreign key (copy_id) references ${usercardsPrivateSchema}.copy (copy_id),
   foreign key (acquisition_id)

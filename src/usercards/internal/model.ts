@@ -160,6 +160,12 @@ export const USERCARDS_LIMITS = {
    * statements.
    */
   maxRecordsPerStatement: 100,
+  /**
+   * Most recorded copies one private statement returns. A recorded outcome larger than the
+   * deployed transport's response bound is read as further bounded pages instead of one oversized
+   * result.
+   */
+  maxReceiptCopiesPerRead: 100,
   /** Largest intended quantity a card- or printing-level association may carry. */
   maxAssociationQuantity: 1000,
   defaultTagPageSize: 50,

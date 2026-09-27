@@ -838,16 +838,25 @@ export function createImportOperations(dependencies: ImportServiceDependencies):
           }
           finish = physicalFinish(printing, entry.finish);
         }
+        const copy = {
+          printingId: entry.printingId,
+          finish,
+          condition: entry.condition,
+          quantity: entry.quantity,
+        };
         return {
           entryId: entry.entryId,
           expectedRevision: requested.expectedRevision,
           state: entry.state,
-          copy: {
-            printingId: entry.printingId,
-            finish,
-            condition: entry.condition,
-            quantity: entry.quantity,
-          },
+          // The reviewed content of this entry is the durable key its acquisition is recorded
+          // under, so replay protection does not depend on how a caller partitions confirmations.
+          entryFingerprint: fingerprint([
+            copy.printingId,
+            copy.finish,
+            copy.condition,
+            copy.quantity,
+          ]),
+          copy,
         };
       });
 
@@ -860,16 +869,6 @@ export function createImportOperations(dependencies: ImportServiceDependencies):
             .map((entry) => [entry.entryId, entry.expectedRevision] as const)
             .sort((left, right) => left[0].localeCompare(right[0])),
         }),
-        contentFingerprint: fingerprint(
-          reviewed
-            .map((entry) => [
-              entry.copy.printingId,
-              entry.copy.finish,
-              entry.copy.condition,
-              entry.copy.quantity,
-            ])
-            .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
-        ),
         entries: reviewed,
       });
       switch (outcome.outcome) {
