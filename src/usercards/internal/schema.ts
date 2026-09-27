@@ -295,6 +295,8 @@ create table if not exists ${usercardsPrivateSchema}.import_session (
   account_id text not null check (length(account_id) between 1 and ${identifierLength}),
   source_kind text not null check (length(source_kind) between 1 and ${identifierLength}),
   source_id text not null check (length(source_id) between 1 and ${identifierLength}),
+  source_reference text check (source_reference is null
+    or length(source_reference) between 1 and ${USERCARDS_LIMITS.maxSourceReferenceLength}),
   last_accepted_identity text check (last_accepted_identity is null
     or length(last_accepted_identity) between 1 and ${identifierLength}),
   revision integer not null default 1 check (revision >= 1),
@@ -314,6 +316,13 @@ create table if not exists ${usercardsPrivateSchema}.import_entry (
   condition text check (condition in (${conditionValues})),
   quantity integer not null default 1
     check (quantity between 1 and ${USERCARDS_LIMITS.maxCreateQuantity}),
+  -- The parsed source line and its durable identity inside the acquisition source. Every field of
+  -- the line is separately bounded, so this bound only has to cover the same text after escaping;
+  -- the reviewed values stay in the columns above.
+  source_line jsonb check (source_line is null or length(source_line::text) <= 16384),
+  source_line_key text check (source_line_key is null
+    or length(source_line_key) between 1 and 128),
+  check ((source_line is null) = (source_line_key is null)),
   revision integer not null default 1 check (revision >= 1),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -325,6 +334,13 @@ create table if not exists ${usercardsPrivateSchema}.import_entry (
 
 create index if not exists import_entry_session_index
   on ${usercardsPrivateSchema}.import_entry (account_id, session_id, position);
+
+-- Entries of one parsed source line are addressed by the line's durable identity inside its
+-- acquisition source, so a repeated import reconciles its lines without scanning the account's
+-- whole pending state.
+create index if not exists import_entry_source_line_index
+  on ${usercardsPrivateSchema}.import_entry (account_id, source_line_key)
+  where source_line_key is not null;
 
 create table if not exists ${usercardsPrivateSchema}.import_candidate (
   entry_id text not null check (length(entry_id) between 1 and ${identifierLength}),

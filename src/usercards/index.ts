@@ -11,8 +11,11 @@
  * outcome. Consumers read private copies, tags and associations through the declared query surface
  * (USERCARDS_QUERY_SURFACE), which Application binds to that account inside one read transaction;
  * pending imports have no published relation and are read through the component's own pending
- * reads. Other components import UserCards through this module only; its internal modules stay
- * private to the component (docs/architecture.md, .dependency-cruiser.mjs).
+ * reads. Source imports parse a pasted list, a public Moxfield deck or a reviewed Wizards
+ * preconstructed list inside this boundary into the same pending entries, preserving what the
+ * source published and reconciling a repeated import with what the source already acquired. Other
+ * components import UserCards through this module only; its internal modules stay private to the
+ * component (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
 export { UserCardsError, type UserCardsFailureCode } from './internal/errors.js';
@@ -44,6 +47,7 @@ export {
   type ImportSession,
   type ImportSessionId,
   type ImportSessionState,
+  type ImportSourceLine,
   type PhysicalCopy,
   type Tag,
   type TagId,
@@ -75,6 +79,24 @@ export {
   type StageImportEntriesInput,
   type StageImportEntryInput,
 } from './internal/import-service.js';
+export {
+  createMoxfieldDeckSource,
+  type MoxfieldDeckSource,
+  type MoxfieldSourceOptions,
+} from './internal/moxfield.js';
+export {
+  createSourceImports,
+  type MoxfieldDeckImport,
+  type PastedCardListImport,
+  type ReviewedWizardsLine,
+  type SourceImportDependencies,
+  type SourceImportOperations,
+  type SourceImportOutcome,
+  type SourceImportResult,
+  type SourceImportRow,
+  type StageSourceImportInput,
+  type WizardsPreconImport,
+} from './internal/source-imports.js';
 export {
   USERCARDS_ACCOUNT_SCOPE_SQL,
   USERCARDS_ACCOUNT_SETTING,

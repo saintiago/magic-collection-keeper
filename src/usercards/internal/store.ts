@@ -6,6 +6,7 @@ import type {
   ImportCandidate,
   ImportEntry,
   ImportSession,
+  ImportSourceLine,
   PhysicalCopy,
   Tag,
   TagKind,
@@ -220,12 +221,25 @@ export interface NewStagedImportEntry extends NewImportEntry {
    * (docs/user-cards.md#import-and-capture-state).
    */
   readonly fingerprint: string;
+  /**
+   * Parsed source line this entry carries, or null for a capture observation that names no source
+   * line. A source line is stored with the entry, so an unresolved name or printing stays
+   * reviewable (docs/user-cards.md#source-imports).
+   */
+  readonly sourceLine: ImportSourceLine | null;
+  /**
+   * Durable identity of the parsed source line within its acquisition source, or null when the
+   * entry was not parsed from a source line. A repeated import matches on it.
+   */
+  readonly sourceLineKey: string | null;
 }
 
 export interface ImportStagePlan {
   readonly sessionId: string;
   readonly sourceKind: string;
   readonly sourceId: string;
+  /** Official reference of the acquisition source, or null when it published none. */
+  readonly sourceReference: string | null;
   readonly entries: readonly NewStagedImportEntry[];
 }
 
@@ -408,13 +422,83 @@ export interface ImportEntriesData {
   readonly entries: readonly ImportEntry[];
 }
 
+/** One recorded entry of a parsed source line, used to address the line's next pending entry. */
+export interface SourceLineEntry {
+  readonly sessionId: string;
+  readonly entryId: string;
+}
+
+/**
+ * What one acquisition source already recorded for one parsed source line: the pending quantity
+ * awaiting review, the quantity its confirmations acquired, and one entry of each state so a
+ * repeated import can point the caller at the record instead of staging the line again
+ * (docs/user-cards.md#source-imports).
+ */
+export interface SourceLineRecord {
+  readonly sourceLineKey: string;
+  /** Reviewed quantity of the line's pending entries; 0 while none is pending. */
+  readonly pendingQuantity: number;
+  /** Quantity already acquired from this line; 0 while nothing was confirmed. */
+  readonly confirmedQuantity: number;
+  /** Entries recorded for this line in any state, which addresses the line's next entry. */
+  readonly records: number;
+  readonly pendingEntry: SourceLineEntry | null;
+  readonly confirmedEntry: SourceLineEntry | null;
+}
+
+/**
+ * One parsed source line offered for staging. Equivalent lines of one acquisition source share
+ * `sourceLineKey`, so duplicates are reconciled together and their order does not decide which
+ * quantity is already covered (docs/user-cards.md#source-imports).
+ */
+export interface SourceLineStageInput {
+  /** Durable identity of the parsed line inside its acquisition source, without its quantity. */
+  readonly sourceLineKey: string;
+  readonly printingId: string | null;
+  readonly finish: Finish | null;
+  readonly condition: CopyCondition | null;
+  /** Quantity the source published for this row; a covered part of it stages nothing. */
+  readonly declaredQuantity: number;
+  readonly sourceLine: ImportSourceLine;
+  readonly candidates: readonly ImportCandidate[];
+}
+
+/** The parsed lines of one acquisition source, staged together under its session. */
+export interface SourceLineStagePlan {
+  readonly sessionId: string;
+  readonly sourceKind: string;
+  readonly sourceId: string;
+  readonly sourceReference: string | null;
+  /** Offered lines in source order; equivalent lines of one source may repeat. */
+  readonly lines: readonly SourceLineStageInput[];
+}
+
+/** What one offered line became when its staging committed. */
+export interface SourceLineStageEntry {
+  readonly outcome: 'staged' | 'pending' | 'acquired';
+  /** Entry this line is represented by: the entry this call staged, or the record covering it. */
+  readonly entryId: string;
+  readonly sessionId: string;
+}
+
+/** The committed outcome of staging the parsed lines of one acquisition source. */
+export interface SourceLineStageData {
+  readonly privateRevision: string;
+  readonly session: ImportSession;
+  /** One outcome per offered line, in the order the lines were offered. */
+  readonly lines: readonly SourceLineStageEntry[];
+  /** Lines this call staged; the remainder were already covered by the source's records. */
+  readonly staged: number;
+}
+
 /**
  * Private import and capture storage of one account (docs/user-cards.md#import-and-capture-state).
  * Pending entries are stored separately from the account's owned copies and never change ownership;
  * every operation is scoped by the account the caller passes and never returns another account's
  * record. A replacement implementation keeps the same promises, including the consecutive-identity
- * admission rule and the permanent operation and acquisition records that make confirmation
- * replay-safe.
+ * admission rule, the durable source-line records that let a repeated source import reconcile with
+ * what the source already staged and acquired, and the permanent operation and acquisition records
+ * that make confirmation replay-safe.
  */
 export interface ImportStore {
   /** Reads the account's pending import sessions, ordered by session identity. */
@@ -431,6 +515,14 @@ export interface ImportStore {
   ): Promise<ImportEntriesData | null>;
   /** Reads the entries among `entryIds` that belong to this account, in capture order. */
   readEntries(accountId: string, entryIds: readonly string[]): Promise<readonly ImportEntry[]>;
+  /**
+   * Stages the parsed lines of one acquisition source, reconciling every line with the quantity its
+   * own source already staged and acquired. Reconciliation and staging run under the session lock
+   * inside one transaction, so a concurrent review, discard or import cannot overstage the source,
+   * and the returned lines and count report what the committed transaction actually did
+   * (docs/user-cards.md#persistence-and-recovery).
+   */
+  stageSourceLines(accountId: string, plan: SourceLineStagePlan): Promise<SourceLineStageData>;
   /** Stages parsed source lines, each admitted once under its own stable identity. */
   stageEntries(accountId: string, plan: ImportStagePlan): Promise<ImportStageOutcome>;
   /** Stages one capture observation and returns the admission decision it recorded. */

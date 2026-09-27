@@ -10,14 +10,13 @@
  * late alternative advance the accepted sequence or replace the user's corrections.
  */
 
-import { createHash } from 'node:crypto';
-
 import { z } from 'zod';
 
 import { finishes, type Catalog, type Finish } from '../../catalog/index.js';
 import { physicalFinish, resolvePhysicalPrinting, resolvePrintings } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';
+import { candidateTuples, fingerprint, stagedLineFingerprint } from './fingerprint.js';
 import {
   USERCARDS_LIMITS,
   copyConditions,
@@ -67,6 +66,12 @@ export interface ImportEntryListResult {
 export interface ImportSourceInput {
   readonly kind: string;
   readonly id: string;
+  /**
+   * Official reference of the source, for example an official decklist URL. It is stored with the
+   * session when the session is created and never rewritten
+   * (docs/user-cards.md#source-imports).
+   */
+  readonly reference?: string | null;
 }
 
 /** One parsed source line about to become a pending entry. */
@@ -262,7 +267,16 @@ const listEntriesOptionsSchema = z.object({
 
 const stageEntriesRequestSchema = z.object({
   sessionId: referenceSchema,
-  source: z.object({ kind: referenceSchema, id: referenceSchema }),
+  source: z.object({
+    kind: referenceSchema,
+    id: referenceSchema,
+    reference: z
+      .string()
+      .min(1)
+      .max(USERCARDS_LIMITS.maxSourceReferenceLength)
+      .nullable()
+      .optional(),
+  }),
   entries: z
     .array(
       z.object({
@@ -318,18 +332,6 @@ const confirmImportRequestSchema = z.object({
     .min(1)
     .max(USERCARDS_LIMITS.maxConfirmEntries),
 });
-
-/** Digest of a canonical value, so identical input replays and different input fails. */
-function fingerprint(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex');
-}
-
-/** Candidates in a canonical order: their storage and identity do not depend on delivery order. */
-function candidateTuples(candidates: readonly ImportCandidate[]): readonly (readonly string[])[] {
-  return candidates
-    .map((candidate) => [candidate.printingId, candidate.provider, candidate.evidence] as const)
-    .sort((left, right) => left.join('\u0000').localeCompare(right.join('\u0000')));
-}
 
 function distinctCandidates(candidates: readonly ImportCandidate[]): ImportCandidate[] {
   const seen = new Set<string>();
@@ -518,12 +520,14 @@ export function createImportOperations(dependencies: ImportServiceDependencies):
             condition: entry.condition ?? null,
             quantity: entry.quantity,
             candidates,
-            fingerprint: fingerprint({
+            sourceLine: null,
+            sourceLineKey: null,
+            fingerprint: stagedLineFingerprint({
               printingId: null,
               finish: null,
               condition: entry.condition ?? null,
               quantity: entry.quantity,
-              candidates: candidateTuples(candidates),
+              candidates,
             }),
           };
         }
@@ -539,12 +543,14 @@ export function createImportOperations(dependencies: ImportServiceDependencies):
           condition: entry.condition ?? null,
           quantity: entry.quantity,
           candidates,
-          fingerprint: fingerprint({
+          sourceLine: null,
+          sourceLineKey: null,
+          fingerprint: stagedLineFingerprint({
             printingId,
             finish,
             condition: entry.condition ?? null,
             quantity: entry.quantity,
-            candidates: candidateTuples(candidates),
+            candidates,
           }),
         };
       });
@@ -553,6 +559,7 @@ export function createImportOperations(dependencies: ImportServiceDependencies):
         sessionId,
         sourceKind: source.kind,
         sourceId: source.id,
+        sourceReference: source.reference ?? null,
         entries: staged,
       });
       if (outcome.outcome === 'line-conflict') {

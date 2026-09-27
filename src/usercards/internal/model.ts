@@ -95,6 +95,32 @@ export interface ImportCandidate {
 }
 
 /**
+ * One parsed source line (docs/user-cards.md#source-imports): what a pasted card list, a Moxfield
+ * deck or a reviewed Wizards preconstructed list published for one pending entry, kept
+ * independently of the reviewed values and of the physical copies the line eventually produces. An
+ * unresolved name or printing stays reviewable because the entry keeps what its source said, and a
+ * repeated import of the same source can recognize the line from this identity.
+ */
+export interface ImportSourceLine {
+  /** Card name the source published; null when it named none. */
+  readonly name: string | null;
+  /** Deck section the line belongs to, for example `mainboard`; null for a flat list. */
+  readonly section: string | null;
+  /** Edition code the source published; null when it published none. */
+  readonly set: string | null;
+  /** Collector number the source published; null when it published none. */
+  readonly collectorNumber: string | null;
+  /** Printing language the source published; null when it published none. */
+  readonly language: string | null;
+  /** Finish the source declared; null when it declared none and the review must choose one. */
+  readonly finish: Finish | null;
+  /** Quantity the source declared for this line when it was parsed. */
+  readonly declaredQuantity: number;
+  /** Why the line needs the owner's review, or null when it resolved without one. */
+  readonly problem: string | null;
+}
+
+/**
  * One persisted pending entry (docs/user-cards.md#import-and-capture-state): its stable capture or
  * source-line identity, the identity of the import session it belongs to, its position in that
  * session's capture order, the reviewed values and the recognition alternatives stored for it.
@@ -116,6 +142,11 @@ export interface ImportEntry {
   /** Explicit pending quantity; confirmation creates this many individual copies. */
   readonly quantity: number;
   readonly candidates: readonly ImportCandidate[];
+  /**
+   * Parsed source line this entry came from; null for a capture observation or a directly staged
+   * entry. It keeps the source's own description beside the reviewed values.
+   */
+  readonly sourceLine: ImportSourceLine | null;
   /** Reviewed revision; a review, discard or confirmation quotes the revision it started from. */
   readonly revision: number;
 }
@@ -133,6 +164,11 @@ export interface ImportSession {
   readonly sourceKind: string;
   /** Stable identity of the acquisition source, preserved independently of the copies it produced. */
   readonly sourceId: string;
+  /**
+   * Official reference of the acquisition source, for example the Wizards decklist the owner
+   * reviewed or the canonical Moxfield deck link; null when the source published none.
+   */
+  readonly sourceReference: string | null;
   /** Derived lifecycle state: pending while the session has pending entries or none yet. */
   readonly state: ImportSessionState;
   readonly pendingEntries: number;
@@ -177,6 +213,14 @@ export const USERCARDS_LIMITS = {
   maxConfirmEntries: 50,
   /** Most recognition alternatives stored with one pending entry. */
   maxImportCandidates: 8,
+  /** Largest number of lines one source import parses into pending entries. */
+  maxSourceLines: 500,
+  /** Longest pasted source text accepted, counted in JavaScript string units. */
+  maxSourceTextLength: 128 * 1024,
+  /** Longest official source reference kept with an import session. */
+  maxSourceReferenceLength: 500,
+  /** Longest reason a parsed source line carries for the owner's review. */
+  maxSourceProblemLength: 300,
   defaultImportPageSize: 50,
   minImportPageSize: 1,
   maxImportPageSize: 100,

@@ -15,10 +15,14 @@
  * its confirmations, while two identical lines or a card captured twice around another card stay
  * distinct acquisitions. Editing pending peers cannot renumber these bindings
  * (docs/user-cards.md#source-imports). Each recorded operation keeps the
- * copies it reported as immutable provenance, read back in transport-safe pages.
+ * copies it reported as immutable provenance, read back in transport-safe pages. A parsed source
+ * line keeps what its source published and a durable identity, so a repeated import reconciles the
+ * same line instead of staging it twice and a source that lost a line changes no record. The
+ * reconciliation of one source runs inside the transaction that stages it, and every statement
+ * stays inside the bounded batch the deployed write transport accepts.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { ensureOwnedTag, storeCopiesWithOwnedTag } from './copies.js';
 import { UserCardsError } from './errors.js';
@@ -28,6 +32,7 @@ import type {
   UserCardsSqlTransactor,
   UserCardsSqlValue,
 } from './executor.js';
+import { stagedLineFingerprint } from './fingerprint.js';
 import {
   USERCARDS_LIMITS,
   type ImportCandidate,
@@ -42,6 +47,7 @@ import {
   importEntriesFromRows,
   importEntryPayloadSql,
   importSessionFromRow,
+  importSourceLinePayload,
   importSessionsFromRows,
 } from './rows.js';
 import {
@@ -73,6 +79,11 @@ import type {
   ImportStore,
   NewImportEntry,
   NewStagedImportEntry,
+  SourceLineRecord,
+  SourceLineStageData,
+  SourceLineStageEntry,
+  SourceLineStageInput,
+  SourceLineStagePlan,
 } from './store.js';
 
 interface Statement {
@@ -112,6 +123,7 @@ const sessionSelectSql = `
   select session.session_id,
          session.source_kind,
          session.source_id,
+         session.source_reference,
          session.revision,
          count(entry.entry_id) filter (where entry.state = 'pending')::int as pending_entries,
          count(entry.entry_id) filter (where entry.state = 'confirmed')::int as confirmed_entries,
@@ -128,7 +140,7 @@ const sessionSelectSql = `
 
 const sessionGroupBySql = `
    group by session.account_id, session.session_id, session.source_kind, session.source_id,
-            session.revision`;
+            session.source_reference, session.revision`;
 
 /** One bounded page of pending import sessions, ordered by stable session identity. */
 function sessionListStatement(accountId: string, offset: number, limit: number): Statement {
@@ -184,7 +196,7 @@ select 'entry' as row_kind,
   (row_number() over (order by entry.position))::int as row_position,
   ${importEntryPayloadSql} as payload
 from (select entry_id, session_id, position, state, printing_id, finish, condition, quantity,
-             revision
+             source_line, revision
         from usercards_private.import_entry
        where account_id = :account_id
          and session_id = :session_id
@@ -217,7 +229,7 @@ function entryDataStatement(accountId: string, entryId: string): Statement {
 union all
 select 'entry' as row_kind, 0 as row_position, ${importEntryPayloadSql} as payload
 from (select entry_id, session_id, position, state, printing_id, finish, condition, quantity,
-             revision
+             source_line, revision
         from usercards_private.import_entry
        where account_id = :account_id and entry_id = :entry_id) as entry
 union all
@@ -333,11 +345,13 @@ function ensureSessionStatement(
   sessionId: string,
   sourceKind: string,
   sourceId: string,
+  sourceReference: string | null,
 ): Statement {
   return {
     statement: `insert into usercards_private.import_session
-       (session_id, account_id, source_kind, source_id, last_accepted_identity, revision)
-     values (:session_id, :account_id, :source_kind, :source_id, null, 1)
+       (session_id, account_id, source_kind, source_id, source_reference,
+        last_accepted_identity, revision)
+     values (:session_id, :account_id, :source_kind, :source_id, :source_reference, null, 1)
      on conflict (account_id, session_id) do nothing
      returning session_id`,
     parameters: {
@@ -345,6 +359,7 @@ function ensureSessionStatement(
       account_id: accountId,
       source_kind: sourceKind,
       source_id: sourceId,
+      source_reference: sourceReference,
     },
   };
 }
@@ -383,8 +398,15 @@ async function claimSession(
   sessionId: string,
   sourceKind: string,
   sourceId: string,
+  sourceReference: string | null,
 ): Promise<StoredSession> {
-  const ensure = ensureSessionStatement(accountId, sessionId, sourceKind, sourceId);
+  const ensure = ensureSessionStatement(
+    accountId,
+    sessionId,
+    sourceKind,
+    sourceId,
+    sourceReference,
+  );
   await readRows(
     statements,
     ensure.statement,
@@ -465,7 +487,7 @@ function insertEntryStatement(
 function insertEntriesStatement(
   accountId: string,
   sessionId: string,
-  entries: readonly NewImportEntry[],
+  entries: readonly NewStagedImportEntry[],
   basePosition: number,
 ): Statement {
   const parameters: Record<string, UserCardsSqlValue> = {
@@ -480,16 +502,20 @@ function insertEntriesStatement(
       parameters[`finish_${index}`] = entry.finish;
       parameters[`condition_${index}`] = entry.condition;
       parameters[`quantity_${index}`] = entry.quantity;
+      parameters[`source_line_${index}`] =
+        entry.sourceLine === null ? null : importSourceLinePayload(entry.sourceLine);
+      parameters[`source_line_key_${index}`] = entry.sourceLineKey;
       return (
         `(:entry_id_${index}, :account_id, :session_id, 'pending', :position_${index}, ` +
-        `:printing_id_${index}, :finish_${index}, :condition_${index}, :quantity_${index}, 1)`
+        `:printing_id_${index}, :finish_${index}, :condition_${index}, :quantity_${index}, ` +
+        `:source_line_${index}::jsonb, :source_line_key_${index}, 1)`
       );
     })
     .join(',\n       ');
   return {
     statement: `insert into usercards_private.import_entry
        (entry_id, account_id, session_id, state, position, printing_id, finish, condition,
-        quantity, revision)
+        quantity, source_line, source_line_key, revision)
      values ${values}
      returning entry_id`,
     parameters,
@@ -602,6 +628,55 @@ function readStagingReceiptsStatement(accountId: string, captureIds: readonly st
   };
 }
 
+/**
+ * Stores freshly staged entries with their alternatives and their permanent admission receipts.
+ * Every write stays inside the bounded batch the deployed transport accepts and inside the
+ * caller's transaction, so one staging call remains atomic and entry positions stay contiguous.
+ */
+async function insertStagedEntries(
+  statements: UserCardsSqlExecutor,
+  accountId: string,
+  sessionId: string,
+  fresh: readonly NewStagedImportEntry[],
+): Promise<void> {
+  let position = await nextPosition(statements, accountId, sessionId);
+  for (const batch of batches(fresh)) {
+    const insert = insertEntriesStatement(accountId, sessionId, batch, position);
+    await readRows(
+      statements,
+      insert.statement,
+      insert.parameters,
+      'The pending entries could not be stored.',
+    );
+    position += batch.length;
+  }
+  for (const batch of batches(candidateRows(fresh))) {
+    const candidates = insertCandidatesStatement(accountId, batch);
+    await readRows(
+      statements,
+      candidates.statement,
+      candidates.parameters,
+      'The recognition alternatives could not be stored.',
+    );
+  }
+  for (const batch of batches(fresh)) {
+    const staging = insertStagingReceiptsStatement(accountId, sessionId, batch);
+    await readRows(
+      statements,
+      staging.statement,
+      staging.parameters,
+      'The staging receipts could not be stored.',
+    );
+  }
+  const bump = bumpSessionStatement(accountId, sessionId);
+  await readRows(
+    statements,
+    bump.statement,
+    bump.parameters,
+    'The import session could not be updated.',
+  );
+}
+
 function readStagingReceiptStatement(accountId: string, captureId: string): Statement {
   return {
     statement: `select session_id, fingerprint, outcome, entry_id
@@ -609,6 +684,208 @@ function readStagingReceiptStatement(accountId: string, captureId: string): Stat
     where account_id = :account_id and capture_id = :capture_id`,
     parameters: { account_id: accountId, capture_id: captureId },
   };
+}
+
+/**
+ * What one acquisition source recorded for a bounded set of parsed source lines. Only entries of
+ * the named source and account are aggregated, so a line of another source or another account never
+ * affects the reconciliation (docs/user-cards.md#source-imports).
+ */
+function sourceLinesStatement(
+  accountId: string,
+  sourceKind: string,
+  sourceId: string,
+  sourceLineKeys: readonly string[],
+): Statement {
+  const references = placeholdersFor(sourceLineKeys, 'source_line_key');
+  return {
+    statement: `select entry.source_line_key,
+              coalesce(sum(entry.quantity) filter (where entry.state = 'pending'), 0)::int
+                as pending_quantity,
+              coalesce(sum(entry.quantity) filter (where entry.state = 'confirmed'), 0)::int
+                as confirmed_quantity,
+              count(*)::int as records,
+              (array_agg(entry.session_id order by entry.entry_id)
+                filter (where entry.state = 'pending'))[1] as pending_session_id,
+              (array_agg(entry.entry_id order by entry.entry_id)
+                filter (where entry.state = 'pending'))[1] as pending_entry_id,
+              (array_agg(entry.session_id order by entry.entry_id)
+                filter (where entry.state = 'confirmed'))[1] as confirmed_session_id,
+              (array_agg(entry.entry_id order by entry.entry_id)
+                filter (where entry.state = 'confirmed'))[1] as confirmed_entry_id
+     from usercards_private.import_entry as entry
+     join usercards_private.import_session as session
+       on session.account_id = entry.account_id
+      and session.session_id = entry.session_id
+    where entry.account_id = :account_id
+      and session.source_kind = :source_kind
+      and session.source_id = :source_id
+      and entry.source_line_key in (${references.list})
+    group by entry.source_line_key`,
+    parameters: {
+      account_id: accountId,
+      source_kind: sourceKind,
+      source_id: sourceId,
+      ...references.parameters,
+    },
+  };
+}
+
+/** One recorded line's aggregate, with the identities its reconciliation may point the caller at. */
+function sourceLineRecordFromRow(row: UserCardsSqlRow): SourceLineRecord {
+  const optionalText = (value: UserCardsSqlValue | undefined): string | null =>
+    typeof value === 'string' ? value : null;
+  const pendingSessionId = optionalText(row.pending_session_id);
+  const pendingEntryId = optionalText(row.pending_entry_id);
+  const confirmedSessionId = optionalText(row.confirmed_session_id);
+  const confirmedEntryId = optionalText(row.confirmed_entry_id);
+  return {
+    sourceLineKey: textValue(row.source_line_key),
+    pendingQuantity: integerValue(row.pending_quantity),
+    confirmedQuantity: integerValue(row.confirmed_quantity),
+    records: integerValue(row.records),
+    pendingEntry:
+      pendingSessionId === null || pendingEntryId === null
+        ? null
+        : { sessionId: pendingSessionId, entryId: pendingEntryId },
+    confirmedEntry:
+      confirmedSessionId === null || confirmedEntryId === null
+        ? null
+        : { sessionId: confirmedSessionId, entryId: confirmedEntryId },
+  };
+}
+
+/**
+ * Durable identity of the next pending entry of one parsed source line. `attempt` counts the
+ * entries the line already recorded, so a line whose entry was discarded stages a fresh entry
+ * instead of replaying the discarded one, while a covered line stages nothing at all.
+ */
+function sourceEntryId(sessionId: string, sourceLineKey: string, attempt: number): string {
+  return createHash('sha256')
+    .update(`${sessionId}\u0000${sourceLineKey}\u0000${attempt}`, 'utf8')
+    .digest('hex');
+}
+
+/** Reads one aggregate per parsed source line inside the caller's transaction. */
+async function readSourceLineRecords(
+  statements: UserCardsSqlExecutor,
+  accountId: string,
+  sourceKind: string,
+  sourceId: string,
+  sourceLineKeys: readonly string[],
+): Promise<readonly SourceLineRecord[]> {
+  const distinct = [...new Set(sourceLineKeys)];
+  if (distinct.length === 0) {
+    return [];
+  }
+  const records: SourceLineRecord[] = [];
+  for (const batch of batches(distinct)) {
+    const request = sourceLinesStatement(accountId, sourceKind, sourceId, batch);
+    const rows = await readRows(
+      statements,
+      request.statement,
+      request.parameters,
+      'The recorded source lines could not be read.',
+    );
+    records.push(...rows.map(sourceLineRecordFromRow));
+  }
+  return records;
+}
+
+/** What one source line's reconciliation staged, and what each offered row is represented by. */
+interface ReconciledSourceLines {
+  readonly lines: readonly SourceLineStageEntry[];
+  readonly fresh: readonly NewStagedImportEntry[];
+}
+
+/**
+ * Reconciles the offered lines of one acquisition source with what its session already recorded.
+ * Equivalent rows share one durable key and their declared quantities are covered together, in the
+ * order the source published them, so reordering, removing or duplicating a row never moves an
+ * already staged or acquired quantity onto another row and never stages a covered quantity again
+ * (docs/user-cards.md#source-imports).
+ */
+async function reconcileSourceLines(
+  statements: UserCardsSqlExecutor,
+  accountId: string,
+  plan: SourceLineStagePlan,
+): Promise<ReconciledSourceLines> {
+  const groups = new Map<
+    string,
+    { readonly line: SourceLineStageInput; readonly index: number }[]
+  >();
+  for (const [index, line] of plan.lines.entries()) {
+    const group = groups.get(line.sourceLineKey);
+    if (group === undefined) {
+      groups.set(line.sourceLineKey, [{ line, index }]);
+    } else {
+      group.push({ line, index });
+    }
+  }
+
+  const recorded = await readSourceLineRecords(
+    statements,
+    accountId,
+    plan.sourceKind,
+    plan.sourceId,
+    [...groups.keys()],
+  );
+  const recordedByKey = new Map(recorded.map((record) => [record.sourceLineKey, record]));
+
+  const lines: SourceLineStageEntry[] = new Array<SourceLineStageEntry>(plan.lines.length);
+  const fresh: { readonly index: number; readonly entry: NewStagedImportEntry }[] = [];
+  for (const [sourceLineKey, group] of groups) {
+    const record = recordedByKey.get(sourceLineKey) ?? null;
+    const pending = (record?.pendingQuantity ?? 0) > 0;
+    const held = (record?.pendingQuantity ?? 0) + (record?.confirmedQuantity ?? 0);
+    let coverage = held;
+    let attempts = record?.records ?? 0;
+    for (const { line, index } of group) {
+      // The recorded quantity covers the group's rows in source order, so a row the source still
+      // declares as covered is not staged again, and only the quantity the group exceeds stages.
+      const covered = Math.min(line.declaredQuantity, coverage);
+      coverage -= covered;
+      const quantity = line.declaredQuantity - covered;
+      if (quantity === 0) {
+        const entry = pending ? (record?.pendingEntry ?? null) : (record?.confirmedEntry ?? null);
+        if (entry === null) {
+          throw new UserCardsError(
+            'unavailable',
+            'The import source recorded a covered line without an entry.',
+          );
+        }
+        lines[index] = {
+          outcome: pending ? 'pending' : 'acquired',
+          entryId: entry.entryId,
+          sessionId: entry.sessionId,
+        };
+        continue;
+      }
+      attempts += 1;
+      const entry: NewStagedImportEntry = {
+        entryId: sourceEntryId(plan.sessionId, sourceLineKey, attempts),
+        printingId: line.printingId,
+        finish: line.finish,
+        condition: line.condition,
+        quantity,
+        candidates: line.candidates,
+        sourceLine: line.sourceLine,
+        sourceLineKey,
+        fingerprint: stagedLineFingerprint({
+          printingId: line.printingId,
+          finish: line.finish,
+          condition: line.condition,
+          quantity,
+          candidates: line.candidates,
+        }),
+      };
+      fresh.push({ index, entry });
+      lines[index] = { outcome: 'staged', entryId: entry.entryId, sessionId: plan.sessionId };
+    }
+  }
+  // Group traversal determines quantity coverage; session positions follow the offered rows.
+  fresh.sort((left, right) => left.index - right.index);
+  return { lines, fresh: fresh.map(({ entry }) => entry) };
 }
 
 function bumpSessionStatement(accountId: string, sessionId: string): Statement {
@@ -1116,7 +1393,7 @@ function entriesDataStatement(accountId: string, entryIds: readonly string[]): S
   (row_number() over (order by entry.position))::int as row_position,
   ${importEntryPayloadSql} as payload
 from (select entry_id, session_id, position, state, printing_id, finish, condition, quantity,
-             revision
+             source_line, revision
         from usercards_private.import_entry
        where account_id = :account_id and entry_id in (${references.list})) as entry
 union all
@@ -1356,6 +1633,48 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
       return readEntriesByIds(sql, accountId, entryIds);
     },
 
+    async stageSourceLines(accountId, plan): Promise<SourceLineStageData> {
+      return inTransaction(
+        sql,
+        async (statements) => {
+          const session = await claimSession(
+            statements,
+            accountId,
+            plan.sessionId,
+            plan.sourceKind,
+            plan.sourceId,
+            plan.sourceReference,
+          );
+          if (session.sourceKind !== plan.sourceKind || session.sourceId !== plan.sourceId) {
+            throw new UserCardsError(
+              'invalid-request',
+              'This session belongs to another import source; start a new import.',
+            );
+          }
+
+          // Reconciliation reads what the source recorded only after this transaction holds the
+          // session, so a review, discard or competing import that committed first is observed
+          // instead of overwritten (docs/user-cards.md#persistence-and-recovery).
+          const reconciled = await reconcileSourceLines(statements, accountId, plan);
+          let privateRevision: string;
+          if (reconciled.fresh.length === 0) {
+            privateRevision = await currentRevision(statements, accountId);
+          } else {
+            await insertStagedEntries(statements, accountId, plan.sessionId, reconciled.fresh);
+            privateRevision = await advanceRevision(statements, accountId);
+          }
+
+          return {
+            privateRevision,
+            session: await requireSession(statements, accountId, plan.sessionId),
+            lines: reconciled.lines,
+            staged: reconciled.fresh.length,
+          };
+        },
+        'The staged entries could not be committed.',
+      );
+    },
+
     async stageEntries(accountId, plan): Promise<ImportStageOutcome> {
       return inTransaction(
         sql,
@@ -1366,6 +1685,7 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
             plan.sessionId,
             plan.sourceKind,
             plan.sourceId,
+            plan.sourceReference,
           );
           if (session.sourceKind !== plan.sourceKind || session.sourceId !== plan.sourceId) {
             throw new UserCardsError(
@@ -1374,16 +1694,20 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
             );
           }
 
-          const receiptRequest = readStagingReceiptsStatement(
-            accountId,
-            plan.entries.map((entry) => entry.entryId),
-          );
-          const receipts = await readRows(
-            statements,
-            receiptRequest.statement,
-            receiptRequest.parameters,
-            'The staged entries could not be read.',
-          );
+          // An empty batch only prepares the session and names no identity to read a receipt for.
+          let receipts: readonly UserCardsSqlRow[] = [];
+          if (plan.entries.length > 0) {
+            const receiptRequest = readStagingReceiptsStatement(
+              accountId,
+              plan.entries.map((entry) => entry.entryId),
+            );
+            receipts = await readRows(
+              statements,
+              receiptRequest.statement,
+              receiptRequest.parameters,
+              'The staged entries could not be read.',
+            );
+          }
           const recorded = new Map(
             receipts.map((row) => [textValue(row.capture_id), row] as const),
           );
@@ -1407,37 +1731,7 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
           if (fresh.length === 0) {
             privateRevision = await currentRevision(statements, accountId);
           } else {
-            const base = await nextPosition(statements, accountId, plan.sessionId);
-            const insert = insertEntriesStatement(accountId, plan.sessionId, fresh, base);
-            await readRows(
-              statements,
-              insert.statement,
-              insert.parameters,
-              'The pending entries could not be stored.',
-            );
-            for (const batch of batches(candidateRows(fresh))) {
-              const candidates = insertCandidatesStatement(accountId, batch);
-              await readRows(
-                statements,
-                candidates.statement,
-                candidates.parameters,
-                'The recognition alternatives could not be stored.',
-              );
-            }
-            const staging = insertStagingReceiptsStatement(accountId, plan.sessionId, fresh);
-            await readRows(
-              statements,
-              staging.statement,
-              staging.parameters,
-              'The staging receipts could not be stored.',
-            );
-            const bump = bumpSessionStatement(accountId, plan.sessionId);
-            await readRows(
-              statements,
-              bump.statement,
-              bump.parameters,
-              'The import session could not be updated.',
-            );
+            await insertStagedEntries(statements, accountId, plan.sessionId, fresh);
             privateRevision = await advanceRevision(statements, accountId);
           }
 
@@ -1472,6 +1766,7 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
             plan.sessionId,
             'capture',
             plan.sessionId,
+            null,
           );
           if (session.sourceKind !== 'capture' || session.sourceId !== plan.sessionId) {
             throw new UserCardsError(
