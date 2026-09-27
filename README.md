@@ -36,12 +36,19 @@ npm run boundaries       # dependency-cruiser over src/
 npm run test:component   # Vitest component contracts
 npm run test:integration # Vitest integration boundaries
 npm run test:browser     # Playwright browser journeys
-npm run test:python      # Python unittest recognition suite
+npm run test:python      # Python unittest recognition suite (src/recognition/python/tests)
+npm run test:recognition # Retained browser recognition regressions (tests/recognition)
 npm run build            # compile the component public entry points into build/
 ```
 
 Focus a scope with a path filter, for example `npm run test:component -- public-contracts`. Component
 tests are organised as tests/component/<component>/ so one component's tests can be selected by path.
+The Python runner provisions the pinned `src/recognition/python/requirements-tests.txt` wheels into
+the ignored `.recognition-python/` environment once so the retained engine regressions run without
+extra setup. The check requires the complete 27-regression suite: when the dependencies are missing
+or cannot be installed it fails with an actionable error instead of skipping regressions. Set
+`KEEPER_PYTHON` to an interpreter that already provides NumPy, Pillow and OpenCV to bypass
+provisioning.
 
 `npm run validate` runs every check through Turborepo, which caches only the deterministic checks
 (formatting, linting, type checking and boundaries) and always runs the test suites and build.
@@ -95,7 +102,8 @@ entry point; cross-component imports use that module, and `.dependency-cruiser.m
 boundaries check for anything else, including imports it cannot resolve.
 tests/integration/boundaries.test.ts proves that an internal import and an unresolved import are
 reported. Tests follow the scopes in docs/testing.md: tests/component, tests/integration,
-tests/browser for browser journeys, src/recognition/tests for Python recognition tests, and
+tests/browser for browser journeys, src/recognition/python/tests for the preserved Python
+recognition tests, tests/recognition for the preserved browser recognition regressions, and
 tests/unit and tests/system once their first tests exist.
 
 The complete previous implementation is preserved separately at
@@ -105,4 +113,5 @@ Collection migration is required before cutover. Local owner data and existing A
 are preserved; no data migration, resource deletion or deployment is performed by this reset.
 
 Local runtime files are archived outside the repo at E:/projects/magic-keeper-local-backup.
-Recognition implementation and tests will be recovered from magic-keeper-old when needed.
+The recognition engines and their regressions are recovered from magic-keeper-old into
+src/recognition (KAN-16); their digests are recorded in src/recognition/baseline.json.

@@ -1,0 +1,69 @@
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+import zipfile
+
+PACKAGE = "src/recognition/python"
+
+
+def repository_root():
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "package.json").is_file() and (parent / PACKAGE).is_dir():
+            return parent
+    raise RuntimeError("Repository root not found for the recognition fixtures")
+
+
+class PublicFixtureTests(unittest.TestCase):
+    def test_frozen_fixtures_and_exported_source_keep_exact_original_bytes(self):
+        repo = repository_root()
+        sources = json.loads((repo / "tests/recognition/sources.json").read_text())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / PACKAGE
+            (package / "scripts").mkdir(parents=True)
+            (package / "fixtures").mkdir()
+            (package / "artifacts").mkdir()
+            (package / "artifacts/ocr-onnx.json").write_text("{}")
+            (package / "artifact-manifest.json").write_text(json.dumps({"code": "a" * 40}))
+            vendor = package / "vendor/CollectorVision"
+            (vendor / "docs").mkdir(parents=True)
+            (vendor / "docs/diagram.png").write_bytes(b"public documentation picture")
+            (vendor / "docs/diagram.svg").write_bytes(b"editable diagram source")
+            (vendor / "service.py").write_bytes(b"# complete upstream source")
+            (package / "LICENSE").write_text("Test licence fixture")
+            script = package / "scripts/source_bundle.py"
+            script.write_bytes((repo / PACKAGE / "scripts/source_bundle.py").read_bytes())
+            expected = {}
+            for source in sources:
+                name = PACKAGE + "/fixtures/" + source["key"] + ".jpg"
+                data = (repo / name).read_bytes()
+                self.assertEqual(hashlib.sha256(data).hexdigest(), source["sha256"])
+                (root / name).write_bytes(data)
+                expected["keeper/" + name] = data
+            # Unrelated photos must not enter source even if a manifest lists them.
+            (root / "private-photo.jpg").write_bytes(b"not a public fixture")
+            (root / "SOURCE_FILES.json").write_text(json.dumps([
+                name.removeprefix("keeper/") for name in expected
+            ] + ["private-photo.jpg"]))
+            subprocess.run([sys.executable, str(script)], check=True, capture_output=True)
+            with zipfile.ZipFile(package / "source.zip") as archive:
+                self.assertNotIn("keeper/private-photo.jpg", archive.namelist())
+                self.assertNotIn("CollectorVision/docs/diagram.png", archive.namelist())
+                self.assertEqual(archive.read("CollectorVision/docs/diagram.svg"), b"editable diagram source")
+                self.assertEqual(archive.read("CollectorVision/service.py"), b"# complete upstream source")
+                media = json.loads(archive.read("CollectorVision/DOCUMENTATION_MEDIA.json"))
+                self.assertEqual(media, [{
+                    "path": "docs/diagram.png",
+                    "url": "https://raw.githubusercontent.com/HanClinto/CollectorVision/" + "a" * 40 + "/docs/diagram.png",
+                    "sha256": hashlib.sha256(b"public documentation picture").hexdigest(),
+                }])
+                for name, data in expected.items():
+                    self.assertEqual(archive.read(name), data)
+
+
+if __name__ == "__main__":
+    unittest.main()

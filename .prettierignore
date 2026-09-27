@@ -13,3 +13,12 @@ package-lock.json
 *.py
 __pycache__/
 *.pyc
+
+# Retained recognition baseline: the 128c903 engine, browser modules and regressions stay
+# byte-identical to their pinned revision (src/recognition/baseline.json).
+src/recognition/browser/
+src/recognition/python/
+tests/recognition/
+
+# Provisioned recognition test interpreter.
+.recognition-python/

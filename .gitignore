@@ -9,6 +9,11 @@ __pycache__/
 *.pyc
 *.log
 *.zip
+.recognition-python/
+# Prepared recognition models and the assembled source bundle stay out of git.
+src/recognition/python/artifacts/
+# Browser ONNX runtime and catalog assets prepared next to the recognition modules.
+src/recognition/browser/vendor/
 build/
 public/vendor/
 public/config.json

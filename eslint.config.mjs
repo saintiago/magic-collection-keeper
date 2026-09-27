@@ -19,4 +19,17 @@ export default [
       globals: { ...globals.node },
     },
   },
+  {
+    // The retained 128c903 browser recognition baseline stays byte-identical to its pinned
+    // revision (src/recognition/baseline.json) and runs in the browser: worker, camera and
+    // canvas globals apply, and unused upstream exports are preserved deliberately.
+    files: ['src/recognition/browser/**/*.js'],
+    languageOptions: {
+      globals: { ...globals.browser },
+    },
+    rules: {
+      '@typescript-eslint/no-unused-vars': 'off',
+      'preserve-caught-error': 'off',
+    },
+  },
 ];

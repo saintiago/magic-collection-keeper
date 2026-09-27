@@ -5,7 +5,8 @@ import { defineConfig } from 'vitest/config';
  * tests exercise a component's public contract; integration tests cover one real boundary. The unit
  * scope joins with the first focused product rule, and the system scope with the assembled
  * application. Browser journeys live in tests/browser under Playwright, and recognition regressions
- * live in Python under src/recognition/tests.
+ * live in Python under src/recognition/python/tests and as retained browser cases in
+ * tests/recognition.
  */
 export default defineConfig({
   test: {
