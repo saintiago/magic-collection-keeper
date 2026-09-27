@@ -1,13 +1,14 @@
 /**
  * Browser journeys: CardList (docs/user-interface.md#list-boundary, docs/user-interface.md#cardlist,
- * docs/testing.md#component-acceptance-scenarios).
+ * docs/user-interface.md#state-ownership-and-restoration, docs/testing.md#component-acceptance-scenarios).
  *
  * The cases bundle the real CardList with the controlled sources, fragment readers and tools of
  * card-list.harness.ts and drive them in Chromium: bounded pages, basic information with the
  * entries, a refresh that keeps usable content, empty versus failed results, independent fragment
  * loading and retry, response ordering, selection through enrichment and refinement, tool outcomes,
  * a bounded working set with bounded fragment batches, retired obsolete work, retained keyboard
- * focus, grouped copies and two independent lists.
+ * focus, grouped copies, two independent lists and the capture and restoration of one list's own
+ * state through its public contract.
  */
 
 import path from 'node:path';
@@ -17,6 +18,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 
 import type {
+  UiCardListRestorationReport,
   UiCardListControl,
   UiCardListFragmentRequest,
   UiCardListInstall,
@@ -27,6 +29,7 @@ import type {
 import type {
   UiFragmentKind,
   UiFragmentResult,
+  UiCardListState as UiCardListRetainedState,
   UiListEntry,
   UiOperationOutcome,
 } from '../../src/ui/index.js';
@@ -120,6 +123,18 @@ async function close(page: Page, id: string): Promise<void> {
 async function state(page: Page, id: string): Promise<UiCardListState> {
   return page.evaluate((listId) => {
     return (globalThis as unknown as GlobalControl).keeperCardListControl.state(listId);
+  }, id);
+}
+
+async function capture(page: Page, id: string): Promise<UiCardListRetainedState> {
+  return page.evaluate((listId) => {
+    return (globalThis as unknown as GlobalControl).keeperCardListControl.capture(listId);
+  }, id);
+}
+
+async function restoration(page: Page, id: string): Promise<UiCardListRestorationReport> {
+  return page.evaluate((listId) => {
+    return (globalThis as unknown as GlobalControl).keeperCardListControl.restoration(listId);
   }, id);
 }
 
@@ -257,6 +272,16 @@ async function onlyRequest(page: Page, list: string): Promise<UiCardListPageRequ
     throw new Error(`No page request of list ${list} was recorded.`);
   }
   return first;
+}
+
+/** The latest request one list recorded; a journey settles or fails it by its id. */
+async function lastRequest(page: Page, list: string): Promise<UiCardListPageRequest> {
+  const requests = (await pageRequests(page)).filter((request) => request.list === list);
+  const last = requests.at(-1);
+  if (last === undefined) {
+    throw new Error(`No page request of list ${list} was recorded.`);
+  }
+  return last;
 }
 
 function copy(copyId: string, printingId: string, name = 'Lightning Bolt'): UiListEntry {
@@ -1266,4 +1291,286 @@ test('retires selected tool reads when a replacement result arrives', async ({ p
     selection: ['copy:1'],
     targets: ['copy:1'],
   });
+});
+
+test('restores the retained window, selection and local focus from its own source position', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', {
+    pageSize: 2,
+    restored: {
+      window: 2,
+      position: { continuation: 'cursor-1', offset: 0 },
+      selection: ['card:2'],
+      scrollTop: 0,
+      focus: { control: 'select', key: 'card:2' },
+    },
+  });
+
+  // The list resumes the retained position instead of starting the result again, and it keeps the
+  // window it is restoring while the source has not presented it.
+  const restored = await onlyRequest(page, 'a');
+  expect(restored).toMatchObject({ continuation: 'cursor-1', aborted: false });
+  expect(await restoration(page, 'a')).toEqual({ status: 'pending', message: null });
+  expect(await capture(page, 'a')).toEqual({
+    window: 2,
+    position: { continuation: 'cursor-1', offset: 0 },
+    selection: ['card:2'],
+    scrollTop: 0,
+    focus: { control: 'select', key: 'card:2' },
+  });
+
+  await settlePage(page, restored.id, [card('1'), card('2')]);
+
+  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(2);
+  await expect(page.locator('#list-a [data-ui-select="card:2"]')).toBeChecked();
+  await expect(page.locator('#list-a [data-ui-select="card:2"]')).toBeFocused();
+  expect(await restoration(page, 'a')).toEqual({ status: 'presented', message: null });
+  expect(await capture(page, 'a')).toMatchObject({
+    window: 2,
+    position: { continuation: 'cursor-1', offset: 0 },
+    selection: ['card:2'],
+  });
+  expect(errors).toEqual([]);
+});
+
+test('presents a restored window only once its further pages are back', async ({ page }) => {
+  const errors = await openLists(page);
+  await install(page, 'a', {
+    pageSize: 3,
+    restored: {
+      window: 3,
+      position: { continuation: null, offset: 1 },
+      selection: [],
+      scrollTop: 0,
+      focus: null,
+    },
+  });
+
+  // The retained window starts inside its first page, so the entries before the position leave.
+  const first = await onlyRequest(page, 'a');
+  expect(first).toMatchObject({ continuation: null });
+  await settlePage(page, first.id, [card('0'), card('1'), card('2')], 'next');
+
+  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(2);
+  expect(await restoration(page, 'a')).toEqual({ status: 'pending', message: null });
+  await expect(page.locator('#list-a [data-ui-more]')).toBeHidden();
+
+  // The list asks for the next page of the retained position itself and reports the presentation
+  // only when the window the history entry held is back.
+  const requests = await pageRequests(page);
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).toMatchObject({ continuation: 'next', aborted: false });
+  await settlePage(page, requests[1]!.id, [card('3'), card('4')]);
+
+  expect(await state(page, 'a')).toMatchObject({
+    entries: ['card:1', 'card:2', 'card:3', 'card:4'],
+    loading: false,
+    error: null,
+  });
+  expect(await restoration(page, 'a')).toEqual({ status: 'presented', message: null });
+  expect(errors).toEqual([]);
+});
+
+test('keeps the intended state through repeated interruption, with the edits beside it', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  const retained: UiCardListRetainedState = {
+    window: 4,
+    position: { continuation: 'cursor-2', offset: 1 },
+    selection: ['card:0', 'card:1'],
+    scrollTop: 0,
+    focus: null,
+  };
+  await install(page, 'a', { pageSize: 2, restored: retained });
+
+  // The first page of the restoration arrives and the second is still loading when the user edits
+  // the selection, which supersedes only the state it affects.
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, [card('0'), card('2')], 'cursor-3');
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as GlobalControl).keeperCardListControl;
+    control.setSelected('a', 'card:0', false);
+    control.setSelected('a', 'card:9', true);
+  });
+  await expect.poll(async () => (await capture(page, 'a')).selection).toEqual(['card:1', 'card:9']);
+
+  // Leaving during the second page keeps the intended window, not the partial one.
+  const captured = await capture(page, 'a');
+  expect(captured).toMatchObject({
+    window: 4,
+    position: { continuation: 'cursor-2', offset: 1 },
+  });
+  await close(page, 'a');
+  await expect.poll(() => restoration(page, 'a')).toMatchObject({ status: 'interrupted' });
+
+  // The next visit resumes the same position and keeps the selection outside the loaded window.
+  await install(page, 'a', { pageSize: 2, restored: captured });
+  const resumed = await lastRequest(page, 'a');
+  expect(resumed.continuation).toBe('cursor-2');
+  await settlePage(page, resumed.id, [card('0'), card('2')], 'cursor-3');
+  const continued = await lastRequest(page, 'a');
+  expect(continued.continuation).toBe('cursor-3');
+  await settlePage(page, continued.id, [card('3'), card('4')]);
+  expect(await restoration(page, 'a')).toEqual({ status: 'presented', message: null });
+  expect(await capture(page, 'a')).toMatchObject({ selection: ['card:1', 'card:9'] });
+  expect(errors).toEqual([]);
+});
+
+test('reports a failed restoration, retries the retained position and starts fresh on refresh', async ({
+  page,
+}) => {
+  await openLists(page);
+  await install(page, 'a', {
+    pageSize: 2,
+    restored: {
+      window: 2,
+      position: { continuation: 'stale', offset: 0 },
+      selection: ['card:5'],
+      scrollTop: 0,
+      focus: null,
+    },
+  });
+
+  const first = await onlyRequest(page, 'a');
+  await failPage(page, first.id, 'Results changed; refresh.');
+  await expect(page.locator('#list-a [data-ui-status]')).toHaveText('Results changed; refresh.');
+  // The interruption is reported, and the intended window stays retained for the next visit.
+  expect(await restoration(page, 'a')).toEqual({
+    status: 'interrupted',
+    message: 'Results changed; refresh.',
+  });
+  expect(await capture(page, 'a')).toMatchObject({
+    window: 2,
+    position: { continuation: 'stale', offset: 0 },
+    selection: ['card:5'],
+  });
+
+  await page.locator('#list-a [data-ui-retry]').click();
+  const retried = (await pageRequests(page)).at(-1)!;
+  expect(retried).toMatchObject({ continuation: 'stale', aborted: false });
+  await settlePage(page, retried.id, [card('5'), card('6')]);
+  // The retry is this visit's own request again: the interruption stays reported and what the
+  // source supplies now becomes the loaded window.
+  expect(await restoration(page, 'a')).toEqual({
+    status: 'interrupted',
+    message: 'Results changed; refresh.',
+  });
+  await expect(page.locator('#list-a [data-ui-select="card:5"]')).toBeChecked();
+
+  // Refresh supersedes the retained window: the result starts at its beginning and the page learns
+  // that the restoration ended without presenting it.
+  await close(page, 'a');
+  await install(page, 'a', {
+    pageSize: 2,
+    restored: {
+      window: 2,
+      position: { continuation: 'stale', offset: 0 },
+      selection: [],
+      scrollTop: 0,
+      focus: null,
+    },
+  });
+  await refresh(page, 'a');
+  const fresh = await lastRequest(page, 'a');
+  expect(fresh).toMatchObject({ continuation: null, aborted: false });
+  await expect.poll(() => restoration(page, 'a')).toMatchObject({ status: 'interrupted' });
+  await settlePage(page, fresh.id, [card('1'), card('2')]);
+  expect(await state(page, 'a')).toMatchObject({ entries: ['card:1', 'card:2'], error: null });
+});
+
+test('keeps more than a hundred selected identities across visits', async ({ page }) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 100 });
+  await settlePage(
+    page,
+    (await onlyRequest(page, 'a')).id,
+    Array.from({ length: 100 }, (_, index) => card(String(index))),
+    'next',
+  );
+
+  // The user selects more identities than any former history bound held, including entries the
+  // source has not loaded yet; none of them is dropped by the state a history entry retains.
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as GlobalControl).keeperCardListControl;
+    for (let index = 0; index < 150; index += 1) {
+      control.setSelected('a', `card:${index}`, true);
+    }
+  });
+  const captured = await capture(page, 'a');
+  expect(captured.window).toBe(100);
+  expect(captured.selection).toHaveLength(150);
+
+  await close(page, 'a');
+  await install(page, 'a', { pageSize: 100, restored: captured });
+  await settlePage(
+    page,
+    (await lastRequest(page, 'a')).id,
+    Array.from({ length: 100 }, (_, index) => card(String(index))),
+    'next',
+  );
+
+  await expect(page.locator('#list-a [data-ui-select="card:0"]')).toBeChecked();
+  await expect(page.locator('#list-a [data-ui-select="card:99"]')).toBeChecked();
+  expect((await capture(page, 'a')).selection).toHaveLength(150);
+  expect(await restoration(page, 'a')).toEqual({ status: 'presented', message: null });
+  expect(errors).toEqual([]);
+});
+
+test("restores the list's own scroll and focus with its window", async ({ page }) => {
+  const errors = await openLists(page);
+  const entries = Array.from({ length: 6 }, (_, index) => card(String(index)));
+  await install(page, 'a', { pageSize: 6, scrollable: true });
+  await settlePage(page, (await onlyRequest(page, 'a')).id, entries);
+
+  const last = page.locator('#list-a [data-ui-select="card:5"]');
+  await last.focus();
+  await page.evaluate(() => {
+    document.getElementById('list-a')!.scrollTop = 30;
+  });
+  const captured = await capture(page, 'a');
+  expect(captured.focus).toEqual({ control: 'select', key: 'card:5' });
+  expect(captured.scrollTop).toBe(30);
+
+  await close(page, 'a');
+  await install(page, 'a', { pageSize: 6, scrollable: true, restored: captured });
+  await expect.poll(() => restoration(page, 'a')).toMatchObject({ status: 'pending' });
+  await settlePage(page, (await lastRequest(page, 'a')).id, entries);
+
+  await expect(last).toBeFocused();
+  await expect
+    .poll(() => page.evaluate(() => document.getElementById('list-a')!.scrollTop))
+    .toBe(30);
+  expect(await restoration(page, 'a')).toEqual({ status: 'presented', message: null });
+  expect(errors).toEqual([]);
+});
+
+test('keeps a control the page rendered for an entry focused through window updates', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 2, openEntry: true });
+  await settlePage(page, (await onlyRequest(page, 'a')).id, [card('1'), card('2')], 'next');
+
+  const opened = page.locator('#list-a [id="open-card:1"]');
+  await opened.focus();
+  // The page extends the window while the entry's own control keeps the keyboard focus.
+  await page.evaluate(() => {
+    (globalThis as unknown as GlobalControl).keeperCardListControl.loadMore('a');
+  });
+  await settlePage(page, (await lastRequest(page, 'a')).id, [card('3')]);
+
+  // The page rendered the entry's own control; the list keeps that focus through its re-rendering
+  // and retains the control by the stable id the page gave it.
+  await expect(page.locator('#list-a [id="open-card:1"]')).toBeFocused();
+  const captured = await capture(page, 'a');
+  expect(captured.focus).toEqual({ control: 'element', id: 'open-card:1' });
+
+  await close(page, 'a');
+  await install(page, 'a', { pageSize: 3, openEntry: true, restored: captured });
+  await settlePage(page, (await lastRequest(page, 'a')).id, [card('1'), card('2'), card('3')]);
+  await expect(page.locator('#list-a [id="open-card:1"]')).toBeFocused();
+  expect(errors).toEqual([]);
 });

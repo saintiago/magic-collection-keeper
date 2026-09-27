@@ -33,6 +33,8 @@ export interface UiShellControl {
   completeDeviceRelease(message?: string): void;
   /** Answers the asynchronous page's held result requests, as the source's response arriving would. */
   answerAsyncResults(): void;
+  /** Inserts late content above the presented window, as decoded images or fragments would. */
+  shiftAsyncLayout(): void;
   /** Result requests the asynchronous page holds, waiting for the journey to answer them. */
   asyncPending(): number;
   /** Notes the harness recorded, oldest first. */
@@ -177,6 +179,9 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     answerAsyncResults: () => {
       asyncResults.answer();
     },
+    shiftAsyncLayout: () => {
+      asyncResults.grow();
+    },
     asyncPending: () => asyncResults.pending(),
     log: () => [...log],
     dispose: () => {
@@ -199,6 +204,7 @@ function fixturePages(
     catalogPage(document),
     cardPage(document, log),
     collectionPage(document),
+    statePage(document),
     redirectPage(document, log),
     devicePage(document, log),
   ];
@@ -215,10 +221,15 @@ interface AsyncResults {
   answer(): void;
   /** Requests waiting for their answer. */
   pending(): number;
+  /** Inserts content above the presented window, as late layout arriving would. */
+  grow(): void;
+  /** Adopts the presented page's own way of growing; the mount presented now is the one that grows. */
+  adoptGrow(apply: () => void): void;
 }
 
 function createAsyncResults(): AsyncResults {
   const waiting: (() => void)[] = [];
+  let grow = (): void => {};
   return {
     hold: () => new Promise<void>((resolve) => waiting.push(resolve)),
     answer: () => {
@@ -227,6 +238,12 @@ function createAsyncResults(): AsyncResults {
       }
     },
     pending: () => waiting.length,
+    grow: () => {
+      grow();
+    },
+    adoptGrow: (apply) => {
+      grow = apply;
+    },
   };
 }
 
@@ -258,6 +275,14 @@ function asyncHomePage(
       const host = document.createElement('ol');
       const tail = document.createElement('div');
       tail.style.height = '600px';
+      // Late content the journey inserts above the presented window, as decoded images would.
+      const late = document.createElement('div');
+      late.style.height = '400px';
+      results.adoptGrow(() => {
+        if (!container.contains(late)) {
+          container.prepend(late);
+        }
+      });
       container.append(status, host, tail);
       const presented = Promise.withResolvers<void>();
       let loaded = 0;
@@ -266,7 +291,10 @@ function asyncHomePage(
       renderLoaded();
       load();
       return {
-        capture: () => ({ loaded }),
+        // The entry keeps the window it is restoring until the source has presented it again, so a
+        // history entry interrupted while loading it keeps that window
+        // (docs/user-interface.md#state-ownership-and-restoration).
+        capture: () => ({ loaded: done || kept === 0 ? loaded : kept }),
         ...(kept > 0 ? { presented: () => presentKeptWindow() } : {}),
       };
 
@@ -333,8 +361,8 @@ function resultRow(document: Document, index: number): HTMLLIElement {
 }
 
 /** Entries the restored history entry had presented, or zero when it kept none. */
-function readLoadedWindow(restored: Readonly<Record<string, unknown>> | null): number {
-  const value = restored?.loaded;
+function readLoadedWindow(state: unknown): number {
+  const value = readRecord(state)?.loaded;
   return typeof value === 'number' &&
     Number.isSafeInteger(value) &&
     value > 0 &&
@@ -343,10 +371,19 @@ function readLoadedWindow(restored: Readonly<Record<string, unknown>> | null): n
     : 0;
 }
 
+/** One page-owned state object, or null when the entry kept none or kept another shape. */
+function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : null;
+}
+
 /** Home keeps a query, two independent selections, an opening link, a dialog and long content. */
 function homePage(document: Document, log: string[]): UiPageDefinition {
   return {
     page: 'home',
+    // Reported for every account the shell leaves, whatever page is presented at that moment.
+    accountEnded: (accountId) => log.push(`account-ended:${accountId}`),
     mount(container, context) {
       const query = document.createElement('input');
       query.id = 'home-query';
@@ -395,7 +432,7 @@ function homePage(document: Document, log: string[]): UiPageDefinition {
       });
       container.append(query, guard, bolt, lead, open, edit, go, answer, tail);
 
-      const restored = context.restored?.state ?? null;
+      const restored = readRecord(context.restored?.state);
       if (restored !== null) {
         query.value = typeof restored.query === 'string' ? restored.query : '';
         guard.checked = restored.guard === true;
@@ -405,6 +442,60 @@ function homePage(document: Document, log: string[]): UiPageDefinition {
       return {
         capture: () => ({ query: query.value, guard: guard.checked, bolt: bolt.checked }),
       };
+    },
+  };
+}
+
+/**
+ * State ownership fixture: the page keeps its own representation — a selection far beyond any
+ * history storage bound beside an unrelated draft — and hands the very same shape back, so a
+ * journey proves that navigation retains the page state without reading or restricting it
+ * (docs/user-interface.md#state-ownership-and-restoration).
+ */
+function statePage(document: Document): UiPageDefinition {
+  return {
+    page: 'tags',
+    mount(container, context) {
+      const draft = document.createElement('input');
+      draft.id = 'state-draft';
+      draft.setAttribute('aria-label', 'State draft');
+      const selectMany = document.createElement('button');
+      selectMany.type = 'button';
+      selectMany.textContent = 'Select many';
+      const count = document.createElement('p');
+      count.id = 'state-count';
+      const open = document.createElement('a');
+      open.id = 'state-open';
+      open.href = uiHref({ page: 'collection' });
+      open.textContent = 'Open collection';
+      container.append(draft, selectMany, count, open);
+
+      const restored = readRecord(context.restored?.state);
+      const kept = Array.isArray(restored?.selection) ? restored.selection : [];
+      const selection = new Set<string>(
+        kept.filter((key): key is string => typeof key === 'string'),
+      );
+      if (typeof restored?.draft === 'string') {
+        draft.value = restored.draft;
+      }
+      selectMany.addEventListener('click', () => {
+        for (let index = 0; index < 150; index += 1) {
+          selection.add(`card:${index}`);
+        }
+        render();
+      });
+      render();
+      return {
+        capture: () => ({
+          selection: [...selection],
+          draft: draft.value,
+          nested: { only: 'the page interprets this' },
+        }),
+      };
+
+      function render(): void {
+        count.textContent = `${selection.size} selected`;
+      }
     },
   };
 }

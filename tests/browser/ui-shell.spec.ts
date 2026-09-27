@@ -18,6 +18,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 
 import type { UiShellControl, UiShellStart } from './ui-shell.harness.js';
+import { UI_LIMITS } from '../../src/ui/index.js';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const harnessPath = path.join(repoRoot, 'tests', 'browser', 'ui-shell.harness.ts');
@@ -250,6 +251,76 @@ test('a late result of a closed page never reaches the new view', async ({ page 
   await expect(page.locator('#collection-marker')).toBeVisible();
 });
 
+test('every page implementation learns that the shell left an account', async ({ page }) => {
+  await openShell(page, '#/cards/card-1');
+  await expect(page.locator('#card-level')).toHaveText('card-1/-/-');
+
+  // The card is presented, and the Home implementation still learns that its account ended.
+  await signInAs(page, 'bob');
+  expect(await notes(page)).toContain('account-ended:alice');
+
+  // Disposal ends the presented account too, so no page keeps private state past the shell.
+  await disposeShell(page);
+  expect(await notes(page)).toContain('account-ended:bob');
+});
+
+test('page-owned state survives history without a storage bound', async ({ page }) => {
+  await openShell(page, '#/tags');
+
+  // The page retains a selection far beyond any former history bound beside an unrelated draft;
+  // navigation keeps that representation without reading or restricting it.
+  await page.getByRole('button', { name: 'Select many' }).click();
+  await expect(page.locator('#state-count')).toHaveText('150 selected');
+  await page.getByLabel('State draft').fill('draft beside the selection');
+  await page.locator('#state-open').click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+
+  await page.goBack();
+  await expect(page.locator('#state-count')).toHaveText('150 selected');
+  await expect(page.getByLabel('State draft')).toHaveValue('draft beside the selection');
+});
+
+test('history eviction releases the state of the oldest entries', async ({ page }) => {
+  await openShell(page, '#/tags');
+  await page.getByLabel('State draft').fill('oldest');
+  const visits = UI_LIMITS.viewStates + 2;
+  for (let index = 1; index <= visits; index += 1) {
+    await page.locator('#state-open').click();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+    await page.getByRole('link', { name: 'Tags', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Tags' })).toBeVisible();
+    await page.getByLabel('State draft').fill(`draft-${index}`);
+  }
+
+  // Back reaches every entry again. The entries beyond the history bound were evicted with the
+  // state they retained, while the entries inside it restore their own draft.
+  const drafts: string[] = [];
+  for (let index = visits; index >= 1; index -= 1) {
+    await page.goBack();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+    // The last step reaches the very first entry of the journey.
+    await page.goBack();
+    await expect(page.getByRole('heading', { name: 'Tags' })).toBeVisible();
+    drafts.push(await page.getByLabel('State draft').inputValue());
+  }
+
+  expect(drafts.at(0)).toBe(`draft-${visits - 1}`);
+  // Every entry inside the bound still restores the draft it captured, in its own order...
+  const retained = drafts.filter((value) => value.length > 0);
+  expect(retained).toEqual(retained.map((_, index) => `draft-${visits - 1 - index}`));
+  expect(retained.length).toBeGreaterThanOrEqual(UI_LIMITS.viewStates / 2 - 1);
+  // ...while every entry beyond it kept nothing, the first entry of the journey included.
+  expect(drafts.slice(retained.length).every((value) => value === '')).toBe(true);
+  expect(drafts.at(-1)).toBe('');
+
+  // The page whose state was evicted still works: the entry captures a fresh draft again.
+  await page.getByLabel('State draft').fill('fresh');
+  await page.locator('#state-open').click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+  await page.goBack();
+  await expect(page.getByLabel('State draft')).toHaveValue('fresh');
+});
+
 test('sign-out removes private presentation state and ends the session', async ({ page }) => {
   await openShell(page, '#/');
   await page.getByLabel('Search cards').fill('lightning bolt');
@@ -396,6 +467,88 @@ test('a restored entry captures its live state once the page presented it', asyn
   await completeAsyncResults(page, 100);
   await expect(page.locator('#async-result-50')).toBeFocused();
 });
+
+test('early input still allows later interaction to replace the restored focus and scroll', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/', { asyncResults: true });
+  await completeAsyncResults(page, 100);
+  await page.locator('#async-result-100').click();
+  await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+
+  // The user acts while the restored window is still loading: the automatic restoration of the
+  // entry's focus and scroll is cancelled, but the entry keeps its context.
+  await page.goBack();
+  await expect.poll(() => asyncPending(page)).toBeGreaterThan(0);
+  await page.keyboard.press('Tab');
+  await completeAsyncResults(page, 100);
+  await expect(page.locator('#async-result-100')).not.toBeFocused();
+
+  // Later interaction becomes the entry's own context, including keyboard activation.
+  const first = page.locator('#async-result-1');
+  await first.focus();
+  await first.evaluate((element) => window.scrollBy(0, element.getBoundingClientRect().top - 90));
+  const savedTop = await first.evaluate((element) => element.getBoundingClientRect().top);
+  await first.press('Enter');
+  await expect(page.locator('#card-level')).toHaveText('card-1/-/-');
+
+  await page.goBack();
+  await completeAsyncResults(page, 100);
+  await expect(first).toBeFocused();
+  await expect
+    .poll(async () =>
+      Math.abs((await first.evaluate((element) => element.getBoundingClientRect().top)) - savedTop),
+    )
+    .toBeLessThan(2);
+  expect(errors).toEqual([]);
+});
+
+test('a restored entry keeps its visible result while late content arrives', async ({ page }) => {
+  const errors = await openShell(page, '#/', { asyncResults: true });
+  await completeAsyncResults(page, 100);
+  await page.locator('#async-result-100').focus();
+  await page
+    .locator('#async-result-100')
+    .evaluate((element) => window.scrollBy(0, element.getBoundingClientRect().top - 120));
+  const anchor = await visibleAnchor(page);
+  await page.locator('#async-result-100').click();
+  await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+
+  // Back presents the window again; late content is inserted above it, as decoded images or
+  // fragments arriving after the presentation would shift it.
+  await page.goBack();
+  await completeAsyncResults(page, 100);
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.shiftAsyncLayout();
+  });
+
+  const moved = await visibleAnchor(page);
+  expect(moved?.id).toBe(anchor?.id);
+  expect(Math.abs((moved?.top ?? 0) - (anchor?.top ?? 0))).toBeLessThan(2);
+  expect(errors).toEqual([]);
+});
+
+/** The element and viewport offset the shell keeps for an entry, computed as the shell does. */
+async function visibleAnchor(
+  page: Page,
+): Promise<{ readonly id: string; readonly top: number } | null> {
+  return page.evaluate(() => {
+    let closest: { id: string; top: number } | null = null;
+    for (const element of document.querySelectorAll<HTMLElement>('main [id]')) {
+      const rect = element.getBoundingClientRect();
+      if (
+        rect.height > 0 &&
+        rect.bottom > 0 &&
+        rect.top < innerHeight &&
+        (closest === null || Math.abs(rect.top) < Math.abs(closest.top))
+      ) {
+        closest = { id: element.id, top: rect.top };
+      }
+    }
+    return closest;
+  });
+}
 
 test('an account change during a pending restoration presents the new account alone', async ({
   page,
