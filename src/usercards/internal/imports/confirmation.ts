@@ -29,7 +29,7 @@ import {
   type Statement,
 } from './session-state.js';
 
-/** The durable content key of one entry: its reviewed content and its occurrence in its source. */
+/** The durable content key of one entry: its reviewed content and its occurrence in its import. */
 interface EntryKey {
   readonly entryFingerprint: string;
   readonly occurrence: number;
@@ -117,17 +117,15 @@ function bindEntryStatement(accountId: string, entryId: string, acquisitionId: s
   };
 }
 
-/** The acquisitions already recorded for the requested reviewed entries of one source. */
+/** The acquisitions already recorded for the requested reviewed entries of one import. */
 function recordedAcquisitionsStatement(
   accountId: string,
-  sourceKind: string,
-  sourceId: string,
+  sessionId: string,
   keys: readonly EntryKey[],
 ): Statement {
   const parameters: Record<string, UserCardsSqlValue> = {
     account_id: accountId,
-    source_kind: sourceKind,
-    source_id: sourceId,
+    session_id: sessionId,
   };
   const values = keys
     .map((key, index) => {
@@ -145,32 +143,28 @@ function recordedAcquisitionsStatement(
        on requested.entry_fingerprint = acquisition.entry_fingerprint
       and requested.occurrence = acquisition.occurrence
     where acquisition.account_id = :account_id
-      and acquisition.source_kind = :source_kind
-      and acquisition.source_id = :source_id`,
+      and acquisition.session_id = :session_id`,
     parameters,
   };
 }
 
-/** Records the acquisition of one source entry the account has not acquired from that source. */
+/** Records the acquisition of one source entry the import has not acquired yet. */
 function claimAcquisitionStatement(
   accountId: string,
-  sourceKind: string,
-  sourceId: string,
+  sessionId: string,
   entry: ConfirmedImportEntry,
   occurrence: number,
 ): Statement {
   return {
     statement: `insert into usercards_private.import_acquisition
-       (acquisition_id, account_id, source_kind, source_id, entry_fingerprint, occurrence, entry_id)
-     values (:acquisition_id, :account_id, :source_kind, :source_id, :entry_fingerprint,
-             :occurrence, :entry_id)
-     on conflict (account_id, source_kind, source_id, entry_fingerprint, occurrence) do nothing
+       (acquisition_id, account_id, session_id, entry_fingerprint, occurrence, entry_id)
+     values (:acquisition_id, :account_id, :session_id, :entry_fingerprint, :occurrence, :entry_id)
+     on conflict (account_id, session_id, entry_fingerprint, occurrence) do nothing
      returning acquisition_id`,
     parameters: {
       acquisition_id: randomUUID(),
       account_id: accountId,
-      source_kind: sourceKind,
-      source_id: sourceId,
+      session_id: sessionId,
       entry_fingerprint: entry.entryFingerprint,
       occurrence,
       entry_id: entry.entryId,
@@ -178,7 +172,7 @@ function claimAcquisitionStatement(
   };
 }
 
-/** The durable key of one reviewed entry inside its acquisition source. */
+/** The durable key of one reviewed entry inside its import. */
 function entryKey(entryFingerprint: string, occurrence: number): string {
   return `${entryFingerprint}\u0000${occurrence}`;
 }
@@ -430,7 +424,7 @@ async function classifyConfirmation(
   return { pending, missing, stale, unresolved };
 }
 
-/** One reviewed entry with the durable key its acquisition source is recognized by. */
+/** One reviewed entry with the durable key its import recognizes it by. */
 interface KeyedImportEntry {
   readonly entry: ConfirmedImportEntry;
   /** Next occurrence allocated from this session's permanent confirmation bindings. */
@@ -472,12 +466,11 @@ async function readEntryKeys(
   });
 }
 
-/** The acquisitions already recorded for the given durable keys of one source. */
+/** The acquisitions already recorded for the given durable keys of one import. */
 async function readRecordedAcquisitions(
   statements: UserCardsSqlExecutor,
   accountId: string,
-  sourceKind: string,
-  sourceId: string,
+  sessionId: string,
   keys: readonly KeyedImportEntry[],
 ): Promise<ReadonlyMap<string, string>> {
   if (keys.length === 0) {
@@ -485,8 +478,7 @@ async function readRecordedAcquisitions(
   }
   const request = recordedAcquisitionsStatement(
     accountId,
-    sourceKind,
-    sourceId,
+    sessionId,
     keys.map(({ entry, occurrence }) => ({
       entryFingerprint: entry.entryFingerprint,
       occurrence,
@@ -530,8 +522,6 @@ export function createImportConfirmation(
           if (stored === undefined) {
             return { outcome: 'missing-session' as const };
           }
-          const sourceKind = textValue(stored.source_kind);
-          const sourceId = textValue(stored.source_id);
 
           const operationRequest = readReceiptStatement(accountId, plan.operationId);
           const operation = (
@@ -643,8 +633,7 @@ export function createImportConfirmation(
           const recorded = await readRecordedAcquisitions(
             statements,
             accountId,
-            sourceKind,
-            sourceId,
+            plan.sessionId,
             keys,
           );
           const bindings = new Map<string, string>();
@@ -658,13 +647,7 @@ export function createImportConfirmation(
               bindings.set(entry.entryId, alreadyAcquired);
               continue;
             }
-            const claim = claimAcquisitionStatement(
-              accountId,
-              sourceKind,
-              sourceId,
-              entry,
-              occurrence,
-            );
+            const claim = claimAcquisitionStatement(accountId, plan.sessionId, entry, occurrence);
             const claimed = (
               await readRows(
                 statements,
@@ -674,25 +657,9 @@ export function createImportConfirmation(
               )
             )[0];
             if (claimed === undefined) {
-              // A competing confirmation of another session acquired the same source entry first:
-              // this entry replays that recorded acquisition instead of adding it twice.
-              const concurrent = await readRecordedAcquisitions(
-                statements,
-                accountId,
-                sourceKind,
-                sourceId,
-                [{ entry, occurrence, key }],
-              );
-              const concurrentlyAcquired = concurrent.get(key);
-              if (concurrentlyAcquired === undefined) {
-                throw new UserCardsError(
-                  'unavailable',
-                  'UserCards did not record the acquisition.',
-                );
-              }
-              covered.add(concurrentlyAcquired);
-              bindings.set(entry.entryId, concurrentlyAcquired);
-              continue;
+              // The import is locked and its recorded acquisitions were just read, so a claim that
+              // inserts nothing can only be a persistent record UserCards did not report.
+              throw new UserCardsError('unavailable', 'UserCards did not record the acquisition.');
             }
             acquired = true;
             const acquisitionId = textValue(claimed.acquisition_id);

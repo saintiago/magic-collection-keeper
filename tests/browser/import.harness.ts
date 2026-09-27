@@ -4,9 +4,9 @@
  *
  * The harness installs the real shell with the real Import page and replaces the boundaries around
  * them: identity and the component access Application supplies. Every pending-import read, staging,
- * review, discard, confirmation and recovery the page issues is recorded and settled from the
- * journey, so the journeys drive the real query building, list presentation, review controls and
- * confirmation handling while observing exactly what crossed the component contracts.
+ * source parsing, review, discard, confirmation and recovery the page issues is recorded and settled
+ * from the journey, so the journeys drive the real query building, list presentation, review
+ * controls and confirmation handling while observing exactly what crossed the component contracts.
  */
 
 import {
@@ -40,7 +40,9 @@ import type {
   ImportSessionListResult,
   ImportStageResult,
   ReviewImportEntryInput,
+  SourceImportResult,
   StageImportEntriesInput,
+  StageSourceImportInput,
 } from '../../src/usercards/index.js';
 import {
   createImportPages,
@@ -89,6 +91,7 @@ export interface UiImportControl {
   sessions(): readonly UiImportRequest<UiImportSessionsRequest>[];
   entries(): readonly UiImportRequest<UiImportEntriesRequest>[];
   stage(): readonly UiImportRequest<StageImportEntriesInput>[];
+  source(): readonly UiImportRequest<StageSourceImportInput>[];
   review(): readonly UiImportRequest<ReviewImportEntryInput>[];
   discardEntry(): readonly UiImportRequest<DiscardImportEntryInput>[];
   discardSession(): readonly UiImportRequest<DiscardImportSessionInput>[];
@@ -110,6 +113,7 @@ export interface UiImportControl {
     },
   ): void;
   settleStage(id: number, result: Omit<ImportStageResult, 'privateRevision'>): void;
+  settleSource(id: number, result: Omit<SourceImportResult, 'privateRevision'>): void;
   settleReview(
     id: number,
     result: { readonly entry: ImportEntry; readonly session: ImportSession },
@@ -142,6 +146,8 @@ export interface UiImportControl {
     id: number,
     failure: { readonly code: ApplicationFailureCode; readonly message: string },
   ): void;
+  /** Presents another verified account of the same deployment, as a sign-in does. */
+  signInAs(accountId: string): void;
   signOut(): void;
   navigate(view: UiView): void;
   back(): void;
@@ -156,8 +162,17 @@ const harnessRevision = {
   publishedAt: '2026-09-01T00:00:00.000Z',
 };
 
+/** Capabilities of the deployment one Import journey presents. */
+export interface UiImportHarnessOptions {
+  /** Whether the deployment parses source imports; a journey may present one that refuses them. */
+  readonly sourceImports?: boolean;
+}
+
 /** Installs the Import page into `root`; identity starts signed in as one account. */
-export function installImportHarness(root: Element | null): UiImportControl {
+export function installImportHarness(
+  root: Element | null,
+  options: UiImportHarnessOptions = {},
+): UiImportControl {
   if (root === null) {
     throw new Error('The Import journey needs its root element.');
   }
@@ -169,6 +184,7 @@ export function installImportHarness(root: Element | null): UiImportControl {
   const sessionRequests: UiImportRequest<UiImportSessionsRequest>[] = [];
   const entryRequests: UiImportRequest<UiImportEntriesRequest>[] = [];
   const stageRequests: UiImportRequest<StageImportEntriesInput>[] = [];
+  const sourceRequests: UiImportRequest<StageSourceImportInput>[] = [];
   const reviewRequests: UiImportRequest<ReviewImportEntryInput>[] = [];
   const discardEntryRequests: UiImportRequest<DiscardImportEntryInput>[] = [];
   const discardSessionRequests: UiImportRequest<DiscardImportSessionInput>[] = [];
@@ -289,6 +305,9 @@ export function installImportHarness(root: Element | null): UiImportControl {
     stageImportEntries(input, signal) {
       return begin(stageRequests, input, signal) as Promise<ImportStageResult>;
     },
+    stageSourceImport(input, signal) {
+      return begin(sourceRequests, input, signal) as Promise<SourceImportResult>;
+    },
     reviewImportEntry(input, signal) {
       return begin(reviewRequests, input, signal) as Promise<ImportEntryChangeResult>;
     },
@@ -311,7 +330,7 @@ export function installImportHarness(root: Element | null): UiImportControl {
       apiBaseUrl: 'https://api.test.keeper.example',
       authentication: { region: 'us-east-1', appClientId: 'keeper-test-client' },
       recognition: { cloudEnabled: false, computeBaseUrl: null },
-      capabilities: { sourceImports: false },
+      capabilities: { sourceImports: options.sourceImports ?? true },
     },
     request,
     catalog,
@@ -390,6 +409,7 @@ export function installImportHarness(root: Element | null): UiImportControl {
     sessions: () => sessionRequests.map((entry) => ({ ...entry })),
     entries: () => entryRequests.map((entry) => ({ ...entry })),
     stage: () => stageRequests.map((entry) => ({ ...entry })),
+    source: () => sourceRequests.map((entry) => ({ ...entry })),
     review: () => reviewRequests.map((entry) => ({ ...entry })),
     discardEntry: () => discardEntryRequests.map((entry) => ({ ...entry })),
     discardSession: () => discardSessionRequests.map((entry) => ({ ...entry })),
@@ -411,6 +431,8 @@ export function installImportHarness(root: Element | null): UiImportControl {
         continuation: value.continuation ?? null,
       })),
     settleStage: (id, result) =>
+      settle(id, result, (value) => ({ privateRevision: 'private-1', ...value })),
+    settleSource: (id, result) =>
       settle(id, result, (value) => ({ privateRevision: 'private-1', ...value })),
     settleReview: (id, result) =>
       settle(id, result, (value) => ({ privateRevision: 'private-1', ...value })),
@@ -438,6 +460,7 @@ export function installImportHarness(root: Element | null): UiImportControl {
       waiting.reject(new ApplicationError(failure.code, failure.message));
     },
     signOut: () => report(null),
+    signInAs: (accountId) => report({ accountId, displayName: accountId }),
     navigate: (view) => shell.navigate(view),
     back: () => shell.back(),
     dispose: () => shell.dispose(),

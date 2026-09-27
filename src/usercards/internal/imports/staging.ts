@@ -74,7 +74,8 @@ function ensureSessionStatement(
 
 /**
  * Creates the session when it is new and locks it, verifying that a capture observation belongs to
- * a capture session and a parsed source line to the session of its own source.
+ * a capture session and a parsed source line to the import the caller identified, whose provenance
+ * cannot change under an identity it already carries (docs/user-cards.md#import-state-and-identity).
  */
 async function claimSession(
   statements: UserCardsSqlExecutor,
@@ -371,14 +372,13 @@ function readStagingReceiptStatement(accountId: string, captureId: string): Stat
 }
 
 /**
- * What one acquisition source recorded for a bounded set of parsed source lines. Only entries of
- * the named source and account are aggregated, so a line of another source or another account never
- * affects the reconciliation (docs/user-cards.md#source-imports).
+ * What one import recorded for a bounded set of parsed source lines. Only entries of the named
+ * import and account are aggregated, so a line of another import or another account never affects
+ * the reconciliation (docs/user-cards.md#source-imports).
  */
 function sourceLinesStatement(
   accountId: string,
-  sourceKind: string,
-  sourceId: string,
+  sessionId: string,
   sourceLineKeys: readonly string[],
 ): Statement {
   const references = placeholdersFor(sourceLineKeys, 'source_line_key');
@@ -398,18 +398,13 @@ function sourceLinesStatement(
               (array_agg(entry.entry_id order by entry.entry_id)
                 filter (where entry.state = 'confirmed'))[1] as confirmed_entry_id
      from usercards_private.import_entry as entry
-     join usercards_private.import_session as session
-       on session.account_id = entry.account_id
-      and session.session_id = entry.session_id
     where entry.account_id = :account_id
-      and session.source_kind = :source_kind
-      and session.source_id = :source_id
+      and entry.session_id = :session_id
       and entry.source_line_key in (${references.list})
     group by entry.source_line_key`,
     parameters: {
       account_id: accountId,
-      source_kind: sourceKind,
-      source_id: sourceId,
+      session_id: sessionId,
       ...references.parameters,
     },
   };
@@ -454,8 +449,7 @@ function sourceEntryId(sessionId: string, sourceLineKey: string, attempt: number
 async function readSourceLineRecords(
   statements: UserCardsSqlExecutor,
   accountId: string,
-  sourceKind: string,
-  sourceId: string,
+  sessionId: string,
   sourceLineKeys: readonly string[],
 ): Promise<readonly SourceLineRecord[]> {
   const distinct = [...new Set(sourceLineKeys)];
@@ -464,7 +458,7 @@ async function readSourceLineRecords(
   }
   const records: SourceLineRecord[] = [];
   for (const batch of batches(distinct)) {
-    const request = sourceLinesStatement(accountId, sourceKind, sourceId, batch);
+    const request = sourceLinesStatement(accountId, sessionId, batch);
     const rows = await readRows(
       statements,
       request.statement,
@@ -483,10 +477,10 @@ interface ReconciledSourceLines {
 }
 
 /**
- * Reconciles the offered lines of one acquisition source with what its session already recorded.
- * Equivalent rows share one durable key and their declared quantities are covered together, in the
- * order the source published them, so reordering, removing or duplicating a row never moves an
- * already staged or acquired quantity onto another row and never stages a covered quantity again
+ * Reconciles the offered lines of one import with what that import already recorded. Equivalent
+ * rows share one durable key and their declared quantities are covered together, in the order the
+ * source published them, so reordering, removing or duplicating a row never moves an already staged
+ * or acquired quantity onto another row and never stages a covered quantity again
  * (docs/user-cards.md#source-imports).
  */
 async function reconcileSourceLines(
@@ -507,13 +501,9 @@ async function reconcileSourceLines(
     }
   }
 
-  const recorded = await readSourceLineRecords(
-    statements,
-    accountId,
-    plan.sourceKind,
-    plan.sourceId,
-    [...groups.keys()],
-  );
+  const recorded = await readSourceLineRecords(statements, accountId, plan.sessionId, [
+    ...groups.keys(),
+  ]);
   const recordedByKey = new Map(recorded.map((record) => [record.sourceLineKey, record]));
 
   const lines: SourceLineStageEntry[] = new Array<SourceLineStageEntry>(plan.lines.length);

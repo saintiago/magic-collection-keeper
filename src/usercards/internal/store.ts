@@ -238,8 +238,8 @@ export interface NewStagedImportEntry extends NewImportEntry {
    */
   readonly sourceLine: ImportSourceLine | null;
   /**
-   * Durable identity of the parsed source line within its acquisition source, or null when the
-   * entry was not parsed from a source line. A repeated import matches on it.
+   * Durable identity of the parsed source line within its import, or null when the entry was not
+   * parsed from a source line. A repeated import of that list matches on it.
    */
   readonly sourceLineKey: string | null;
 }
@@ -371,8 +371,8 @@ export interface ReviewedEntryCopy {
 
 /**
  * One reviewed entry a confirmation covers, with the state and copy data the caller read. The
- * entry fingerprint digests that reviewed content, so a later import of the same source recognizes
- * the entry it already acquired without depending on how confirmations were partitioned
+ * entry fingerprint digests that reviewed content, so a repeat of the same import recognizes the
+ * entry it already acquired without depending on how confirmations were partitioned
  * (docs/user-cards.md#source-imports).
  */
 export interface ConfirmedImportEntry {
@@ -439,9 +439,9 @@ export interface SourceLineEntry {
 }
 
 /**
- * What one acquisition source already recorded for one parsed source line: the pending quantity
- * awaiting review, the quantity its confirmations acquired, and one entry of each state so a
- * repeated import can point the caller at the record instead of staging the line again
+ * What one import already recorded for one parsed source line: the pending quantity awaiting
+ * review, the quantity its confirmations acquired, and one entry of each state so a repeated import
+ * of that list can point the caller at the record instead of staging the line again
  * (docs/user-cards.md#source-imports).
  */
 export interface SourceLineRecord {
@@ -457,12 +457,12 @@ export interface SourceLineRecord {
 }
 
 /**
- * One parsed source line offered for staging. Equivalent lines of one acquisition source share
- * `sourceLineKey`, so duplicates are reconciled together and their order does not decide which
- * quantity is already covered (docs/user-cards.md#source-imports).
+ * One parsed source line offered for staging. Equivalent lines of one import share `sourceLineKey`,
+ * so duplicates are reconciled together and their order does not decide which quantity is already
+ * covered (docs/user-cards.md#source-imports).
  */
 export interface SourceLineStageInput {
-  /** Durable identity of the parsed line inside its acquisition source, without its quantity. */
+  /** Durable identity of the parsed line inside its import, without its quantity. */
   readonly sourceLineKey: string;
   readonly printingId: string | null;
   readonly finish: Finish | null;
@@ -473,13 +473,15 @@ export interface SourceLineStageInput {
   readonly candidates: readonly ImportCandidate[];
 }
 
-/** The parsed lines of one acquisition source, staged together under its session. */
+/** The parsed lines of one import, staged together under its session. */
 export interface SourceLineStagePlan {
+  /** Identity of the import the caller stages into; a new import carries a new identity. */
   readonly sessionId: string;
   readonly sourceKind: string;
+  /** Published source identity of the import, or its own identity when it published none. */
   readonly sourceId: string;
   readonly sourceReference: string | null;
-  /** Offered lines in source order; equivalent lines of one source may repeat. */
+  /** Offered lines in source order; equivalent lines of one import may repeat. */
   readonly lines: readonly SourceLineStageInput[];
 }
 
@@ -491,13 +493,13 @@ export interface SourceLineStageEntry {
   readonly sessionId: string;
 }
 
-/** The committed outcome of staging the parsed lines of one acquisition source. */
+/** The committed outcome of staging the parsed lines of one import. */
 export interface SourceLineStageData {
   readonly privateRevision: string;
   readonly session: ImportSession;
   /** One outcome per offered line, in the order the lines were offered. */
   readonly lines: readonly SourceLineStageEntry[];
-  /** Lines this call staged; the remainder were already covered by the source's records. */
+  /** Lines this call staged; the remainder were already covered by the import's records. */
   readonly staged: number;
 }
 
@@ -506,9 +508,9 @@ export interface SourceLineStageData {
  * Pending entries are stored separately from the account's owned copies and never change ownership;
  * every operation is scoped by the account the caller passes and never returns another account's
  * record. A replacement implementation keeps the same promises, including the consecutive-identity
- * admission rule, the durable source-line records that let a repeated source import reconcile with
- * what the source already staged and acquired, and the permanent operation and acquisition records
- * that make confirmation replay-safe.
+ * admission rule, the durable source-line records that let a repeated import reconcile with what
+ * that import already staged and acquired, and the permanent operation and acquisition records that
+ * make confirmation replay-safe.
  */
 export interface ImportStore {
   /** Reads the account's pending import sessions, ordered by session identity. */
@@ -526,10 +528,10 @@ export interface ImportStore {
   /** Reads the entries among `entryIds` that belong to this account, in capture order. */
   readEntries(accountId: string, entryIds: readonly string[]): Promise<readonly ImportEntry[]>;
   /**
-   * Stages the parsed lines of one acquisition source, reconciling every line with the quantity its
-   * own source already staged and acquired. Reconciliation and staging run under the session lock
-   * inside one transaction, so a concurrent review, discard or import cannot overstage the source,
-   * and the returned lines and count report what the committed transaction actually did
+   * Stages the parsed lines of one import, reconciling every line with the quantity that import
+   * already staged and acquired. Reconciliation and staging run under the session lock inside one
+   * transaction, so a concurrent review, discard or import of the same list cannot overstage it, and
+   * the returned lines and count report what the committed transaction actually did
    * (docs/user-cards.md#persistence-and-recovery).
    */
   stageSourceLines(accountId: string, plan: SourceLineStagePlan): Promise<SourceLineStageData>;
@@ -561,9 +563,9 @@ export interface ImportStore {
   ): Promise<ImportSessionDiscardOutcome>;
   /**
    * Confirms reviewed entries, creating individual copies with their provenance for every source
-   * entry the account has not acquired yet. Entries whose acquisition source already holds that
-   * source entry are confirmed under the recorded outcome instead of creating copies again, so a
-   * repeated import adds nothing however the caller partitions its confirmations.
+   * entry the import has not acquired yet. Entries whose own import already holds that source entry
+   * are confirmed under the recorded outcome instead of creating copies again, so a repeated import
+   * of one list adds nothing however the caller partitions its confirmations.
    */
   confirm(accountId: string, plan: ConfirmationPlan): Promise<ConfirmationOutcome>;
   /** Reads the recorded outcome of one operation, or `null` when the account has none. */

@@ -6,21 +6,22 @@
  * ownership: a parsed line becomes a reviewable pending entry, and only an explicit confirmation
  * creates copies. Every entry keeps what its source published — name, section, edition, collector
  * number, language, finish and declared quantity — so an unresolved name or printing stays
- * reviewable, and it keeps a durable identity inside its acquisition source, so a repeated import
+ * reviewable, and it keeps a durable identity inside its import, so a repeated import of that list
  * recognizes the lines it already staged or acquired instead of adding them twice.
  *
- * Reconciliation compares each parsed line with what the source recorded: a line whose declared
- * quantity is already covered by its pending and confirmed entries stages nothing, an increased
- * quantity stages only the uncovered difference for review, and a removed or reduced line changes
- * nothing. Equivalent rows of one source share one durable identity and their declared quantities
- * are reconciled together, so reordering, removing or duplicating a row never moves coverage onto
- * another row. Source identity, the official reference of a reviewed list and the line's published
- * description are stored with the session and entries, never derived from editable labels or from
- * the physical copies a confirmation later creates. One acquisition source owns one import
- * session, so its recorded pending entries, acquisitions and the successive quantities of one line
- * stay addressable together however often the source is imported. Staging and its reconciliation
- * run in one transaction that holds the session, so a concurrent review or import cannot overstage
- * a source.
+ * Each new import is its own card list with the identity its caller gives it: contents and source
+ * URLs describe an import and never identify it or merge it with another one, while retrying,
+ * reopening or reconciling an import keeps its identity (docs/user-cards.md#import-state-and-identity).
+ * Reconciliation compares each parsed line with what this import already recorded: a line whose
+ * declared quantity is already covered by its pending and confirmed entries stages nothing, an
+ * increased quantity stages only the uncovered difference for review, and a removed or reduced line
+ * changes nothing. Equivalent rows of one import share one durable identity and their declared
+ * quantities are reconciled together, so reordering, removing or duplicating a row never moves
+ * coverage onto another row. Import identity, the source kind, the published identity of a Moxfield
+ * deck or a reviewed Wizards list, its official reference and the line's published description are
+ * stored with the session and entries, never derived from editable labels or from the physical
+ * copies a confirmation later creates. Staging and its reconciliation run in one transaction that
+ * holds the session, so a concurrent review or import of the same list cannot overstage it.
  */
 
 import { createHash } from 'node:crypto';
@@ -52,14 +53,25 @@ import type { ImportStore, SourceLineStageInput } from './store.js';
 /** A pasted card list: text lines of `quantity name (SET) number` (docs/user-cards.md#source-imports). */
 export interface PastedCardListImport {
   readonly format: 'pasted-list';
-  /** Identity of the pasted list inside the account; a repeated import of it reuses the identity. */
-  readonly sourceId: string;
+  /**
+   * Identity of the import this paste belongs to. A caller keeps it while it retries, reopens or
+   * reconciles that import and gives the next list its own identity, so importing identical content
+   * again stages another list instead of merging with this one
+   * (docs/user-cards.md#import-state-and-identity).
+   */
+  readonly sessionId: string;
   readonly text: string;
 }
 
 /** A public Moxfield deck the component reads through the configured deck source. */
 export interface MoxfieldDeckImport {
   readonly format: 'moxfield';
+  /**
+   * Identity of the import this deck belongs to. The public deck link describes the import; it does
+   * not identify it, so another import of the same deck is another list
+   * (docs/user-cards.md#import-state-and-identity).
+   */
+  readonly sessionId: string;
   /** Public Moxfield deck link, for example `https://moxfield.com/decks/<identity>`. */
   readonly url: string;
 }
@@ -82,6 +94,12 @@ export interface ReviewedWizardsLine {
 export interface WizardsPreconImport {
   readonly format: 'wizards-precon';
   /**
+   * Identity of the import this reviewed list belongs to. The namespaced product identity below
+   * describes the import's provenance; it does not identify the list
+   * (docs/user-cards.md#import-state-and-identity).
+   */
+  readonly sessionId: string;
+  /**
    * Namespaced identity of the reviewed product list, for example
    * `wizards:mkm:deadly-disguise:regular:en`.
    */
@@ -95,9 +113,9 @@ export type StageSourceImportInput =
   PastedCardListImport | MoxfieldDeckImport | WizardsPreconImport;
 
 /**
- * What one parsed row became: a new pending entry (`staged`), a line whose quantity its pending
- * entries already cover (`pending`), a line the source already acquired (`acquired`), or a row the
- * import could not read (`invalid`).
+ * What one parsed row became: a new pending entry (`staged`), a line whose quantity this import's
+ * pending entries already cover (`pending`), a line this import already acquired (`acquired`), or a
+ * row the import could not read (`invalid`).
  */
 export type SourceImportOutcome = 'staged' | 'pending' | 'acquired' | 'invalid';
 
@@ -129,7 +147,7 @@ export interface SourceImportResult {
 export interface SourceImportOperations {
   /**
    * Parses one supported source into the account's pending entries and reconciles every parsed line
-   * with what the source already staged and acquired. Unresolved lines are staged for review,
+   * with what the identified import already staged and acquired. Unresolved lines are staged for review,
    * unreadable rows are reported without failing the readable ones, and no call changes ownership.
    */
   stageSourceImport(
@@ -159,15 +177,17 @@ const identifierSchema = z.string().min(1).max(identifierLength);
 const stageSourceImportRequestSchema = z.discriminatedUnion('format', [
   z.object({
     format: z.literal('pasted-list'),
-    sourceId: identifierSchema,
+    sessionId: identifierSchema,
     text: z.string().min(1).max(USERCARDS_LIMITS.maxSourceTextLength),
   }),
   z.object({
     format: z.literal('moxfield'),
+    sessionId: identifierSchema,
     url: identifierSchema,
   }),
   z.object({
     format: z.literal('wizards-precon'),
+    sessionId: identifierSchema,
     sourceId: identifierSchema,
     reference: z.string().min(1).max(USERCARDS_LIMITS.maxSourceReferenceLength),
     entries: z.array(z.unknown()).min(1).max(USERCARDS_LIMITS.maxSourceLines),
@@ -250,24 +270,12 @@ function lineContent(line: {
 }
 
 /**
- * Durable identity of one parsed line inside its acquisition source. Equivalent rows of one source
- * share it, so which row currently carries a quantity never decides whether that quantity is
- * already covered (docs/user-cards.md#source-imports).
+ * Durable identity of one parsed line inside its import. Equivalent rows of one import share it, so
+ * which row currently carries a quantity never decides whether that quantity is already covered
+ * (docs/user-cards.md#source-imports).
  */
 function sourceLineKey(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex');
-}
-
-/**
- * The import session of one acquisition source. One source owns one session, so its pending
- * entries, its recorded acquisitions and the successive quantities of one line stay together
- * however often the source is imported, and a confirmation can distinguish an additional quantity
- * of a line from the quantity it already acquired.
- */
-function sourceImportSession(sourceKind: string, sourceId: string): string {
-  return createHash('sha256')
-    .update(`source-import\u0000${sourceKind}\u0000${sourceId}`, 'utf8')
-    .digest('hex');
 }
 
 const pastedLineProblem = 'Use “quantity card name”, optionally followed by “(SET) number”.';
@@ -648,8 +656,9 @@ function wizardsReference(reference: string): void {
 }
 
 /**
- * One parsed source with the session, identity and reference it is stored under. The session is
- * derived from the source identity, so every import of one source reconciles with the same records.
+ * One parsed source with the import identity and the provenance it is stored under. The session is
+ * the identity the caller gave this import, so a retry, a reopening or a reconciliation of the same
+ * import reads its own records and another import stays a list of its own.
  */
 interface ReadSource {
   readonly sessionId: string;
@@ -681,8 +690,8 @@ function requireParsedSource(rows: readonly ParsedSourceRow[]): void {
 /** Invalid source-import input, with the bound the caller exceeded. */
 function invalidSourceImportMessage(): string {
   return (
-    'A source import needs one of the formats pasted-list, moxfield or wizards-precon, its ' +
-    `source identity and at most ${USERCARDS_LIMITS.maxSourceLines} lines.`
+    'A source import needs one of the formats pasted-list, moxfield or wizards-precon, the ' +
+    `identity of the import and at most ${USERCARDS_LIMITS.maxSourceLines} lines.`
   );
 }
 
@@ -718,9 +727,11 @@ export function createSourceImports(
         const rows = parsePastedList(request.text);
         requireParsedSource(rows);
         return {
-          sessionId: sourceImportSession('pasted-list', request.sourceId),
+          sessionId: request.sessionId,
           sourceKind: 'pasted-list',
-          sourceId: request.sourceId,
+          // A pasted list publishes no identity of its own: the list is the import the caller
+          // identified, so its provenance stays that identity.
+          sourceId: request.sessionId,
           sourceReference: null,
           rows,
         };
@@ -747,7 +758,7 @@ export function createSourceImports(
         const rows = parseMoxfieldDeck(document);
         requireParsedSource(rows);
         return {
-          sessionId: sourceImportSession('moxfield', deck.sourceId),
+          sessionId: request.sessionId,
           sourceKind: 'moxfield',
           sourceId: deck.sourceId,
           sourceReference: deck.reference,
@@ -760,7 +771,7 @@ export function createSourceImports(
         const rows = parseReviewedWizardsLines(request.entries);
         requireParsedSource(rows);
         return {
-          sessionId: sourceImportSession('wizards-precon', request.sourceId),
+          sessionId: request.sessionId,
           sourceKind: 'wizards-precon',
           sourceId: request.sourceId,
           sourceReference: request.reference,
@@ -789,8 +800,8 @@ export function createSourceImports(
       );
 
       // Every readable row is offered with the identity of its content and the catalog's answer
-      // for the printing it published; the store reconciles the offered lines with what this
-      // source already staged and acquired.
+      // for the printing it published; the store reconciles the offered lines with what this import
+      // already staged and acquired.
       const offered: { readonly line: ImportSourceLine; readonly input: SourceLineStageInput }[] =
         [];
       for (const row of source.rows) {

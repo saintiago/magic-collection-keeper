@@ -73,6 +73,7 @@ export {
   reviewImportEntry,
   stageCaptureObservation,
   stageImportLines,
+  stageSourceImport,
   uiCaptureIdentity,
   uiImportCandidates,
   uiImportIdentity,

@@ -922,6 +922,122 @@ describe('user cards client', () => {
       'https://api.test.keeper.example/api/collection/imports/operations/operation%2F1',
     );
   });
+
+  it('parses one supported source through its route and reads every row', async () => {
+    const session = {
+      sessionId: 'pasted-list:1',
+      sourceKind: 'pasted-list',
+      sourceId: 'pasted-list:1',
+      sourceReference: null,
+      state: 'pending',
+      pendingEntries: 1,
+      confirmedEntries: 0,
+      discardedEntries: 0,
+      revision: 2,
+    };
+    const { fetch, calls } = jsonFetch({
+      privateRevision: 'private-1',
+      session,
+      rows: [
+        {
+          position: 1,
+          line: {
+            name: 'Lightning Bolt',
+            section: null,
+            set: 'M11',
+            collectorNumber: '149',
+            language: null,
+            finish: null,
+            declaredQuantity: 1,
+            problem: 'The source named no printing; choose one during review.',
+          },
+          outcome: 'staged',
+          problem: 'The source named no printing; choose one during review.',
+          entryId: 'entry-1',
+          sessionId: 'pasted-list:1',
+        },
+        {
+          position: 2,
+          line: null,
+          outcome: 'invalid',
+          problem: 'Use “quantity card name”, optionally followed by “(SET) number”.',
+          entryId: null,
+          sessionId: null,
+        },
+      ],
+      staged: 1,
+    });
+    const client = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch,
+      }),
+    );
+
+    const result = await client.stageSourceImport({
+      format: 'pasted-list',
+      sessionId: 'paste-import-1',
+      text: '1 Lightning Bolt',
+    });
+
+    expect(calls[0]?.url).toBe('https://api.test.keeper.example/api/collection/imports/sources');
+    expect(calls[0]?.init.method).toBe('POST');
+    expect(calls[0]?.init.body).toBe(
+      '{"format":"pasted-list","sessionId":"paste-import-1","text":"1 Lightning Bolt"}',
+    );
+    expect(result.session.sourceId).toBe('pasted-list:1');
+    expect(result.rows.map((row) => row.outcome)).toEqual(['staged', 'invalid']);
+    expect(result.rows[0]?.line?.name).toBe('Lightning Bolt');
+    expect(result.staged).toBe(1);
+  });
+
+  it('rejects a source-import response outside the declared shape', async () => {
+    const { fetch } = jsonFetch({
+      privateRevision: 'private-1',
+      session: {
+        sessionId: 'pasted-list:1',
+        sourceKind: 'pasted-list',
+        sourceId: 'pasted-list:1',
+        sourceReference: null,
+        state: 'pending',
+        pendingEntries: 1,
+        confirmedEntries: 0,
+        discardedEntries: 0,
+        revision: 2,
+      },
+      // A row that reports a line cannot be an unreadable row.
+      rows: [
+        {
+          position: 1,
+          line: { name: 'Lightning Bolt', declaredQuantity: 1 },
+          outcome: 'invalid',
+          problem: null,
+          entryId: null,
+          sessionId: null,
+        },
+      ],
+      staged: 0,
+    });
+    const client = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch,
+      }),
+    );
+
+    await expect(
+      client.stageSourceImport({
+        format: 'moxfield',
+        sessionId: 'deck-import-1',
+        url: 'https://x.test',
+      }),
+    ).rejects.toMatchObject({
+      code: 'unavailable',
+      message: 'The import response could not be read.',
+    });
+  });
 });
 
 describe('browser application', () => {

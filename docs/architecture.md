@@ -134,8 +134,9 @@ through the Import page.
 
 The [import lifecycle](user-cards.md#import-and-capture-state) uses system tags to distinguish
 pending entries, visible only on Import, from confirmed owned copies. Sessions group entries by
-acquisition source and track progress. UserCards owns the transition and enforces visibility through
-its public contracts. Recognition output alone does not establish ownership.
+one identified import and track its progress; contents and source references describe an import
+without identifying it. UserCards owns the transition and enforces visibility through its public
+contracts. Recognition output alone does not establish ownership.
 
 ## UserInterface
 

@@ -316,9 +316,9 @@ create table if not exists ${usercardsPrivateSchema}.import_entry (
   condition text check (condition in (${conditionValues})),
   quantity integer not null default 1
     check (quantity between 1 and ${USERCARDS_LIMITS.maxCreateQuantity}),
-  -- The parsed source line and its durable identity inside the acquisition source. Every field of
-  -- the line is separately bounded, so this bound only has to cover the same text after escaping;
-  -- the reviewed values stay in the columns above.
+  -- The parsed source line and its durable identity inside the import that staged it. Every field
+  -- of the line is separately bounded, so this bound only has to cover the same text after
+  -- escaping; the reviewed values stay in the columns above.
   source_line jsonb check (source_line is null or length(source_line::text) <= 16384),
   source_line_key text check (source_line_key is null
     or length(source_line_key) between 1 and 128),
@@ -335,11 +335,11 @@ create table if not exists ${usercardsPrivateSchema}.import_entry (
 create index if not exists import_entry_session_index
   on ${usercardsPrivateSchema}.import_entry (account_id, session_id, position);
 
--- Entries of one parsed source line are addressed by the line's durable identity inside its
--- acquisition source, so a repeated import reconciles its lines without scanning the account's
--- whole pending state.
+-- Entries of one parsed source line are addressed by the line's durable identity inside the import
+-- that staged it, so a repeat of that list reconciles its lines without scanning the account's whole
+-- pending state.
 create index if not exists import_entry_source_line_index
-  on ${usercardsPrivateSchema}.import_entry (account_id, source_line_key)
+  on ${usercardsPrivateSchema}.import_entry (account_id, session_id, source_line_key)
   where source_line_key is not null;
 
 create table if not exists ${usercardsPrivateSchema}.import_candidate (
@@ -370,16 +370,22 @@ create table if not exists ${usercardsPrivateSchema}.import_stage (
     references ${usercardsPrivateSchema}.import_session (account_id, session_id)
 );
 
+-- One acquisition: reviewed content of one source line and its occurrence inside the import that
+-- produced it. Its identity is scoped to the account and that import, so a repeat of the list
+-- recognizes the recorded outcome instead of acquiring it twice, while another import owns its own
+-- acquisitions (docs/user-cards.md#import-state-and-identity). It stays permanent when the reviewed
+-- entry is corrected later.
 create table if not exists ${usercardsPrivateSchema}.import_acquisition (
   acquisition_id text primary key check (length(acquisition_id) between 1 and ${identifierLength}),
   account_id text not null check (length(account_id) between 1 and ${identifierLength}),
-  source_kind text not null check (length(source_kind) between 1 and ${identifierLength}),
-  source_id text not null check (length(source_id) between 1 and ${identifierLength}),
+  session_id text not null check (length(session_id) between 1 and ${identifierLength}),
   entry_fingerprint text not null check (length(entry_fingerprint) between 1 and ${fingerprintLength}),
   occurrence integer not null check (occurrence >= 1),
   entry_id text not null check (length(entry_id) between 1 and ${identifierLength}),
   committed_at timestamptz not null default now(),
-  unique (account_id, source_kind, source_id, entry_fingerprint, occurrence),
+  unique (account_id, session_id, entry_fingerprint, occurrence),
+  foreign key (account_id, session_id)
+    references ${usercardsPrivateSchema}.import_session (account_id, session_id),
   foreign key (account_id, entry_id)
     references ${usercardsPrivateSchema}.import_entry (account_id, entry_id)
 );
