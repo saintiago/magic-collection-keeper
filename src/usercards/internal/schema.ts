@@ -368,6 +368,18 @@ create table if not exists ${usercardsPrivateSchema}.import_acquisition (
     references ${usercardsPrivateSchema}.import_entry (account_id, entry_id)
 );
 
+-- A confirmed entry keeps its acquisition even when other pending entries are corrected.
+create table if not exists ${usercardsPrivateSchema}.import_entry_acquisition (
+  account_id text not null,
+  entry_id text not null,
+  acquisition_id text not null,
+  primary key (account_id, entry_id),
+  foreign key (account_id, entry_id)
+    references ${usercardsPrivateSchema}.import_entry (account_id, entry_id),
+  foreign key (acquisition_id)
+    references ${usercardsPrivateSchema}.import_acquisition (acquisition_id)
+);
+
 create table if not exists ${usercardsPrivateSchema}.import_receipt (
   operation_id text not null check (length(operation_id) between 1 and ${identifierLength}),
   account_id text not null check (length(account_id) between 1 and ${identifierLength}),

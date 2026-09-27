@@ -240,6 +240,182 @@ describe('usercards import confirmation', () => {
     expect(changed.message).toContain('different input');
   });
 
+  it('records every successful operation identity, including alternate-operation retries', async () => {
+    await stageDeck();
+    const request = {
+      operationId: 'original',
+      sessionId: 'session-deck',
+      entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+    };
+    const original = await userCards.confirmImport(alice, request);
+    const replay = await userCards.confirmImport(alice, { ...request, operationId: 'replay' });
+    expect(replay).toMatchObject({
+      operationId: 'replay',
+      replayed: true,
+      copies: original.copies,
+    });
+    expect(await userCards.recoverImportOperation(alice, 'replay')).toEqual({
+      outcome: 'recorded',
+      receipt: {
+        operationId: 'replay',
+        sessionId: replay.sessionId,
+        sourceId: replay.sourceId,
+        sourceKind: replay.sourceKind,
+        copies: original.copies,
+      },
+    });
+    expect(await userCards.recoverImportOperation(bob, 'replay')).toEqual({ outcome: 'absent' });
+    const retry = await userCards.confirmImport(alice, { ...request, operationId: 'replay' });
+    expect(retry.copies).toEqual(original.copies);
+    await reviewUnresolvedLine();
+    const changed = await captureUserCardsError(
+      userCards.confirmImport(alice, {
+        ...request,
+        operationId: 'replay',
+        entries: [{ entryId: 'line-2', expectedRevision: 2 }],
+      }),
+    );
+    expect(changed).toMatchObject({ code: 'conflict' });
+    expect(await countCopies(database, alice.accountId)).toBe(2);
+
+    const failing = createUserCards({ sql: failRevisionStatements(database.sql), catalog });
+    expect(
+      await captureUserCardsError(
+        failing.confirmImport(alice, {
+          ...request,
+          operationId: 'failed-replay',
+        }),
+      ),
+    ).toMatchObject({ code: 'unavailable' });
+    expect(await userCards.recoverImportOperation(alice, 'failed-replay')).toEqual({
+      outcome: 'absent',
+    });
+  });
+
+  it.each(['capture', 'source'] as const)(
+    'keeps distinct %s entries when an earlier review matches a confirmed peer',
+    async (kind) => {
+      const sessionId = 'review-order';
+      const source = { kind: 'text', id: 'review-order-source' };
+      for (const [entryId, printingId] of [
+        ['earlier', m11Printing.printingId],
+        ['later', counterspellPrinting.printingId],
+      ] as const) {
+        if (kind === 'capture') {
+          await userCards.stageCaptureObservation(alice, {
+            sessionId,
+            captureId: entryId,
+            printingId,
+          });
+        } else {
+          await userCards.stageImportEntries(alice, {
+            sessionId,
+            source,
+            entries: [{ entryId: entryId, printingId, quantity: 1 }],
+          });
+        }
+      }
+      const later = await userCards.confirmImport(alice, {
+        operationId: 'later',
+        sessionId,
+        entries: [{ entryId: 'later', expectedRevision: 1 }],
+      });
+      await userCards.reviewImportEntry(alice, {
+        entryId: 'earlier',
+        expectedRevision: 1,
+        printingId: counterspellPrinting.printingId,
+        finish: 'nonfoil',
+        condition: null,
+        quantity: 1,
+      });
+      const earlier = await userCards.confirmImport(alice, {
+        operationId: 'earlier',
+        sessionId,
+        entries: [{ entryId: 'earlier', expectedRevision: 2 }],
+      });
+      expect(earlier.replayed).toBe(false);
+      expect(new Set([...earlier.copies, ...later.copies].map((copy) => copy.copyId)).size).toBe(2);
+      expect(await countCopies(database, alice.accountId)).toBe(2);
+      if (kind === 'source') {
+        await userCards.stageImportEntries(alice, {
+          sessionId: 'repeat',
+          source,
+          entries: ['repeat-1', 'repeat-2'].map((entryId) => ({
+            entryId,
+            printingId: counterspellPrinting.printingId,
+            quantity: 1,
+          })),
+        });
+        const repeatedCopies = [];
+        for (const entryId of ['repeat-2', 'repeat-1']) {
+          const repeated = await userCards.confirmImport(alice, {
+            operationId: entryId,
+            sessionId: 'repeat',
+            entries: [{ entryId, expectedRevision: 1 }],
+          });
+          expect(repeated.replayed).toBe(true);
+          repeatedCopies.push(...repeated.copies);
+        }
+        expect(new Set(repeatedCopies.map((copy) => copy.copyId))).toEqual(
+          new Set([...earlier.copies, ...later.copies].map((copy) => copy.copyId)),
+        );
+        expect(await countCopies(database, alice.accountId)).toBe(2);
+      }
+    },
+  );
+
+  it('replays the final source after a review separates formerly identical entries', async () => {
+    const source = { kind: 'text', id: 'review-source' };
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'original',
+      source,
+      entries: ['first', 'second'].map((entryId) => ({
+        entryId,
+        printingId: m11Printing.printingId,
+        quantity: 1,
+      })),
+    });
+    const second = await userCards.confirmImport(alice, {
+      operationId: 'second',
+      sessionId: 'original',
+      entries: [{ entryId: 'second', expectedRevision: 1 }],
+    });
+    await userCards.reviewImportEntry(alice, {
+      entryId: 'first',
+      expectedRevision: 1,
+      printingId: counterspellPrinting.printingId,
+      finish: 'nonfoil',
+      condition: null,
+      quantity: 1,
+    });
+    const first = await userCards.confirmImport(alice, {
+      operationId: 'first',
+      sessionId: 'original',
+      entries: [{ entryId: 'first', expectedRevision: 2 }],
+    });
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'repeat',
+      source,
+      entries: [
+        { entryId: 'repeat-first', printingId: counterspellPrinting.printingId, quantity: 1 },
+        { entryId: 'repeat-second', printingId: m11Printing.printingId, quantity: 1 },
+      ],
+    });
+    const repeated = await userCards.confirmImport(alice, {
+      operationId: 'repeat',
+      sessionId: 'repeat',
+      entries: ['repeat-first', 'repeat-second'].map((entryId) => ({
+        entryId,
+        expectedRevision: 1,
+      })),
+    });
+    expect(repeated.replayed).toBe(true);
+    expect(new Set(repeated.copies.map((copy) => copy.copyId))).toEqual(
+      new Set([...first.copies, ...second.copies].map((copy) => copy.copyId)),
+    );
+    expect(await countCopies(database, alice.accountId)).toBe(2);
+  });
+
   it('refuses stale revisions, discarded entries and unresolved entries', async () => {
     await stageDeck();
 

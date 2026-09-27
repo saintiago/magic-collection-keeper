@@ -428,6 +428,67 @@ describe('usercards confirmation races', () => {
     expect(await acquisitionCount(contender, 'session-4')).toBe(1);
   });
 
+  it('refuses a racing alternate-operation replay when another session reserves its ID', async () => {
+    if (fixture === undefined) throw new Error('A local PostgreSQL server is unavailable.');
+    const { holder, contender, cards } = fixture;
+    for (const sessionId of ['alias-original', 'alias-winner']) {
+      await cards.stageImportEntries(alice, {
+        sessionId,
+        source: { kind: 'text', id: sessionId },
+        entries: [{ entryId: sessionId, printingId: m11Printing.printingId, quantity: 1 }],
+      });
+    }
+    const original = await cards.confirmImport(alice, {
+      operationId: 'alias-original',
+      sessionId: 'alias-original',
+      entries: [{ entryId: 'alias-original', expectedRevision: 1 }],
+    });
+    const held = heldWriter(holder);
+    const winner = held.cards.confirmImport(alice, {
+      operationId: 'alias-shared',
+      sessionId: 'alias-winner',
+      entries: [{ entryId: 'alias-winner', expectedRevision: 1 }],
+    });
+    await waitFor(held.claimed, 'winning confirmation');
+    const reservation = sessionLockWatcher();
+    const racing = createUserCards({
+      catalog,
+      sql: contender.transactor({
+        onStatement(statement) {
+          if (statement.includes('insert into usercards_private.import_receipt'))
+            reservation.onStatement();
+        },
+      }),
+    });
+    const replay = racing
+      .confirmImport(alice, {
+        operationId: 'alias-shared',
+        sessionId: 'alias-original',
+        entries: [{ entryId: 'alias-original', expectedRevision: 1 }],
+      })
+      .then(
+        (result) => result,
+        (cause: unknown) => cause,
+      );
+    try {
+      await waitFor(reservation.reached, 'replay reservation');
+    } finally {
+      held.release();
+    }
+    const committed = await winner;
+    expect(await replay).toMatchObject({ code: 'conflict' });
+    expect(await cards.recoverImportOperation(alice, 'alias-shared')).toMatchObject({
+      outcome: 'recorded',
+      receipt: { sessionId: 'alias-winner', copies: committed.copies },
+    });
+    expect(await cards.recoverImportOperation(alice, 'alias-original')).toMatchObject({
+      outcome: 'recorded',
+      receipt: { copies: original.copies },
+    });
+    expect(await sessionCopyCount(contender, 'alias-original')).toBe(1);
+    expect(await sessionCopyCount(contender, 'alias-winner')).toBe(1);
+  });
+
   it('replays a source entry another session acquired concurrently', async () => {
     if (fixture === undefined) {
       throw new Error(`A local PostgreSQL server is unavailable. ${unavailable}`.trim());

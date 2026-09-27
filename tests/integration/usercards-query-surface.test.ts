@@ -595,6 +595,7 @@ describe('usercards query surface', () => {
         'import_acquisition',
         'import_receipt',
         'import_receipt_acquisition',
+        'import_entry_acquisition',
         'copy_provenance',
       ]) {
         await expect(database.query(`select * from usercards_private.${relation}`)).rejects.toThrow(

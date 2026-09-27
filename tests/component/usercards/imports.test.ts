@@ -22,7 +22,7 @@ import {
   createUserCardsTestDatabase,
   type UserCardsTestDatabase,
 } from '../../support/usercards-database.js';
-import { callerInput } from './harness.js';
+import { boundedResponses, callerInput, dataApiResponseBytes } from './harness.js';
 
 const alice: TrustedUserContext = { accountId: 'cognito-alice' };
 const bob: TrustedUserContext = { accountId: 'cognito-bob' };
@@ -571,6 +571,149 @@ describe('usercards pending imports', () => {
       expectedRevision: attached.session.revision,
     });
     expect(cleared.session).toMatchObject({ state: 'discarded', pendingEntries: 0 });
+  });
+
+  it.each(['界', '\u0001'])(
+    'keeps maximum candidate results within transport bounds (%s)',
+    async (character) => {
+      const printingId = character.repeat(200);
+      const sessionId = `session-${character.repeat(192)}`;
+      await publishCatalog(database, {
+        revisionId: 'large-strings',
+        cards: [lightningBolt],
+        printings: [{ ...m11Printing, printingId }],
+      });
+      const bounded = createUserCards({
+        sql: boundedResponses(database.sql, 1024 * 1024),
+        catalog,
+      });
+      const candidates = Array.from({ length: 8 }, (_, index) => ({
+        printingId,
+        provider: `${index}${character.repeat(199)}`,
+        evidence: character.repeat(200),
+      }));
+      const entries = Array.from({ length: 100 }, (_, index) => ({
+        entryId: `${String(index).padStart(3, '0')}${character.repeat(197)}`,
+        printingId,
+        quantity: 1,
+        candidates,
+      }));
+      for (let offset = 0; offset < entries.length; offset += 50) {
+        const staged = await bounded.stageImportEntries(alice, {
+          sessionId,
+          source: { kind: 'text', id: character.repeat(200) },
+          entries: entries.slice(offset, offset + 50),
+        });
+        expect(staged.entries).toHaveLength(50);
+        expect(staged.entries.map((entry) => entry.candidates)).toEqual(
+          Array.from({ length: 50 }, () => candidates),
+        );
+      }
+      const listed = await bounded.listImportEntries(alice, { sessionId, pageSize: 100 });
+      expect(listed.entries.map((entry) => entry.entryId)).toEqual(
+        entries.map((entry) => entry.entryId),
+      );
+      expect(listed.entries.map((entry) => entry.candidates)).toEqual(
+        Array.from({ length: 100 }, () => candidates),
+      );
+      expect(listed.continuation).toBeNull();
+      // This fixture exceeds one response even before adding entry/session rows.
+      const unbounded = await database.query(`select to_jsonb(candidate)::text as payload
+      from (select entry_id, printing_id, provider, evidence from usercards_private.import_candidate) as candidate`);
+      expect(dataApiResponseBytes(unbounded)).toBeGreaterThan(1024 * 1024);
+      const confirmed = await bounded.confirmImport(alice, {
+        operationId: 'large-candidates',
+        sessionId,
+        entries: entries
+          .slice(0, 50)
+          .map((entry) => ({ entryId: entry.entryId, expectedRevision: 1 })),
+      });
+      expect(confirmed.copies).toHaveLength(50);
+      expect(
+        (await bounded.listImportEntries(alice, { sessionId, pageSize: 100 })).entries,
+      ).toHaveLength(50);
+    },
+  );
+
+  it('discards a large session with a bounded result and preserves other pending work', async () => {
+    const bounded = createUserCards({ sql: boundedResponses(database.sql, 1024 * 1024), catalog });
+    const staged = await bounded.stageImportEntries(alice, {
+      sessionId: 'large-discard',
+      source: { kind: 'text', id: 'large-discard' },
+      entries: [{ entryId: 'original', quantity: 1 }],
+    });
+    // Large persisted progress is a fixture; the public discard still performs the whole mutation.
+    await database.query(
+      `insert into usercards_private.import_entry
+      (account_id, session_id, entry_id, position)
+      select $1, 'large-discard', lpad(n::text, 200, 'x'), n + 1 from generate_series(1, 5000) as n`,
+      [alice.accountId],
+    );
+    await bounded.stageImportEntries(alice, {
+      sessionId: 'untouched',
+      source: { kind: 'text', id: 'other' },
+      entries: [{ entryId: 'untouched-entry', quantity: 1 }],
+    });
+    const discarded = await bounded.discardImportSession(alice, {
+      sessionId: 'large-discard',
+      expectedRevision: staged.session.revision,
+    });
+    expect(discarded.session).toMatchObject({
+      pendingEntries: 0,
+      discardedEntries: 5001,
+      revision: staged.session.revision + 1,
+    });
+    expect(
+      (await bounded.listImportEntries(alice, { sessionId: 'untouched' })).entries,
+    ).toHaveLength(1);
+    const repeat = await bounded.discardImportSession(alice, {
+      sessionId: 'large-discard',
+      expectedRevision: discarded.session.revision,
+    });
+    expect(repeat).toEqual(discarded);
+  });
+
+  it('rejects a pending page that changes between internal transport reads', async () => {
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'changing-page',
+      source: { kind: 'text', id: 'changing' },
+      entries: Array.from({ length: 30 }, (_, index) => ({
+        entryId: `changing-${index}`,
+        quantity: 1,
+      })),
+    });
+    let changed = false;
+    const interleaved = createUserCards({
+      catalog,
+      sql: {
+        transaction: (work) => database.sql.transaction(work),
+        async query(statement, parameters) {
+          const rows = await database.sql.query(statement, parameters);
+          if (!changed && parameters?.session_id === 'changing-page' && parameters.offset === 0) {
+            changed = true;
+            await userCards.reviewImportEntry(alice, {
+              entryId: 'changing-0',
+              expectedRevision: 1,
+              printingId: m11Printing.printingId,
+              finish: 'foil',
+              condition: 'LP',
+              quantity: 2,
+            });
+          }
+          return rows;
+        },
+      },
+    });
+    const failed = await captureUserCardsError(
+      interleaved.listImportEntries(alice, { sessionId: 'changing-page', pageSize: 30 }),
+    );
+    expect(failed.code).toBe('conflict');
+    const reloaded = await userCards.listImportEntries(alice, {
+      sessionId: 'changing-page',
+      pageSize: 30,
+    });
+    expect(reloaded.entries).toHaveLength(30);
+    expect(reloaded.entries[0]).toMatchObject({ revision: 2, quantity: 2 });
   });
 
   it('stages a batch whose references exceed one catalog resolution', async () => {

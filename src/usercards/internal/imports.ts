@@ -10,10 +10,11 @@
  * identity before it changes any record, so an operation conflict commits nothing.
  *
  * Replay protection is durable per acquisition source and source entry: an acquisition records the
- * reviewed content of one entry and its occurrence among the source's entries with that content, so
+ * reviewed content of one entry and an occurrence allocated from permanent confirmation bindings, so
  * a repeated import recognizes the source entries it already acquired however a caller partitions
  * its confirmations, while two identical lines or a card captured twice around another card stay
- * distinct acquisitions (docs/user-cards.md#source-imports). Each recorded operation keeps the
+ * distinct acquisitions. Editing pending peers cannot renumber these bindings
+ * (docs/user-cards.md#source-imports). Each recorded operation keeps the
  * copies it reported as immutable provenance, read back in transport-safe pages.
  */
 
@@ -78,6 +79,14 @@ interface Statement {
   readonly statement: string;
   readonly parameters: Record<string, UserCardsSqlValue>;
 }
+
+/**
+ * Ten entries fit below 1 MiB even with eight candidates each and all four candidate strings at
+ * 200 units: double JSON escaping costs at most seven bytes per unit (< 6 KiB per candidate).
+ * Entry/session/revision rows and transport wrappers leave ample headroom; no row reaches 64 KiB.
+ * Keep this transport bound separate from the public page and staging sizes.
+ */
+const entriesPerRead = 10;
 
 /** The durable content key of one entry: its reviewed content and its occurrence in its source. */
 interface EntryKey {
@@ -709,12 +718,12 @@ function discardEntryStatement(
 
 function discardPendingEntriesStatement(accountId: string, sessionId: string): Statement {
   return {
-    statement: `update usercards_private.import_entry
+    statement: `with discarded as (update usercards_private.import_entry
      set state = 'discarded',
          revision = revision + 1,
          updated_at = now()
     where account_id = :account_id and session_id = :session_id and state = 'pending'
-    returning entry_id`,
+    returning 1) select count(*)::int as count from discarded`,
     parameters: { account_id: accountId, session_id: sessionId },
   };
 }
@@ -771,38 +780,33 @@ function readReceiptByInputStatement(accountId: string, inputFingerprint: string
   };
 }
 
-/**
- * The occurrence of each requested entry among its session's entries with the same reviewed
- * content, counted in capture order. Together with the entry fingerprint it identifies the source
- * entry an acquisition belongs to, so a duplicate line or a scan of the same card twice stays a
- * separate acquisition while a repeated import of that source recognizes what it already acquired.
- */
+/** Counts only permanent bindings, never editable pending peers. */
 function entryOccurrencesStatement(
   accountId: string,
   sessionId: string,
-  entryIds: readonly string[],
+  fingerprints: readonly string[],
 ): Statement {
-  const references = placeholdersFor(entryIds, 'occurrence');
+  const references = placeholdersFor(fingerprints, 'fingerprint');
   return {
-    statement: `select requested.entry_id,
-       (select count(*)::int
-          from usercards_private.import_entry as peer
-         where peer.account_id = requested.account_id
-           and peer.session_id = requested.session_id
-           and peer.position <= requested.position
-           and peer.printing_id is not distinct from requested.printing_id
-           and peer.finish is not distinct from requested.finish
-           and peer.condition is not distinct from requested.condition
-           and peer.quantity = requested.quantity) as occurrence
-     from usercards_private.import_entry as requested
-    where requested.account_id = :account_id
-      and requested.session_id = :session_id
-      and requested.entry_id in (${references.list})`,
-    parameters: {
-      account_id: accountId,
-      session_id: sessionId,
-      ...references.parameters,
-    },
+    statement: `select acquisition.entry_fingerprint, count(*)::int as occurrence
+      from usercards_private.import_entry_acquisition as binding
+      join usercards_private.import_entry as entry
+        on entry.account_id = binding.account_id and entry.entry_id = binding.entry_id
+      join usercards_private.import_acquisition as acquisition
+        on acquisition.acquisition_id = binding.acquisition_id
+     where binding.account_id = :account_id and entry.session_id = :session_id
+       and acquisition.entry_fingerprint in (${references.list})
+     group by acquisition.entry_fingerprint`,
+    parameters: { account_id: accountId, session_id: sessionId, ...references.parameters },
+  };
+}
+
+/** Permanently binds an entry, including a replay, to the acquisition it confirmed. */
+function bindEntryStatement(accountId: string, entryId: string, acquisitionId: string): Statement {
+  return {
+    statement: `insert into usercards_private.import_entry_acquisition
+      (account_id, entry_id, acquisition_id) values (:account_id, :entry_id, :acquisition_id)`,
+    parameters: { account_id: accountId, entry_id: entryId, acquisition_id: acquisitionId },
   };
 }
 
@@ -1137,17 +1141,24 @@ async function readEntriesByIds(
   if (entryIds.length === 0) {
     return [];
   }
-  const request = entriesDataStatement(accountId, entryIds);
-  const rows = groupRows(
-    await readRows(
-      statements,
-      request.statement,
-      request.parameters,
-      'The pending entries could not be read.',
-    ),
-    ['entry', 'candidate'] as const,
-  );
-  return importEntriesFromRows(rows.entry, rows.candidate);
+  const entries: ImportEntry[] = [];
+  for (let offset = 0; offset < entryIds.length; offset += entriesPerRead) {
+    const request = entriesDataStatement(
+      accountId,
+      entryIds.slice(offset, offset + entriesPerRead),
+    );
+    const rows = groupRows(
+      await readRows(
+        statements,
+        request.statement,
+        request.parameters,
+        'The pending entries could not be read.',
+      ),
+      ['entry', 'candidate'] as const,
+    );
+    entries.push(...importEntriesFromRows(rows.entry, rows.candidate));
+  }
+  return entries.sort((left, right) => left.position - right.position);
 }
 
 function candidateKey(printingId: string, provider: string, evidence: string): string {
@@ -1213,16 +1224,15 @@ async function classifyConfirmation(
 /** One reviewed entry with the durable key its acquisition source is recognized by. */
 interface KeyedImportEntry {
   readonly entry: ConfirmedImportEntry;
-  /** Occurrence of the entry among the session's entries with the same reviewed content. */
+  /** Next occurrence allocated from this session's permanent confirmation bindings. */
   readonly occurrence: number;
   readonly key: string;
 }
 
 /**
- * The occurrence of each reviewed entry among its session's entries with the same reviewed
- * content, in capture order. Two identical lines, or a card scanned twice around another card, get
- * distinct occurrences and stay distinct acquisitions, while a repeated import of the same source
- * declares the same occurrences again.
+ * Allocate distinct occurrences after the entries already confirmed with this content. The session
+ * lock serializes allocation, and each resulting binding is permanent, including source replays.
+ * Reviews of other entries therefore cannot steal or shift an already assigned acquisition.
  */
 async function readEntryKeys(
   statements: UserCardsSqlExecutor,
@@ -1230,11 +1240,9 @@ async function readEntryKeys(
   sessionId: string,
   pending: readonly ConfirmedImportEntry[],
 ): Promise<readonly KeyedImportEntry[]> {
-  const request = entryOccurrencesStatement(
-    accountId,
-    sessionId,
-    pending.map((entry) => entry.entryId),
-  );
+  const request = entryOccurrencesStatement(accountId, sessionId, [
+    ...new Set(pending.map((entry) => entry.entryFingerprint)),
+  ]);
   const rows = await readRows(
     statements,
     request.statement,
@@ -1242,13 +1250,11 @@ async function readEntryKeys(
     'The reviewed entries could not be read.',
   );
   const occurrences = new Map(
-    rows.map((row) => [textValue(row.entry_id), integerValue(row.occurrence)] as const),
+    rows.map((row) => [textValue(row.entry_fingerprint), integerValue(row.occurrence)] as const),
   );
   return pending.map((entry) => {
-    const occurrence = occurrences.get(entry.entryId);
-    if (occurrence === undefined) {
-      throw new UserCardsError('unavailable', 'UserCards did not report the reviewed entries.');
-    }
+    const occurrence = (occurrences.get(entry.entryFingerprint) ?? 0) + 1;
+    occurrences.set(entry.entryFingerprint, occurrence);
     return {
       entry,
       occurrence,
@@ -1315,25 +1321,35 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
     },
 
     async listEntries(accountId, sessionId, offset, limit): Promise<ImportEntriesData | null> {
-      const request = entryPageStatement(accountId, sessionId, offset, limit);
-      const rows = groupRows(
-        await readRows(
-          sql,
-          request.statement,
-          request.parameters,
-          'The pending entries could not be read.',
-        ),
-        ['revision', 'session', 'entry', 'candidate'] as const,
-      );
-      const sessionRow = rows.session[0];
-      if (sessionRow === undefined) {
-        return null;
+      let result: ImportEntriesData | null = null;
+      const collected: ImportEntry[] = [];
+      for (let read = 0; read < limit; read += entriesPerRead) {
+        const size = Math.min(entriesPerRead, limit - read);
+        const request = entryPageStatement(accountId, sessionId, offset + read, size);
+        const rows = groupRows(
+          await readRows(
+            sql,
+            request.statement,
+            request.parameters,
+            'The pending entries could not be read.',
+          ),
+          ['revision', 'session', 'entry', 'candidate'] as const,
+        );
+        const sessionRow = rows.session[0];
+        if (sessionRow === undefined) return null;
+        const privateRevision = revisionFromPayload(rows.revision[0]?.payload);
+        if (result !== null && result.privateRevision !== privateRevision) {
+          throw new UserCardsError(
+            'conflict',
+            'The pending entries changed while being read; reload them.',
+          );
+        }
+        const entries = importEntriesFromRows(rows.entry, rows.candidate);
+        collected.push(...entries);
+        result = { privateRevision, session: importSessionFromRow(sessionRow), entries: collected };
+        if (entries.length < size) break;
       }
-      return {
-        privateRevision: revisionFromPayload(rows.revision[0]?.payload),
-        session: importSessionFromRow(sessionRow),
-        entries: importEntriesFromRows(rows.entry, rows.candidate),
-      };
+      return result;
     },
 
     async readEntries(accountId, entryIds): Promise<readonly ImportEntry[]> {
@@ -1770,7 +1786,7 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
             'The pending entries could not be discarded.',
           );
           let privateRevision: string;
-          if (discarded.length === 0) {
+          if (integerValue(discarded[0]?.count) === 0) {
             privateRevision = await currentRevision(statements, accountId);
           } else {
             const bump = bumpSessionStatement(accountId, sessionId);
@@ -1844,46 +1860,13 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
               'The recorded request could not be read.',
             )
           )[0];
-          if (identical !== undefined) {
-            return {
-              outcome: 'confirmed' as const,
-              replayed: true,
-              privateRevision: await currentRevision(statements, accountId),
-              receipt: await requireReceipt(
-                statements,
-                accountId,
-                textValue(identical.operation_id),
-              ),
-            };
-          }
-
-          const classification = await classifyConfirmation(statements, accountId, plan);
-          if (classification.missing) {
-            return { outcome: 'missing-entry' as const };
-          }
-          if (classification.stale) {
-            return { outcome: 'stale-entry' as const };
-          }
-          if (classification.unresolved) {
-            return { outcome: 'unresolved-entry' as const };
-          }
-
-          // Each reviewed entry is recognized by the durable key of its source entry: an
-          // acquisition this source already holds is replayed, and only a source entry the account
-          // has not acquired creates copies.
-          const keys = await readEntryKeys(
-            statements,
-            accountId,
-            plan.sessionId,
-            classification.pending,
-          );
-          const recorded = await readRecordedAcquisitions(
-            statements,
-            accountId,
-            sourceKind,
-            sourceId,
-            keys,
-          );
+          const classification =
+            identical === undefined
+              ? await classifyConfirmation(statements, accountId, plan)
+              : null;
+          if (classification?.missing) return { outcome: 'missing-entry' as const };
+          if (classification?.stale) return { outcome: 'stale-entry' as const };
+          if (classification?.unresolved) return { outcome: 'unresolved-entry' as const };
 
           // Reserve the account-scoped operation identity before changing any record, so an
           // operation conflict commits no copy, acquisition or entry closure.
@@ -1923,6 +1906,43 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
             };
           }
 
+          if (identical !== undefined) {
+            // Bind every successful operation ID, even when its reviewed request already ran.
+            await readRows(
+              statements,
+              `insert into usercards_private.import_receipt_acquisition
+                 (account_id, operation_id, acquisition_id)
+               select account_id, :operation_id, acquisition_id
+                 from usercards_private.import_receipt_acquisition
+                where account_id = :account_id and operation_id = :original_operation_id`,
+              {
+                account_id: accountId,
+                operation_id: plan.operationId,
+                original_operation_id: textValue(identical.operation_id),
+              },
+              'The replay outcome could not be stored.',
+            );
+            return {
+              outcome: 'confirmed' as const,
+              replayed: true,
+              privateRevision: await advanceRevision(statements, accountId),
+              receipt: await requireReceipt(statements, accountId, plan.operationId),
+            };
+          }
+          const keys = await readEntryKeys(
+            statements,
+            accountId,
+            plan.sessionId,
+            classification?.pending ?? [],
+          );
+          const recorded = await readRecordedAcquisitions(
+            statements,
+            accountId,
+            sourceKind,
+            sourceId,
+            keys,
+          );
+          const bindings = new Map<string, string>();
           const covered = new Set<string>();
           let ownedTagId: string | null = null;
           let acquired = false;
@@ -1930,6 +1950,7 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
             const alreadyAcquired = recorded.get(key);
             if (alreadyAcquired !== undefined) {
               covered.add(alreadyAcquired);
+              bindings.set(entry.entryId, alreadyAcquired);
               continue;
             }
             const claim = claimAcquisitionStatement(
@@ -1965,11 +1986,13 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
                 );
               }
               covered.add(concurrentlyAcquired);
+              bindings.set(entry.entryId, concurrentlyAcquired);
               continue;
             }
             acquired = true;
             const acquisitionId = textValue(claimed.acquisition_id);
             covered.add(acquisitionId);
+            bindings.set(entry.entryId, acquisitionId);
             ownedTagId ??= await ensureOwnedTag(statements, accountId);
             const { printingId, finish } = entry.copy;
             if (printingId === null || finish === null) {
@@ -2008,6 +2031,15 @@ export function createPostgresImportStore(sql: UserCardsSqlTransactor): ImportSt
             }
           }
 
+          for (const [entryId, acquisitionId] of bindings) {
+            const binding = bindEntryStatement(accountId, entryId, acquisitionId);
+            await readRows(
+              statements,
+              binding.statement,
+              binding.parameters,
+              'The confirmed entry binding could not be stored.',
+            );
+          }
           const entryIds = keys.map(({ entry }) => entry.entryId);
           const confirmation = confirmEntriesStatement(accountId, plan.sessionId, entryIds);
           const confirmed = await readRows(
