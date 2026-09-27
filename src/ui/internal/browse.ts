@@ -19,7 +19,7 @@
  * (docs/user-interface.md#capture-and-review).
  */
 
-import type { UiCardList, UiCardListPresentation } from './card-list.js';
+import type { UiCardList, UiCardListPresentation, UiListPosition } from './card-list.js';
 import { cardListBasicContent, createCardList } from './card-list.js';
 import { UI_LIMITS } from './limits.js';
 import type { UiListEntry, UiListSource } from './list.js';
@@ -71,14 +71,13 @@ function homePage(recent: UiRecentCards): UiPageDefinition {
       const restored = context.restored?.state ?? null;
       const pageSize = UI_LIMITS.recentCards;
       const restoredWindow =
-        context.restored === null
-          ? null
-          : restoreResultWindow(readLoadedWindow(restored), pageSize);
+        context.restored === null ? null : restoreResultWindow(readLoadedWindow(restored));
       const input = searchInput(document, 'home-search');
       const form = searchForm(document, input);
       const heading = document.createElement('h2');
       heading.textContent = 'Recent cards';
       const listHost = document.createElement('div');
+      listHost.id = `${context.view.page}-results`;
       container.append(form, heading, listHost);
       form.addEventListener('submit', (event) => {
         event.preventDefault();
@@ -97,6 +96,7 @@ function homePage(recent: UiRecentCards): UiPageDefinition {
         source: recentSource(recent),
         context: accountId,
         pageSize,
+        initialPosition: readPosition(restored, pageSize),
         presentation: openEntryPresentation(document, 'home-result', (entry) =>
           recent.record(accountId, entry),
         ),
@@ -114,6 +114,8 @@ function homePage(recent: UiRecentCards): UiPageDefinition {
           query: input.value,
           selection: [...list.selection],
           loaded: list.entries.length,
+          continuation: list.position?.continuation ?? null,
+          offset: list.position?.offset ?? 0,
         }),
         ...(restoredWindow === null ? {} : { presented: () => restoredWindow.presented }),
       };
@@ -134,9 +136,7 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
       const restored = context.restored?.state ?? null;
       const pageSize = UI_LIMITS.catalogPage;
       const restoredWindow =
-        context.restored === null
-          ? null
-          : restoreResultWindow(readLoadedWindow(restored), pageSize);
+        context.restored === null ? null : restoreResultWindow(readLoadedWindow(restored));
       const document = container.ownerDocument;
       const input = searchInput(document, 'catalog-search');
       input.value = view.query;
@@ -162,6 +162,7 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
       const heading = document.createElement('h2');
       heading.textContent = 'Results';
       const listHost = document.createElement('div');
+      listHost.id = `${context.view.page}-results`;
       container.append(form, heading, refresh, listHost);
 
       const access = createCatalogSearchAccess(
@@ -179,6 +180,7 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
         source: access.source,
         context: query,
         pageSize,
+        initialPosition: readPosition(restored, pageSize),
         ...(view.level === 'printing' ? { fragments: { images: access.images } } : {}),
         presentation: openEntryPresentation(document, 'catalog-result', (entry) =>
           recent.record(context.account.accountId, entry),
@@ -232,6 +234,8 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
           // The entries the presented window held, so the way back presents the same window of the
           // same result instead of its first page (docs/user-interface.md#pages-and-navigation).
           loaded: list.entries.length,
+          continuation: list.position?.continuation ?? null,
+          offset: list.position?.offset ?? 0,
         }),
         ...(restoredWindow === null ? {} : { presented: () => restoredWindow.presented }),
       };
@@ -311,9 +315,12 @@ interface UiWindowList {
 }
 
 /** Reloads one result window page by page, within the pages one bounded window can hold. */
-function restoreResultWindow(loaded: number, pageSize: number): UiRestoredWindow {
+function restoreResultWindow(loaded: number): UiRestoredWindow {
   const presented = Promise.withResolvers<void>();
-  const pageBudget = Math.ceil(UI_LIMITS.listWindow / pageSize);
+  // A provider may return short pages. Every productive request adds at least one entry; one
+  // additional request can make no progress before restoration stops.
+  const pageBudget = UI_LIMITS.listWindow;
+  let previousLength = -1;
   let asked = 0;
   let done = false;
   return {
@@ -322,7 +329,13 @@ function restoreResultWindow(loaded: number, pageSize: number): UiRestoredWindow
       if (done || list.loading) {
         return;
       }
-      if (list.entries.length < loaded && list.hasMore && asked < pageBudget) {
+      if (
+        list.entries.length < loaded &&
+        list.entries.length > previousLength &&
+        list.hasMore &&
+        asked < pageBudget
+      ) {
+        previousLength = list.entries.length;
         asked += 1;
         list.loadMore();
         return;
@@ -333,10 +346,28 @@ function restoreResultWindow(loaded: number, pageSize: number): UiRestoredWindow
   };
 }
 
+/** The source owns the opaque cursor; only the within-page offset is interpreted here. */
+function readPosition(
+  restored: Readonly<Record<string, unknown>> | null,
+  pageSize: number,
+): UiListPosition {
+  const continuation = restoredValue(restored, 'continuation');
+  const offset = restoredValue(restored, 'offset');
+  return {
+    continuation: typeof continuation === 'string' ? continuation : null,
+    offset:
+      typeof offset === 'number' && Number.isSafeInteger(offset) && offset >= 0 && offset < pageSize
+        ? offset
+        : 0,
+  };
+}
+
 /** Entries the window of one restored history entry had loaded, or none when it kept no window. */
 function readLoadedWindow(restored: Readonly<Record<string, unknown>> | null): number {
   const value = restoredValue(restored, 'loaded');
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? Math.min(value, UI_LIMITS.listWindow)
+    : 0;
 }
 
 /** Card details view of one entry, or null when the entry carries no identity to open. */

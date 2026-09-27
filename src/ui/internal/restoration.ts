@@ -27,6 +27,9 @@ export interface UiViewSnapshot {
   readonly scrollY: number;
   /** Id of the element focused when the view was left, or null. */
   readonly focusId: string | null;
+  /** Visible element and its viewport offset, retained across later asynchronous layout. */
+  readonly anchorId?: string | null;
+  readonly anchorTop?: number;
 }
 
 /** The bounded presentation state the shell keeps for the history entries of one account. */
@@ -123,6 +126,15 @@ function readSnapshot(snapshot: UiViewSnapshot): UiViewSnapshot {
     state: readState(snapshot?.state),
     scrollY: readScroll(snapshot?.scrollY),
     focusId: readFocusId(snapshot?.focusId),
+    ...(snapshot.anchorId == null
+      ? {}
+      : {
+          anchorId: readFocusId(snapshot.anchorId),
+          anchorTop:
+            typeof snapshot.anchorTop === 'number' && Number.isFinite(snapshot.anchorTop)
+              ? snapshot.anchorTop
+              : 0,
+        }),
   };
 }
 
@@ -153,7 +165,7 @@ function readValue(value: unknown): UiRestorationValue | undefined {
     return Number.isFinite(value) ? value : undefined;
   }
   if (typeof value === 'string') {
-    return value.length <= UI_LIMITS.restorationText ? value : undefined;
+    return value.length <= UI_LIMITS.restorationValueText ? value : undefined;
   }
   if (
     Array.isArray(value) &&

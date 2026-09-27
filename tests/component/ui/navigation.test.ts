@@ -170,7 +170,7 @@ describe('bounded, account-isolated restoration state', () => {
         ]),
       ),
     ],
-    ['over-long text', { query: 'x'.repeat(UI_LIMITS.restorationText + 1) }],
+    ['over-long text', { query: 'x'.repeat(UI_LIMITS.restorationValueText + 1) }],
     [
       'over-long list',
       {

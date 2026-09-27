@@ -26,7 +26,12 @@ import type {
   UiBrowseStart,
 } from './browse.harness.js';
 import type { PrintingRecord } from '../../src/catalog/index.js';
-import type { SearchPage, SearchEntry } from '../../src/search/index.js';
+import {
+  encodeSearchContinuation,
+  normalizeSearchRequest,
+  type SearchPage,
+  type SearchEntry,
+} from '../../src/search/index.js';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const harnessPath = path.join(repoRoot, 'tests', 'browser', 'browse.harness.ts');
@@ -530,7 +535,10 @@ test('further results load with the continuation of the same query', async ({ pa
     pageSize: 50,
     continuation: 'cursor-1',
   });
+  const firstLink = page.locator('[data-ui-entry="card:card-1"] [data-ui-open]');
+  await firstLink.focus();
   await settleSearch(page, next.id, searchPage([cardEntry('card-2', { name: 'Bolt Two' })]));
+  await expect(firstLink).toBeFocused();
 
   await expect(page.locator('[data-ui-entry]')).toHaveCount(2);
   await expect(page.locator('[data-ui-entry="card:card-2"]')).toContainText('Bolt Two');
@@ -750,3 +758,203 @@ test('a closed page withdraws its search and presents no late result', async ({ 
   await expect(page.locator('[data-ui-entry="card:card-bolt"]')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+for (const total of [550, 525]) {
+  test(`Back restores the actual 500-entry window after browsing ${total} results`, async ({
+    page,
+  }) => {
+    const errors = await openBrowse(page, '#/catalog');
+    const cursor = (offset: number): string =>
+      encodeSearchContinuation({
+        query: normalizeSearchRequest({ resultLevel: 'card', pageSize: 50 }),
+        context: { accountId: 'alice' },
+        revisions: { catalogRevision: '\\'.repeat(200), privateRevision: null },
+        offset,
+      });
+    expect(cursor(50).length).toBeGreaterThan(500);
+    const resultPage = (offset: number): SearchPage =>
+      searchPage(
+        Array.from({ length: Math.min(50, total - offset) }, (_, index) =>
+          cardEntry(`card-${offset + index}`, { name: `Card ${offset + index}` }),
+        ),
+        { totalCount: total, continuation: offset + 50 < total ? cursor(offset + 50) : null },
+      );
+    for (let offset = 0; offset < total; offset += 50) {
+      if (offset > 0) await page.getByRole('button', { name: 'Load more' }).click();
+      const request = await searchRequest(page, offset / 50);
+      await settleSearch(page, request.id, resultPage(offset));
+    }
+    await expect(page.locator('[data-ui-entry]')).toHaveCount(500);
+    const last = page.locator(`[data-ui-entry="card:card-${total - 1}"] [data-ui-open]`);
+    await last.click();
+    await expect(page.locator('#card-level')).toHaveText(`card-${total - 1}/-/-`);
+    await page.goBack();
+    const start = total === 550 ? 50 : 0;
+    for (let offset = start, index = 11; offset < total; offset += 50, index += 1) {
+      const request = await searchRequest(page, index);
+      expect(request.request.continuation).toBe(offset === 0 ? undefined : cursor(offset));
+      await settleSearch(page, request.id, resultPage(offset));
+    }
+    await expect(page.locator('[data-ui-entry]')).toHaveCount(500);
+    await expect(page.locator('[data-ui-entry]').first()).toHaveAttribute(
+      'data-ui-entry',
+      `card:card-${total - 500}`,
+    );
+    await expect(last).toBeFocused();
+    expect(errors).toEqual([]);
+
+    if (total === 550) {
+      // The source remains authoritative: a changed revision rejects a retained cursor, and
+      // Refresh starts at the beginning instead of retrying an obsolete window indefinitely.
+      await last.click();
+      await page.goBack();
+      const stale = await searchRequest(page, 21);
+      expect(stale.request.continuation).toBe(cursor(50));
+      await failSearch(page, stale.id, {
+        code: 'stale-continuation',
+        message: 'Results changed; refresh.',
+      });
+      await expect(page.locator('[data-ui-status]')).toHaveText('Results changed; refresh.');
+      await page.getByRole('button', { name: 'Refresh results', exact: true }).click();
+      const fresh = await searchRequest(page, 22);
+      expect(fresh.request.continuation).toBeUndefined();
+      await settleSearch(page, fresh.id, resultPage(0));
+      await expect(page.locator('[data-ui-entry]').first()).toHaveAttribute(
+        'data-ui-entry',
+        'card:card-0',
+      );
+    }
+  });
+}
+
+for (const view of ['catalog', 'home'] as const) {
+  test(`history restores the focused result checkbox on ${view}`, async ({ page }) => {
+    const errors = await openBrowse(page, '#/');
+    await page.getByRole('link', { name: 'Catalog', exact: true }).click();
+    const entries = [cardEntry('card-bolt', { name: 'Lightning Bolt' })];
+    await settleSearch(page, (await searchRequest(page)).id, searchPage(entries));
+    if (view === 'home') {
+      await page.locator('[data-ui-open]').click();
+      await page.getByRole('link', { name: 'Home', exact: true }).click();
+    }
+    const checkbox = page.getByLabel('Select Lightning Bolt');
+    await checkbox.check();
+    await checkbox.focus();
+    await page.goBack();
+    await page.goForward();
+    if (view === 'catalog') {
+      await settleSearch(page, (await searchRequest(page, 1)).id, searchPage(entries));
+    }
+    await expect(checkbox).toBeChecked();
+    await expect(checkbox).toBeFocused();
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const action of ['restore', 'input', 'account', 'navigate'] as const) {
+  test(`delayed printing image layout respects history position and ${action}`, async ({
+    page,
+  }) => {
+    const errors = await openBrowse(page, '#/catalog?level=printing');
+    const imageGate = Promise.withResolvers<void>();
+    let delayedImages = 0;
+    await page.route('https://cards.test/**', async (route) => {
+      if (route.request().url().includes('return')) {
+        delayedImages += 1;
+        await imageGate.promise;
+      }
+      await route.fulfill({
+        contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="223" height="310"><rect width="223" height="310" fill="gray"/></svg>',
+      });
+    });
+    const entries = Array.from({ length: 10 }, (_, index) =>
+      printingEntry(`printing-${index}`, `card-${index}`, `Card ${index}`),
+    );
+    const printings = entries.map((entry, index): PrintingRecord => ({
+      ...printing(entry.card.cardId),
+      printingId: `printing-${index}`,
+      images: {
+        small: null,
+        normal: `https://cards.test/${index}.svg`,
+        large: null,
+        artCrop: null,
+      },
+    }));
+    await settleSearch(page, (await searchRequest(page)).id, searchPage(entries));
+    await settleCatalog(page, (await catalogRequest(page)).id, printings);
+    await expect
+      .poll(() =>
+        page
+          .locator('img')
+          .evaluateAll((images) =>
+            images.every(
+              (image) =>
+                image instanceof HTMLImageElement && image.complete && image.naturalHeight === 310,
+            ),
+          ),
+      )
+      .toBe(true);
+    const last = page.locator('[data-ui-entry="printing:printing-9"] [data-ui-open]');
+    await last.focus();
+    await last.evaluate((element) => window.scrollBy(0, element.getBoundingClientRect().top - 120));
+    const departedTop = await last.evaluate((element) => element.getBoundingClientRect().top);
+    await last.click();
+    await page.goBack();
+    await settleSearch(page, (await searchRequest(page, 1)).id, searchPage(entries));
+    await expect(last).toBeFocused();
+    await settleCatalog(
+      page,
+      (await catalogRequest(page, 1)).id,
+      printings.map((value) => ({
+        ...value,
+        images: { ...value.images, normal: `${value.images.normal}?return` },
+      })),
+    );
+    await expect.poll(() => delayedImages).toBe(10);
+    if (action === 'input') {
+      await page.getByLabel('Search cards').focus();
+      await page.getByLabel('Search cards').press('Home');
+      await page.evaluate(() => window.scrollTo(0, 0));
+    } else if (action === 'account') {
+      await signInAs(page, 'bob');
+    } else if (action === 'navigate') {
+      await page.getByRole('link', { name: 'Home', exact: true }).click();
+    }
+    imageGate.resolve();
+    if (action === 'restore' || action === 'input') {
+      await expect
+        .poll(() =>
+          page
+            .locator('img')
+            .evaluateAll((images) =>
+              images.every(
+                (image) =>
+                  image instanceof HTMLImageElement &&
+                  image.complete &&
+                  image.naturalHeight === 310,
+              ),
+            ),
+        )
+        .toBe(true);
+      if (action === 'restore') {
+        await expect
+          .poll(async () =>
+            Math.abs(
+              (await last.evaluate((element) => element.getBoundingClientRect().top)) - departedTop,
+            ),
+          )
+          .toBeLessThan(2);
+        await expect(last).toBeFocused();
+      } else {
+        await expect(page.getByLabel('Search cards')).toBeFocused();
+        await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+      }
+    } else {
+      await expect(page.locator('h1')).toBeFocused();
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+      await expect(page.locator('[data-ui-entry]')).toHaveCount(action === 'navigate' ? 1 : 0);
+    }
+    expect(errors).toEqual([]);
+  });
+}

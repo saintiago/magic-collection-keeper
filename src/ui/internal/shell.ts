@@ -368,7 +368,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     }
     pageHandle = handle;
     restoreInteraction(heading, restored);
-    restorePresentedInteraction(handle, heading, restored, currentGeneration);
+    restorePresentedInteraction(handle, heading, restored, currentGeneration, controller.signal);
   }
 
   function renderPanel(heading: HTMLHeadingElement, content: readonly Node[]): void {
@@ -399,25 +399,65 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     heading: HTMLHeadingElement,
     restored: UiViewSnapshot | null,
     currentGeneration: number,
+    signal: AbortSignal,
   ): void {
     if (restored === null || handle?.presented === undefined) {
       return;
+    }
+    // Explicit input takes ownership back from history restoration, even if data is still pending.
+    const lifetime = new AbortController();
+    let observer: ResizeObserver | null = null;
+    const stop = (): void => {
+      observer?.disconnect();
+      lifetime.abort();
+    };
+    signal.addEventListener('abort', stop, { once: true, signal: lifetime.signal });
+    for (const event of ['wheel', 'touchstart', 'pointerdown', 'keydown']) {
+      browser.addEventListener(event, stop, {
+        capture: true,
+        passive: true,
+        signal: lifetime.signal,
+      });
     }
     let pending: void | Promise<void>;
     try {
       pending = handle.presented();
     } catch {
       // A page that reports no presentation keeps the restoration the shell already made.
+      stop();
       return;
     }
     void Promise.resolve(pending).then(
       () => {
-        if (!disposed && generation === currentGeneration && pageHandle === handle) {
-          restoreInteraction(heading, restored);
+        if (
+          lifetime.signal.aborted ||
+          disposed ||
+          generation !== currentGeneration ||
+          pageHandle !== handle
+        ) {
+          stop();
+          return;
         }
+        restoreInteraction(heading, restored);
+        const anchor =
+          restored.anchorId == null ? null : document.getElementById(restored.anchorId);
+        if (anchor === null || !main.contains(anchor)) {
+          stop();
+          return;
+        }
+        const align = (): void => {
+          if (lifetime.signal.aborted || !anchor.isConnected) return;
+          browser.scrollBy(0, anchor.getBoundingClientRect().top - (restored.anchorTop ?? 0));
+        };
+        // Fragments and image decoding can change layout after the basic window is ready. Keep
+        // the visible anchor at its saved offset until user input or page teardown takes over.
+        observer = new ResizeObserver(align);
+        observer.observe(main);
+        align();
       },
       () => {
         // A page that could not present its content also keeps the synchronous restoration.
+        stop();
       },
     );
   }
@@ -509,8 +549,28 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     store.save(current.accountId, lastToken, {
       state: pageHandle?.capture?.() ?? null,
       scrollY: browser.scrollY,
+      ...captureAnchor(),
       focusId: document.activeElement?.id ?? null,
     });
+  }
+
+  /** One visible stable element; no result data or unbounded DOM snapshot is retained. */
+  function captureAnchor(): Pick<UiViewSnapshot, 'anchorId' | 'anchorTop'> {
+    let closest: HTMLElement | null = null;
+    let top = Number.POSITIVE_INFINITY;
+    for (const element of main.querySelectorAll<HTMLElement>('[id]')) {
+      const rect = element.getBoundingClientRect();
+      if (
+        rect.height > 0 &&
+        rect.bottom > 0 &&
+        rect.top < browser.innerHeight &&
+        Math.abs(rect.top) < Math.abs(top)
+      ) {
+        closest = element;
+        top = rect.top;
+      }
+    }
+    return closest === null ? {} : { anchorId: closest.id, anchorTop: top };
   }
 
   /** Closes the presented page: its work is cancelled and its container is left behind. */

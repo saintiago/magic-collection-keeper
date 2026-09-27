@@ -26,6 +26,7 @@ export {
   type UiCardListOptions,
   type UiCardListPresentation,
   type UiCardListTool,
+  type UiListPosition,
   type UiEntryImage,
   type UiEntryOwnership,
   type UiEntryTag,
