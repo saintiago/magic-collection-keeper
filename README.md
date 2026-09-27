@@ -133,12 +133,14 @@ use. The shared CardList turns one supplied source into a bounded, asynchronous 
 (docs/user-interface.md#list-boundary, docs/user-interface.md#cardlist): a page request carries the
 query context, the page size, the continuation and a cancellation signal, and only the request the
 user still waits for may replace the window, while a refresh keeps the usable entries presented.
-Basic information renders with the entries; images, ownership, tags and tool availability are
-separate fragments that load and fail independently, batched over the active window, and a failed
-fragment stays distinguishable from an empty answer. Equivalent copies group for convenient
-selection without losing their individual copies, and the card tools invoke the owning component's
-operation for the explicit selection and report its outcome. The dedicated pages and capture build
-on that in their own tasks.
+The retained window and every fragment batch are bounded, and an entry that leaves the window or
+changes retires the outstanding read that could no longer answer for it. Basic information renders
+with the entries; images, ownership, tags and tool availability are separate fragments that load
+and fail independently, and a failed fragment stays distinguishable from an empty answer.
+Equivalent copies group for convenient selection without losing their individual copies, and the
+card tools invoke the owning component's operation for the explicit selection and report its
+outcome, with a lost response reported as unknown until the recorded outcome is recovered. The
+dedicated pages and capture build on that in their own tasks.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without

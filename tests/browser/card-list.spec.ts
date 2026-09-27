@@ -6,7 +6,8 @@
  * card-list.harness.ts and drive them in Chromium: bounded pages, basic information with the
  * entries, a refresh that keeps usable content, empty versus failed results, independent fragment
  * loading and retry, response ordering, selection through enrichment and refinement, tool outcomes,
- * grouped copies and two independent lists.
+ * a bounded working set with bounded fragment batches, retired obsolete work, retained keyboard
+ * focus, grouped copies and two independent lists.
  */
 
 import path from 'node:path';
@@ -29,6 +30,7 @@ import type {
   UiListEntry,
   UiOperationOutcome,
 } from '../../src/ui/index.js';
+import { UI_LIMITS } from '../../src/ui/index.js';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const harnessPath = path.join(repoRoot, 'tests', 'browser', 'card-list.harness.ts');
@@ -226,6 +228,27 @@ async function settleTool(page: Page, id: number, outcome: UiOperationOutcome): 
   );
 }
 
+async function failTool(page: Page, id: number, message: string): Promise<void> {
+  await page.evaluate(
+    (input) => {
+      (globalThis as unknown as GlobalControl).keeperCardListControl.failTool(
+        input.id,
+        input.message,
+      );
+    },
+    { id, message },
+  );
+}
+
+/** The entry one list presents the keyboard focus on, as the user's keyboard interaction leaves it. */
+async function focusedEntry(page: Page, list: string): Promise<string | null> {
+  return page.evaluate((listId) => {
+    const active = document.activeElement;
+    const row = active?.closest?.(`#list-${listId} [data-ui-entry]`) ?? null;
+    return row?.getAttribute('data-ui-entry') ?? null;
+  }, list);
+}
+
 /** The first request one list recorded; a journey settles or fails it by its id. */
 async function onlyRequest(page: Page, list: string): Promise<UiCardListPageRequest> {
   const requests = (await pageRequests(page)).filter((request) => request.list === list);
@@ -257,6 +280,24 @@ function card(cardId: string, name = 'Lightning Bolt'): UiListEntry {
       printing: null,
     },
     quantity: null,
+  };
+}
+
+/** The copy of `copy:1` after the same physical copy was corrected to another printing. */
+function correctedCopy(): UiListEntry {
+  return {
+    key: 'copy:1',
+    target: { kind: 'copy', copyId: 'copy-1' },
+    basic: {
+      card: { cardId: 'card-2', name: 'Lightning Bolt', matchedName: null },
+      printing: {
+        printingId: 'printing-2',
+        edition: '2X2',
+        collectorNumber: '117',
+        language: 'en',
+      },
+    },
+    quantity: { copies: 1, intended: null },
   };
 }
 
@@ -692,4 +733,315 @@ test('cancels outstanding work when the page closes and drops its late results',
 
   await settlePage(page, first.id, [copy('1', 'printing-1')]);
   await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(0);
+});
+
+/** One fragment answer per key: the controlled reader resolved them as definitively empty. */
+function absent(keys: readonly string[]): readonly UiFragmentResult<unknown>[] {
+  return keys.map((key) => ({ key, status: 'absent', values: null }));
+}
+
+test('bounds the working set and the fragment batches of a large source', async ({ page }) => {
+  await openLists(page);
+  await install(page, 'a', { pageSize: 100, fragments: ['images'] });
+
+  const window = (number: number): readonly UiListEntry[] =>
+    Array.from({ length: 100 }, (_, index) =>
+      copy(String((number - 1) * 100 + index + 1), 'printing-1'),
+    );
+
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, window(1), 'more-1');
+  // Paging with the first enrichment held pending never grows the window, the rendering or a read
+  // beyond its bound, and further results stay reachable.
+  for (let number = 2; number <= 8; number += 1) {
+    await page.locator('#list-a [data-ui-more]').click();
+    const requests = (await pageRequests(page)).filter((request) => request.list === 'a');
+    const request = requests[number - 1]!;
+    expect(request).toMatchObject({ continuation: `more-${number - 1}` });
+    await settlePage(page, request.id, window(number), `more-${number}`);
+  }
+
+  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(UI_LIMITS.listWindow);
+  const paged = await state(page, 'a');
+  expect(paged.entries).toHaveLength(UI_LIMITS.listWindow);
+  expect(paged.hasMore).toBe(true);
+
+  const reads = (await fragmentRequests(page)).filter((request) => request.kind === 'images');
+  expect(reads.length).toBeGreaterThan(0);
+  for (const read of reads) {
+    expect(read.keys.length).toBeLessThanOrEqual(UI_LIMITS.fragmentBatch);
+  }
+  const waiting = reads.at(-1)!;
+  expect(waiting.aborted).toBe(false);
+  await settleFragment(page, waiting.id, absent(waiting.keys));
+  const following = (await fragmentRequests(page)).filter((request) => request.kind === 'images');
+  expect(following).toHaveLength(reads.length + 1);
+  expect(following.at(-1)!.keys.length).toBe(UI_LIMITS.fragmentBatch);
+});
+
+test('never pages a retained window with the context of a failed refinement', async ({ page }) => {
+  await openLists(page);
+  await install(page, 'a', { pageSize: 2, context: 'old' });
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, [copy('1', 'printing-1')], 'old-cursor');
+
+  await refine(page, 'a', 'new');
+  const refined = (await pageRequests(page))[1]!;
+  expect(refined).toMatchObject({ context: 'new', continuation: null });
+  await failPage(page, refined.id, 'Search unavailable');
+
+  // The retained window stays presented, but it belongs to the previous query and is not paged
+  // with the new one.
+  await expect(page.locator('#list-a [data-ui-entry="copy:1"]')).toBeVisible();
+  await expect(page.locator('#list-a [data-ui-more]')).toBeHidden();
+  expect(await state(page, 'a')).toMatchObject({
+    entries: ['copy:1'],
+    hasMore: false,
+    error: 'Search unavailable',
+  });
+
+  // Retrying repeats the new query's first page; the previous continuation is never sent with it.
+  await page.locator('#list-a [data-ui-retry]').click();
+  const retried = (await pageRequests(page))[2]!;
+  expect(retried).toMatchObject({ context: 'new', continuation: null });
+  await settlePage(page, retried.id, [copy('2', 'printing-2')], 'new-cursor');
+  await expect(page.locator('#list-a [data-ui-entry="copy:2"]')).toBeVisible();
+  expect(await pageRequests(page)).not.toContainEqual(
+    expect.objectContaining({ context: 'new', continuation: 'old-cursor' }),
+  );
+});
+
+test('retires the fragment read of an entry the window no longer holds', async ({ page }) => {
+  await openLists(page);
+  await install(page, 'a', { pageSize: 2, fragments: ['images'] });
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, [copy('1', 'printing-1')]);
+  const [read] = (await fragmentRequests(page)).filter((request) => request.kind === 'images');
+  expect(read?.keys).toEqual(['copy:1']);
+  expect(read?.aborted).toBe(false);
+
+  // Replacing the entry retires its outstanding read instead of waiting behind it, and the fresh
+  // entry reads its own images.
+  await refresh(page, 'a');
+  const refreshed = (await pageRequests(page))[1]!;
+  await settlePage(page, refreshed.id, [copy('2', 'printing-2')]);
+  await expect(
+    page.locator('#list-a [data-ui-entry="copy:2"] [data-ui-fragment="images"]'),
+  ).toHaveText('Loading images…');
+  const reads = (await fragmentRequests(page)).filter((request) => request.kind === 'images');
+  expect(reads).toHaveLength(2);
+  expect(reads[0]?.aborted).toBe(true);
+  expect(reads[1]?.keys).toEqual(['copy:2']);
+
+  // The withdrawn read settling late neither populates nor disturbs the current entry.
+  await settleFragment(page, read!.id, [
+    {
+      key: 'copy:1',
+      status: 'ready',
+      values: [{ src: 'https://keeper.test/old.png', alt: 'Old' }],
+    },
+  ]);
+  await expect(
+    page.locator('#list-a [data-ui-entry="copy:2"] [data-ui-fragment="images"]'),
+  ).toHaveText('Loading images…');
+});
+
+test('retires an outstanding fragment read when a retained entry changes', async ({ page }) => {
+  await openLists(page);
+  await install(page, 'a', { pageSize: 2, fragments: ['images'] });
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, [copy('1', 'printing-1')]);
+  const [read] = (await fragmentRequests(page)).filter((request) => request.kind === 'images');
+
+  // The refresh corrects the entry's printing while its first read is still outstanding.
+  await refresh(page, 'a');
+  const refreshed = (await pageRequests(page))[1]!;
+  await settlePage(page, refreshed.id, [correctedCopy()]);
+  await expect(page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-printing]')).toHaveText(
+    '2X2 117 · en',
+  );
+  const reads = (await fragmentRequests(page)).filter((request) => request.kind === 'images');
+  expect(reads).toHaveLength(2);
+  expect(reads[0]?.aborted).toBe(true);
+  expect(reads[1]?.keys).toEqual(['copy:1']);
+  await expect(
+    page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="images"]'),
+  ).toHaveText('Loading images…');
+
+  await settleFragment(page, reads[1]!.id, [
+    {
+      key: 'copy:1',
+      status: 'ready',
+      values: [{ src: 'https://keeper.test/corrected.png', alt: 'Corrected' }],
+    },
+  ]);
+  await expect(
+    page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="images"] img'),
+  ).toHaveAttribute('src', 'https://keeper.test/corrected.png');
+  // The withdrawn read answers for the previous printing and never replaces the fresh values.
+  await settleFragment(page, read!.id, [
+    {
+      key: 'copy:1',
+      status: 'ready',
+      values: [{ src: 'https://keeper.test/old.png', alt: 'Old' }],
+    },
+  ]);
+  await expect(
+    page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="images"] img'),
+  ).toHaveAttribute('src', 'https://keeper.test/corrected.png');
+});
+
+test('reads a fragment again when a settled retained entry changes', async ({ page }) => {
+  await openLists(page);
+  await install(page, 'a', { pageSize: 2, fragments: ['images'] });
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, [copy('1', 'printing-1')]);
+  const [read] = (await fragmentRequests(page)).filter((request) => request.kind === 'images');
+  await settleFragment(page, read!.id, [
+    {
+      key: 'copy:1',
+      status: 'ready',
+      values: [{ src: 'https://keeper.test/old.png', alt: 'Old' }],
+    },
+  ]);
+  await expect(
+    page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="images"] img'),
+  ).toHaveAttribute('src', 'https://keeper.test/old.png');
+
+  // The presented entry now names another printing, so its enrichment is read again rather than
+  // presenting the values read for the previous one.
+  await refresh(page, 'a');
+  const refreshed = (await pageRequests(page))[1]!;
+  await settlePage(page, refreshed.id, [correctedCopy()]);
+  const reads = (await fragmentRequests(page)).filter((request) => request.kind === 'images');
+  expect(reads).toHaveLength(2);
+  expect(reads[1]?.keys).toEqual(['copy:1']);
+  await expect(
+    page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="images"]'),
+  ).toHaveText('Loading images…');
+  await settleFragment(page, reads[1]!.id, [
+    {
+      key: 'copy:1',
+      status: 'ready',
+      values: [{ src: 'https://keeper.test/corrected.png', alt: 'Corrected' }],
+    },
+  ]);
+  await expect(
+    page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="images"] img'),
+  ).toHaveAttribute('src', 'https://keeper.test/corrected.png');
+});
+
+test('reloads one fragment without waiting for the read it supersedes', async ({ page }) => {
+  await openLists(page);
+  await install(page, 'a', { pageSize: 2, fragments: ['images'] });
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, [copy('1', 'printing-1')]);
+  const [superseded] = (await fragmentRequests(page)).filter(
+    (request) => request.kind === 'images',
+  );
+
+  await reloadFragment(page, 'a', 'copy:1', 'images');
+  const reads = (await fragmentRequests(page)).filter((request) => request.kind === 'images');
+  expect(reads).toHaveLength(2);
+  expect(reads[0]?.aborted).toBe(true);
+  expect(reads[1]?.keys).toEqual(['copy:1']);
+
+  // The superseded read failing late never reports for the entry its replacement now serves.
+  await failFragment(page, superseded!.id, 'The previous read failed.');
+  const slot = page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="images"]');
+  await expect(slot).toHaveAttribute('data-ui-state', 'loading');
+  await expect(slot.locator('[data-ui-fragment-retry]')).toHaveCount(0);
+
+  await settleFragment(page, reads[1]!.id, [
+    {
+      key: 'copy:1',
+      status: 'ready',
+      values: [{ src: 'https://keeper.test/bolt.png', alt: 'Lightning Bolt' }],
+    },
+  ]);
+  await expect(slot.locator('img')).toHaveAttribute('src', 'https://keeper.test/bolt.png');
+});
+
+test('keeps keyboard focus on a retained entry through window updates', async ({ page }) => {
+  await openLists(page);
+  await install(page, 'a', { pageSize: 2, fragments: ['images'] });
+  const presented = [copy('1', 'printing-1'), copy('2', 'printing-1')];
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, presented, 'more');
+
+  // A refresh that presents the identical entries keeps the focused control of its group.
+  await page.locator('#list-a [data-ui-group-select]').focus();
+  await expect(page.locator('#list-a [data-ui-group-select]')).toBeFocused();
+  await refresh(page, 'a');
+  const refreshed = (await pageRequests(page))[1]!;
+  await settlePage(page, refreshed.id, presented, 'more');
+  await expect(page.locator('#list-a [data-ui-group-select]')).toBeFocused();
+
+  // So does the page that extends the window with the focused entry still presented.
+  await page.locator('#list-a [data-ui-more]').click();
+  const more = (await pageRequests(page))[2]!;
+  await page.locator('#list-a [data-ui-select="copy:2"]').focus();
+  await settlePage(page, more.id, [copy('3', 'printing-2')]);
+  await expect(page.locator('#list-a [data-ui-select="copy:2"]')).toBeFocused();
+
+  // And a refinement that keeps the entry.
+  await page.locator('#list-a [data-ui-select="copy:1"]').focus();
+  await refine(page, 'a', 'refined');
+  const refined = (await pageRequests(page))[3]!;
+  await settlePage(page, refined.id, [copy('1', 'printing-1'), copy('4', 'printing-4')]);
+  await expect(page.locator('#list-a [data-ui-select="copy:1"]')).toBeFocused();
+
+  // A fragment that re-renders keeps the focus inside the entry it belongs to.
+  const inFlight = (await fragmentRequests(page))
+    .filter((request) => request.kind === 'images')
+    .at(-1)!;
+  await failFragment(page, inFlight.id, 'Images unavailable');
+  await page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment-retry]').focus();
+  expect(await focusedEntry(page, 'a')).toBe('copy:1');
+  await page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment-retry]').click();
+  expect(await focusedEntry(page, 'a')).toBe('copy:1');
+});
+
+test('reports a lost tool response as unknown instead of a definite failure', async ({ page }) => {
+  await openLists(page);
+  await install(page, 'a', {
+    pageSize: 2,
+    tools: [{ id: 'wishlist', label: 'Add to wishlist' }],
+  });
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, [copy('1', 'printing-1')]);
+  await page.locator('#list-a [data-ui-select="copy:1"]').check();
+
+  // A tool whose write may have committed before its response was lost reports no receipt, so the
+  // outcome is unknown and the explicit selection stays recoverable.
+  await page.locator('#list-a [data-ui-tool="wishlist"]').click();
+  const [lost] = await toolRequests(page);
+  await failTool(page, lost!.id, 'Failed to fetch');
+  await expect(page.locator('#list-a [data-ui-outcome]')).toHaveAttribute(
+    'data-ui-outcome-status',
+    'unknown',
+  );
+  await expect(page.locator('#list-a [data-ui-outcome]')).toHaveText(
+    'The outcome is unknown; recover the recorded operation outcome.',
+  );
+  expect(await state(page, 'a')).toMatchObject({ selection: ['copy:1'] });
+
+  // An unreadable answer carries no receipt either.
+  await page.locator('#list-a [data-ui-tool="wishlist"]').click();
+  const unreadable = (await toolRequests(page))[1]!;
+  await settleTool(page, unreadable.id, { status: 'weird' } as unknown as UiOperationOutcome);
+  await expect(page.locator('#list-a [data-ui-outcome]')).toHaveAttribute(
+    'data-ui-outcome-status',
+    'unknown',
+  );
+
+  // The operation's own report of a failure still stays a definite failure.
+  await page.locator('#list-a [data-ui-tool="wishlist"]').click();
+  const failed = (await toolRequests(page))[2]!;
+  await settleTool(page, failed.id, { status: 'failed', message: 'The card was not saved.' });
+  await expect(page.locator('#list-a [data-ui-outcome]')).toHaveAttribute(
+    'data-ui-outcome-status',
+    'failed',
+  );
+  await expect(page.locator('#list-a [data-ui-outcome]')).toHaveText('The card was not saved.');
 });

@@ -124,8 +124,10 @@ describe('equivalent copy grouping', () => {
     expect(groupCardListEntries([])).toEqual([]);
   });
 
-  it('declares a positive page bound and fragment bound', () => {
+  it('declares positive page, window, fragment batch and fragment item bounds', () => {
     expect(UI_LIMITS.listPage).toBeGreaterThan(0);
+    expect(UI_LIMITS.listWindow).toBeGreaterThanOrEqual(UI_LIMITS.listPage);
+    expect(UI_LIMITS.fragmentBatch).toBeGreaterThan(0);
     expect(UI_LIMITS.fragmentItems).toBeGreaterThan(0);
   });
 });

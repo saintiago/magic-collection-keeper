@@ -5,7 +5,8 @@
  * The harness installs real CardLists over controlled sources, fragment readers and tools. Every
  * page, fragment and tool request is recorded and settled from the journey, so response ordering,
  * independent fragment failure and retry, bounded requests and tool outcomes are driven exactly
- * while the journeys observe the real presentation.
+ * while the journeys observe the real presentation. A page or fragment request also records
+ * whether the list withdrew it before it settled.
  */
 
 import {
@@ -50,6 +51,8 @@ export interface UiCardListFragmentRequest {
   readonly list: string;
   readonly kind: UiFragmentKind;
   readonly keys: readonly string[];
+  /** Whether the list retired the read before it settled, as it does for obsolete work. */
+  readonly aborted: boolean;
 }
 
 /** One tool invocation the controlled tools recorded. */
@@ -122,6 +125,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
   const invocations: UiCardListToolRequest[] = [];
   const pendingPages = new Map<number, Pending<UiListPage>>();
   const pendingFragments = new Map<number, Pending<readonly UiFragmentResult<unknown>[]>>();
+  const retiredFragments = new Set<number>();
   const pendingTools = new Map<number, Pending<UiOperationOutcome>>();
   let sequence = 0;
 
@@ -203,7 +207,11 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       pending.reject(new Error(message));
     },
     fragmentRequests() {
-      return fragments.map((fragment) => ({ ...fragment, keys: [...fragment.keys] }));
+      return fragments.map((fragment) => ({
+        ...fragment,
+        keys: [...fragment.keys],
+        aborted: retiredFragments.has(fragment.id),
+      }));
     },
     settleFragment(id, results) {
       const pending = pendingFragments.get(id);
@@ -286,7 +294,16 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     return {
       read(request) {
         const requestId = next();
-        fragments.push({ id: requestId, list: id, kind, keys: [...request.keys] });
+        fragments.push({
+          id: requestId,
+          list: id,
+          kind,
+          keys: [...request.keys],
+          aborted: false,
+        });
+        request.signal.addEventListener('abort', () => {
+          retiredFragments.add(requestId);
+        });
         return new Promise<readonly UiFragmentResult<unknown>[]>((resolve, reject) => {
           pendingFragments.set(requestId, { resolve, reject });
         });

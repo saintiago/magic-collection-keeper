@@ -3,19 +3,23 @@
  * docs/user-interface.md#cardlist).
  *
  * CardList turns one supplied source into a bounded, asynchronous working set: the first page
- * loads when the list is constructed, further pages extend the window on demand, and a refresh or
- * refinement replaces the window while the usable content stays presented until the fresh page
- * arrives. Every response belongs to the request that asked for it, so a withdrawn request and an
- * obsolete page never replaces the active view, and closing the page a list belongs to cancels its
- * work (docs/user-interface.md#pages-and-navigation).
+ * loads when the list is constructed, further pages extend the window on demand while the oldest
+ * entries beyond the window bound leave it, and a refresh or refinement replaces the
+ * window while the usable content stays presented until the fresh page arrives. Every response
+ * belongs to the request that asked for it, so a withdrawn request and an obsolete page never
+ * replaces the active view, and closing the page a list belongs to cancels its work
+ * (docs/user-interface.md#pages-and-navigation).
  *
  * Basic information renders with the entries. Images, ownership, tags and tool availability are
  * fragments: each kind loads and fails independently of the basic information and of the other
- * kinds, batched over the active window, and a failed fragment stays distinguishable from an empty
- * answer and is retried on demand. Equivalent copies group for convenient selection without losing
- * their individual identities, and the tools invoke the owning component's operation for the
- * explicit selection and report its outcome. Each list owns its query, loaded window, selection and
- * presentation state, so one page can present several independent lists.
+ * kinds, read in bounded batches over the active window, and a failed fragment stays
+ * distinguishable from an empty answer and is retried on demand. A read answers for the entry it
+ * was asked about: an entry that left the window or changed retires its outstanding read, so the
+ * read neither blocks nor updates what the window presents now. Equivalent copies group for
+ * convenient selection without losing their individual identities, and the tools invoke the owning
+ * component's operation for the explicit selection and report its outcome; an invocation without a
+ * receipt is unknown, never a definite failure. Each list owns its query, loaded window, selection
+ * and presentation state, so one page can present several independent lists.
  */
 
 import { UI_LIMITS } from './limits.js';
@@ -136,25 +140,35 @@ export interface UiCardListOptions<Context = unknown> {
 
 /** One presented list over one source; the page owns the container and the list's own state. */
 export interface UiCardList<Context = unknown> {
-  /** Entries of the loaded window, in source order. */
+  /**
+   * Entries of the loaded window, in source order; at most UI_LIMITS.listWindow unselected entries
+   * are retained, beside the selected ones.
+   */
   readonly entries: readonly UiListEntry[];
   /** Keys of loaded entries the user selected, in entry order. */
   readonly selection: readonly string[];
-  /** Whether the active result continues past the loaded window. */
+  /**
+   * Whether the active result continues past the loaded window and may be paged now. False while
+   * the presented window belongs to a query a refinement superseded and while the last request
+   * failed; `retry` repeats that request.
+   */
   readonly hasMore: boolean;
   /** Whether a window request is in flight. */
   readonly loading: boolean;
   /** Failure of the last window request, or null; the loaded window stays usable either way. */
   readonly error: string | null;
-  /** Loads the next page of the active result. */
+  /** Loads the next page of the active result; the window bound retires its oldest entries. */
   loadMore(): void;
   /** Starts a new result for `context`; usable content stays until the fresh page arrives. */
   refine(context: Context): void;
   /** Reloads the active result from its first page, keeping the window until it arrives. */
   refresh(): void;
-  /** Repeats the failed request of the active result. */
+  /** Repeats the failed request of the active result; never another query's continuation. */
   retry(): void;
-  /** Re-reads one fragment of one entry; the entry's other fragments stay unchanged. */
+  /**
+   * Re-reads one fragment of one entry; the entry's other fragments stay unchanged and an
+   * outstanding read of that entry's kind is retired instead of answering the fresh one.
+   */
   reloadFragment(key: string, kind: UiFragmentKind): void;
   /** Marks one entry selected; a key may be selected before its entry is loaded. */
   setSelected(key: string, selected: boolean): void;
@@ -185,6 +199,26 @@ interface GroupHeader {
   readonly checkbox: HTMLInputElement;
   readonly keys: readonly string[];
 }
+
+/** One fragment read in flight: the entries it asked about and the read token of each of them. */
+interface FragmentRequest {
+  readonly kind: UiFragmentKind;
+  readonly keys: readonly string[];
+  readonly tokens: ReadonlyMap<string, number>;
+  readonly controller: AbortController;
+}
+
+/** One fragment kind's work: the entries waiting for their turn and the read in flight. */
+interface FragmentQueue {
+  readonly pending: Set<string>;
+  active: FragmentRequest | null;
+}
+
+/** One entry control that holds focus, identified so a re-rendering retains it. */
+type EntryFocus =
+  | { readonly control: 'select'; readonly key: string }
+  | { readonly control: 'group'; readonly key: string }
+  | { readonly control: 'fragment-retry'; readonly key: string; readonly kind: UiFragmentKind };
 
 export function createCardList<Context>(options: UiCardListOptions<Context>): UiCardList<Context> {
   const container = readContainer(options?.container);
@@ -238,16 +272,18 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   const rows = new Map<string, EntryRow>();
   const groupHeaders = new Map<string, GroupHeader>();
   const fragmentStates = new Map<string, Map<UiFragmentKind, FragmentState>>();
-  const fragmentQueues = new Map<
-    UiFragmentKind,
-    { readonly pending: Set<string>; controller: AbortController | null }
-  >();
+  /** Read token of one entry's outstanding fragment read of one kind; absent when there is none. */
+  const fragmentTokens = new Map<string, Map<UiFragmentKind, number>>();
+  const fragmentQueues = new Map<UiFragmentKind, FragmentQueue>();
   const selected = new Set<string>();
   let entries: readonly UiListEntry[] = [];
   let windowKeys: ReadonlySet<string> = new Set();
   let activeContext = options.context;
   let continuation: string | null = null;
-  let hasMore = false;
+  /** Whether the loaded window carries a continuation that has further results. */
+  let continues = false;
+  /** The presented window belongs to a query a refinement superseded; it is never paged with it. */
+  let staleWindow = false;
   let loading = false;
   let error: string | null = null;
   let outcome: UiOperationOutcome | null = null;
@@ -255,6 +291,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   let invocation: AbortController | null = null;
   let failed: { readonly continuation: string | null } | null = null;
   let generation = 0;
+  let fragmentSequence = 0;
   let disposed = false;
 
   renderStatus();
@@ -275,7 +312,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       return selectedKeys();
     },
     get hasMore() {
-      return hasMore;
+      return pagingAvailable();
     },
     get loading() {
       return loading;
@@ -345,12 +382,14 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     error = null;
     failed = null;
     if (requested === null) {
+      // The fresh first page belongs to the active query, so nothing older stays paged.
+      staleWindow = false;
       setWindow(read.page.entries);
     } else {
       appendWindow(read.page.entries);
     }
     continuation = read.page.continuation;
-    hasMore = continuation !== null;
+    continues = continuation !== null;
     renderStatus();
     requestFragments();
   }
@@ -368,14 +407,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
 
   /** Replaces the window; entries the new result no longer holds leave it. */
   function setWindow(next: readonly UiListEntry[]): void {
-    entries = [...next];
-    windowKeys = new Set(entries.map((entry) => entry.key));
-    for (const key of [...fragmentStates.keys()]) {
-      if (!windowKeys.has(key)) {
-        fragmentStates.delete(key);
-      }
-    }
-    renderEntries();
+    applyWindow(next);
   }
 
   /** Extends the window; an entry key the window already holds arrives once. */
@@ -385,16 +417,60 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (added.length === 0) {
       return;
     }
-    entries = [...entries, ...added];
+    applyWindow([...entries, ...added]);
+  }
+
+  /**
+   * Presents one window, bounded to UI_LIMITS.listWindow retained entries. The oldest entries
+   * beyond the bound leave the list, except the selected ones, so an explicit selection is never
+   * silently dropped and further results stay reachable through the continuation. Enrichment
+   * follows the entry it was read for: an entry that left the window or that the result now holds
+   * with another target or basic information drops its fragments and retires its outstanding
+   * reads.
+   */
+  function applyWindow(next: readonly UiListEntry[]): void {
+    const previous = new Map(entries.map((entry) => [entry.key, entryIdentity(entry)] as const));
+    entries = boundWindow(next);
     windowKeys = new Set(entries.map((entry) => entry.key));
+    const identities = new Map(entries.map((entry) => [entry.key, entryIdentity(entry)] as const));
+    for (const [key, identity] of previous) {
+      if (identities.get(key) === identity) {
+        continue;
+      }
+      invalidateFragments(key);
+    }
+    retireObsoleteFragments();
     renderEntries();
   }
 
+  /** The retained window: at most UI_LIMITS.listWindow unselected entries, plus the selected ones. */
+  function boundWindow(next: readonly UiListEntry[]): UiListEntry[] {
+    if (next.length <= UI_LIMITS.listWindow) {
+      return [...next];
+    }
+    const kept: UiListEntry[] = [];
+    let retired = next.length - UI_LIMITS.listWindow;
+    for (const entry of next) {
+      if (retired > 0 && !selected.has(entry.key)) {
+        retired -= 1;
+        continue;
+      }
+      kept.push(entry);
+    }
+    return kept;
+  }
+
   function loadMore(): void {
-    if (disposed || loading || !hasMore || continuation === null) {
+    const next = continuation;
+    if (disposed || loading || !pagingAvailable() || next === null) {
       return;
     }
-    startRequest(continuation);
+    startRequest(next);
+  }
+
+  /** Whether the active result offers further results right now. */
+  function pagingAvailable(): boolean {
+    return continues && !staleWindow && error === null;
   }
 
   function refresh(): void {
@@ -406,6 +482,9 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       return;
     }
     activeContext = next;
+    // The presented window belongs to the previous query until the fresh page arrives: it is kept
+    // as usable content, but paging it with the new context would mix two result sequences.
+    staleWindow = true;
     outcome = null;
     renderOutcome();
     startRequest(null);
@@ -516,14 +595,20 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   }
 
   async function runTool(tool: UiTool, request: UiToolRequest): Promise<UiOperationOutcome> {
+    let value: unknown;
     try {
-      return readOutcome(await tool.invoke(request));
-    } catch (cause) {
-      return { status: 'failed', message: readMessage(cause, 'The action failed.') };
+      value = await tool.invoke(request);
+    } catch {
+      // A lost response does not establish that the write failed: the operation may have committed
+      // before its answer went missing, so its outcome stays unknown until the owning component's
+      // recorded receipt is recovered (docs/application.md#construction-and-request-boundary).
+      return { status: 'unknown', message: null };
     }
+    return readOutcome(value);
   }
 
   function renderEntries(): void {
+    const focus = readEntryFocus();
     rows.clear();
     groupHeaders.clear();
     entriesHost.replaceChildren();
@@ -533,6 +618,51 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       );
     }
     renderSelection();
+    restoreEntryFocus(focus);
+  }
+
+  /** The control of one entry that holds keyboard focus, so a re-rendering of the window keeps it. */
+  function readEntryFocus(): EntryFocus | null {
+    const active = document.activeElement;
+    if (active === null || !entriesHost.contains(active)) {
+      return null;
+    }
+    const row = active.closest('[data-ui-entry]');
+    if (row !== null) {
+      const key = row.getAttribute('data-ui-entry') ?? '';
+      const kind = active.getAttribute('data-ui-fragment-retry');
+      if (kind !== null && isFragmentKind(kind)) {
+        return { control: 'fragment-retry', key, kind };
+      }
+      return active.hasAttribute('data-ui-select') ? { control: 'select', key } : null;
+    }
+    const group = active.closest('[data-ui-group]');
+    if (group !== null && active.hasAttribute('data-ui-group-select')) {
+      return { control: 'group', key: group.getAttribute('data-ui-group') ?? '' };
+    }
+    return null;
+  }
+
+  /** Focuses the same control of the same entry again, when the update still presents it. */
+  function restoreEntryFocus(focus: EntryFocus | null): void {
+    if (focus === null) {
+      return;
+    }
+    const row = rows.get(focus.key);
+    if (focus.control === 'select') {
+      row?.checkbox.focus();
+      return;
+    }
+    if (focus.control === 'group') {
+      groupHeaders.get(focus.key)?.checkbox.focus();
+      return;
+    }
+    const slot = row?.fragments.get(focus.kind);
+    // A fragment that now shows a retry keeps the button focused; another state keeps the slot.
+    const control = slot?.querySelector<HTMLElement>('[data-ui-fragment-retry]') ?? slot;
+    if (control !== undefined) {
+      control.focus();
+    }
   }
 
   function renderGroup(group: UiCardListGroup): HTMLLIElement {
@@ -586,6 +716,8 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
         }
         const slot = document.createElement('span');
         slot.dataset.uiFragment = kind;
+        // Re-rendering a fragment keeps keyboard focus inside the entry it belongs to.
+        slot.tabIndex = -1;
         host.append(slot);
         fragments.set(kind, slot);
       }
@@ -621,7 +753,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
 
   function renderStatus(): void {
     section.setAttribute('aria-busy', loading ? 'true' : 'false');
-    moreButton.hidden = !hasMore;
+    moreButton.hidden = !pagingAvailable();
     moreButton.disabled = loading;
     retryButton.hidden = error === null;
     if (error !== null) {
@@ -713,58 +845,78 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (disposed || !windowKeys.has(key) || !readers.has(kind)) {
       return;
     }
+    // The outstanding read of this entry is retired so the fresh one is not blocked behind it and
+    // its answer never replaces the fresh one.
+    invalidateFragment(key, kind);
     setFragmentState(key, kind, { status: 'loading', values: null, message: null });
     fragmentQueue(kind).pending.add(key);
+    retireObsoleteFragments();
     pumpFragments(kind);
   }
 
-  /** One in-flight request per kind; keys requested meanwhile are read after it settles. */
+  /**
+   * Reads the pending entries of one kind in bounded batches; one read is in flight per kind and
+   * the entries requested meanwhile wait for their own batch.
+   */
   function pumpFragments(kind: UiFragmentKind): void {
     const queue = fragmentQueue(kind);
     const reader = readers.get(kind);
-    if (disposed || reader === undefined || queue.controller !== null || queue.pending.size === 0) {
+    if (disposed || reader === undefined || queue.active !== null || queue.pending.size === 0) {
       return;
     }
-    const keys = [...queue.pending];
-    queue.pending.clear();
-    const controller = new AbortController();
-    queue.controller = controller;
-    const finish = (): void => {
-      queue.controller = null;
+    const keys = [...queue.pending].slice(0, UI_LIMITS.fragmentBatch);
+    for (const key of keys) {
+      queue.pending.delete(key);
+    }
+    const request: FragmentRequest = {
+      kind,
+      keys,
+      tokens: new Map(keys.map((key) => [key, beginFragmentRead(kind, key)] as const)),
+      controller: new AbortController(),
+    };
+    queue.active = request;
+    const finish = (apply: () => void): void => {
+      // A read the window retired meanwhile settled late: it no longer belongs to this queue.
+      if (disposed || queue.active !== request) {
+        return;
+      }
+      queue.active = null;
+      apply();
+      for (const key of request.keys) {
+        endFragmentRead(kind, key);
+      }
       pumpFragments(kind);
     };
-    let request: Promise<readonly UiFragmentResult<unknown>[]>;
+    let reading: Promise<readonly UiFragmentResult<unknown>[]>;
     try {
-      request = reader.read({ keys, information: [kind], signal: controller.signal });
+      reading = reader.read({ keys, information: [kind], signal: request.controller.signal });
     } catch (cause) {
-      applyFragmentFailure(kind, keys, readMessage(cause, 'The fragment could not load.'));
-      finish();
+      finish(() =>
+        applyFragmentFailure(kind, request, readMessage(cause, 'The fragment could not load.')),
+      );
       return;
     }
-    Promise.resolve(request).then(
-      (results) => {
-        applyFragmentResults(kind, keys, results);
-        finish();
-      },
-      (cause) => {
-        applyFragmentFailure(kind, keys, readMessage(cause, 'The fragment could not load.'));
-        finish();
-      },
+    Promise.resolve(reading).then(
+      (results) => finish(() => applyFragmentResults(kind, request, results)),
+      (cause) =>
+        finish(() =>
+          applyFragmentFailure(kind, request, readMessage(cause, 'The fragment could not load.')),
+        ),
     );
   }
 
   function applyFragmentResults(
     kind: UiFragmentKind,
-    keys: readonly string[],
+    request: FragmentRequest,
     results: unknown,
   ): void {
     if (disposed) {
       return;
     }
     const read = readFragmentResults(kind, results);
-    for (const key of keys) {
-      // A key requested again while the response was in flight is read by the queued request.
-      if (!windowKeys.has(key) || fragmentQueue(kind).pending.has(key)) {
+    for (const key of request.keys) {
+      // The values answer for this entry only while this read is still the one that was asked for.
+      if (!fragmentResponseApplies(request, key)) {
         continue;
       }
       const state = read.get(key) ?? {
@@ -778,17 +930,23 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
 
   function applyFragmentFailure(
     kind: UiFragmentKind,
-    keys: readonly string[],
+    request: FragmentRequest,
     message: string,
   ): void {
     if (disposed) {
       return;
     }
-    for (const key of keys) {
-      if (windowKeys.has(key)) {
+    for (const key of request.keys) {
+      // A failure of a superseded read never reports for the entry its replacement now serves.
+      if (fragmentResponseApplies(request, key)) {
         setFragmentState(key, kind, { status: 'failed', values: null, message });
       }
     }
+  }
+
+  /** Whether one read still answers for this entry: it is presented under the read's own token. */
+  function fragmentResponseApplies(request: FragmentRequest, key: string): boolean {
+    return windowKeys.has(key) && fragmentToken(request.kind, key) === request.tokens.get(key);
   }
 
   function fragmentState(key: string, kind: UiFragmentKind): FragmentState | null {
@@ -806,13 +964,89 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     }
   }
 
-  function fragmentQueue(kind: UiFragmentKind): {
-    readonly pending: Set<string>;
-    controller: AbortController | null;
-  } {
+  /** Drops the enrichment of one entry that the presented window no longer holds unchanged. */
+  function invalidateFragments(key: string): void {
+    fragmentStates.delete(key);
+    for (const kind of uiFragmentKinds) {
+      invalidateFragment(key, kind);
+    }
+  }
+
+  function invalidateFragment(key: string, kind: UiFragmentKind): void {
+    const states = fragmentStates.get(key);
+    states?.delete(kind);
+    if (states !== undefined && states.size === 0) {
+      fragmentStates.delete(key);
+    }
+    endFragmentRead(kind, key);
+    fragmentQueues.get(kind)?.pending.delete(key);
+  }
+
+  /** The token of the read now answering for one entry's kind, or zero when none is outstanding. */
+  function fragmentToken(kind: UiFragmentKind, key: string): number {
+    return fragmentTokens.get(key)?.get(kind) ?? 0;
+  }
+
+  /** Marks one entry's kind as being read now, so earlier answers for it are retired. */
+  function beginFragmentRead(kind: UiFragmentKind, key: string): number {
+    fragmentSequence += 1;
+    const tokens = fragmentTokens.get(key) ?? new Map<UiFragmentKind, number>();
+    tokens.set(kind, fragmentSequence);
+    fragmentTokens.set(key, tokens);
+    return fragmentSequence;
+  }
+
+  function endFragmentRead(kind: UiFragmentKind, key: string): void {
+    const tokens = fragmentTokens.get(key);
+    if (tokens === undefined) {
+      return;
+    }
+    tokens.delete(kind);
+    if (tokens.size === 0) {
+      fragmentTokens.delete(key);
+    }
+  }
+
+  /** Whether the window still waits for one entry's fragment of one kind. */
+  function fragmentReadWanted(kind: UiFragmentKind, key: string): boolean {
+    return windowKeys.has(key) && fragmentState(key, kind)?.status === 'loading';
+  }
+
+  /**
+   * Retires the read in flight for a kind whose answer can no longer apply to the presented window,
+   * so the entries that still wait for that kind are not blocked behind withdrawn work. The entries
+   * that are still wanted are read again under a fresh token.
+   */
+  function retireObsoleteFragments(): void {
+    for (const [kind, queue] of fragmentQueues) {
+      const active = queue.active;
+      if (active === null || !fragmentReadObsolete(kind, active)) {
+        continue;
+      }
+      queue.active = null;
+      active.controller.abort();
+      for (const key of active.keys) {
+        endFragmentRead(kind, key);
+        if (fragmentReadWanted(kind, key)) {
+          queue.pending.add(key);
+        }
+      }
+      pumpFragments(kind);
+    }
+  }
+
+  /** Whether one read in flight can no longer answer for a presented entry it asked about. */
+  function fragmentReadObsolete(kind: UiFragmentKind, active: FragmentRequest): boolean {
+    return active.keys.some(
+      (key) =>
+        !fragmentReadWanted(kind, key) || fragmentToken(kind, key) !== active.tokens.get(key),
+    );
+  }
+
+  function fragmentQueue(kind: UiFragmentKind): FragmentQueue {
     let queue = fragmentQueues.get(kind);
     if (queue === undefined) {
-      queue = { pending: new Set(), controller: null };
+      queue = { pending: new Set(), active: null };
       fragmentQueues.set(kind, queue);
     }
     return queue;
@@ -824,6 +1058,8 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (slot === undefined) {
       return;
     }
+    // Replacing the slot's content must not drop keyboard focus from the entry it belongs to.
+    const focused = slot.contains(document.activeElement);
     const state = fragmentState(key, kind) ?? {
       status: 'loading' as const,
       values: null,
@@ -831,6 +1067,20 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     };
     slot.replaceChildren();
     slot.dataset.uiState = state.status;
+    paintFragmentSlot(key, kind, state, slot);
+    if (focused) {
+      // A state that offers a retry keeps that control focused; another state keeps the slot.
+      (slot.querySelector<HTMLElement>('[data-ui-fragment-retry]') ?? slot).focus();
+    }
+  }
+
+  /** Draws one fragment state into its own slot, which the caller has already cleared. */
+  function paintFragmentSlot(
+    key: string,
+    kind: UiFragmentKind,
+    state: FragmentState,
+    slot: HTMLElement,
+  ): void {
     if (state.status === 'loading') {
       slot.textContent = `Loading ${uiFragmentLabel(kind)}…`;
       return;
@@ -962,8 +1212,8 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     invocation?.abort();
     invocation = null;
     for (const queue of fragmentQueues.values()) {
-      queue.controller?.abort();
-      queue.controller = null;
+      queue.active?.controller.abort();
+      queue.active = null;
       queue.pending.clear();
     }
     entries = [];
@@ -971,11 +1221,21 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     rows.clear();
     groupHeaders.clear();
     fragmentStates.clear();
+    fragmentTokens.clear();
     selected.clear();
     section.removeEventListener('click', onClick);
     section.removeEventListener('change', onChange);
     section.remove();
   }
+}
+
+/**
+ * Identity the enrichment of one entry belongs to: its key, its typed target and its basic
+ * information. A result that presents the same key with another target or other basic information
+ * is another entry, whose fragments are read again instead of answering for the previous one.
+ */
+function entryIdentity(entry: UiListEntry): string {
+  return JSON.stringify([entry.key, entry.target, entry.basic]);
 }
 
 /** One source page: at most the requested entries, their keys unique and their information read. */
@@ -1299,7 +1559,8 @@ function readOutcome(value: unknown): UiOperationOutcome {
   const status = readOutcomeStatus(outcome?.status);
   const message = outcome?.message ?? null;
   if (status === null || (message !== null && typeof message !== 'string')) {
-    return { status: 'failed', message: 'The operation reported an unreadable outcome.' };
+    // An unreadable answer carries no receipt either, so it reports no committed or failed outcome.
+    return { status: 'unknown', message: null };
   }
   return { status, message };
 }
