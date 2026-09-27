@@ -133,10 +133,12 @@ use. The shared CardList turns one supplied source into a bounded, asynchronous 
 (docs/user-interface.md#list-boundary, docs/user-interface.md#cardlist): a page request carries the
 query context, the page size, the continuation and a cancellation signal, and only the request the
 user still waits for may replace the window, while a refresh keeps the usable entries presented.
-The retained window and every fragment batch are bounded, and an entry that leaves the window or
-changes retires the outstanding read that could no longer answer for it. Basic information renders
-with the entries; images, ownership, tags and tool availability are separate fragments that load
-and fail independently, and a failed fragment stays distinguishable from an empty answer.
+The rendered window and every fragment batch are bounded. Paging keeps selected targets and their
+tool availability separately, so selection cannot hide later results. Other enrichment retires when
+an entry leaves the window, and changed entries retire reads that can no longer answer for them.
+Basic information renders with the entries; images, ownership, tags and tool availability are
+separate fragments that load and fail independently, and a failed fragment stays distinguishable
+from an empty answer.
 Equivalent copies group for convenient selection without losing their individual copies, and the
 card tools invoke the owning component's operation for the explicit selection and report its
 outcome, with a lost response reported as unknown until the recorded outcome is recovered. The

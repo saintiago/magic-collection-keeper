@@ -4,18 +4,18 @@
  *
  * CardList turns one supplied source into a bounded, asynchronous working set: the first page
  * loads when the list is constructed, further pages extend the window on demand while the oldest
- * entries beyond the window bound leave it, and a refresh or refinement replaces the
- * window while the usable content stays presented until the fresh page arrives. Every response
- * belongs to the request that asked for it, so a withdrawn request and an obsolete page never
- * replaces the active view, and closing the page a list belongs to cancels its work
+ * entries beyond the window bound leave it (with selected targets kept separately for tools), and
+ * a refresh or refinement replaces the window while usable content stays until the fresh page
+ * arrives. Every response belongs to the request that asked for it, so a withdrawn request or an
+ * obsolete page never replaces the active view, and closing the page cancels its lists' work
  * (docs/user-interface.md#pages-and-navigation).
  *
  * Basic information renders with the entries. Images, ownership, tags and tool availability are
  * fragments: each kind loads and fails independently of the basic information and of the other
- * kinds, read in bounded batches over the active window, and a failed fragment stays
- * distinguishable from an empty answer and is retried on demand. A read answers for the entry it
- * was asked about: an entry that left the window or changed retires its outstanding read, so the
- * read neither blocks nor updates what the window presents now. Equivalent copies group for
+ * kinds, read in bounded batches over the active window and selected tool targets. A failed
+ * fragment stays distinguishable from an empty answer and is retried on demand. A read answers
+ * for the entry it was asked about: obsolete work is retired, so the read neither blocks nor
+ * updates what the window presents now. Equivalent copies group for
  * convenient selection without losing their individual identities, and the tools invoke the owning
  * component's operation for the explicit selection and report its outcome; an invocation without a
  * receipt is unknown, never a definite failure. Each list owns its query, loaded window, selection
@@ -141,11 +141,10 @@ export interface UiCardListOptions<Context = unknown> {
 /** One presented list over one source; the page owns the container and the list's own state. */
 export interface UiCardList<Context = unknown> {
   /**
-   * Entries of the loaded window, in source order; at most UI_LIMITS.listWindow unselected entries
-   * are retained, beside the selected ones.
+   * Entries of the loaded window, in source order; at most UI_LIMITS.listWindow are rendered.
    */
   readonly entries: readonly UiListEntry[];
-  /** Keys of loaded entries the user selected, in entry order. */
+  /** Selected keys in result order, including entries retired by paging beyond the window. */
   readonly selection: readonly string[];
   /**
    * Whether the active result continues past the loaded window and may be paged now. False while
@@ -166,8 +165,9 @@ export interface UiCardList<Context = unknown> {
   /** Repeats the failed request of the active result; never another query's continuation. */
   retry(): void;
   /**
-   * Re-reads one fragment of one entry; the entry's other fragments stay unchanged and an
-   * outstanding read of that entry's kind is retired instead of answering the fresh one.
+   * Re-reads one fragment of one entry (also tool availability of a selected entry retired by
+   * paging); the other fragments stay unchanged and an outstanding read of that entry's kind
+   * is retired instead of answering the fresh one.
    */
   reloadFragment(key: string, kind: UiFragmentKind): void;
   /** Marks one entry selected; a key may be selected before its entry is loaded. */
@@ -217,8 +217,8 @@ interface FragmentQueue {
 /** One entry control that holds focus, identified so a re-rendering retains it. */
 type EntryFocus =
   | { readonly control: 'select'; readonly key: string }
-  | { readonly control: 'group'; readonly key: string }
-  | { readonly control: 'fragment-retry'; readonly key: string; readonly kind: UiFragmentKind };
+  | { readonly control: 'group'; readonly keys: readonly string[] }
+  | { readonly control: 'fragment'; readonly key: string; readonly kind: UiFragmentKind };
 
 export function createCardList<Context>(options: UiCardListOptions<Context>): UiCardList<Context> {
   const container = readContainer(options?.container);
@@ -276,6 +276,8 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   const fragmentTokens = new Map<string, Map<UiFragmentKind, number>>();
   const fragmentQueues = new Map<UiFragmentKind, FragmentQueue>();
   const selected = new Set<string>();
+  /** Explicit targets survive paging; only their tool availability remains part of fragment work. */
+  const retiredSelection = new Map<string, UiListEntry['target']>();
   let entries: readonly UiListEntry[] = [];
   let windowKeys: ReadonlySet<string> = new Set();
   let activeContext = options.context;
@@ -407,6 +409,9 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
 
   /** Replaces the window; entries the new result no longer holds leave it. */
   function setWindow(next: readonly UiListEntry[]): void {
+    // A replacement result exposes selected keys as they are found again, as with other retained
+    // selection keys; only paging carries explicit action context beyond the rendered window.
+    clearRetiredSelection();
     applyWindow(next);
   }
 
@@ -417,21 +422,32 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (added.length === 0) {
       return;
     }
-    applyWindow([...entries, ...added]);
+    const combined = [...entries, ...added];
+    for (const entry of combined.slice(0, -UI_LIMITS.listWindow)) {
+      if (selected.has(entry.key)) {
+        retiredSelection.set(entry.key, entry.target);
+      }
+    }
+    applyWindow(combined);
   }
 
   /**
    * Presents one window, bounded to UI_LIMITS.listWindow retained entries. The oldest entries
-   * beyond the bound leave the list, except the selected ones, so an explicit selection is never
-   * silently dropped and further results stay reachable through the continuation. Enrichment
-   * follows the entry it was read for: an entry that left the window or that the result now holds
-   * with another target or basic information drops its fragments and retires its outstanding
-   * reads.
+   * beyond the bound leave the rendering regardless of selection; paging retains selected action
+   * context separately, so selection never hides further results. Enrichment follows the entry it
+   * was read for: entries that leave or change retire their fragments and outstanding reads.
+   * Only tool availability remains needed for selected targets retired by paging.
    */
   function applyWindow(next: readonly UiListEntry[]): void {
     const previous = new Map(entries.map((entry) => [entry.key, entryIdentity(entry)] as const));
-    entries = boundWindow(next);
+    entries = next.slice(-UI_LIMITS.listWindow);
     windowKeys = new Set(entries.map((entry) => entry.key));
+    for (const key of windowKeys) {
+      if (retiredSelection.delete(key)) {
+        // An entry returning to the window may have changed while it was away.
+        invalidateFragment(key, 'tools');
+      }
+    }
     const identities = new Map(entries.map((entry) => [entry.key, entryIdentity(entry)] as const));
     for (const [key, identity] of previous) {
       if (identities.get(key) === identity) {
@@ -441,23 +457,6 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     }
     retireObsoleteFragments();
     renderEntries();
-  }
-
-  /** The retained window: at most UI_LIMITS.listWindow unselected entries, plus the selected ones. */
-  function boundWindow(next: readonly UiListEntry[]): UiListEntry[] {
-    if (next.length <= UI_LIMITS.listWindow) {
-      return [...next];
-    }
-    const kept: UiListEntry[] = [];
-    let retired = next.length - UI_LIMITS.listWindow;
-    for (const entry of next) {
-      if (retired > 0 && !selected.has(entry.key)) {
-        retired -= 1;
-        continue;
-      }
-      kept.push(entry);
-    }
-    return kept;
   }
 
   function loadMore(): void {
@@ -505,6 +504,10 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       selected.add(key);
     } else {
       selected.delete(key);
+      if (retiredSelection.delete(key)) {
+        invalidateFragment(key, 'tools');
+        retireObsoleteFragments();
+      }
     }
     renderSelection();
   }
@@ -514,7 +517,16 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       return;
     }
     selected.clear();
+    clearRetiredSelection();
+    retireObsoleteFragments();
     renderSelection();
+  }
+
+  function clearRetiredSelection(): void {
+    for (const key of retiredSelection.keys()) {
+      invalidateFragment(key, 'tools');
+    }
+    retiredSelection.clear();
   }
 
   function setGroupSelected(groupKey: string, selectedNow: boolean): void {
@@ -532,9 +544,12 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     renderSelection();
   }
 
-  /** Keys of the loaded window the user selected, in entry order. */
+  /** Selected result keys, including explicit targets retained when paging retires their rows. */
   function selectedKeys(): readonly string[] {
-    return entries.filter((entry) => selected.has(entry.key)).map((entry) => entry.key);
+    return [
+      ...retiredSelection.keys(),
+      ...entries.filter((entry) => selected.has(entry.key)).map((entry) => entry.key),
+    ];
   }
 
   /** Whether one tool acts on the whole selection: every selected entry reports it available. */
@@ -575,7 +590,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       return null;
     }
     const chosen = entries.filter((entry) => selected.has(entry.key));
-    const targets = chosen.map((entry) => entry.target);
+    const targets = [...retiredSelection.values(), ...chosen.map((entry) => entry.target)];
     const controller = new AbortController();
     invocation = controller;
     renderTools();
@@ -630,15 +645,17 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     const row = active.closest('[data-ui-entry]');
     if (row !== null) {
       const key = row.getAttribute('data-ui-entry') ?? '';
-      const kind = active.getAttribute('data-ui-fragment-retry');
+      const kind =
+        active.getAttribute('data-ui-fragment-retry') ?? active.getAttribute('data-ui-fragment');
       if (kind !== null && isFragmentKind(kind)) {
-        return { control: 'fragment-retry', key, kind };
+        return { control: 'fragment', key, kind };
       }
       return active.hasAttribute('data-ui-select') ? { control: 'select', key } : null;
     }
     const group = active.closest('[data-ui-group]');
     if (group !== null && active.hasAttribute('data-ui-group-select')) {
-      return { control: 'group', key: group.getAttribute('data-ui-group') ?? '' };
+      const header = groupHeaders.get(group.getAttribute('data-ui-group') ?? '');
+      return header === undefined ? null : { control: 'group', keys: header.keys };
     }
     return null;
   }
@@ -648,13 +665,19 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (focus === null) {
       return;
     }
+    if (focus.control === 'group') {
+      // Group positions are local to one rendering. Follow the first surviving member even when
+      // groups reorder, merge, or shrink to an individual entry.
+      const key = focus.keys.find((key) => rows.has(key));
+      if (key !== undefined) {
+        const header = [...groupHeaders.values()].find((header) => header.keys.includes(key));
+        (header?.checkbox ?? rows.get(key)?.checkbox)?.focus();
+      }
+      return;
+    }
     const row = rows.get(focus.key);
     if (focus.control === 'select') {
       row?.checkbox.focus();
-      return;
-    }
-    if (focus.control === 'group') {
-      groupHeaders.get(focus.key)?.checkbox.focus();
       return;
     }
     const slot = row?.fragments.get(focus.kind);
@@ -842,7 +865,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   }
 
   function reloadFragment(key: string, kind: UiFragmentKind): void {
-    if (disposed || !windowKeys.has(key) || !readers.has(kind)) {
+    if (disposed || !fragmentKeyActive(key, kind) || !readers.has(kind)) {
       return;
     }
     // The outstanding read of this entry is retired so the fresh one is not blocked behind it and
@@ -946,7 +969,15 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
 
   /** Whether one read still answers for this entry: it is presented under the read's own token. */
   function fragmentResponseApplies(request: FragmentRequest, key: string): boolean {
-    return windowKeys.has(key) && fragmentToken(request.kind, key) === request.tokens.get(key);
+    return (
+      fragmentKeyActive(key, request.kind) &&
+      fragmentToken(request.kind, key) === request.tokens.get(key)
+    );
+  }
+
+  /** Only tool availability is needed beyond the rendered window, for explicit selected targets. */
+  function fragmentKeyActive(key: string, kind: UiFragmentKind): boolean {
+    return windowKeys.has(key) || (kind === 'tools' && retiredSelection.has(key));
   }
 
   function fragmentState(key: string, kind: UiFragmentKind): FragmentState | null {
@@ -964,11 +995,12 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     }
   }
 
-  /** Drops the enrichment of one entry that the presented window no longer holds unchanged. */
+  /** Retires enrichment, keeping only tool availability needed for a selected target. */
   function invalidateFragments(key: string): void {
-    fragmentStates.delete(key);
     for (const kind of uiFragmentKinds) {
-      invalidateFragment(key, kind);
+      if (kind !== 'tools' || !retiredSelection.has(key)) {
+        invalidateFragment(key, kind);
+      }
     }
   }
 
@@ -1009,7 +1041,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
 
   /** Whether the window still waits for one entry's fragment of one kind. */
   function fragmentReadWanted(kind: UiFragmentKind, key: string): boolean {
-    return windowKeys.has(key) && fragmentState(key, kind)?.status === 'loading';
+    return fragmentKeyActive(key, kind) && fragmentState(key, kind)?.status === 'loading';
   }
 
   /**
@@ -1223,6 +1255,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     fragmentStates.clear();
     fragmentTokens.clear();
     selected.clear();
+    retiredSelection.clear();
     section.removeEventListener('click', onClick);
     section.removeEventListener('change', onChange);
     section.remove();

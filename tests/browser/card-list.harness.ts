@@ -80,6 +80,8 @@ export interface UiCardListControl {
   /** Presents another query context through the list. */
   refine(id: string, context: string): void;
   refresh(id: string): void;
+  setSelected(id: string, key: string, selected: boolean): void;
+  clearSelection(id: string): void;
   reloadFragment(id: string, key: string, kind: UiFragmentKind): void;
   /** Aborts the page signal the list was installed with, as closing its page does. */
   close(id: string): void;
@@ -163,6 +165,12 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     },
     refresh(id) {
       list(id).refresh();
+    },
+    setSelected(id, key, selected) {
+      list(id).setSelected(key, selected);
+    },
+    clearSelection(id) {
+      list(id).clearSelection();
     },
     reloadFragment(id, key, kind) {
       list(id).reloadFragment(key, kind);

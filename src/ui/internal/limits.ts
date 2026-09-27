@@ -17,7 +17,7 @@ export const UI_LIMITS = {
   restorationList: 100,
   /** Entries one CardList request asks a source for at most. */
   listPage: 100,
-  /** Unselected entries one CardList retains in its working set; further results slide it forward. */
+  /** Entries one CardList renders in its working set; further results slide it forward. */
   listWindow: 500,
   /** Entry keys one CardList fragment request asks a reader for at most. */
   fragmentBatch: 100,

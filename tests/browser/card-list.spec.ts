@@ -1045,3 +1045,225 @@ test('reports a lost tool response as unknown instead of a definite failure', as
   );
   await expect(page.locator('#list-a [data-ui-outcome]')).toHaveText('The card was not saved.');
 });
+
+for (const selectedCount of [500, 475]) {
+  test(`keeps every new page accessible with ${selectedCount} selected entries`, async ({
+    page,
+  }) => {
+    await openLists(page);
+    await install(page, 'a', {
+      pageSize: 100,
+      fragments: ['tools', 'images'],
+      tools: [{ id: 'move', label: 'Move copies' }],
+    });
+    const loaded: UiListEntry[] = [];
+    for (let number = 0; number < 7; number += 1) {
+      if (number > 0) {
+        await page.locator('#list-a [data-ui-more]').click();
+      }
+      const request = (await pageRequests(page)).at(-1)!;
+      const next = Array.from({ length: 100 }, (_, index) =>
+        copy(String(number * 100 + index + 1), 'printing-1'),
+      );
+      loaded.push(...next);
+      await settlePage(page, request.id, next, number < 6 ? `more-${number}` : null);
+      await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(
+        Math.min(loaded.length, UI_LIMITS.listWindow),
+      );
+      expect((await state(page, 'a')).entries).toEqual(
+        loaded.slice(-UI_LIMITS.listWindow).map((entry) => entry.key),
+      );
+      if (selectedCount === 475) {
+        const toolsRead = (await fragmentRequests(page))
+          .filter((read) => read.kind === 'tools')
+          .at(-1)!;
+        await settleFragment(
+          page,
+          toolsRead.id,
+          toolsRead.keys.map((key) => ({
+            key,
+            status: 'ready',
+            values: ['move'],
+          })),
+        );
+      }
+      if (number === 4) {
+        await page.locator('#list-a [data-ui-group-select]').check();
+        await page.evaluate((count) => {
+          const control = (globalThis as unknown as GlobalControl).keeperCardListControl;
+          for (let index = count + 1; index <= 500; index += 1) {
+            control.setSelected('a', `copy:${index}`, false);
+          }
+        }, selectedCount);
+      }
+      if (number >= 4) {
+        expect((await state(page, 'a')).selection).toEqual(
+          loaded.slice(0, selectedCount).map((entry) => entry.key),
+        );
+      }
+    }
+    if (selectedCount === 500) {
+      // Availability is still needed for explicit selected targets after their rows retire.
+      await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeDisabled();
+      const firstRead = (await fragmentRequests(page)).find((read) => read.kind === 'tools')!;
+      expect(firstRead.aborted).toBe(false);
+      await settleFragment(
+        page,
+        firstRead.id,
+        firstRead.keys.map((key) =>
+          key === 'copy:1'
+            ? { key, status: 'failed', message: 'Availability unavailable' }
+            : { key, status: 'ready', values: ['move'] },
+        ),
+      );
+      const answered = new Set([firstRead.id]);
+      let read;
+      while (
+        (read = (await fragmentRequests(page)).find(
+          (candidate) =>
+            candidate.kind === 'tools' && !candidate.aborted && !answered.has(candidate.id),
+        ))
+      ) {
+        answered.add(read.id);
+        await settleFragment(
+          page,
+          read.id,
+          read.keys.map((key) => ({ key, status: 'ready', values: ['move'] })),
+        );
+      }
+      // A failed retired entry still prevents an action on only a subset, and can be retried.
+      await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeDisabled();
+      await reloadFragment(page, 'a', 'copy:1', 'tools');
+      const retried = (await fragmentRequests(page)).at(-1)!;
+      expect(retried.keys).toEqual(['copy:1']);
+      await settleFragment(page, retried.id, [
+        { key: 'copy:1', status: 'ready', values: ['move'] },
+      ]);
+    }
+    expect((await state(page, 'a')).hasMore).toBe(false);
+    await page.locator('#list-a [data-ui-select="copy:700"]').check();
+    await page.locator('#list-a [data-ui-tool="move"]').click();
+    const invocation = (await toolRequests(page)).at(-1)!;
+    const expected = [...loaded.slice(0, selectedCount).map((entry) => entry.key), 'copy:700'];
+    expect(invocation.selection).toEqual(expected);
+    expect(invocation.targets).toEqual(expected);
+    await settleTool(page, invocation.id, { status: 'committed', message: null });
+    expect(
+      (await fragmentRequests(page)).every((read) => read.keys.length <= UI_LIMITS.fragmentBatch),
+    ).toBe(true);
+
+    // Evicted entries remain individually deselectable and clearing releases the whole selection.
+    await page.evaluate(() => {
+      (globalThis as unknown as GlobalControl).keeperCardListControl.setSelected(
+        'a',
+        'copy:1',
+        false,
+      );
+    });
+    expect((await state(page, 'a')).selection).toEqual(expected.slice(1));
+    await page.evaluate(() => {
+      (globalThis as unknown as GlobalControl).keeperCardListControl.clearSelection('a');
+    });
+    expect((await state(page, 'a')).selection).toEqual([]);
+    await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeDisabled();
+  });
+}
+
+test('keeps group focus on retained members when groups reorder or shrink', async ({ page }) => {
+  await openLists(page);
+  await install(page, 'a', { pageSize: 4 });
+  const a = [copy('1', 'printing-a'), copy('2', 'printing-a')];
+  const b = [copy('3', 'printing-b'), copy('4', 'printing-b')];
+  await settlePage(page, (await onlyRequest(page, 'a')).id, [...a, ...b]);
+  const groupB = page
+    .locator('#list-a [data-ui-group]')
+    .filter({ has: page.locator('[data-ui-entry="copy:3"]') })
+    .locator('[data-ui-group-select]');
+  await groupB.focus();
+  await refine(page, 'a', 'reordered');
+  await settlePage(page, (await pageRequests(page)).at(-1)!.id, [b[1]!, b[0]!, ...a]);
+  await expect(groupB).toBeFocused();
+  await page.keyboard.press('Space');
+  expect((await state(page, 'a')).selection).toEqual(['copy:4', 'copy:3']);
+
+  // A disappearing first member must not redirect focus to the group now occupying its position.
+  await refresh(page, 'a');
+  await settlePage(page, (await pageRequests(page)).at(-1)!.id, [...a, b[0]!]);
+  await expect(page.locator('#list-a [data-ui-select="copy:3"]')).toBeFocused();
+});
+
+for (const kind of ['images', 'ownership', 'tags', 'tools'] as const) {
+  test(`keeps a retried ${kind} slot focused through window updates`, async ({ page }) => {
+    await openLists(page);
+    await install(page, 'a', { pageSize: 2, fragments: [kind] });
+    const entry = copy('1', 'printing-1');
+    await settlePage(page, (await onlyRequest(page, 'a')).id, [entry], 'more');
+    await failFragment(page, (await fragmentRequests(page)).at(-1)!.id, 'Unavailable');
+    const slot = page.locator(`#list-a [data-ui-entry="copy:1"] [data-ui-fragment="${kind}"]`);
+    await slot.locator('[data-ui-fragment-retry]').click();
+    await expect(slot).toBeFocused();
+    await refresh(page, 'a');
+    await settlePage(page, (await pageRequests(page)).at(-1)!.id, [entry], 'more');
+    await expect(slot).toBeFocused();
+    await page.locator('#list-a [data-ui-more]').click();
+    await slot.focus();
+    await settlePage(page, (await pageRequests(page)).at(-1)!.id, [copy('2', 'printing-2')]);
+    await expect(slot).toBeFocused();
+    const pending = (await fragmentRequests(page)).findLast((read) =>
+      read.keys.includes(entry.key),
+    )!;
+    await settleFragment(page, pending.id, absent(pending.keys));
+    await expect(slot).toBeFocused();
+    await refine(page, 'a', 'retained');
+    await settlePage(page, (await pageRequests(page)).at(-1)!.id, [entry]);
+    await expect(slot).toBeFocused();
+  });
+}
+
+test('retires selected tool reads when a replacement result arrives', async ({ page }) => {
+  await openLists(page);
+  await install(page, 'a', {
+    pageSize: 100,
+    fragments: ['tools'],
+    tools: [{ id: 'move', label: 'Move copies' }],
+  });
+  for (let number = 0; number < 6; number += 1) {
+    if (number > 0) {
+      await page.locator('#list-a [data-ui-more]').click();
+    }
+    await settlePage(
+      page,
+      (await pageRequests(page)).at(-1)!.id,
+      Array.from({ length: 100 }, (_, index) =>
+        copy(String(number * 100 + index + 1), 'printing-1'),
+      ),
+      `more-${number}`,
+    );
+    if (number === 0) {
+      await page.locator('#list-a [data-ui-group-select]').check();
+    }
+  }
+  expect((await state(page, 'a')).selection).toEqual(
+    Array.from({ length: 100 }, (_, index) => `copy:${index + 1}`),
+  );
+  const oldRead = (await fragmentRequests(page)).findLast((read) => read.keys.includes('copy:1'))!;
+  expect(oldRead.aborted).toBe(false);
+  await refine(page, 'a', 'corrected');
+  await settlePage(page, (await pageRequests(page)).at(-1)!.id, [copy('1', 'corrected-printing')]);
+  expect((await state(page, 'a')).selection).toEqual(['copy:1']);
+  expect((await fragmentRequests(page)).find((read) => read.id === oldRead.id)!.aborted).toBe(true);
+  const freshRead = (await fragmentRequests(page)).at(-1)!;
+  expect(freshRead.keys).toEqual(['copy:1']);
+  await settleFragment(
+    page,
+    oldRead.id,
+    oldRead.keys.map((key) => ({ key, status: 'ready', values: ['move'] })),
+  );
+  await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeDisabled();
+  await settleFragment(page, freshRead.id, [{ key: 'copy:1', status: 'ready', values: ['move'] }]);
+  await page.locator('#list-a [data-ui-tool="move"]').click();
+  expect((await toolRequests(page)).at(-1)).toMatchObject({
+    selection: ['copy:1'],
+    targets: ['copy:1'],
+  });
+});
