@@ -43,7 +43,7 @@ import type {
   SourceImportOperations,
 } from '../../usercards/index.js';
 
-import { ApplicationError } from './errors.js';
+import { ApplicationError } from './failures.js';
 import { applicationRoutes } from './paths.js';
 import {
   findPreservedPrinting,

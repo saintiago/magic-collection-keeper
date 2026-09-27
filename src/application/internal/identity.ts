@@ -9,9 +9,11 @@
  * environment's identity is rejected rather than accepted as an unknown caller. An environment may
  * supply another {@link IdentityVerifier}; the transport boundary and the trusted-context handoff
  * stay the same.
+ *
+ * The account identity Application derives is the verified subject itself; the bound on an
+ * identifier a private operation accepts belongs to the owning component's contract, which rejects
+ * an out-of-range account context before it reaches a private record.
  */
-
-import { USERCARDS_LIMITS } from '../../usercards/index.js';
 
 /** Account identity Application derived from verified authentication. */
 export interface AuthenticatedIdentity {
@@ -87,11 +89,7 @@ export function createClaimsIdentityVerifier(
         return null;
       }
       const subject = claims.sub;
-      if (
-        typeof subject !== 'string' ||
-        subject.length === 0 ||
-        subject.length > USERCARDS_LIMITS.maxIdentifierLength
-      ) {
+      if (typeof subject !== 'string' || subject.length === 0) {
         return null;
       }
       return { accountId: subject };
@@ -101,7 +99,7 @@ export function createClaimsIdentityVerifier(
 
 /**
  * Reads the trusted account context one verified identity authorizes, or null for an anonymous
- * caller. A verifier that returns an unusable identity authorizes nothing.
+ * caller. A verifier that returns no usable account reference authorizes nothing.
  */
 export async function readAuthenticatedIdentity(
   verifier: IdentityVerifier,
@@ -112,11 +110,7 @@ export async function readAuthenticatedIdentity(
     return null;
   }
   const accountId = identity.accountId;
-  if (
-    typeof accountId !== 'string' ||
-    accountId.length === 0 ||
-    accountId.length > USERCARDS_LIMITS.maxIdentifierLength
-  ) {
+  if (typeof accountId !== 'string' || accountId.length === 0) {
     return null;
   }
   return { accountId };

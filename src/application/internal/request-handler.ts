@@ -5,11 +5,14 @@
  * derives the trusted context from that identity, validates the transport input, races the operation
  * against its deadline and reports one consistent response. Every piece of invocation state — the
  * deadline, the identity, the diagnostics record — belongs to that invocation alone; a timed-out or
- * cancelled write reports that its outcome is unknown instead of a failure.
+ * cancelled write reports that its outcome is unknown instead of a failure. Work starts only while
+ * the invocation still runs: a cancelled invocation neither starts the identity verification or the
+ * operation nor abandons a promise it already started.
  */
 
 import { recordDiagnostic, type Diagnostics } from './diagnostics.js';
-import { ApplicationError, translateFailure } from './errors.js';
+import { translateFailure } from './errors.js';
+import { ApplicationError } from './failures.js';
 import {
   hasAuthenticationEvidence,
   readAuthenticatedIdentity,
@@ -71,7 +74,7 @@ export function createRequestHandler(
       operation = route.operation;
       const evidence = request?.authentication ?? null;
       const authenticated = await raceDeadline(
-        Promise.resolve(readAuthenticatedIdentity(identity, evidence)),
+        () => readAuthenticatedIdentity(identity, evidence),
         deadline,
       );
       if (
@@ -89,7 +92,7 @@ export function createRequestHandler(
         requestId,
       };
       matched = { route, call };
-      response = jsonResponse(await raceDeadline(Promise.resolve(route.call(call)), deadline));
+      response = jsonResponse(await raceDeadline(() => route.call(call), deadline));
     } catch (cause) {
       failure = classifyFailure(cause, deadline);
       response = failureResponse(failure, readRecovery(matched));

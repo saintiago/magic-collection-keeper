@@ -18,7 +18,7 @@ import {
   type PrintingRecord,
 } from '../../catalog/index.js';
 
-import { ApplicationError } from './errors.js';
+import { ApplicationError } from './failures.js';
 
 /** The exact printing a preserved engine hydrated a candidate into. */
 export interface PreservedCardQuery {

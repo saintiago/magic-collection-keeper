@@ -10,7 +10,7 @@
 
 import type { TrustedUserContext } from '../../usercards/index.js';
 
-import { ApplicationError, transportStatus } from './errors.js';
+import { ApplicationError, transportStatus } from './failures.js';
 import type { TransportAuthentication } from './identity.js';
 
 export interface TransportRequest {
@@ -226,10 +226,12 @@ export function createRequestDeadline(
 
 /**
  * Waits for one invocation's outcome, and stops waiting when its deadline or cancellation fires.
- * The operation itself is not interrupted: a timed-out write may still commit, so the caller
- * recovers the recorded outcome instead of retrying the action.
+ * Work starts only while the invocation still runs, and work that did start is observed to its
+ * settlement, so a rejection arriving after the deadline is never an unhandled failure. The
+ * operation itself is not interrupted: a timed-out write may still commit, so the caller recovers
+ * the recorded outcome instead of retrying the action.
  */
-export function raceDeadline<T>(work: Promise<T>, deadline: RequestDeadline): Promise<T> {
+export function raceDeadline<T>(work: () => T | Promise<T>, deadline: RequestDeadline): Promise<T> {
   const signal = deadline.signal;
   if (signal.aborted) {
     return Promise.reject(signal.reason);
@@ -237,7 +239,15 @@ export function raceDeadline<T>(work: Promise<T>, deadline: RequestDeadline): Pr
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
-    work.then(
+    let started: T | Promise<T>;
+    try {
+      started = work();
+    } catch (cause) {
+      signal.removeEventListener('abort', onAbort);
+      reject(cause);
+      return;
+    }
+    Promise.resolve(started).then(
       (value) => {
         signal.removeEventListener('abort', onAbort);
         resolve(value);

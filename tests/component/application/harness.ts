@@ -7,11 +7,8 @@
 
 import { vi, type Mock } from 'vitest';
 
-import {
-  createApplication,
-  type Application,
-  type Diagnostics,
-} from '../../../src/application/index.js';
+import { type Diagnostics, type IdentityVerifier } from '../../../src/application/index.js';
+import { createApplication, type Application } from '../../../src/application/backend.js';
 import type { CardPrintingsPage, Catalog, CatalogResolution } from '../../../src/catalog/index.js';
 import type { CatalogSnapshotSource } from '../../../src/catalog/index.js';
 import type { Search } from '../../../src/search/index.js';
@@ -273,13 +270,15 @@ export function createTestApplication(
     readonly sql?: RecordingSql;
     readonly snapshots?: CatalogSnapshotSource;
     readonly diagnostics?: Mock;
+    /** Verified identity source; the test environment's claims verifier unless a case scripts one. */
+    readonly identity?: IdentityVerifier;
   } = {},
 ): TestApplication {
   const sql = options.sql ?? createRecordingSql();
   const diagnostics = options.diagnostics ?? vi.fn();
   const application = createApplication({
     configuration: options.configuration ?? testConfiguration(),
-    identity: testIdentityVerifier(),
+    identity: options.identity ?? testIdentityVerifier(),
     resources: {
       sql: sql.sql,
       catalogSynchronization: {

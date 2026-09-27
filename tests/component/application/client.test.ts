@@ -180,6 +180,49 @@ describe('authenticated request', () => {
     await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
   });
 
+  it('reports a cancellation during response consumption instead of an outage', async () => {
+    const controller = new AbortController();
+    let readBody: (() => void) | undefined;
+    const bodyStarted = new Promise<void>((resolve) => {
+      readBody = resolve;
+    });
+    const fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start(streamController) {
+          stream = streamController;
+          streamController.enqueue(new TextEncoder().encode('{"cards":'));
+        },
+        pull() {
+          // The body is being consumed: the response headers have long arrived.
+          readBody?.();
+        },
+      });
+      init?.signal?.addEventListener('abort', () => {
+        stream?.error(new DOMException('Aborted', 'AbortError'));
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof globalThis.fetch;
+    const request = createAuthenticatedRequest({
+      baseUrl: 'https://api.test.keeper.example',
+      token: () => 'id-token-value',
+      fetch,
+    });
+
+    const pending = request('/api/search', {
+      method: 'POST',
+      body: '{}',
+      signal: controller.signal,
+    });
+    await bodyStarted;
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
+  });
+
   it('rejects a response that arrives after the session ended', async () => {
     let release: (() => void) | undefined;
     const fetch = (async () =>
@@ -351,6 +394,39 @@ describe('browser application', () => {
       'https://compute.test.keeper.example/api/recognize',
       'https://api.test.keeper.example/api/catalog/resolve',
     ]);
+  });
+
+  it('keeps the preserved compute failures distinct on both inference paths', async () => {
+    const settings = publicSettings({
+      recognition: {
+        cloudEnabled: true,
+        computeBaseUrl: 'https://compute.test.keeper.example',
+      },
+    });
+    const providerFailures = [
+      { status: 401, error: 'Sign in to scan', code: 'unauthorized' },
+      { status: 429, error: 'Scanner busy. Retry this card', code: 'busy' },
+      { status: 503, error: 'Recognition unavailable. Retry this card', code: 'unavailable' },
+      { status: 400, error: 'Invalid image', code: 'invalid-request' },
+    ];
+
+    for (const path of ['/api/recognize', '/api/recognize-independent']) {
+      for (const providerFailure of providerFailures) {
+        const { fetch } = jsonFetch(
+          { error: providerFailure.error },
+          { status: providerFailure.status },
+        );
+        const application = createBrowserApplication({
+          settings,
+          token: () => 'id-token-value',
+          fetch,
+        });
+
+        await expect(
+          application.request(path, { method: 'POST', body: '{}' }),
+        ).rejects.toMatchObject({ code: providerFailure.code, message: providerFailure.error });
+      }
+    }
   });
 
   it('reports an inference call as unavailable when cloud engines are disabled', async () => {

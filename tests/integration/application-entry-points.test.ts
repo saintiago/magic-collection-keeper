@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createApplication, type Application } from '../../src/application/index.js';
+import { createApplication, type Application } from '../../src/application/backend.js';
 import { catalogSchemaSql } from '../../src/catalog/index.js';
 import { usercardsSchemaSql } from '../../src/usercards/index.js';
 import { claimsFor, testConfiguration, testIdentityVerifier } from '../support/application.js';

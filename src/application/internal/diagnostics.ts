@@ -6,7 +6,7 @@
  * running environment; the default keeps Application testable without one.
  */
 
-import type { ApplicationFailureCode } from './errors.js';
+import type { ApplicationFailureCode } from './failures.js';
 
 export interface DiagnosticEvent {
   /** Stable operation identity, for example `search.execute` or `catalog.synchronize`. */

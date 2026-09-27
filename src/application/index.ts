@@ -2,21 +2,19 @@
  * Application public entry point (docs/application.md).
  *
  * Application owns configuration, identity integration, component assembly, the backend transports
- * and the runtime lifecycle (docs/architecture.md). The backend entry points are the interactive
- * transport and the finite catalog job: `createApplication` validates one environment's settings
- * before serving, constructs Catalog, UserCards, Search and the catalog job through their public
- * contracts, derives trusted user context from verified authentication only, maps every component
- * failure to one distinct transport outcome and exposes the public settings the browser may receive.
- * Catalog synchronization stays a separate job entry point, and Recognition has its own compute
- * entry point: the browser reaches it through the authenticated request and the preserved engines
- * keep their catalog-hydration envelopes. Recognition inference never runs in the interactive
- * transport, and neither entry point exposes resource or credential settings.
+ * and the runtime lifecycle (docs/architecture.md). It serves two runtimes through two public
+ * entries: this module is the runtime-independent contract a browser bundle loads — configuration
+ * and public settings, the verified-claims identity boundary, the failure vocabulary, the routes
+ * and authenticated transports, the Catalog read client and the browser composition — while
+ * ./backend.ts assembles the interactive backend application, the finite catalog job and the
+ * provider failure translation a browser must never reach.
  *
  * The browser side composes the same contracts for the running environment:
  * `createBrowserApplication` validates the public settings, builds the authenticated request, the
  * Catalog read client and the Recognition contract over the preserved browser engines, and hands
- * UserInterface its capabilities. Other components import Application through this module only; its
- * internal modules stay private to the component (docs/architecture.md, .dependency-cruiser.mjs).
+ * UserInterface its capabilities. Other components import Application through these public entries
+ * only; its internal modules stay private to the component (docs/architecture.md,
+ * .dependency-cruiser.mjs).
  */
 
 export {
@@ -31,12 +29,6 @@ export {
   type ApplicationEnvironment,
   type PublicApplicationSettings,
 } from './internal/configuration.js';
-export {
-  createApplication,
-  type Application,
-  type ApplicationDependencies,
-  type ApplicationResources,
-} from './internal/application.js';
 export {
   createBrowserApplication,
   createAuthenticatedRequest,
@@ -54,10 +46,9 @@ export {
   ApplicationError,
   applicationFailureCodes,
   isApplicationFailureCode,
-  translateFailure,
   transportStatus,
   type ApplicationFailureCode,
-} from './internal/errors.js';
+} from './internal/failures.js';
 export {
   createClaimsIdentityVerifier,
   type AuthenticatedIdentity,

@@ -9,14 +9,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ConfigurationError,
-  createApplication,
   createAuthenticatedRequest,
   createBrowserApplication,
   createCatalogClient,
   readPublicSettings,
   resolveApplicationConfiguration,
-  type ApplicationResources,
 } from '../../../src/application/index.js';
+import { createApplication, type ApplicationResources } from '../../../src/application/backend.js';
 
 import { testConfiguration, testIdentityVerifier } from './harness.js';
 

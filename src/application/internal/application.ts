@@ -34,7 +34,8 @@ import {
   type PublicApplicationSettings,
 } from './configuration.js';
 import { recordDiagnostic, silentDiagnostics, type Diagnostics } from './diagnostics.js';
-import { ApplicationError, translateFailure } from './errors.js';
+import { translateFailure } from './errors.js';
+import { ApplicationError } from './failures.js';
 import type { IdentityVerifier } from './identity.js';
 import { createRoutes } from './routes.js';
 import { createRequestHandler } from './request-handler.js';

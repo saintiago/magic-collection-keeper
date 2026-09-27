@@ -6,18 +6,22 @@
  * the preserved recognition calls to the compute entry point and everything else to the interactive
  * entry point, and rejects a response that belongs to a session that already ended. The catalog
  * client and the browser application compose the component contracts the UserInterface receives;
- * only public settings cross into the browser.
+ * only public settings cross into the browser. Application's own failure envelope keeps its code
+ * and message; the preserved compute runtime reports a plain message beside the HTTP status, so
+ * that status decides the failure instead of collapsing into an invalid request.
  */
 
-import {
-  type CardRecord,
-  type CardPrintingsPage,
-  type Catalog,
-  type CatalogReference,
-  type CatalogResolution,
-  type CatalogRevision,
-  type ListCardPrintingsOptions,
-  type PrintingRecord,
+// A type-only import of the Catalog public entry keeps the provider barrel out of a browser
+// bundle: the inline `type` form would stay behind as an evaluated empty import (docs/application.md#interface).
+import type {
+  CardRecord,
+  CardPrintingsPage,
+  Catalog,
+  CatalogReference,
+  CatalogResolution,
+  CatalogRevision,
+  ListCardPrintingsOptions,
+  PrintingRecord,
 } from '../../catalog/index.js';
 import {
   createRecognition,
@@ -26,7 +30,11 @@ import {
   type RecognitionFrameFacts,
 } from '../../recognition/index.js';
 
-import { isApplicationFailureCode, ApplicationError } from './errors.js';
+import {
+  isApplicationFailureCode,
+  ApplicationError,
+  type ApplicationFailureCode,
+} from './failures.js';
 import { resolvePublicSettings, type PublicApplicationSettings } from './configuration.js';
 import { applicationRoutes } from './paths.js';
 import { applicationPath } from './transport.js';
@@ -109,7 +117,7 @@ export function createAuthenticatedRequest(
       }
       throw new ApplicationError('unavailable', 'The service could not be reached.', { cause });
     }
-    const payload = await readPayload(response);
+    const payload = await readPayload(response, init.signal);
     if (opened !== session) {
       throw new ApplicationError('unauthorized', 'The session ended before the response arrived.');
     }
@@ -297,16 +305,31 @@ async function readCredential(
   return credential;
 }
 
-async function readPayload(response: Response): Promise<unknown> {
+/**
+ * Reads one response body. A withdrawn invocation keeps reporting cancellation while the body is
+ * consumed; only a response that fails without a cancellation is an outage.
+ */
+async function readPayload(
+  response: Response,
+  signal: AbortSignal | null | undefined,
+): Promise<unknown> {
   try {
     return await response.json();
   } catch (cause) {
+    if (isAborted(signal)) {
+      throw new ApplicationError('cancelled', 'The invocation was cancelled.', { cause });
+    }
     throw new ApplicationError('unavailable', 'The service returned an unreadable response.', {
       cause,
     });
   }
 }
 
+/**
+ * The failure one non-ok response reports. Application's own envelope carries the failure code and
+ * message; the preserved compute runtime reports a plain message beside its HTTP status, which the
+ * status maps into the same failure vocabulary.
+ */
 function readFailure(status: number, payload: unknown): ApplicationError {
   const envelope = readObject(payload);
   const error = readObject(envelope?.error);
@@ -315,10 +338,32 @@ function readFailure(status: number, payload: unknown): ApplicationError {
   if (isApplicationFailureCode(code) && typeof message === 'string' && message.length > 0) {
     return new ApplicationError(code, message);
   }
+  const providerMessage = typeof envelope?.error === 'string' ? envelope.error.trim() : '';
   return new ApplicationError(
-    status >= 500 ? 'unavailable' : 'invalid-request',
-    'The service rejected the request.',
+    failureCodeForStatus(status),
+    providerMessage === '' ? 'The service rejected the request.' : providerMessage,
   );
+}
+
+/** The failure one provider status reports when its body carries no Application failure code. */
+function failureCodeForStatus(status: number): ApplicationFailureCode {
+  switch (status) {
+    case 400:
+      return 'invalid-request';
+    case 401:
+    case 403:
+      return 'unauthorized';
+    case 404:
+      return 'not-found';
+    case 405:
+      return 'method-not-allowed';
+    case 409:
+      return 'conflict';
+    case 429:
+      return 'busy';
+    default:
+      return status >= 500 ? 'unavailable' : 'invalid-request';
+  }
 }
 
 function readCatalogResolution(payload: unknown): CatalogResolution {

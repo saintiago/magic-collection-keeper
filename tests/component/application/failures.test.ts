@@ -6,9 +6,9 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { translateFailure } from '../../../src/application/backend.js';
 import {
   ApplicationError,
-  translateFailure,
   transportStatus,
   type ApplicationFailureCode,
 } from '../../../src/application/index.js';

@@ -36,6 +36,27 @@ function readPayload<T>(response: { readonly body: string }): T {
   return JSON.parse(response.body) as T;
 }
 
+/**
+ * Collects unhandled promise rejections for one case. A cancelled invocation must not leave a
+ * rejection behind that the Node runtime reports and terminates on.
+ */
+function trackUnhandledRejections(): {
+  readonly seen: readonly unknown[];
+  settle(): Promise<void>;
+  stop(): void;
+} {
+  const seen: unknown[] = [];
+  const onUnhandled = (reason: unknown) => {
+    seen.push(reason);
+  };
+  process.on('unhandledRejection', onUnhandled);
+  return {
+    seen,
+    settle: () => new Promise((resolve) => setImmediate(resolve)),
+    stop: () => process.off('unhandledRejection', onUnhandled),
+  };
+}
+
 describe('application transport', () => {
   let harness: TestApplication;
 
@@ -293,6 +314,63 @@ describe('application transport', () => {
     expect(response.status).toBe(408);
     expect(readError(response)['code']).toBe('cancelled');
     expect(harness.sql.statements).toEqual([]);
+  });
+
+  it('does not start or abandon identity verification of a withdrawn invocation', async () => {
+    const rejections = trackUnhandledRejections();
+    try {
+      const controller = new AbortController();
+      controller.abort();
+      const verify = vi.fn(async () => {
+        throw new Error('identity provider unavailable');
+      });
+      const { application } = createTestApplication({ identity: { verify } });
+
+      const response = await application.handle(
+        callerRequest({
+          path: '/api/collection/copies/read',
+          authentication: { claims: claimsFor(testAccount) },
+          body: JSON.stringify({ copyIds: ['copy-1'] }),
+          signal: controller.signal,
+        }),
+      );
+
+      expect(response.status).toBe(408);
+      expect(readError(response)['code']).toBe('cancelled');
+      expect(verify).not.toHaveBeenCalled();
+      await rejections.settle();
+      expect(rejections.seen).toEqual([]);
+    } finally {
+      rejections.stop();
+    }
+  });
+
+  it('observes a route failure that follows the cancellation it caused', async () => {
+    const rejections = trackUnhandledRejections();
+    try {
+      const controller = new AbortController();
+      const sql = createRecordingSql(() => {
+        controller.abort();
+        throw new CatalogError('unavailable', 'The provider aborted the invocation.');
+      });
+      const { application } = createTestApplication({ sql });
+
+      const response = await application.handle(
+        callerRequest({
+          method: 'GET',
+          path: '/api/card',
+          query: { printing: 'printing-1' },
+          signal: controller.signal,
+        }),
+      );
+
+      expect(response.status).toBe(408);
+      expect(readError(response)['code']).toBe('cancelled');
+      await rejections.settle();
+      expect(rejections.seen).toEqual([]);
+    } finally {
+      rejections.stop();
+    }
   });
 
   it('keeps concurrent invocations of two accounts isolated', async () => {
