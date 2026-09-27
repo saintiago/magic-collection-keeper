@@ -165,7 +165,13 @@ physical copy's printing and language, finish and condition under the revision i
 or a failed edit keeps the unsaved change for review and retry. After a lost response, the outcome
 stays unknown while the current copy is read for review and revision-guarded retry; matching
 attributes cannot establish commitment. A saved outcome is presented only once the change reports
-it committed. The remaining dedicated pages and capture build on that in their own tasks.
+it committed. The Import page captures cards hands-free through the camera the deployment supplies
+and the Recognition contract (docs/user-interface.md#capture-and-review): a settled frame the
+runtime reports as holding one card stages its candidate in the account's pending imports, the
+provider suppresses a repeated observation, an unresolved reading receives no success cue while a
+later comparison may still resolve the same capture, late alternatives are attached beside the
+reviewed values, and stopping or leaving the view releases the camera and the Recognition session.
+The remaining dedicated pages and source-import UI build on that in their own tasks.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without

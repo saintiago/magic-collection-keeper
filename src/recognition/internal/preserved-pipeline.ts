@@ -3,6 +3,7 @@ import {
   recognitionCardPresenceStates,
   type RecognitionCardPresence,
   type RecognitionEngineCandidate,
+  type RecognitionEngineName,
   type RecognitionEngineOutcome,
 } from './model.js';
 import type { RecognitionEnginePipeline, RecognitionEngineRecognizeRequest } from './service.js';
@@ -87,6 +88,18 @@ export interface BrowserRecognitionPipelineOptions {
 }
 
 /**
+ * Engine names the preserved pipeline enables for one runtime capability
+ * (docs/recognition.md#interface, docs/recognition.md#engines-and-assets). A caller names exactly
+ * these when it prepares a session: cloud inference runs the Python visual/OCR path and the
+ * independent identity check beside the browser ONNX engine, while a local runtime runs the
+ * browser engine alone. The selection lives here, with the composition that owns it, so
+ * UserInterface prepares the same engines the pipeline accepts instead of repeating the names.
+ */
+export function recognitionEngineNames(cloudEnabled: boolean): readonly RecognitionEngineName[] {
+  return cloudEnabled ? ['browser-onnx', 'python-ocr', 'independent-identity'] : ['browser-onnx'];
+}
+
+/**
  * Composes the preserved browser recognition into the public engine pipeline. The factory fixes
  * the composition of this session's engines: Application constructs it for the runtime's enabled
  * capabilities and supplies the authenticated transport, while the matching policy, candidate
@@ -102,9 +115,7 @@ export function createBrowserRecognitionPipeline(
     );
   }
   const cloudEnabled = options?.cloudEnabled !== false;
-  const enabledEngines = cloudEnabled
-    ? ['browser-onnx', 'python-ocr', 'independent-identity']
-    : ['browser-onnx'];
+  const enabledEngines = recognitionEngineNames(cloudEnabled);
   const remoteRequest: PreservedRequest = async (path, init) => {
     const response = await request(path, init);
     if (path === '/api/recognize' || path === '/api/recognize-independent') {

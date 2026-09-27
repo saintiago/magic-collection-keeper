@@ -14,8 +14,13 @@
  * contract. The Import page stages manually entered cards as pending entries and presents the
  * account's pending imports for review and confirmation through the same private contract, so a
  * staged line is never presented as owned before its confirmation reports the copies it created.
+ * The same page captures cards hands-free through the supplied device and the Recognition
+ * contract: a settled frame the runtime reports as one card stages its candidate in review, a
+ * repeated observation stays one entry, unresolved readings receive no success cue, and late
+ * alternatives are attached to the entry they belong to without rewriting its reviewed values.
  * Application supplies the public configuration, the authenticated transport and the component
- * access, and the deployment supplies the verified identity and its device capability. Other
+ * access, and the deployment supplies the verified identity and its device capability, including
+ * the camera the capture view opens. Other
  * components import UserInterface through this module only; its internal modules stay private to
  * the component (docs/architecture.md, .dependency-cruiser.mjs).
  */
@@ -53,17 +58,20 @@ export {
   type UiListPosition,
   type UiListSelectedTarget,
 } from './internal/card-list.js';
-export type { UiDevice } from './internal/device.js';
+export type { UiCamera, UiDevice } from './internal/device.js';
 export type { UiDialogOptions, UiDialogs } from './internal/dialogs.js';
 export type { UiAccount, UiIdentity } from './internal/identity.js';
 export {
+  attachImportCandidates,
   confirmImport,
   createImportAccess,
   discardImportEntry,
   discardImportSession,
   recoverConfirmation,
   reviewImportEntry,
+  stageCaptureObservation,
   stageImportLines,
+  uiCaptureIdentity,
   uiImportCandidates,
   uiImportIdentity,
   uiImportSourceLabel,

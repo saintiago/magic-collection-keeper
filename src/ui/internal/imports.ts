@@ -21,6 +21,7 @@
 
 import type { SearchClient } from '../../application/index.js';
 import type { CardRecord, Catalog, Finish, PrintingRecord } from '../../catalog/index.js';
+import { recognitionEngineNames } from '../../recognition/index.js';
 import type {
   ConfirmImportEntryInput,
   CopyCondition,
@@ -33,6 +34,7 @@ import type {
   ImportSourceLine,
 } from '../../usercards/index.js';
 
+import { createCaptureControls, type UiCaptureReviewChange } from './capture.js';
 import {
   cardListBasicContent,
   createCardList,
@@ -189,6 +191,21 @@ function importPage(): UiPageDefinition {
       resultsHost.id = 'import-results';
       const resultsHeading = text(document, 'h3', 'import-results-heading', 'Add a printing');
 
+      // Hands-free camera capture feeds the same pending review as manual entry and stays with the
+      // page: closing the view disposes it, releasing the camera and the Recognition session
+      // (docs/user-interface.md#capture-and-review).
+      const capture = createCaptureControls({
+        document,
+        access,
+        device: context.device,
+        createRecognition: context.capabilities.createRecognition,
+        engines: recognitionEngineNames(context.capabilities.settings.recognition.cloudEnabled),
+        signal: context.signal,
+        reviewChanged: (change) => {
+          void reconcileCapture(change);
+        },
+      });
+
       const reviewHeading = text(document, 'h3', 'import-review-heading', 'Pending review');
       const sessionSelect = document.createElement('select');
       sessionSelect.id = 'import-session';
@@ -208,6 +225,7 @@ function importPage(): UiPageDefinition {
         manualStatus,
         resultsHeading,
         resultsHost,
+        capture.element,
         reviewHeading,
         controlLabel(document, 'Import', sessionSelect),
         sessionsMore,
@@ -297,6 +315,7 @@ function importPage(): UiPageDefinition {
         capture: captureState,
         presented: () => presented.promise,
         dispose: () => {
+          capture.dispose();
           results?.dispose();
           pending?.dispose();
         },
@@ -658,6 +677,37 @@ function importPage(): UiPageDefinition {
           present(defaultSessionId(sessions));
           return;
         }
+        pending?.refresh();
+      }
+
+      /**
+       * Takes one capture change into the review. A staged observation is presented in its capture
+       * session, so the candidate the success cue announced is visible in review; late alternatives
+       * reload the session that holds them when the review presents it; an unknown outcome re-reads
+       * what the provider holds instead of inferring an entry
+       * (docs/user-interface.md#capture-and-review).
+       */
+      async function reconcileCapture(change: UiCaptureReviewChange): Promise<void> {
+        if (change.kind === 'unknown') {
+          pending?.refresh();
+          await readSessions(null, false);
+          return;
+        }
+        if (change.session.sessionId !== sessionId) {
+          if (change.kind === 'attached') {
+            // The updated entry belongs to an import the review does not present; its counts stay
+            // current while the presented review keeps its own window.
+            await readSessions(null, false);
+            return;
+          }
+          await readSessions(null, false);
+          if (closed) {
+            return;
+          }
+          present(change.session.sessionId);
+          return;
+        }
+        adoptSession(change.session);
         pending?.refresh();
       }
 

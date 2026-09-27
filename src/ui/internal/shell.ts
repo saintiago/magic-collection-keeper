@@ -577,16 +577,27 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
 
   /** Device access lasts through synchronous teardown, but never into a replacement page. */
   function pageDevice(currentGeneration: number): UiDevice {
-    return {
+    const available = (): boolean =>
+      (!disposed && generation === currentGeneration) ||
+      (teardownGeneration === currentGeneration && generation === currentGeneration + 1);
+    const page: UiDevice = {
       release() {
-        const active = !disposed && generation === currentGeneration;
-        const tearingDown =
-          teardownGeneration === currentGeneration && generation === currentGeneration + 1;
-        if (active || tearingDown) {
+        if (available()) {
           return device.release();
         }
       },
     };
+    const open = device.openCamera;
+    if (typeof open === 'function') {
+      page.openCamera = () => {
+        if (!available()) {
+          // A closed page cannot open the device of the view that replaced it.
+          return Promise.reject(new Error('This page no longer holds the device.'));
+        }
+        return open.call(device);
+      };
+    }
+    return page;
   }
 
   function signedOutHeading(): HTMLHeadingElement {
@@ -822,6 +833,9 @@ function readDevice(value: unknown): UiDevice {
   const record = readObject(value);
   if (record === null || typeof record.release !== 'function') {
     throw new TypeError('The device capability releases the resources the UI holds.');
+  }
+  if (record.openCamera !== undefined && typeof record.openCamera !== 'function') {
+    throw new TypeError('The device capability opens the camera the capture view reads.');
   }
   return value as UiDevice;
 }

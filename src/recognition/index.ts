@@ -4,9 +4,11 @@
  * Prepare, Recognize and Dispose are the session lifecycle UserInterface uses: preparation is
  * demand-driven for the enabled engines, one capture attempt runs at a time per session and keeps
  * its capture/attempt identity across later readings, and disposal releases the session's local
- * work. Readings carry ordered catalog-validated candidates, an editable suggestion that stays
- * distinguishable from evidence-supported printing, provisional state, disagreement, engine
- * versions and timings, and never confer ownership or physical condition
+ * work. `recognitionEngineNames` names the engines of one runtime capability, so a caller prepares
+ * exactly the set the composed pipeline accepts. Readings carry ordered catalog-validated
+ * candidates, an editable suggestion that stays distinguishable from evidence-supported printing,
+ * provisional state, disagreement, engine versions and timings, and never confer ownership or
+ * physical condition
  * (docs/recognition.md#execution). Application supplies the preserved engine pipeline, the Catalog
  * read contract and the runtime frame inspector; the component executes in the browser and a
  * separate backend runtime through that same contract, and `createBrowserRecognitionPipeline`
@@ -57,6 +59,7 @@ export {
 } from './internal/service.js';
 export {
   createBrowserRecognitionPipeline,
+  recognitionEngineNames,
   type BrowserRecognitionPipelineOptions,
   type PreservedRequest,
 } from './internal/preserved-pipeline.js';

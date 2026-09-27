@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createBrowserRecognitionPipeline,
   createRecognition,
+  recognitionEngineNames,
   type PreservedRequest,
   type Recognition,
   type RecognitionReading,
@@ -690,6 +691,28 @@ print(json.dumps(decide(visual, text, aliases=[("Relampago", "es")])))
             frame: createCanvas(),
           }).initial,
         ).rejects.toMatchObject({ code: 'invalid-request' });
+      } finally {
+        recognition.dispose({ sessionId: 'session-1' });
+      }
+    },
+  );
+
+  it.each([
+    { cloudEnabled: true, engines: ['browser-onnx', 'python-ocr', 'independent-identity'] },
+    { cloudEnabled: false, engines: ['browser-onnx'] },
+  ])(
+    'names the engines one capability enables and prepares exactly those: $engines',
+    async ({ cloudEnabled, engines }) => {
+      expect(recognitionEngineNames(cloudEnabled)).toEqual(engines);
+      const transport = createTransport({});
+      const recognition = createPreservedRecognition(transport, { cloudEnabled });
+      try {
+        await expect(
+          recognition.prepare({
+            sessionId: 'session-1',
+            engines: recognitionEngineNames(cloudEnabled),
+          }),
+        ).resolves.toMatchObject({ engines });
       } finally {
         recognition.dispose({ sessionId: 'session-1' });
       }
