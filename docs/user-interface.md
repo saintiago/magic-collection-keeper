@@ -23,6 +23,11 @@ stable keys, typed targets, basic information or explicit unresolved state, and 
 indicator. Search pages and UserCards pending entries are adapted to this presentation contract;
 their providers do not import UI types.
 
+A source distinguishes a retryable read failure from a result sequence that must restart. Source
+bindings translate provider failure semantics into this list contract; CardList does not interpret
+provider error codes. A source reports the outcome rather than calling back into a page to restart
+its list.
+
 Fragment requests identify entry keys and requested information. Results distinguish ready, absent
 and failed information. Tools accept explicit target references and selection context and return
 an operation outcome. Cancellation or an old page response cannot replace the active view.
@@ -93,6 +98,13 @@ CardList decides how to acquire and restore its contents through its supplied so
 capabilities. It can reuse available data or request data as needed; pages and navigation do not
 choose between cache reuse and backend loading or drive pagination to rebuild a list. Sources remain
 authoritative for membership, ordering and continuation. This boundary does not require a new cache.
+
+CardList owns read recovery. A temporary failure retries the failed position; an invalidated sequence
+restarts from the beginning without reusing its rejected continuation. Keep usable content until a
+replacement arrives, preserve selection and page-owned drafts, and never append a new sequence to an
+old one. A failed restart stays recoverable without an automatic retry loop. These rules also apply
+when reacquiring retained list state. Pages request refreshes through the list contract rather than
+implementing pagination recovery.
 
 Render basic information with initial resolved entries. Images, ownership, tags and tool availability
 have separate loading and failure states. Refresh preserves usable content; unavailable data is not
