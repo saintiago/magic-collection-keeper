@@ -133,6 +133,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     },
     search: {
       execute: () => Promise.reject(new Error('The shell journey runs no search.')),
+      counts: () => Promise.reject(new Error('The shell journey reads no private counts.')),
     },
     userCards: unusedUserCards,
     createRecognition: () => {

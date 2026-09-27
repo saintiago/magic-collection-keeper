@@ -35,6 +35,8 @@ export const SEARCH_LIMITS = {
   maxTextLength: 300,
   /** Most structured criteria one request combines, before a text expression adds its own. */
   maxCriteria: 50,
+  /** Most explicit references one private count request covers. */
+  maxCountReferences: 200,
   /** Longest accepted card, printing, copy or tag reference, matching the provider bounds. */
   maxIdentifierLength,
   /** Longest accepted edition (set) code, matching the catalog printing bound. */

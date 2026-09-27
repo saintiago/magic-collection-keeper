@@ -16,21 +16,41 @@
 
 import type { SearchClient } from '../../application/index.js';
 import type { CardRecord, Catalog, PrintingRecord } from '../../catalog/index.js';
-import type { SearchRequestInput } from '../../search/index.js';
+import type { SearchEntry, SearchRequestInput } from '../../search/index.js';
 import type {
   Association,
+  AssociationListResult,
   AssociationTargetLevel,
   PhysicalCopy,
   Tag,
 } from '../../usercards/index.js';
 
-import { cardListBasicContent, createCardList, type UiCardList } from './card-list.js';
+import {
+  cardListBasicContent,
+  createCardList,
+  type UiCardList,
+  type UiEntryOwnership,
+} from './card-list.js';
+import { readUiFailureCode } from './failure.js';
 import { UI_LIMITS } from './limits.js';
-import type { UiEntryTarget, UiFragmentReader, UiListEntry, UiListSource } from './list.js';
+import type {
+  UiEntryQuantity,
+  UiEntryTarget,
+  UiFragmentReader,
+  UiListEntry,
+  UiListSource,
+} from './list.js';
 import { controlLabel, readListState, readPageState } from './page-support.js';
 import type { UiPageDefinition } from './pages.js';
 import { readUiCollectionLevel, uiHref } from './routes.js';
-import { searchListEntry } from './search-source.js';
+import {
+  createEntryOwnershipReader,
+  createSearchCounts,
+  searchListEntry,
+  uiEntryKey,
+  type UiCountsAccess,
+  type UiEntryCounts,
+} from './search-source.js';
 import {
   addToTagTool,
   createTag,
@@ -98,12 +118,27 @@ function tagsPage(): UiPageDefinition {
       let tags: readonly Tag[] = readRetainedTags(restored?.tags) ?? [];
       let continuation = readContinuation(restored?.continuation);
       let complete = restored?.complete === true;
+      /**
+       * Source position of the first presented tag, kept with the history entry so returning to
+       * this page re-acquires the window the user browsed instead of the account's first tags
+       * (docs/user-interface.md#pages-and-navigation).
+       */
+      let start = readTagPosition(restored?.position);
       let loading = false;
       let error: string | null = null;
       let closed = false;
+      /**
+       * Version of the presented window. A read captures it and only publishes its answer while it
+       * is still current, so a late response never replaces a newer window and a change the user
+       * just committed is never wiped out by a read that started before it
+       * (docs/user-interface.md#state-ownership-and-restoration).
+       */
+      let version = 0;
       /** Unsaved rename input per tag, kept across paging and with the history entry. */
       const drafts = readDrafts(restored?.drafts);
       const rows = new Map<string, UiTagRow>();
+      /** Source position of every presented tag, so the window can be read again from its start. */
+      const positions = new Map<string, UiTagPosition>();
       context.signal.addEventListener(
         'abort',
         () => {
@@ -113,8 +148,8 @@ function tagsPage(): UiPageDefinition {
       );
 
       paint();
-      // The retained window is re-read from the provider until it is covered again; the retained
-      // tags stay presented while that read is unavailable
+      // The retained window is re-read from the provider from the position it held until it is
+      // covered again; the retained tags stay presented while that read is unavailable
       // (docs/user-interface.md#state-ownership-and-restoration).
       void readWindow(tags.length);
 
@@ -134,6 +169,7 @@ function tagsPage(): UiPageDefinition {
           tags,
           continuation,
           complete,
+          position: start,
           drafts: Object.fromEntries(drafts),
           kind: kind.value,
           label: label.value,
@@ -157,7 +193,7 @@ function tagsPage(): UiPageDefinition {
           return;
         }
         if (outcome.record !== null) {
-          keep(outcome.record);
+          publish(outcome.record);
           label.value = '';
         } else if (outcome.status === 'unknown') {
           // A lost create response: the list is read again, so a tag the service committed appears
@@ -193,8 +229,14 @@ function tagsPage(): UiPageDefinition {
           return;
         }
         if (outcome.record !== null) {
-          keep(outcome.record);
-          row.input.value = outcome.record.label;
+          publish(outcome.record);
+          if (outcome.status === 'committed') {
+            // Only a committed rename replaces the unsaved label the row kept; a state a lost
+            // response recovered stays beside the user's own input for review
+            // (docs/user-interface.md#browsing-and-organization).
+            drafts.delete(outcome.record.tagId);
+            row.input.value = outcome.record.label;
+          }
         }
         row.status.textContent = outcome.message ?? 'Renamed the tag.';
         if (outcome.status === 'conflict') {
@@ -209,21 +251,21 @@ function tagsPage(): UiPageDefinition {
       }
 
       /**
-       * Reads the tags from the start of the account's list until the requested number is covered
-       * or the list ends, and presents that fresh window. A failure keeps the retained tags and
-       * reports the retry.
+       * Reads the account's tags from the position the presented window starts at until the
+       * requested number of tags is covered or the list ends, and presents that fresh window. A
+       * failure keeps the retained tags and reports the retry; a response a newer read or change
+       * superseded never replaces the active window.
        */
       async function readWindow(cover: number): Promise<void> {
         if (closed) {
           return;
         }
-        loading = true;
-        error = null;
-        paint();
+        const current = beginRead();
         const read: Tag[] = [];
-        let next: string | null = null;
+        let next: string | null = start?.continuation ?? null;
+        let offset = start?.offset ?? 0;
         try {
-          do {
+          for (;;) {
             const page = await access.list(
               {
                 pageSize: UI_LIMITS.tagPage,
@@ -231,11 +273,31 @@ function tagsPage(): UiPageDefinition {
               },
               context.signal,
             );
-            read.push(...page.tags.filter((candidate) => !candidate.system));
+            if (closed || current !== version) {
+              return;
+            }
+            page.tags.forEach((candidate, index) => {
+              if (index < offset || candidate.system) {
+                return;
+              }
+              read.push(candidate);
+              positions.set(candidate.tagId, { continuation: next, offset: index });
+            });
             next = page.continuation;
-          } while (next !== null && read.length < Math.min(cover, UI_LIMITS.listWindow));
+            offset = 0;
+            if (next === null || read.length >= Math.min(cover, UI_LIMITS.listWindow)) {
+              break;
+            }
+          }
         } catch (cause) {
-          if (closed) {
+          if (closed || current !== version) {
+            return;
+          }
+          if (start !== null && readUiFailureCode(cause) === 'stale-continuation') {
+            // The private records changed since this page was read: the window is read again from
+            // the account's list instead of repeating a continuation the change invalidated.
+            start = null;
+            void readWindow(cover);
             return;
           }
           error = readMessage(cause, 'The tags could not be loaded.');
@@ -243,47 +305,82 @@ function tagsPage(): UiPageDefinition {
           paint();
           return;
         }
-        if (closed) {
+        if (closed || current !== version) {
           return;
         }
         tags = read.slice(0, UI_LIMITS.listWindow);
         continuation = next;
         complete = next === null;
+        retirePositions();
+        start = windowStart();
         loading = false;
+        error = null;
         paint();
       }
 
       /** Appends the next page of tags, retiring the oldest beyond the retained window. */
       async function loadMore(): Promise<void> {
-        if (closed || loading || continuation === null) {
+        const requested = continuation;
+        if (closed || loading || requested === null) {
           return;
         }
-        loading = true;
-        error = null;
-        paint();
+        const current = beginRead();
         try {
           const page = await access.list(
-            { pageSize: UI_LIMITS.tagPage, continuation },
+            { pageSize: UI_LIMITS.tagPage, continuation: requested },
             context.signal,
           );
-          if (closed) {
+          if (closed || current !== version) {
             return;
           }
           const seen = new Set(tags.map((tag) => tag.tagId));
-          tags = [
-            ...tags,
-            ...page.tags.filter((candidate) => !candidate.system && !seen.has(candidate.tagId)),
-          ].slice(-UI_LIMITS.listWindow);
+          const added: Tag[] = [];
+          page.tags.forEach((candidate, index) => {
+            if (candidate.system || seen.has(candidate.tagId)) {
+              return;
+            }
+            added.push(candidate);
+            positions.set(candidate.tagId, { continuation: requested, offset: index });
+          });
+          tags = [...tags, ...added].slice(-UI_LIMITS.listWindow);
           continuation = page.continuation;
           complete = continuation === null;
+          retirePositions();
+          start = windowStart();
         } catch (cause) {
-          if (closed) {
+          if (closed || current !== version) {
+            return;
+          }
+          if (readUiFailureCode(cause) === 'stale-continuation') {
+            // The further page belongs to a superseded revision: the retained window is read from
+            // its own position again instead of repeating the unusable cursor.
+            void readWindow(tags.length);
             return;
           }
           error = readMessage(cause, 'The tags could not be loaded.');
         }
         loading = false;
         paint();
+      }
+
+      /** Starts one window-changing read: it supersedes every read the page started earlier. */
+      function beginRead(): number {
+        version += 1;
+        loading = true;
+        error = null;
+        paint();
+        return version;
+      }
+
+      /**
+       * Publishes one tag the account just changed: it enters the window and supersedes the reads
+       * that started before the change, so no late answer replaces the committed state.
+       */
+      function publish(tag: Tag): void {
+        version += 1;
+        loading = false;
+        error = null;
+        keep(tag);
       }
 
       /** Keeps one provider-published tag in the window, ordered by stable identity. */
@@ -293,7 +390,25 @@ function tagsPage(): UiPageDefinition {
         tags = (at === -1 ? [...kept, tag] : [...kept.slice(0, at), tag, ...kept.slice(at)]).slice(
           -UI_LIMITS.listWindow,
         );
+        retirePositions();
+        start = windowStart();
         paint();
+      }
+
+      /** Source position of the first presented tag; the retained position when it is unknown. */
+      function windowStart(): UiTagPosition | null {
+        const first = tags[0];
+        return first === undefined ? null : (positions.get(first.tagId) ?? start);
+      }
+
+      /** Drops the source positions of tags the presented window no longer holds. */
+      function retirePositions(): void {
+        const presented = new Set(tags.map((tag) => tag.tagId));
+        for (const tagId of positions.keys()) {
+          if (!presented.has(tagId)) {
+            positions.delete(tagId);
+          }
+        }
       }
 
       function find(tagId: string): Tag | null {
@@ -353,6 +468,12 @@ interface UiTagRow {
   paint(tag: Tag): void;
 }
 
+/** Source position of one tag inside the account's tag list: the page that supplied it and its offset. */
+interface UiTagPosition {
+  readonly continuation: string | null;
+  readonly offset: number;
+}
+
 function tagRow(
   document: Document,
   tag: Tag,
@@ -406,6 +527,7 @@ function tagViewPage(): UiPageDefinition {
       const document = container.ownerDocument;
       const restored = readPageState(context.restored?.state);
       const access = createTagAccess(context.capabilities.userCards);
+      const counts = createSearchCounts(context.capabilities.search);
       const presented = Promise.withResolvers<void>();
       // A page whose presentation the shell never awaits must still not surface a rejection.
       presented.promise.catch(() => {});
@@ -437,6 +559,9 @@ function tagViewPage(): UiPageDefinition {
       const associationsStatus = statusLine(document, 'tag-associations-status');
       const associationsHost = document.createElement('div');
       associationsHost.id = 'tag-associations';
+      const locationsStatus = statusLine(document, 'tag-locations-status');
+      const locationsMore = button(document, 'tag-locations-more', 'More locations');
+      locationsMore.hidden = true;
       const addHeading = text(document, 'h3', 'tag-add-heading', 'Add to this tag');
       const addForm = document.createElement('form');
       addForm.id = 'tag-add';
@@ -464,6 +589,8 @@ function tagViewPage(): UiPageDefinition {
         associationsHeading,
         associationsStatus,
         associationsHost,
+        locationsStatus,
+        locationsMore,
         addHeading,
         addForm,
         addHost,
@@ -473,13 +600,24 @@ function tagViewPage(): UiPageDefinition {
       let tag: Tag | null = null;
       /** Associations the presented rows interpret, keyed by their entry key. */
       const records = new Map<string, Association>();
-      /** Editors of the presented association rows, rebuilt when a move's choices arrive. */
+      /** Editors of the presented association rows, redrawn as their choices or records change. */
       const editors = new Map<string, UiAssociationEditor>();
       /** Printings offered to refine a card-level association, keyed by card identity. */
-      const printings = new Map<string, readonly PrintingRecord[]>();
+      const printings = new Map<string, UiPrintingOffer>();
       const printingRequests = new Set<string>();
       /** Location tags the page offers for a move; the presented tag is always offered. */
-      let locations: readonly Tag[] = [];
+      let locations: UiLocationOffer = {
+        tags: [],
+        continuation: null,
+        loading: false,
+        error: null,
+      };
+      /** Supersedes an outstanding location read when a newer one starts. */
+      let locationVersion = 0;
+      /** Unsaved association input per association, kept across redraws and with the history entry. */
+      const drafts = readAssociationDrafts(restored?.drafts);
+      /** Whether a stale continuation of the association list is already being restarted. */
+      let restartingAssociations = false;
       let associations: UiCardList<string> | null = null;
       let addList: UiCardList<UiTagAddQuery> | null = null;
       /** The retained list states, kept while the lists are not composed yet. */
@@ -493,6 +631,9 @@ function tagViewPage(): UiPageDefinition {
       addForm.addEventListener('submit', (event) => {
         event.preventDefault();
         search();
+      });
+      locationsMore.addEventListener('click', () => {
+        void readLocations(locations.continuation);
       });
       void open();
 
@@ -509,6 +650,10 @@ function tagViewPage(): UiPageDefinition {
         return {
           label: labelInput.value,
           add: { text: query.value, level: level.value, quantity: quantity.value },
+          // Unsaved association input stays with the entry, so leaving the view and returning to it
+          // keeps the edits the user was asked to review
+          // (docs/user-interface.md#state-ownership-and-restoration).
+          drafts: Object.fromEntries([...drafts].map(([id, draft]) => [id, { ...draft }])),
           // A list not composed yet keeps the state its entry handed back instead of overwriting
           // it with a partially presented view
           // (docs/user-interface.md#state-ownership-and-restoration).
@@ -564,23 +709,42 @@ function tagViewPage(): UiPageDefinition {
           addForm.append(controlLabel(document, 'Intended quantity', quantity));
         }
         addForm.append(addSubmit);
-        if (location) {
-          void readLocations();
-        }
         const list = createCardList<string>({
           container: associationsHost,
-          source: associationSource(access, context.capabilities.catalog, records),
+          source: associationSource({
+            access,
+            catalog: context.capabilities.catalog,
+            counts,
+            tagId: () => tag?.tagId ?? tagId,
+            records,
+            onWindow: associationWindow,
+            onStaleContinuation: restartAssociations,
+          }),
           context: tagId,
           pageSize: UI_LIMITS.associationPage,
           restored: readListState<string>(retainedAssociations),
-          fragments: { tags: associationReader() },
+          fragments: {
+            ownership: createEntryOwnershipReader(counts, associationReferenceOf),
+            tags: associationReader(),
+          },
           presentation: {
             renderEntry: (entry) => associationEntry(document, entry),
-            renderFragment: (kind, entry) => (kind === 'tags' ? associationEditor(entry) : null),
+            renderFragment: (kind, entry, values) => {
+              if (kind === 'tags') {
+                return associationEditor(entry);
+              }
+              return kind === 'ownership' ? ownershipContent(values as UiEntryOwnership) : null;
+            },
           },
           signal: context.signal,
         });
         associations = list;
+        if (location) {
+          // A location view offers every destination the account has, so the move control reads
+          // the account's location tags page by page
+          // (docs/user-interface.md#browsing-and-organization).
+          void readLocations(null);
+        }
         const restorations: (Promise<void> | null)[] = [list.restoration?.presented ?? null];
         if (retainedResults !== null) {
           // A restored search is composed again, so the entry's result window keeps its context.
@@ -604,6 +768,8 @@ function tagViewPage(): UiPageDefinition {
           associationsHeading,
           associationsStatus,
           associationsHost,
+          locationsStatus,
+          locationsMore,
           addHeading,
           addForm,
           addHost,
@@ -639,6 +805,11 @@ function tagViewPage(): UiPageDefinition {
           }
         }
         renameStatus.textContent = outcome.message ?? 'Renamed the tag.';
+        if (outcome.status === 'committed') {
+          // The tag's own revision advanced: the association sequence reads its private records
+          // again instead of paging a continuation the change invalidated.
+          associations?.refresh();
+        }
         if (outcome.status === 'conflict') {
           const reread = await readTag(access, current.tagId, context.signal);
           if (!closed && reread !== null) {
@@ -657,22 +828,61 @@ function tagViewPage(): UiPageDefinition {
         kindLine.textContent = `Kind: ${uiTagKindLabel(kindOf(next.kind))}`;
       }
 
-      /** Reads the account's location tags, so a copy can move between the known locations. */
-      async function readLocations(): Promise<void> {
+      /**
+       * Reads one page of the account's location tags, so a copy can move between every destination
+       * the account has instead of only the tags of the first page of every kind
+       * (docs/user-interface.md#browsing-and-organization). A failure stays beside the control that
+       * reads further locations and keeps the known ones usable.
+       */
+      async function readLocations(continuation: string | null): Promise<void> {
+        if (closed || locations.loading) {
+          return;
+        }
+        const current = ++locationVersion;
+        locations = { ...locations, loading: true, error: null };
+        paintLocations();
         try {
-          const page = await access.list({ pageSize: UI_LIMITS.tagPage }, context.signal);
-          if (closed) {
+          const page = await access.list(
+            {
+              pageSize: UI_LIMITS.tagPage,
+              ...(continuation === null ? {} : { continuation }),
+            },
+            context.signal,
+          );
+          if (closed || current !== locationVersion) {
             return;
           }
-          locations = page.tags.filter((candidate) => kindOf(candidate.kind) === 'location');
+          const known = new Set(locations.tags.map((candidate) => candidate.tagId));
+          locations = {
+            // The offered destinations slide forward under the retained window's bound, so a long
+            // location list never grows the page without limit.
+            tags: [
+              ...locations.tags,
+              ...locationTagsOf(page.tags).filter((candidate) => !known.has(candidate.tagId)),
+            ].slice(-UI_LIMITS.listWindow),
+            continuation: page.continuation,
+            loading: false,
+            error: null,
+          };
         } catch (cause) {
-          if (!closed) {
-            associationsStatus.textContent = readMessage(
-              cause,
-              'The other locations could not be loaded.',
-            );
+          if (closed || current !== locationVersion) {
+            return;
           }
+          locations = {
+            ...locations,
+            loading: false,
+            error: readMessage(cause, 'The other locations could not be loaded.'),
+          };
         }
+        paintLocations();
+      }
+
+      /** Presents the location choice set's progress and its next page's control. */
+      function paintLocations(): void {
+        locationsMore.hidden = locations.continuation === null;
+        locationsMore.disabled = locations.loading;
+        locationsStatus.textContent =
+          locations.error ?? (locations.loading ? 'Loading locations…' : '');
         repaintEditors();
       }
 
@@ -700,11 +910,18 @@ function tagViewPage(): UiPageDefinition {
         }
         addList = createCardList<UiTagAddQuery>({
           container: addHost,
-          source: addSource(context.capabilities.search),
+          source: addSource(context.capabilities.search, counts, () => tag?.tagId ?? null),
           context: next,
           pageSize: UI_LIMITS.catalogPage,
           restored: readListState<UiTagAddQuery>(retainedResults),
-          fragments: { tools: addToolsReader() },
+          fragments: {
+            ownership: createEntryOwnershipReader(counts),
+            tools: addToolsReader(),
+          },
+          presentation: {
+            renderFragment: (kind, _entry, values) =>
+              kind === 'ownership' ? ownershipContent(values as UiEntryOwnership) : null,
+          },
           tools: [
             {
               id: 'add-to-tag',
@@ -722,8 +939,10 @@ function tagViewPage(): UiPageDefinition {
                       `${uiMaxAssociationQuantity} before adding.`,
                   });
                   const outcome = await base.tool.invoke(request);
-                  if (outcome.status === 'committed') {
-                    // The tag's associations changed: the association list reads them again.
+                  if (outcome.committed > 0 || outcome.status === 'unknown') {
+                    // Writes committed or stay uncertain: the association list reads them again, so
+                    // a partial addition is visible instead of presented as an unchanged result
+                    // (docs/user-interface.md#browsing-and-organization).
                     associations?.refresh();
                   }
                   return outcome;
@@ -748,6 +967,35 @@ function tagViewPage(): UiPageDefinition {
           content.append(level);
         }
         return content;
+      }
+
+      /**
+       * Presents the ownership fragment of one entry: the owned count the same read evaluated is
+       * the copies the row presents, so the fragment adds the distinct physical locations holding
+       * them. Owned, intended and physical-location counts stay distinct
+       * (docs/user-interface.md#browsing-and-organization).
+       */
+      function ownershipContent(ownership: UiEntryOwnership): Node {
+        const content = document.createElement('span');
+        content.dataset.uiLocations = '';
+        content.textContent = ` Locations: ${ownership.locations}`;
+        return content;
+      }
+
+      /** The presented target of one association row, or null when the row holds no association. */
+      function associationReferenceOf(key: string): UiEntryTarget | null {
+        const association = records.get(key);
+        if (association === undefined) {
+          return null;
+        }
+        switch (association.targetLevel) {
+          case 'card':
+            return { kind: 'card', cardId: association.targetId };
+          case 'printing':
+            return { kind: 'printing', printingId: association.targetId };
+          case 'copy':
+            return { kind: 'copy', copyId: association.targetId };
+        }
       }
 
       /** The fragment reader that carries one row's association to its own editor. */
@@ -799,30 +1047,31 @@ function tagViewPage(): UiPageDefinition {
         return controls;
       }
 
-      /** Draws one association editor; the row's unsaved control values survive a redraw. */
+      /**
+       * Draws one association editor. The unsaved input of a row lives in the page's drafts rather
+       * than in the rendered controls, so paging, a redraw after another change or leaving and
+       * returning to the view keeps what the user must review and retry; only a committed change
+       * clears its own draft (docs/user-interface.md#browsing-and-organization,
+       * docs/user-interface.md#state-ownership-and-restoration).
+       */
       function paintEditor(editor: UiAssociationEditor): void {
         const association = records.get(editor.entry.key);
         const current = tag;
         if (association === undefined || current === null) {
           return;
         }
-        const values = new Map<string, string>();
-        for (const control of editor.controls.querySelectorAll<
-          HTMLInputElement | HTMLSelectElement
-        >('input,select')) {
-          if (control.id.length > 0) {
-            values.set(control.id, control.value);
-          }
-        }
+        const draft = drafts.get(association.associationId) ?? null;
         const kind = kindOf(current.kind);
         const controls: (Node | string)[] = [];
         if (association.targetLevel !== 'copy') {
           const wanted = numberInput(
             document,
             `tag-quantity-${encodeURIComponent(association.associationId)}`,
-            values.get(`tag-quantity-${encodeURIComponent(association.associationId)}`) ??
-              String(association.quantity ?? 1),
+            draft?.quantity ?? String(association.quantity ?? 1),
           );
+          wanted.addEventListener('input', () => {
+            draftFor(association.associationId).quantity = wanted.value;
+          });
           const save = button(
             document,
             `tag-quantity-save-${encodeURIComponent(association.associationId)}`,
@@ -834,8 +1083,8 @@ function tagViewPage(): UiPageDefinition {
           controls.push(controlLabel(document, 'Intended', wanted), save, ' ');
         }
         if (association.targetLevel === 'card') {
-          const loaded = printings.get(association.targetId);
-          if (loaded === undefined) {
+          const offer = printings.get(association.targetId);
+          if (offer === undefined) {
             // The card's printings are read when the owner refines this association, so a long
             // wishlist issues no catalog request for every presented card.
             const choose = button(
@@ -845,13 +1094,16 @@ function tagViewPage(): UiPageDefinition {
             );
             choose.addEventListener('click', () => {
               choose.disabled = true;
-              void loadPrintings(association.targetId, editor);
+              void loadPrintings(association.targetId, editor, null);
             });
             controls.push(choose, ' ');
           } else {
             const chosen = document.createElement('select');
             chosen.id = `tag-refine-${encodeURIComponent(association.associationId)}`;
-            paintPrintings(chosen, loaded, values.get(chosen.id));
+            paintPrintings(chosen, offer.printings, draft?.printingId ?? undefined);
+            chosen.addEventListener('change', () => {
+              draftFor(association.associationId).printingId = chosen.value;
+            });
             const refine = button(
               document,
               `tag-refine-save-${encodeURIComponent(association.associationId)}`,
@@ -862,6 +1114,7 @@ function tagViewPage(): UiPageDefinition {
                 editor.status.textContent = 'Choose the printing to refine the association to.';
                 return;
               }
+              draftFor(association.associationId).printingId = chosen.value;
               void saveAssociationChange(
                 association,
                 'printing',
@@ -870,7 +1123,23 @@ function tagViewPage(): UiPageDefinition {
                 editor.status,
               );
             });
-            controls.push(controlLabel(document, 'Printing', chosen), refine, ' ');
+            const more = button(
+              document,
+              `tag-refine-more-${encodeURIComponent(association.associationId)}`,
+              'More printings',
+            );
+            more.hidden = offer.continuation === null;
+            more.disabled = offer.loading;
+            more.addEventListener('click', () => {
+              void loadPrintings(association.targetId, editor, offer.continuation);
+            });
+            controls.push(controlLabel(document, 'Printing', chosen), refine, ' ', more, ' ');
+            const printingStatus = document.createElement('span');
+            printingStatus.id = `tag-refine-status-${encodeURIComponent(association.associationId)}`;
+            printingStatus.textContent = offer.error ?? (offer.loading ? 'Loading printings…' : '');
+            if (printingStatus.textContent.length > 0) {
+              controls.push(printingStatus, ' ');
+            }
           }
         }
         if (association.targetLevel === 'printing') {
@@ -914,7 +1183,7 @@ function tagViewPage(): UiPageDefinition {
           chosen.append(none);
           const offered = [
             ...(current.kind === 'location' ? [current] : []),
-            ...locations.filter((candidate) => candidate.tagId !== current.tagId),
+            ...locations.tags.filter((candidate) => candidate.tagId !== current.tagId),
           ];
           for (const location of offered) {
             const option = document.createElement('option');
@@ -922,18 +1191,43 @@ function tagViewPage(): UiPageDefinition {
             option.textContent = location.label;
             chosen.append(option);
           }
-          chosen.value = values.get(chosen.id) ?? current.tagId;
+          const wantedLocation = draft?.locationId ?? current.tagId;
+          if (
+            chosen.value !== wantedLocation &&
+            [...chosen.options].some((option) => option.value === wantedLocation)
+          ) {
+            chosen.value = wantedLocation;
+          }
+          chosen.addEventListener('change', () => {
+            draftFor(association.associationId).locationId = chosen.value;
+          });
           const move = button(
             document,
             `tag-move-save-${encodeURIComponent(association.associationId)}`,
             'Move',
           );
           move.addEventListener('click', () => {
-            void moveCopy(association.targetId, chosen.value, editor.status);
+            draftFor(association.associationId).locationId = chosen.value;
+            void moveCopy(association, chosen.value, editor.status);
           });
           controls.push(controlLabel(document, 'Move to', chosen), move);
         }
         editor.controls.replaceChildren(editor.status, ...controls);
+      }
+
+      /** The unsaved input of one association, created when the user first edits it. */
+      function draftFor(associationId: string): UiAssociationDraft {
+        const existing = drafts.get(associationId);
+        if (existing !== undefined) {
+          return existing;
+        }
+        const created: UiAssociationDraft = {
+          quantity: null,
+          printingId: null,
+          locationId: null,
+        };
+        drafts.set(associationId, created);
+        return created;
       }
 
       /** Saves the intended quantity the row presents, quoting the revision it read. */
@@ -977,7 +1271,7 @@ function tagViewPage(): UiPageDefinition {
           },
           context.signal,
         );
-        presentAssociationOutcome(outcome, status);
+        await presentAssociationOutcome(outcome, association, status);
       }
 
       /** Removes one association after a brief confirmation. */
@@ -1005,80 +1299,193 @@ function tagViewPage(): UiPageDefinition {
           },
           context.signal,
         );
-        presentAssociationOutcome(outcome, status);
+        if (!closed && control.isConnected && outcome.status !== 'committed') {
+          // The association is still presented, so the user can retry the removal from this view
+          // after a conflict or a failed request.
+          control.disabled = false;
+        }
+        await presentAssociationOutcome(outcome, association, status);
       }
 
       /** Moves one copy to the location the row presents, or clears its location. */
       async function moveCopy(
-        copyId: string,
+        association: Association,
         locationTagId: string,
         status: HTMLParagraphElement,
       ): Promise<void> {
         const outcome = await moveCopyById(
           access,
-          copyId,
+          association.targetId,
           locationTagId.length === 0 ? null : locationTagId,
           context.signal,
         );
-        presentAssociationOutcome(outcome, status);
+        // A move quotes the copy's own revision, which every attempt reads again: a conflict here
+        // names the copy, not the association the row edits.
+        await presentAssociationOutcome(outcome, association, status, false);
       }
 
       /**
-       * Presents one change's outcome: only a committed change is reported as saved and the
-       * association list reads the tag's associations again; a conflict or a definite failure
-       * keeps the row's unsaved input for review
-       * (docs/user-interface.md#browsing-and-organization).
+       * Presents one change's outcome. Only a committed change is reported as saved: its draft is
+       * cleared and the association list reads the tag's associations again. A conflict reads the
+       * association's recorded state and presents it beside the unsaved input, so a deliberate
+       * retry quotes the revision the page reviewed instead of the obsolete one it held
+       * (docs/user-cards.md#persistence-and-recovery,
+       * docs/user-interface.md#browsing-and-organization). A definite failure keeps the unsaved
+       * input for the retry.
        */
-      function presentAssociationOutcome(
+      async function presentAssociationOutcome(
         outcome: UiChangeOutcome<unknown>,
+        association: Association,
         status: HTMLParagraphElement | null,
-      ): void {
+        review = true,
+      ): Promise<void> {
         if (closed) {
           return;
         }
-        if (status !== null) {
+        if (outcome.status === 'committed') {
+          drafts.delete(association.associationId);
+          if (status !== null) {
+            status.textContent = outcome.message ?? 'Saved.';
+          }
+          associations?.refresh();
+          return;
+        }
+        if (!review) {
+          if (status !== null) {
+            status.textContent = outcome.message ?? 'Saved.';
+          }
+          if (outcome.status === 'unknown') {
+            // The move may have committed: the list reads the tag's copies again for review.
+            associations?.refresh();
+          }
+          return;
+        }
+        if (outcome.status === 'conflict') {
+          const reread = await readRecord(association.associationId);
+          if (closed) {
+            return;
+          }
+          const reviewed = reread === null ? null : adoptAssociation(reread);
+          if (status !== null) {
+            status.textContent =
+              reviewed === null
+                ? (outcome.message ?? 'The association changed. Reload the view before retrying.')
+                : `${outcome.message ?? 'The association changed after this revision.'} Its saved ` +
+                  `state is now ${describeAssociation(reviewed)}. Your input stays for the retry.`;
+          }
+          return;
+        }
+        if (outcome.status === 'unknown' && outcome.record !== null) {
+          // A lost response is reviewed through the record it recovered; its revision becomes the
+          // one a deliberate retry quotes, while the unsaved input stays untouched.
+          const reviewed = adoptAssociation(outcome.record as Association);
+          if (status !== null) {
+            status.textContent =
+              outcome.message === null
+                ? null
+                : `${outcome.message} Its recorded state is now ${describeAssociation(reviewed)}.`;
+          }
+        } else if (status !== null) {
           status.textContent = outcome.message ?? 'Saved.';
         }
-        if (
-          outcome.status === 'committed' ||
-          (outcome.status === 'unknown' && outcome.record !== null)
-        ) {
-          associations?.refresh();
+      }
+
+      /** Reads one association record the page presents, or null when the read did not answer. */
+      async function readRecord(associationId: string): Promise<Association | null> {
+        try {
+          const read = await access.readAssociations([associationId], context.signal);
+          return read.associations.get(associationId) ?? null;
+        } catch {
+          return null;
         }
       }
 
       /**
-       * Reads the printings of one card the owner asked to refine an association to, on demand:
-       * a presented card association issues no catalog request until the owner refines it. A
-       * failure stays visible beside the control instead of presenting curated choices as the
-       * whole list.
+       * Presents one association state the page read; an older revision never regresses to an
+       * earlier one and the row's editor is redrawn around it, so its controls quote the revision
+       * the page presents.
        */
-      async function loadPrintings(cardId: string, editor: UiAssociationEditor): Promise<void> {
+      function adoptAssociation(next: Association): Association {
+        const key = associationKey(next);
+        const current = records.get(key);
+        if (current !== undefined && next.revision < current.revision) {
+          return current;
+        }
+        records.set(key, next);
+        editors.get(key)?.refresh();
+        return next;
+      }
+
+      /** One association state in words, for the review a conflict or a lost response presents. */
+      function describeAssociation(association: Association): string {
+        const level = uiAssociationLevelLabel(association.targetLevel).toLowerCase();
+        return association.quantity === null
+          ? `${level} membership`
+          : `${level} intention of ${association.quantity}`;
+      }
+
+      /**
+       * Reads one page of the printings of a card the owner asked to refine an association to, on
+       * demand: a presented card association issues no catalog request until the owner refines it.
+       * The offered window keeps the continuation of the rest and the row offers the next page, so
+       * an exact printing beyond the first page stays selectable; a failure stays visible beside
+       * the control that reads further printings instead of presenting the known ones as the whole
+       * list (docs/user-interface.md#browsing-and-organization).
+       */
+      async function loadPrintings(
+        cardId: string,
+        editor: UiAssociationEditor,
+        continuation: string | null,
+      ): Promise<void> {
         if (printingRequests.has(cardId)) {
           return;
         }
         printingRequests.add(cardId);
-        editor.status.textContent = 'Loading printings…';
+        const offered = printings.get(cardId);
+        const previous = offered?.printings ?? [];
+        printings.set(cardId, {
+          printings: previous,
+          continuation: offered?.continuation ?? null,
+          loading: true,
+          error: null,
+        });
+        editor.refresh();
         try {
           const page = await context.capabilities.catalog.listCardPrintings(cardId, {
             pageSize: UI_LIMITS.printingPage,
+            ...(continuation === null ? {} : { continuation }),
           });
           if (closed) {
             return;
           }
-          if (printings.size >= UI_LIMITS.listWindow) {
-            const oldest = printings.keys().next().value;
-            if (oldest !== undefined) {
-              printings.delete(oldest);
+          const merged = [...(continuation === null ? [] : previous), ...page.printings];
+          printings.set(cardId, {
+            printings: merged.slice(-UI_LIMITS.listWindow),
+            continuation: page.continuation,
+            loading: false,
+            error: null,
+          });
+          // The offers of the working set are bounded: the oldest cards a page no longer refines
+          // release theirs, so repeated refinement cannot retain every card ever visited.
+          for (const other of printings.keys()) {
+            if (printings.size <= UI_LIMITS.listWindow) {
+              break;
+            }
+            if (other !== cardId) {
+              printings.delete(other);
             }
           }
-          printings.set(cardId, page.printings);
-          editor.status.textContent = '';
         } catch (cause) {
           if (closed) {
             return;
           }
-          editor.status.textContent = readMessage(cause, 'The printings could not be loaded.');
+          const known = printings.get(cardId);
+          printings.set(cardId, {
+            printings: known?.printings ?? [],
+            continuation: known?.continuation ?? null,
+            loading: false,
+            error: readMessage(cause, 'The printings could not be loaded.'),
+          });
         } finally {
           printingRequests.delete(cardId);
         }
@@ -1130,13 +1537,49 @@ function tagViewPage(): UiPageDefinition {
 
       /** Redraws the presented association editors, so they follow the choices now known. */
       function repaintEditors(): void {
-        for (const [key, editor] of editors) {
-          if (!editor.controls.isConnected) {
-            editors.delete(key);
-            continue;
-          }
+        for (const editor of editors.values()) {
           editor.refresh();
         }
+      }
+
+      /**
+       * Accepts the window of association keys the list now presents: rows the window no longer
+       * holds release their editors, and a restart that read the sequence again is complete. The
+       * unsaved drafts stay under their own bound, so an edit a retired row held survives paging
+       * without retaining every visited association
+       * (docs/user-interface.md#state-ownership-and-restoration).
+       */
+      function associationWindow(presentedKeys: ReadonlySet<string>): void {
+        restartingAssociations = false;
+        for (const key of editors.keys()) {
+          if (!presentedKeys.has(key)) {
+            editors.delete(key);
+          }
+        }
+        while (drafts.size > UI_LIMITS.listWindow) {
+          const oldest = drafts.keys().next().value;
+          if (oldest === undefined) {
+            break;
+          }
+          drafts.delete(oldest);
+        }
+      }
+
+      /**
+       * Restarts the association list after its continuation went stale: the account's private
+       * records changed since the failed page was read, so the list reads the sequence again from
+       * its first page while the presented rows, unsaved drafts and selection stay
+       * (docs/user-interface.md#browsing-and-organization,
+       * docs/user-interface.md#state-ownership-and-restoration).
+       */
+      function restartAssociations(): void {
+        if (closed || associations === null || restartingAssociations) {
+          return;
+        }
+        restartingAssociations = true;
+        associationsStatus.textContent =
+          'The associations changed; the list was reloaded from the start.';
+        associations.refresh();
       }
 
       /**
@@ -1169,35 +1612,91 @@ interface UiAssociationEditor {
   refresh(): void;
 }
 
+/** Unsaved association input the page keeps independently of the rendered row. */
+interface UiAssociationDraft {
+  /** Intended quantity the user typed, or null while the saved one stands. */
+  quantity: string | null;
+  /** Printing the user chose to refine the association to, or null while the saved one stands. */
+  printingId: string | null;
+  /** Location the user chose to move the copy to, or null while the saved one stands. */
+  locationId: string | null;
+}
+
+/** One card's offered printings: the window the page read and the continuation of the rest. */
+interface UiPrintingOffer {
+  readonly printings: readonly PrintingRecord[];
+  readonly continuation: string | null;
+  readonly loading: boolean;
+  readonly error: string | null;
+}
+
+/** The account's offered location tags: the known ones, their continuation and its state. */
+interface UiLocationOffer {
+  readonly tags: readonly Tag[];
+  readonly continuation: string | null;
+  readonly loading: boolean;
+  readonly error: string | null;
+}
+
 /** One add search: the text expression and the result level the tag view presents. */
 interface UiTagAddQuery {
   readonly text: string;
   readonly level: 'card' | 'printing' | 'copy';
 }
 
-/** The source of one tag view's association list: the tag's associations with resolved basics. */
-function associationSource(
-  access: UiTagAccess,
-  catalog: Catalog,
-  records: Map<string, Association>,
-): UiListSource<string> {
+/**
+ * The source of one tag view's association list: the tag's associations with resolved basics and
+ * the private counts of the entries they present. The list reports the window it accumulated, so
+ * the page releases the editors of rows that left it, and a continuation the provider rejects as
+ * stale tells the page to read the sequence again from its first page instead of repeating an
+ * unusable cursor forever (docs/user-interface.md#browsing-and-organization).
+ */
+function associationSource(options: {
+  readonly access: UiTagAccess;
+  readonly catalog: Catalog;
+  readonly counts: UiCountsAccess;
+  readonly tagId: () => string | null;
+  readonly records: Map<string, Association>;
+  readonly onWindow: (presentedKeys: ReadonlySet<string>) => void;
+  readonly onStaleContinuation: () => void;
+}): UiListSource<string> {
+  /** Keys of the window the list presents, bounded like the list's own working set. */
+  const presented: string[] = [];
   return {
     async load(request) {
-      const page = await access.associations(
-        request.context,
-        {
-          pageSize: request.pageSize,
-          ...(request.continuation === null ? {} : { continuation: request.continuation }),
-        },
-        request.signal,
-      );
+      let page: AssociationListResult;
+      try {
+        page = await options.access.associations(
+          request.context,
+          {
+            pageSize: request.pageSize,
+            ...(request.continuation === null ? {} : { continuation: request.continuation }),
+          },
+          request.signal,
+        );
+      } catch (cause) {
+        if (request.continuation !== null && readUiFailureCode(cause) === 'stale-continuation') {
+          options.onStaleContinuation();
+        }
+        throw cause;
+      }
       const entries = await associationEntries(
         page.associations,
-        access,
-        catalog,
-        records,
+        options.access,
+        options.catalog,
+        options.counts,
+        options.tagId(),
+        options.records,
         request.signal,
       );
+      if (request.continuation === null) {
+        presented.length = 0;
+      }
+      presented.push(...entries.map((entry) => entry.key));
+      if (presented.length > UI_LIMITS.listWindow) {
+        presented.splice(0, presented.length - UI_LIMITS.listWindow);
+      }
+      options.onWindow(new Set(presented));
       return { entries, continuation: page.continuation };
     },
   };
@@ -1206,12 +1705,17 @@ function associationSource(
 /**
  * Adapts one page of associations to the list boundary and records each association under its entry
  * key, so the row that presents it edits the identity and revision a read observed. The records of
- * entries the list no longer presents are retired under the bound the list renders.
+ * entries the list no longer presents are retired under the bound the list renders, and the private
+ * counts of the presented entries are read in one bounded batch: an unavailable count read leaves
+ * their counts unknown instead of failing the page, because the ownership fragment reports that
+ * failure and retries it on its own (docs/user-interface.md#cardlist).
  */
 async function associationEntries(
   associations: readonly Association[],
   access: UiTagAccess,
   catalog: Catalog,
+  counts: UiCountsAccess,
+  tagId: string | null,
   records: Map<string, Association>,
   signal: AbortSignal,
 ): Promise<readonly UiListEntry[]> {
@@ -1237,11 +1741,14 @@ async function associationEntries(
     cardIds.add(printing.cardId);
   }
   const cards = await resolveCards(catalog, [...cardIds]);
+  const read = await readAssociationCounts(counts, associations, tagId, signal);
   const entries: UiListEntry[] = [];
   for (const association of associations) {
     const key = associationKey(association);
     records.set(key, association);
-    entries.push(associationListEntry(key, association, copies, printings, cards));
+    entries.push(
+      associationListEntry(key, association, copies, printings, cards, read.get(key) ?? null),
+    );
   }
   const presented = new Set(entries.map((entry) => entry.key));
   while (records.size > UI_LIMITS.listWindow + UI_LIMITS.listPage) {
@@ -1254,6 +1761,47 @@ async function associationEntries(
   return entries;
 }
 
+/** Private counts of the presented association entries, or none when the read did not answer. */
+async function readAssociationCounts(
+  counts: UiCountsAccess,
+  associations: readonly Association[],
+  tagId: string | null,
+  signal: AbortSignal,
+): Promise<ReadonlyMap<string, UiEntryCounts>> {
+  const targets: UiEntryTarget[] = [];
+  for (const association of associations) {
+    targets.push(referenceOfAssociation(association));
+  }
+  try {
+    const read = await counts.ofBatch(targets, tagId, signal);
+    // The provider answers per entry reference; the rows look their counts up under their own
+    // association key.
+    const byKey = new Map<string, UiEntryCounts>();
+    targets.forEach((target, index) => {
+      const count = read.get(uiEntryKey(target));
+      const association = associations[index];
+      if (count !== undefined && association !== undefined) {
+        byKey.set(associationKey(association), count);
+      }
+    });
+    return byKey;
+  } catch {
+    return new Map();
+  }
+}
+
+/** The presented target of one association. */
+function referenceOfAssociation(association: Association): UiEntryTarget {
+  switch (association.targetLevel) {
+    case 'card':
+      return { kind: 'card', cardId: association.targetId };
+    case 'printing':
+      return { kind: 'printing', printingId: association.targetId };
+    case 'copy':
+      return { kind: 'copy', copyId: association.targetId };
+  }
+}
+
 /** One association as the list boundary presents it: its typed target and resolved basics. */
 function associationListEntry(
   key: string,
@@ -1261,6 +1809,7 @@ function associationListEntry(
   copies: ReadonlyMap<string, PhysicalCopy>,
   printings: ReadonlyMap<string, PrintingRecord>,
   cards: ReadonlyMap<string, CardRecord>,
+  counts: UiEntryCounts | null,
 ): UiListEntry {
   const target: UiEntryTarget =
     association.targetLevel === 'card'
@@ -1300,13 +1849,25 @@ function associationListEntry(
                 },
         }
       : null,
-    quantity: { copies: null, intended: association.quantity },
+    // The account's owned copies of the entry and its requirement stay distinct: a card or
+    // printing association carries its own intended quantity, while a physical copy presents the
+    // requirement covering the printing it belongs to
+    // (docs/user-interface.md#browsing-and-organization, docs/architecture.md#tags-and-associations).
+    quantity: {
+      copies: counts?.owned ?? null,
+      intended: association.quantity ?? counts?.intended ?? null,
+    },
   };
 }
 
 /** Stable key of one association entry; the row's editor looks the record up under it. */
 function associationKey(association: Association): string {
   return `association:${association.associationId}`;
+}
+
+/** Location tags of one page of the account's tags; other kinds are not move destinations. */
+function locationTagsOf(tags: readonly Tag[]): readonly Tag[] {
+  return tags.filter((candidate) => kindOf(candidate.kind) === 'location');
 }
 
 /** Copies the copy-targeted associations name, read in the bounded batches a private read accepts. */
@@ -1369,20 +1930,64 @@ async function resolveCards(
   return cards;
 }
 
-/** The source of one add search: the Search contract over the presented query. */
-function addSource(search: SearchClient): UiListSource<UiTagAddQuery> {
+/**
+ * The source of one add search: the Search contract over the presented query, enriched with the
+ * private counts of exactly the entries it presents. The counts come from the entries' own
+ * references, so an entry the account does not own keeps its place in the result with an exact zero
+ * instead of being dropped (docs/user-interface.md#browsing-and-organization,
+ * docs/search.md#evaluation-and-grouping).
+ */
+function addSource(
+  search: SearchClient,
+  counts: UiCountsAccess,
+  tagId: () => string | null,
+): UiListSource<UiTagAddQuery> {
   return {
     async load(request) {
       const page = await search.execute(
         addSearchRequest(request.context, request.pageSize, request.continuation),
         request.signal,
       );
+      const entries = page.entries.map((entry) => searchListEntry(entry));
+      const read = await readAddCounts(counts, page.entries, tagId(), request.signal);
       return {
-        entries: page.entries.map((entry) => searchListEntry(entry)),
+        entries: entries.map((entry) => ({
+          ...entry,
+          quantity: entryQuantity(entry, read.get(entry.key) ?? null),
+        })),
         continuation: page.continuation,
       };
     },
   };
+}
+
+/** Private counts of the entries one add page presents, or none when the read did not answer. */
+async function readAddCounts(
+  counts: UiCountsAccess,
+  entries: readonly SearchEntry[],
+  tagId: string | null,
+  signal: AbortSignal,
+): Promise<ReadonlyMap<string, UiEntryCounts>> {
+  try {
+    return await counts.ofBatch(
+      entries.map((entry) => entry.target),
+      tagId,
+      signal,
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * Quantity one add entry presents: the copies the account owns, the presented tag's intended
+ * quantity covering the entry, or the quantity the query itself evaluated when the count read did
+ * not answer.
+ */
+function entryQuantity(entry: UiListEntry, counts: UiEntryCounts | null): UiEntryQuantity | null {
+  return counts === null
+    ? entry.quantity
+    : { copies: counts.owned, intended: counts.intended ?? entry.quantity?.intended ?? null };
 }
 
 /** One add search as the Search contract receives it; a copy level reads the owned copies. */
@@ -1475,6 +2080,25 @@ function readContinuation(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+/** The source position one history entry kept, or null when it kept none the page can use. */
+function readTagPosition(value: unknown): UiTagPosition | null {
+  const record = readPageState(value);
+  if (record === null) {
+    return null;
+  }
+  const continuation = record.continuation === null ? null : readContinuation(record.continuation);
+  const offset = record.offset;
+  if (
+    (record.continuation !== null && continuation === null) ||
+    typeof offset !== 'number' ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0
+  ) {
+    return null;
+  }
+  return { continuation, offset };
+}
+
 /** The unsaved rename labels one history entry kept, keyed by tag identity. */
 function readDrafts(value: unknown): Map<string, string> {
   const drafts = new Map<string, string>();
@@ -1488,6 +2112,36 @@ function readDrafts(value: unknown): Map<string, string> {
     }
   }
   return drafts;
+}
+
+/** The unsaved association input one history entry kept, keyed by association identity. */
+function readAssociationDrafts(value: unknown): Map<string, UiAssociationDraft> {
+  const drafts = new Map<string, UiAssociationDraft>();
+  const record = readPageState(value);
+  if (record === null) {
+    return drafts;
+  }
+  for (const [associationId, entry] of Object.entries(record)) {
+    const draft = readPageState(entry);
+    if (
+      draft === null ||
+      associationId.length === 0 ||
+      associationId.length > UI_LIMITS.routeSegment
+    ) {
+      continue;
+    }
+    drafts.set(associationId, {
+      quantity: readDraftValue(draft.quantity, UI_LIMITS.entryKey),
+      printingId: readDraftValue(draft.printingId, UI_LIMITS.routeSegment),
+      locationId: readDraftValue(draft.locationId, UI_LIMITS.routeSegment),
+    });
+  }
+  return drafts;
+}
+
+/** One retained draft value, bounded like the control that produced it. */
+function readDraftValue(value: unknown, bound: number): string | null {
+  return typeof value === 'string' ? value.slice(0, bound) : null;
 }
 
 /** The intended quantity one control names, or null when it is not a bounded positive number. */

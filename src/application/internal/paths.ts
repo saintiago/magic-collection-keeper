@@ -13,6 +13,8 @@ export const applicationRoutes = {
   preservedCard: '/api/card',
   /** New query model (`POST`) and the preserved lookup subset (`GET`) share one path. */
   search: '/api/search',
+  /** Private counts of explicit references; it never changes a query's membership. */
+  searchCounts: '/api/search/counts',
   copies: '/api/collection/copies',
   copiesRead: '/api/collection/copies/read',
   copyCorrections: '/api/collection/copies/:copyId/corrections',

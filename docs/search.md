@@ -9,6 +9,10 @@ result membership, ordering, grouping and pagination.
 
 - Accept UserInterface queries with a requested card level, filters, ordering and page boundary.
   Return bounded entries with stable identity, basic information, result context and continuation.
+- Answer bounded private count reads for explicit card, printing or copy references: the account's
+  owned copies, the distinct physical locations holding them and one tag's intended quantity. A
+  count read enriches the entries a consumer presents without changing any query's membership, so
+  an entry the account does not own keeps its place with an exact zero.
 - Use provider-owned read contracts from Catalog and UserCards. These contracts support combined
   database evaluation without exposing private storage structures.
 - Receive trusted user context from Application for private queries. UserCards' access rules apply

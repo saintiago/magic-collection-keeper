@@ -32,6 +32,9 @@ import {
 // Search stays a type-only import here for the same reason: the browser reaches its contract
 // through the request it already carries (docs/application.md#interface).
 import type {
+  SearchCount,
+  SearchCountInput,
+  SearchCountResult,
   SearchEntry,
   SearchEntryTarget,
   SearchPage,
@@ -209,6 +212,12 @@ export function createCatalogClient(request: RequestTransport): Catalog {
 export interface SearchClient {
   /** Evaluates one request; an aborted signal withdraws the invocation. */
   execute(request: SearchRequestInput, signal?: AbortSignal): Promise<SearchPage>;
+  /**
+   * Reads the account's private counts of explicit references: owned copies, the distinct physical
+   * locations holding them and one tag's intended quantity covering each reference. The read
+   * enriches presented entries without changing which entries a query selected.
+   */
+  counts(request: SearchCountInput, signal?: AbortSignal): Promise<SearchCountResult>;
 }
 
 /** Builds the Search contract the UserInterface queries through the interactive entry point. */
@@ -224,6 +233,15 @@ export function createSearchClient(request: RequestTransport): SearchClient {
         ...(signal === undefined ? {} : { signal }),
       });
       return readSearchPage(payload);
+    },
+
+    async counts(input: SearchCountInput, signal?: AbortSignal): Promise<SearchCountResult> {
+      const payload = await request(applicationRoutes.searchCounts, {
+        method: 'POST',
+        body: JSON.stringify(input),
+        ...(signal === undefined ? {} : { signal }),
+      });
+      return readSearchCountResult(payload);
     },
   };
 }
@@ -861,6 +879,38 @@ function readSearchQuantity(value: unknown): SearchEntry['quantity'] {
 
 function isSearchCountOrNull(value: unknown): value is number | null {
   return value === null || isSearchCount(value);
+}
+
+/**
+ * Reads one private count result. Every requested reference arrives with exact counts; a response
+ * outside the declared shape is unavailable rather than an inferred zero.
+ */
+function readSearchCountResult(payload: unknown): SearchCountResult {
+  const record = readObject(payload);
+  const privateRevision = record?.privateRevision;
+  const counts = record?.counts;
+  if (record === null || !isIdentifier(privateRevision) || !Array.isArray(counts)) {
+    throw unreadableSearch();
+  }
+  const read = new Map<string, SearchCount>();
+  for (const candidate of counts) {
+    const count = readObject(candidate);
+    const key = count?.key;
+    const owned = count?.owned;
+    const locations = count?.locations;
+    const intended = count?.intended;
+    if (
+      count === null ||
+      !isIdentifier(key) ||
+      !isSearchCount(owned) ||
+      !isSearchCount(locations) ||
+      !isSearchCountOrNull(intended)
+    ) {
+      throw unreadableSearch();
+    }
+    read.set(key, { owned, locations, intended });
+  }
+  return { privateRevision, counts: read };
 }
 
 function isIdentifierOrNull(value: unknown): value is string | null {

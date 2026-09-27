@@ -159,6 +159,7 @@ describe('collection search access', () => {
         requests.push(input);
         return Promise.resolve(pages);
       },
+      counts: () => Promise.reject(new Error('The list source reads no private counts.')),
     };
     const catalog = {
       resolve: () =>
@@ -238,6 +239,7 @@ describe('collection search access', () => {
     } as unknown as Catalog;
     const search: SearchClient = {
       execute: () => Promise.reject(new Error('The images reader runs no query.')),
+      counts: () => Promise.reject(new Error('The images reader reads no private counts.')),
     };
     const access = createCollectionSearchAccess(search, catalog);
 

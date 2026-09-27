@@ -28,6 +28,7 @@ import type {
   PrintingRecord,
 } from '../../src/catalog/index.js';
 import type { SearchPage, SearchRequestInput } from '../../src/search/index.js';
+import type { SearchCount, SearchCountResult } from '../../src/search/index.js';
 import type {
   Association,
   AssociationChangeResult,
@@ -86,6 +87,17 @@ export interface UiTagsSearchRequest {
   readonly request: SearchRequestInput;
 }
 
+/** One private count request: the explicit references and the tag whose intent it reports. */
+export interface UiTagsCountsRequest {
+  readonly references: readonly {
+    readonly kind: 'card' | 'printing' | 'copy';
+    readonly cardId?: string;
+    readonly printingId?: string;
+    readonly copyId?: string;
+  }[];
+  readonly tagId: string | null;
+}
+
 /** One catalog resolve the pages issued. */
 export interface UiTagsCatalogRequest {
   readonly references: readonly CatalogReference[];
@@ -113,6 +125,7 @@ export interface UiTagsControl {
   removeAssociation(): readonly UiTagsRequest<RemoveAssociationInput>[];
   setCopyLocation(): readonly UiTagsRequest<SetCopyLocationInput>[];
   searches(): readonly UiTagsRequest<UiTagsSearchRequest>[];
+  counts(): readonly UiTagsRequest<UiTagsCountsRequest>[];
   catalogRequests(): readonly UiTagsRequest<UiTagsCatalogRequest>[];
   printingsRequests(): readonly UiTagsRequest<UiTagsPrintingsRequest>[];
   settleListTags(
@@ -144,6 +157,9 @@ export interface UiTagsControl {
     result: { readonly copy: PhysicalCopy; readonly location: Association | null },
   ): void;
   settleSearch(id: number, page: SearchPage): void;
+  settleCounts(id: number, counts: readonly (readonly [string, SearchCount])[]): void;
+  /** Answers every following count read from this table, like the provider the page reads through. */
+  scriptCounts(counts: readonly (readonly [string, SearchCount])[] | null): void;
   settleCatalog(
     id: number,
     records: {
@@ -169,6 +185,17 @@ const harnessRevision = {
   publishedAt: '2026-09-01T00:00:00.000Z',
 };
 
+/** Entry key of one count reference, so a script can name the counts of each presented entry. */
+function referenceKey(reference: UiTagsCountsRequest['references'][number]): string {
+  const identity =
+    reference.kind === 'card'
+      ? reference.cardId
+      : reference.kind === 'printing'
+        ? reference.printingId
+        : reference.copyId;
+  return `${reference.kind}:${identity ?? ''}`;
+}
+
 /** Installs the organization pages into `root`; identity starts signed in. */
 export function installTagsHarness(root: Element | null): UiTagsControl {
   if (root === null) {
@@ -192,6 +219,9 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
   const removeAssociationRequests: UiTagsRequest<RemoveAssociationInput>[] = [];
   const setCopyLocationRequests: UiTagsRequest<SetCopyLocationInput>[] = [];
   const searchRequests: UiTagsRequest<UiTagsSearchRequest>[] = [];
+  const countsRequests: UiTagsRequest<UiTagsCountsRequest>[] = [];
+  /** Counts every following count read answers from, or null while the journey settles each one. */
+  let scriptedCounts: ReadonlyMap<string, SearchCount> | null = null;
   const catalogRequests: UiTagsRequest<UiTagsCatalogRequest>[] = [];
   const printingsRequests: UiTagsRequest<UiTagsPrintingsRequest>[] = [];
 
@@ -260,6 +290,32 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
   const search: SearchClient = {
     execute(input, signal) {
       return begin(searchRequests, { request: input }, signal) as Promise<SearchPage>;
+    },
+    counts(input, signal) {
+      const request: UiTagsCountsRequest = {
+        references: [...input.references],
+        tagId: input.tagId ?? null,
+      };
+      if (scriptedCounts !== null) {
+        sequence += 1;
+        countsRequests.push({
+          id: sequence,
+          arguments: request,
+          get aborted() {
+            return signal?.aborted === true;
+          },
+        });
+        return Promise.resolve({
+          privateRevision: 'private-1',
+          counts: new Map(
+            request.references.map((reference) => {
+              const key = referenceKey(reference);
+              return [key, scriptedCounts?.get(key) ?? { owned: 0, locations: 0, intended: null }];
+            }),
+          ),
+        });
+      }
+      return begin(countsRequests, request, signal) as Promise<SearchCountResult>;
     },
   };
   const userCards: UserCardsClient = {
@@ -378,6 +434,7 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
     removeAssociation: () => removeAssociationRequests.map((entry) => ({ ...entry })),
     setCopyLocation: () => setCopyLocationRequests.map((entry) => ({ ...entry })),
     searches: () => searchRequests.map((entry) => ({ ...entry })),
+    counts: () => countsRequests.map((entry) => ({ ...entry })),
     catalogRequests: () => catalogRequests.map((entry) => ({ ...entry })),
     printingsRequests: () => printingsRequests.map((entry) => ({ ...entry })),
     settleListTags: (id, result) =>
@@ -428,6 +485,14 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
     settleSetCopyLocation: (id, result) =>
       settle(id, result, (value) => ({ privateRevision: 'private-1', ...value })),
     settleSearch: (id, page) => settle(id, page, (value) => value),
+    settleCounts: (id, counts) =>
+      settle(id, counts, (value) => ({
+        privateRevision: 'private-1',
+        counts: new Map(value.map(([key, count]) => [key, count] as const)),
+      })),
+    scriptCounts: (counts) => {
+      scriptedCounts = counts === null ? null : new Map(counts);
+    },
     settleCatalog: (id, records) => settle(id, records, resolution),
     settlePrintings: (id, page) => settle(id, page, (value) => value),
     fail: (id, failure) => {

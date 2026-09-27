@@ -20,7 +20,9 @@ import {
   UI_LIMITS,
   catalogSearchRequest,
   createCatalogSearchAccess,
+  createEntryOwnershipReader,
   createRecentCards,
+  createSearchCounts,
   readUiCatalogFinish,
   readUiCatalogLevel,
   readUiView,
@@ -191,8 +193,103 @@ describe('catalog list entries', () => {
   it('validates the contracts it reads through', () => {
     expect(() => createCatalogSearchAccess(undefined as never, {} as never)).toThrow(TypeError);
     expect(() =>
-      createCatalogSearchAccess({ execute: () => Promise.resolve({}) as never }, {} as never),
+      createCatalogSearchAccess(
+        {
+          execute: () => Promise.resolve({}) as never,
+          counts: () => Promise.resolve({}) as never,
+        },
+        {} as never,
+      ),
     ).toThrow(TypeError);
+  });
+});
+
+describe('private counts of explicit entries', () => {
+  const counts = (
+    references: readonly {
+      readonly kind: 'card' | 'printing' | 'copy';
+      readonly cardId?: string;
+      readonly printingId?: string;
+      readonly copyId?: string;
+    }[],
+  ) => ({
+    privateRevision: 'private-1',
+    counts: new Map(
+      references.map((reference) => [
+        `${reference.kind}:${reference.cardId ?? reference.printingId ?? reference.copyId ?? ''}`,
+        { owned: 2, locations: 1, intended: reference.kind === 'card' ? 3 : null },
+      ]),
+    ),
+  });
+
+  it('reads the presented entries in one bounded request and keys the answer by entry', async () => {
+    const requests: unknown[] = [];
+    const access = createSearchCounts({
+      execute: () => Promise.reject(new Error('The counts read runs no query.')),
+      counts: (request: {
+        readonly references: readonly { readonly kind: 'card' | 'printing' | 'copy' }[];
+      }) => {
+        requests.push(request);
+        return Promise.resolve(counts(request.references));
+      },
+    } as never);
+
+    const read = await access.ofBatch(
+      [
+        { kind: 'card', cardId: 'card-1' },
+        { kind: 'printing', printingId: 'printing-1' },
+      ],
+      'tag-wish',
+      new AbortController().signal,
+    );
+
+    expect(requests).toEqual([
+      {
+        references: [
+          { kind: 'card', cardId: 'card-1' },
+          { kind: 'printing', printingId: 'printing-1' },
+        ],
+        tagId: 'tag-wish',
+      },
+    ]);
+    expect(read.get('card:card-1')).toEqual({ owned: 2, locations: 1, intended: 3 });
+    expect(read.get('printing:printing-1')).toEqual({
+      owned: 2,
+      locations: 1,
+      intended: null,
+    });
+  });
+
+  it('reports an unavailable read as a failure instead of an inferred zero', async () => {
+    const access = createSearchCounts({
+      execute: () => Promise.reject(new Error('The counts read runs no query.')),
+      counts: () => Promise.reject(new Error('The service is down.')),
+    } as never);
+
+    await expect(
+      access.ofBatch([{ kind: 'card', cardId: 'card-1' }], null, new AbortController().signal),
+    ).rejects.toThrow('The service is down.');
+  });
+
+  it('presents the owned and location counts of the entries a fragment names', async () => {
+    const access = createSearchCounts({
+      execute: () => Promise.reject(new Error('The counts read runs no query.')),
+      counts: (request: {
+        readonly references: readonly { readonly kind: 'card' | 'printing' | 'copy' }[];
+      }) => Promise.resolve(counts(request.references)),
+    } as never);
+    const reader = createEntryOwnershipReader(access);
+
+    const read = await reader.read({
+      keys: ['card:card-1', 'association:association-1'],
+      information: ['ownership'],
+      signal: new AbortController().signal,
+    });
+
+    expect(read).toEqual([
+      { key: 'card:card-1', status: 'ready', values: { owned: 2, locations: 1 } },
+      { key: 'association:association-1', status: 'absent', values: null },
+    ]);
   });
 });
 

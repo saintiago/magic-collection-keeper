@@ -11,7 +11,12 @@
 import { z } from 'zod';
 
 import type { Catalog, CatalogReference, CatalogResolution } from '../../catalog/index.js';
-import type { Search, SearchRequestInput } from '../../search/index.js';
+import type {
+  Search,
+  SearchCountInput,
+  SearchCountResult,
+  SearchRequestInput,
+} from '../../search/index.js';
 import type {
   AssociationId,
   AssociationReadResult,
@@ -96,6 +101,16 @@ export function createRoutes(dependencies: RouteDependencies): readonly Route[] 
       path: applicationRoutes.search,
       access: 'public',
       call: ({ body, context }) => search.execute(body as unknown as SearchRequestInput, context),
+    },
+    {
+      // Counts describe the account's private copies and intentions, so the read is authenticated
+      // even though the references it names carry no query membership.
+      operation: 'search.counts',
+      method: 'POST',
+      path: applicationRoutes.searchCounts,
+      access: 'authenticated',
+      call: async ({ body, context }) =>
+        searchCountPayload(await search.counts(body as unknown as SearchCountInput, context)),
     },
     {
       // The preserved browser engines hydrate a candidate through their own envelope; the new
@@ -428,6 +443,14 @@ function copyReadPayload(result: CopyReadResult): unknown {
     privateRevision: result.privateRevision,
     copies: [...result.copies.values()],
     missing: result.missing,
+  };
+}
+
+/** Serializes one private count result: the count map becomes an ordered array on the wire. */
+function searchCountPayload(result: SearchCountResult): unknown {
+  return {
+    privateRevision: result.privateRevision,
+    counts: [...result.counts].map(([key, count]) => ({ key, ...count })),
   };
 }
 

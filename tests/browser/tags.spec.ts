@@ -18,10 +18,12 @@ import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 
 import type { CardRecord, PrintingRecord } from '../../src/catalog/index.js';
+import type { SearchCount } from '../../src/search/index.js';
 import type { Association, PhysicalCopy, Tag } from '../../src/usercards/index.js';
 import type {
   UiTagsAssociationListRequest,
   UiTagsControl,
+  UiTagsCountsRequest,
   UiTagsListRequest,
   UiTagsRequest,
 } from './tags.harness.js';
@@ -130,6 +132,17 @@ function tag(overrides: Partial<Tag> = {}): Tag {
   };
 }
 
+/** One page of generated tags, ordered by stable identity like the provider's pages. */
+function tagPage(from: number, count: number): readonly Tag[] {
+  return Array.from({ length: count }, (_, index) =>
+    tag({
+      tagId: `tag-${String(from + index).padStart(4, '0')}`,
+      kind: 'other',
+      label: `Tag ${from + index}`,
+    }),
+  );
+}
+
 function association(overrides: Partial<Association> = {}): Association {
   return {
     associationId: 'association-1',
@@ -158,6 +171,29 @@ const boltPrinting: PrintingRecord = {
   },
 };
 
+const staBolt: PrintingRecord = {
+  printingId: 'printing-2',
+  cardId: 'card-bolt',
+  edition: 'STA',
+  collectorNumber: '109',
+  language: 'en',
+  finishes: ['etched'],
+  physical: true,
+  images: {
+    small: 'https://cards.test/small-sta.jpg',
+    normal: 'https://cards.test/normal-sta.jpg',
+    large: null,
+    artCrop: null,
+  },
+};
+
+const catalogRevision = {
+  revisionId: 'tags-revision',
+  sourceName: 'fixture',
+  sourceVersion: '1',
+  publishedAt: '2026-09-01T00:00:00.000Z',
+};
+
 const boltCard: CardRecord = {
   cardId: 'card-bolt',
   name: 'Lightning Bolt',
@@ -169,6 +205,17 @@ const boltCard: CardRecord = {
   manaValue: 1,
 };
 
+const counterspellCard: CardRecord = {
+  cardId: 'card-counter',
+  name: 'Counterspell',
+  names: [],
+  rulesText: 'Counter target spell.',
+  typeLine: 'Instant',
+  colors: ['U'],
+  colorIdentity: ['U'],
+  manaValue: 2,
+};
+
 /** Answers the catalog resolves one association page issues for its card and printing references. */
 async function settleCatalog(
   page: Page,
@@ -178,6 +225,22 @@ async function settleCatalog(
   const request = await requested(page, 'catalogRequests', index);
   await settle(page, 'settleCatalog', request.id, records);
 }
+
+/**
+ * Answers every private count read from this table, like the provider the pages read through: a
+ * reference the table does not name is answered with an exact zero and no intention.
+ */
+async function scriptCounts(
+  page: Page,
+  counts: readonly (readonly [string, SearchCount])[],
+): Promise<void> {
+  await control(page, 'scriptCounts', counts);
+}
+
+/** The counts of the association fixture's printing, as the real provider would evaluate them. */
+const wishlistCounts: readonly (readonly [string, SearchCount])[] = [
+  ['printing:printing-1', { owned: 1, locations: 1, intended: 2 }],
+];
 
 test('lists the account’s tags and keeps an unsaved rename after a conflict', async ({ page }) => {
   const errors = await openTags(page, '#/tags');
@@ -288,6 +351,7 @@ test('presents a wishlist association’s intended quantity and saves a new one'
   page,
 }) => {
   const errors = await openTags(page, '#/tags/tag-wish');
+  await scriptCounts(page, wishlistCounts);
   const read = await requested<readonly string[]>(page, 'readTags');
   expect(read.arguments).toEqual(['tag-wish']);
   await settle(page, 'settleReadTags', read.id, [
@@ -303,7 +367,14 @@ test('presents a wishlist association’s intended quantity and saves a new one'
   await expect(row).toContainText('Lightning Bolt');
   await expect(row).toContainText('M11 149 · en');
   await expect(row).toContainText('Printing');
+  // The provider's own counts are presented: the account's owned copies, the requirement the
+  // tag holds and the physical locations of those copies stay distinct.
+  await expect(row.locator('[data-ui-copies]')).toHaveText(' Copies: 1');
   await expect(row.locator('[data-ui-intended]')).toHaveText(' Intended: 2');
+  await expect(row.locator('[data-ui-locations]')).toHaveText(' Locations: 1');
+  const counted = await requested<UiTagsCountsRequest>(page, 'counts', 0);
+  expect(counted.arguments.tagId).toBe('tag-wish');
+  expect(counted.arguments.references).toEqual([{ kind: 'printing', printingId: 'printing-1' }]);
 
   await page.fill('#tag-quantity-association-1', '4');
   await page.click('#tag-quantity-save-association-1');
@@ -337,8 +408,551 @@ test('presents a wishlist association’s intended quantity and saves a new one'
   expect(errors).toEqual([]);
 });
 
+test('keeps the unsaved rename label when a lost response stays unknown', async ({ page }) => {
+  const errors = await openTags(page, '#/tags');
+  const listing = await requested<UiTagsListRequest>(page, 'listTags');
+  await settle(page, 'settleListTags', listing.id, { tags: [tag()], continuation: null });
+
+  await page.fill('#tag-label-tag-burn', 'My draft');
+  await page.click('#tag-rename-tag-burn');
+  const rename = await requested<{ readonly label: string }>(page, 'renameTag');
+  await settle(page, 'fail', rename.id, {
+    code: 'unavailable',
+    message: 'The service is down.',
+  });
+
+  // The lost response is recovered by reading the tag, but the outcome stays unknown: the state
+  // the read observed is presented as the one a retry quotes without replacing the user's label.
+  const recovery = await requested<readonly string[]>(page, 'readTags');
+  await settle(page, 'settleReadTags', recovery.id, [
+    tag({ label: 'Other saved label', revision: 2 }),
+  ]);
+  await expect(page.locator('#tag-label-tag-burn')).toHaveValue('My draft');
+  await expect(page.locator('#tag-row-status-tag-burn')).toHaveText(
+    'The outcome is unknown. Review the record before retrying.',
+  );
+
+  await page.click('#tag-rename-tag-burn');
+  const retry = await requested<{ readonly expectedRevision: number; readonly label: string }>(
+    page,
+    'renameTag',
+    1,
+  );
+  expect(retry.arguments).toEqual({
+    tagId: 'tag-burn',
+    expectedRevision: 2,
+    label: 'My draft',
+  });
+  expect(errors).toEqual([]);
+});
+
+test('never replaces a committed tag with a late list response', async ({ page }) => {
+  const errors = await openTags(page, '#/tags');
+  const listing = await requested<UiTagsListRequest>(page, 'listTags');
+
+  // The user creates a tag while the account's first list read is still outstanding.
+  await page.selectOption('#tag-create-kind', 'wishlist');
+  await page.fill('#tag-create-label', 'To buy');
+  await page.click('#tag-create-submit');
+  const create = await requested<{ readonly label: string }>(page, 'createTag');
+  await settle(
+    page,
+    'settleCreateTag',
+    create.id,
+    tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'To buy' }),
+  );
+  await expect(page.locator('#tags-list [data-ui-tag="tag-wish"] a')).toHaveText('To buy');
+
+  // The read that started before the create arrives late with the account's older, empty page: it
+  // never replaces the window the committed change published.
+  await settle(page, 'settleListTags', listing.id, { tags: [], continuation: null });
+  await expect(page.locator('#tags-list [data-ui-tag="tag-wish"] a')).toHaveText('To buy');
+  await expect(page.locator('#tags-status')).toHaveText('');
+  expect(errors).toEqual([]);
+});
+
+test('keeps a typed quantity while a further association page loads', async ({ page }) => {
+  const errors = await openTags(page, '#/tags/tag-wish');
+  await scriptCounts(page, wishlistCounts);
+  const read = await requested<readonly string[]>(page, 'readTags');
+  await settle(page, 'settleReadTags', read.id, [
+    tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
+  ]);
+  const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
+  await settle(page, 'settleListAssociations', listing.id, {
+    associations: [association()],
+    continuation: 'association-page-2',
+  });
+  await settleCatalog(page, 0, { printings: [boltPrinting] });
+  await settleCatalog(page, 1, { cards: [boltCard] });
+
+  await page.fill('#tag-quantity-association-1', '9');
+  await page.click('#tag-quantity-save-association-1');
+  const change = await requested<Record<string, unknown>>(page, 'changeAssociation');
+  await settle(page, 'fail', change.id, {
+    code: 'invalid-request',
+    message: 'A card or printing association needs its intended quantity.',
+  });
+  await expect(page.locator('#tag-quantity-association-1')).toHaveValue('9');
+
+  // Loading a further page re-renders the presented window; the unsaved input stays with the page.
+  await page.click('#tag-associations [data-ui-more]');
+  const more = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 1);
+  await settle(page, 'settleListAssociations', more.id, {
+    associations: [association({ associationId: 'association-2', quantity: 1 }), association()],
+    continuation: null,
+  });
+  await settleCatalog(page, 2, { printings: [boltPrinting] });
+  await settleCatalog(page, 3, { cards: [boltCard] });
+  await expect(page.locator('#tag-quantity-association-1')).toHaveValue('9');
+  expect(errors).toEqual([]);
+});
+
+test('recovers from an association conflict against the reviewed revision', async ({ page }) => {
+  const errors = await openTags(page, '#/tags/tag-wish');
+  await scriptCounts(page, wishlistCounts);
+  const read = await requested<readonly string[]>(page, 'readTags');
+  await settle(page, 'settleReadTags', read.id, [
+    tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
+  ]);
+  const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
+  await settle(page, 'settleListAssociations', listing.id, { associations: [association()] });
+  await settleCatalog(page, 0, { printings: [boltPrinting] });
+  await settleCatalog(page, 1, { cards: [boltCard] });
+
+  await page.fill('#tag-quantity-association-1', '9');
+  await page.click('#tag-quantity-save-association-1');
+  const change = await requested<Record<string, unknown>>(page, 'changeAssociation');
+  await settle(page, 'fail', change.id, {
+    code: 'conflict',
+    message: 'The association changed after this revision; reload it before changing it.',
+  });
+
+  // The page reads the association the conflict names, presents its recorded state and keeps the
+  // unsaved input for a deliberate retry.
+  const reread = await requested<readonly string[]>(page, 'readAssociations');
+  expect(reread.arguments).toEqual(['association-1']);
+  await settle(page, 'settleReadAssociations', reread.id, [
+    association({ quantity: 3, revision: 7 }),
+  ]);
+  await expect(page.locator('#tag-association-status-association-1')).toHaveText(
+    'The association changed after this revision; reload it before changing it. Its saved state ' +
+      'is now printing intention of 3. Your input stays for the retry.',
+  );
+  await expect(page.locator('#tag-quantity-association-1')).toHaveValue('9');
+
+  // The retry quotes the revision the read presented instead of the obsolete one.
+  await page.click('#tag-quantity-save-association-1');
+  const retry = await requested<Record<string, unknown>>(page, 'changeAssociation', 1);
+  expect(retry.arguments).toEqual({
+    associationId: 'association-1',
+    expectedRevision: 7,
+    targetLevel: 'printing',
+    targetId: 'printing-1',
+    quantity: 9,
+  });
+  await settle(
+    page,
+    'settleChangeAssociation',
+    retry.id,
+    association({ quantity: 9, revision: 8 }),
+  );
+  const refresh = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 1);
+  await settle(page, 'settleListAssociations', refresh.id, {
+    associations: [association({ quantity: 9, revision: 8 })],
+  });
+  await settleCatalog(page, 2, { printings: [boltPrinting] });
+  await settleCatalog(page, 3, { cards: [boltCard] });
+  await expect(page.locator('#tag-quantity-association-1')).toHaveValue('9');
+  expect(errors).toEqual([]);
+});
+
+test('allows removing an association again after a failed request', async ({ page }) => {
+  const errors = await openTags(page, '#/tags/tag-burn');
+  await scriptCounts(page, wishlistCounts);
+  const read = await requested<readonly string[]>(page, 'readTags');
+  await settle(page, 'settleReadTags', read.id, [
+    tag({ tagId: 'tag-burn', kind: 'deck', label: 'Burn' }),
+  ]);
+  const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
+  await settle(page, 'settleListAssociations', listing.id, {
+    associations: [association({ tagId: 'tag-burn' })],
+  });
+  await settleCatalog(page, 0, { printings: [boltPrinting] });
+  await settleCatalog(page, 1, { cards: [boltCard] });
+
+  await page.click('#tag-remove-association-1');
+  await page.getByRole('dialog').getByRole('button', { name: 'Remove' }).click();
+  const removal = await requested<Record<string, unknown>>(page, 'removeAssociation');
+  await settle(page, 'fail', removal.id, {
+    code: 'unavailable',
+    message: 'The service is down.',
+  });
+
+  // The association stays presented, so its control is usable again for another attempt.
+  const control = page.locator('#tag-remove-association-1');
+  await expect(control).toBeEnabled();
+  await control.click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Remove' }).click();
+  const retry = await requested<Record<string, unknown>>(page, 'removeAssociation', 1);
+  expect(retry.arguments).toEqual({ associationId: 'association-1', expectedRevision: 1 });
+  expect(errors).toEqual([]);
+});
+
+test('reports the committed part of a bulk addition and reconciles the list', async ({ page }) => {
+  const errors = await openTags(page, '#/tags/tag-wish');
+  await scriptCounts(page, []);
+  const read = await requested<readonly string[]>(page, 'readTags');
+  await settle(page, 'settleReadTags', read.id, [
+    tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
+  ]);
+  const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
+  await settle(page, 'settleListAssociations', listing.id, { associations: [] });
+
+  await page.fill('#tag-add-query', 'bolt');
+  await page.selectOption('#tag-add-level', 'card');
+  await page.fill('#tag-add-quantity', '2');
+  await page.click('#tag-add-submit');
+  const search = await requested<{ readonly request: Record<string, unknown> }>(page, 'searches');
+  await settle(page, 'settleSearch', search.id, {
+    entries: [
+      {
+        entryKey: 'card:card-bolt',
+        target: { kind: 'card', cardId: 'card-bolt' },
+        card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
+        printing: null,
+        quantity: null,
+      },
+      {
+        entryKey: 'card:card-counter',
+        target: { kind: 'card', cardId: 'card-counter' },
+        card: {
+          cardId: counterspellCard.cardId,
+          name: counterspellCard.name,
+          matchedName: null,
+        },
+        printing: null,
+        quantity: null,
+      },
+    ],
+    totalCount: 2,
+    continuation: null,
+    revisions: { catalogRevision: 'tags-revision', privateRevision: 'private-1' },
+  });
+
+  const results = page.locator('#tag-add-results [data-ui-entry]');
+  await results.nth(0).locator('[data-ui-select]').check();
+  await results.nth(1).locator('[data-ui-select]').check();
+  await page.click('#tag-add-results [data-ui-tool="add-to-tag"]');
+
+  // The first entry commits; the second is a duplicate the provider refuses.
+  const first = await requested<Record<string, unknown>>(page, 'createAssociation');
+  await settle(
+    page,
+    'settleCreateAssociation',
+    first.id,
+    association({
+      associationId: 'association-1',
+      targetLevel: 'card',
+      targetId: 'card-bolt',
+      quantity: 2,
+    }),
+  );
+  const second = await requested<Record<string, unknown>>(page, 'createAssociation', 1);
+  await settle(page, 'fail', second.id, {
+    code: 'conflict',
+    message: 'This tag already associates that target; change the existing association instead.',
+  });
+
+  // The committed portion is reported beside the failure, and the association list reads the tag
+  // again so the entry that committed is visible.
+  await expect(page.locator('#tag-add-results [data-ui-outcome]')).toHaveAttribute(
+    'data-ui-outcome-status',
+    'conflict',
+  );
+  await expect(page.locator('#tag-add-results [data-ui-outcome]')).toHaveText(
+    '1 of 2 entries were added; 1 were not. This tag already associates that target; change the ' +
+      'existing association instead.',
+  );
+  const refresh = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 1);
+  await settle(page, 'settleListAssociations', refresh.id, {
+    associations: [
+      association({
+        associationId: 'association-1',
+        targetLevel: 'card',
+        targetId: 'card-bolt',
+        quantity: 2,
+      }),
+    ],
+  });
+  await settleCatalog(page, 0, { cards: [boltCard] });
+  await expect(
+    page.locator('#tag-associations [data-ui-entry="association:association-1"]'),
+  ).toContainText('Lightning Bolt');
+  expect(errors).toEqual([]);
+});
+
+test('reads further printings when the exact one is not on the first page', async ({ page }) => {
+  const errors = await openTags(page, '#/tags/tag-wish');
+  await scriptCounts(page, [['card:card-bolt', { owned: 1, locations: 0, intended: 1 }]]);
+  const read = await requested<readonly string[]>(page, 'readTags');
+  await settle(page, 'settleReadTags', read.id, [
+    tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
+  ]);
+  const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
+  await settle(page, 'settleListAssociations', listing.id, {
+    associations: [association({ targetLevel: 'card', targetId: 'card-bolt', quantity: 1 })],
+  });
+  await settleCatalog(page, 0, { cards: [boltCard] });
+
+  await page.click('#tag-refine-choose-association-1');
+  const first = await requested<{ readonly cardId: string }>(page, 'printingsRequests');
+  await settle(page, 'settlePrintings', first.id, {
+    cardId: 'card-bolt',
+    cardExists: true,
+    revision: catalogRevision,
+    printings: [boltPrinting],
+    continuation: 'printing-page-2',
+  });
+
+  // The first page is not the whole choice set: the row offers the continuation of the rest.
+  await expect(page.locator('#tag-refine-more-association-1')).toBeVisible();
+  await expect(page.locator('#tag-refine-association-1 option')).toHaveText(['M11 149 · en']);
+  await page.click('#tag-refine-more-association-1');
+  const second = await requested<{
+    readonly cardId: string;
+    readonly options: { readonly continuation?: string };
+  }>(page, 'printingsRequests', 1);
+  expect(second.arguments.options.continuation).toBe('printing-page-2');
+  await settle(page, 'settlePrintings', second.id, {
+    cardId: 'card-bolt',
+    cardExists: true,
+    revision: catalogRevision,
+    printings: [staBolt],
+    continuation: null,
+  });
+
+  await expect(page.locator('#tag-refine-association-1 option')).toHaveText([
+    'M11 149 · en',
+    'STA 109 · en',
+  ]);
+  await expect(page.locator('#tag-refine-more-association-1')).toBeHidden();
+  await page.selectOption('#tag-refine-association-1', 'printing-2');
+  await page.click('#tag-refine-save-association-1');
+  const change = await requested<Record<string, unknown>>(page, 'changeAssociation');
+  expect(change.arguments).toEqual({
+    associationId: 'association-1',
+    expectedRevision: 1,
+    targetLevel: 'printing',
+    targetId: 'printing-2',
+    quantity: 1,
+  });
+  expect(errors).toEqual([]);
+});
+
+test('presents a deck’s required count beside the physical copies it holds', async ({ page }) => {
+  const errors = await openTags(page, '#/tags/tag-burn');
+  await scriptCounts(page, [
+    ['card:card-bolt', { owned: 1, locations: 1, intended: 4 }],
+    ['copy:copy-1', { owned: 1, locations: 1, intended: 4 }],
+  ]);
+  const read = await requested<readonly string[]>(page, 'readTags');
+  await settle(page, 'settleReadTags', read.id, [
+    tag({ tagId: 'tag-burn', kind: 'deck', label: 'Burn' }),
+  ]);
+  const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
+  await settle(page, 'settleListAssociations', listing.id, {
+    associations: [
+      association({
+        associationId: 'association-1',
+        tagId: 'tag-burn',
+        targetLevel: 'card',
+        targetId: 'card-bolt',
+        quantity: 4,
+      }),
+      association({
+        associationId: 'association-2',
+        tagId: 'tag-burn',
+        targetLevel: 'copy',
+        targetId: 'copy-1',
+        quantity: null,
+      }),
+    ],
+  });
+  const copies = await requested<readonly string[]>(page, 'readCopies');
+  await settle(page, 'settleReadCopies', copies.id, [
+    {
+      copyId: 'copy-1',
+      printingId: 'printing-1',
+      finish: 'nonfoil',
+      condition: 'NM',
+      revision: 5,
+    },
+  ]);
+  await settleCatalog(page, 0, { printings: [boltPrinting] });
+  await settleCatalog(page, 1, { cards: [boltCard] });
+
+  // The required count the deck holds and the copies the account owns stay distinct.
+  const required = page.locator('#tag-associations [data-ui-entry="association:association-1"]');
+  await expect(required.locator('[data-ui-intended]')).toHaveText(' Intended: 4');
+  await expect(required.locator('[data-ui-copies]')).toHaveText(' Copies: 1');
+
+  // A physical-copy row presents the requirement covering its printing beside its own copies.
+  const physical = page.locator('#tag-associations [data-ui-entry="association:association-2"]');
+  await expect(physical.locator('[data-ui-copies]')).toHaveText(' Copies: 1');
+  await expect(physical.locator('[data-ui-intended]')).toHaveText(' Intended: 4');
+  expect(errors).toEqual([]);
+});
+
+test('reads further location pages for a move', async ({ page }) => {
+  const errors = await openTags(page, '#/tags/tag-binder');
+  await scriptCounts(page, [['copy:copy-1', { owned: 1, locations: 1, intended: null }]]);
+  const read = await requested<readonly string[]>(page, 'readTags');
+  await settle(page, 'settleReadTags', read.id, [
+    tag({ tagId: 'tag-binder', kind: 'location', label: 'Binder' }),
+  ]);
+  const locations = await requested<UiTagsListRequest>(page, 'listTags');
+  await settle(page, 'settleListTags', locations.id, {
+    tags: [tag({ tagId: 'tag-binder', kind: 'location', label: 'Binder' })],
+    continuation: 'tag-page-2',
+  });
+  const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
+  await settle(page, 'settleListAssociations', listing.id, {
+    associations: [association({ targetLevel: 'copy', targetId: 'copy-1', quantity: null })],
+  });
+  const copies = await requested<readonly string[]>(page, 'readCopies');
+  const stored: PhysicalCopy = {
+    copyId: 'copy-1',
+    printingId: 'printing-1',
+    finish: 'nonfoil',
+    condition: 'NM',
+    revision: 5,
+  };
+  await settle(page, 'settleReadCopies', copies.id, [stored]);
+  await settleCatalog(page, 0, { printings: [boltPrinting] });
+  await settleCatalog(page, 1, { cards: [boltCard] });
+
+  // The first tag page holds no further destination and continues: the view offers the rest.
+  await expect(page.locator('#tag-move-association-1 option')).toHaveText([
+    'No location',
+    'Binder',
+  ]);
+  await expect(page.locator('#tag-locations-more')).toBeVisible();
+  await page.click('#tag-locations-more');
+  const more = await requested<UiTagsListRequest>(page, 'listTags', 1);
+  expect(more.arguments.continuation).toBe('tag-page-2');
+  await settle(page, 'settleListTags', more.id, {
+    tags: [
+      tag({ tagId: 'tag-bulk', kind: 'other', label: 'Bulk' }),
+      tag({ tagId: 'tag-box', kind: 'location', label: 'Box' }),
+    ],
+    continuation: null,
+  });
+
+  // Only location tags are destinations, and the destination beyond the first page is offered.
+  await expect(page.locator('#tag-move-association-1 option')).toHaveText([
+    'No location',
+    'Binder',
+    'Box',
+  ]);
+  await expect(page.locator('#tag-locations-more')).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
+test('restarts the association list when its continuation went stale', async ({ page }) => {
+  const errors = await openTags(page, '#/tags/tag-wish');
+  await scriptCounts(page, wishlistCounts);
+  const read = await requested<readonly string[]>(page, 'readTags');
+  await settle(page, 'settleReadTags', read.id, [
+    tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
+  ]);
+  const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
+  await settle(page, 'settleListAssociations', listing.id, {
+    associations: [association()],
+    continuation: 'association-page-2',
+  });
+  await settleCatalog(page, 0, { printings: [boltPrinting] });
+  await settleCatalog(page, 1, { cards: [boltCard] });
+
+  await page.click('#tag-associations [data-ui-more]');
+  const stale = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 1);
+  expect(stale.arguments.continuation).toBe('association-page-2');
+  await settle(page, 'fail', stale.id, {
+    code: 'stale-continuation',
+    message: 'The private records changed after this page was read; start the list again.',
+  });
+
+  // The page reads the sequence again from its first page instead of repeating the unusable cursor.
+  const restart = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 2);
+  expect(restart.arguments).toEqual({
+    tagId: 'tag-wish',
+    pageSize: 50,
+    continuation: null,
+  });
+  await settle(page, 'settleListAssociations', restart.id, { associations: [association()] });
+  await settleCatalog(page, 2, { printings: [boltPrinting] });
+  await settleCatalog(page, 3, { cards: [boltCard] });
+  await expect(
+    page.locator('#tag-associations [data-ui-entry="association:association-1"]'),
+  ).toContainText('Lightning Bolt');
+  await expect(page.locator('#tag-associations-status')).toHaveText(
+    'The associations changed; the list was reloaded from the start.',
+  );
+  expect(errors).toEqual([]);
+});
+
+test('restores the browsed tag window when returning to the tags page', async ({ page }) => {
+  const errors = await openTags(page, '#/tags');
+  const first = await requested<UiTagsListRequest>(page, 'listTags');
+  expect(first.arguments).toEqual({ pageSize: 50, continuation: null });
+  await settle(page, 'settleListTags', first.id, {
+    tags: tagPage(0, 50),
+    continuation: 'tag-page-2',
+  });
+
+  // Fill the retained window and page once beyond it: the presented window now holds tags 50–549.
+  for (let index = 2; index <= 11; index += 1) {
+    await page.click('#tags-more');
+    const request = await requested<UiTagsListRequest>(page, 'listTags', index - 1);
+    expect(request.arguments.continuation).toBe(`tag-page-${index}`);
+    await settle(page, 'settleListTags', request.id, {
+      tags: tagPage((index - 1) * 50, 50),
+      continuation: index === 11 ? null : `tag-page-${index + 1}`,
+    });
+  }
+
+  // The rendering stays bounded and the retained window starts at the second page's first tag.
+  const rendered = page.locator('#tags-list [data-ui-tag]');
+  await expect(rendered).toHaveCount(500);
+  await expect(page.locator('#tags-list [data-ui-tag="tag-0000"]')).toHaveCount(0);
+  await expect(page.locator('#tags-list [data-ui-tag="tag-0050"]')).toHaveCount(1);
+  await expect(page.locator('#tags-list [data-ui-tag="tag-0549"]')).toHaveCount(1);
+
+  // Leaving for a tag and returning re-reads the window from its own position, not from the start.
+  await page.click('#tags-list [data-ui-tag="tag-0549"] a');
+  await expect(page.locator('#tag-heading')).toBeVisible();
+  await page.goBack();
+  const reread = await requested<UiTagsListRequest>(page, 'listTags', 11);
+  expect(reread.arguments).toEqual({ pageSize: 50, continuation: 'tag-page-2' });
+  await settle(page, 'settleListTags', reread.id, {
+    tags: tagPage(50, 50),
+    continuation: 'tag-page-3',
+  });
+  for (let index = 3; index <= 11; index += 1) {
+    const request = await requested<UiTagsListRequest>(page, 'listTags', 9 + index);
+    await settle(page, 'settleListTags', request.id, {
+      tags: tagPage((index - 1) * 50, 50),
+      continuation: index === 11 ? null : `tag-page-${index + 1}`,
+    });
+  }
+  await expect(page.locator('#tags-list [data-ui-tag="tag-0549"]')).toHaveCount(1);
+  await expect(page.locator('#tags-list [data-ui-tag="tag-0000"]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('keeps a typed intended quantity when the change fails', async ({ page }) => {
   const errors = await openTags(page, '#/tags/tag-wish');
+  await scriptCounts(page, wishlistCounts);
   const read = await requested<readonly string[]>(page, 'readTags');
   await settle(page, 'settleReadTags', read.id, [
     tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
@@ -367,6 +981,7 @@ test('keeps a typed intended quantity when the change fails', async ({ page }) =
 
 test('refines a card association to one exact printing', async ({ page }) => {
   const errors = await openTags(page, '#/tags/tag-wish');
+  await scriptCounts(page, [['card:card-bolt', { owned: 1, locations: 1, intended: 1 }]]);
   const read = await requested<readonly string[]>(page, 'readTags');
   await settle(page, 'settleReadTags', read.id, [
     tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
@@ -427,6 +1042,7 @@ test('refines a card association to one exact printing', async ({ page }) => {
 
 test('moves a copy out of a location and shows the remaining associations', async ({ page }) => {
   const errors = await openTags(page, '#/tags/tag-binder');
+  await scriptCounts(page, [['copy:copy-1', { owned: 1, locations: 1, intended: null }]]);
   const read = await requested<readonly string[]>(page, 'readTags');
   await settle(page, 'settleReadTags', read.id, [
     tag({ tagId: 'tag-binder', kind: 'location', label: 'Binder' }),
@@ -490,6 +1106,7 @@ test('searches the catalog and adds a card to the wishlist with its intended qua
   page,
 }) => {
   const errors = await openTags(page, '#/tags/tag-wish');
+  await scriptCounts(page, [['card:card-bolt', { owned: 1, locations: 1, intended: 2 }]]);
   const read = await requested<readonly string[]>(page, 'readTags');
   await settle(page, 'settleReadTags', read.id, [
     tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
@@ -516,10 +1133,19 @@ test('searches the catalog and adds a card to the wishlist with its intended qua
         target: { kind: 'card', cardId: 'card-bolt' },
         card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
         printing: null,
-        quantity: { copies: 1, intended: 2 },
+        // A public catalog query evaluates no private quantity; the counts the row presents come
+        // from the provider's count read for exactly the entry the query selected.
+        quantity: null,
+      },
+      {
+        entryKey: 'card:card-counter',
+        target: { kind: 'card', cardId: 'card-counter' },
+        card: { cardId: 'card-counter', name: 'Counterspell', matchedName: null },
+        printing: null,
+        quantity: null,
       },
     ],
-    totalCount: 1,
+    totalCount: 2,
     continuation: null,
     revisions: { catalogRevision: 'tags-revision', privateRevision: 'private-1' },
   });
@@ -527,6 +1153,19 @@ test('searches the catalog and adds a card to the wishlist with its intended qua
   const result = page.locator('#tag-add-results [data-ui-entry="card:card-bolt"]');
   await expect(result.locator('[data-ui-copies]')).toHaveText(' Copies: 1');
   await expect(result.locator('[data-ui-intended]')).toHaveText(' Intended: 2');
+  await expect(result.locator('[data-ui-locations]')).toHaveText(' Locations: 1');
+  // An entry the account does not own keeps its place with an exact zero: the counts enrich the
+  // result instead of restricting its membership.
+  const unowned = page.locator('#tag-add-results [data-ui-entry="card:card-counter"]');
+  await expect(unowned.locator('[data-ui-copies]')).toHaveText(' Copies: 0');
+  // The read names the presented entry and the tag whose intention the page presents, so an
+  // unowned entry keeps its place with an exact zero instead of being dropped from the search.
+  const counted = await requested<UiTagsCountsRequest>(page, 'counts', 0);
+  expect(counted.arguments.tagId).toBe('tag-wish');
+  expect(counted.arguments.references).toEqual([
+    { kind: 'card', cardId: 'card-bolt' },
+    { kind: 'card', cardId: 'card-counter' },
+  ]);
 
   await result.locator('[data-ui-select]').check();
   await page.click('#tag-add-results [data-ui-tool="add-to-tag"]');

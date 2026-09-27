@@ -74,6 +74,7 @@ export function createApplication(dependencies: ApplicationDependencies): Applic
     typeof components.catalog?.resolve !== 'function' ||
     typeof components.catalog?.listCardPrintings !== 'function' ||
     typeof components.search?.execute !== 'function' ||
+    typeof components.search?.counts !== 'function' ||
     typeof components.synchronizer?.synchronize !== 'function' ||
     !components.userCards
   ) {

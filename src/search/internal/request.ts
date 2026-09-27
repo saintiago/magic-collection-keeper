@@ -16,6 +16,7 @@ import {
   type SearchQuery,
   type SearchRequestInput,
 } from './model.js';
+import { searchCountKey, type SearchCountInput, type SearchCountReference } from './results.js';
 import { parseScryfallQuery } from './scryfall.js';
 
 const requestSchema = z.object({
@@ -105,4 +106,51 @@ function requestProblem(error: z.ZodError): string {
     default:
       return 'A search request with a result level, criteria, ordering and page size is required.';
   }
+}
+
+const countReferenceSchema = z.union([
+  z.object({
+    kind: z.literal('card'),
+    cardId: z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength),
+  }),
+  z.object({
+    kind: z.literal('printing'),
+    printingId: z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength),
+  }),
+  z.object({
+    kind: z.literal('copy'),
+    copyId: z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength),
+  }),
+]);
+
+const countRequestSchema = z.object({
+  references: z.array(countReferenceSchema).min(1).max(SEARCH_LIMITS.maxCountReferences),
+  tagId: z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength).nullable().optional(),
+});
+
+/** One normalized private count request: distinct references and the tag whose intent is read. */
+export interface SearchCountQuery {
+  readonly references: readonly SearchCountReference[];
+  readonly tagId: string | null;
+}
+
+/**
+ * Normalizes one private count request (docs/search.md#request-and-result). The references stay
+ * explicit and bounded and repeat identities collapse, so one entry is counted once; a missing or
+ * unusable reference never becomes an unnoted zero.
+ */
+export function normalizeSearchCountRequest(request: SearchCountInput): SearchCountQuery {
+  const parsed = countRequestSchema.safeParse(request);
+  if (!parsed.success) {
+    throw new SearchError(
+      'invalid-request',
+      `A count request carries 1 to ${SEARCH_LIMITS.maxCountReferences} card, printing or copy ` +
+        `references of at most ${SEARCH_LIMITS.maxIdentifierLength} characters, and at most one tag.`,
+    );
+  }
+  const references = new Map<string, SearchCountReference>();
+  for (const reference of parsed.data.references) {
+    references.set(searchCountKey(reference), reference);
+  }
+  return { references: [...references.values()], tagId: parsed.data.tagId ?? null };
 }

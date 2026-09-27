@@ -205,6 +205,7 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
         pendingSearches.set(id, { resolve, reject });
       });
     },
+    counts: () => Promise.reject(new Error('The collection journeys read no private counts.')),
   };
   const catalog: Catalog = {
     resolve(references) {

@@ -124,12 +124,17 @@ export {
   collectionSearchRequest,
   createCatalogSearchAccess,
   createCollectionSearchAccess,
+  createEntryOwnershipReader,
+  createSearchCounts,
   searchListEntry,
   uiEntryKey,
+  uiEntryTargetOfKey,
   type UiCatalogQuery,
   type UiCatalogSearchAccess,
   type UiCollectionQuery,
   type UiCollectionSearchAccess,
+  type UiCountsAccess,
+  type UiEntryCounts,
 } from './internal/search-source.js';
 export {
   createUserInterface,

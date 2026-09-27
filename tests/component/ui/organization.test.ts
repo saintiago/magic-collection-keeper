@@ -399,6 +399,83 @@ describe('adding selected entries to a tag', () => {
     expect(outcome.status).toBe('conflict');
   });
 
+  it('reports the committed part of a selection beside the failures that did not commit', async () => {
+    const committed: unknown[] = [];
+    const tool = addToTagTool({
+      id: 'add-to-tag',
+      label: 'Add to this tag',
+      access: access({
+        createAssociation: async (input) => {
+          if (input.targetId === 'card-bolt') {
+            committed.push(input);
+            return { privateRevision: 'r1', association: association({ revision: 1 }) };
+          }
+          throw new ApplicationError(
+            'conflict',
+            'The copy changed after this revision; reload it before moving it.',
+          );
+        },
+      }),
+      tag: () => tag({ kind: 'deck', tagId: 'tag-burn' }),
+      quantity: () => 2,
+      guidance: 'Choose an intended quantity.',
+    });
+
+    const outcome = await tool.tool.invoke({
+      targets: [
+        { kind: 'card', cardId: 'card-bolt' },
+        { kind: 'printing', printingId: 'printing-2' },
+      ],
+      selection: { keys: ['key-1', 'key-2'], targets: [] },
+      signal: new AbortController().signal,
+    });
+
+    expect(committed).toHaveLength(1);
+    expect(outcome.status).toBe('conflict');
+    expect(outcome.committed).toBe(1);
+    expect(outcome.unknown).toBe(0);
+    // The committed portion is reported, and the conflict keeps its own meaning instead of being
+    // presented as duplicate membership.
+    expect(outcome.message).toBe(
+      '1 of 2 entries were added; 1 were not. The copy changed after this revision; reload it ' +
+        'before moving it.',
+    );
+  });
+
+  it('keeps an unknown outcome distinct and reports what committed before it', async () => {
+    let calls = 0;
+    const tool = addToTagTool({
+      id: 'add-to-tag',
+      label: 'Add to this tag',
+      access: access({
+        createAssociation: async () => {
+          calls += 1;
+          if (calls === 1) {
+            return { privateRevision: 'r1', association: association({ revision: 1 }) };
+          }
+          throw new ApplicationError('unavailable', 'The service is down.');
+        },
+      }),
+      tag: () => tag({ kind: 'deck', tagId: 'tag-burn' }),
+      quantity: () => 2,
+      guidance: 'Choose an intended quantity.',
+    });
+
+    const outcome = await tool.tool.invoke({
+      targets: [
+        { kind: 'card', cardId: 'card-bolt' },
+        { kind: 'printing', printingId: 'printing-2' },
+      ],
+      selection: { keys: ['key-1', 'key-2'], targets: [] },
+      signal: new AbortController().signal,
+    });
+
+    expect(outcome.status).toBe('unknown');
+    expect(outcome.committed).toBe(1);
+    expect(outcome.unknown).toBe(1);
+    expect(outcome.message).toContain('1 of 2 entries were added; 1 were not.');
+  });
+
   it('moves a selected copy into a location and associates it with a deck', async () => {
     const moves: unknown[] = [];
     const observed = copy();

@@ -164,6 +164,7 @@ export function installBrowseHarness(
         pendingSearches.set(id, { resolve, reject });
       });
     },
+    counts: () => Promise.reject(new Error('The browsing journeys read no private counts.')),
   };
   const catalog: Catalog = {
     resolve(references) {

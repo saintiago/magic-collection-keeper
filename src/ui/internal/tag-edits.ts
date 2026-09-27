@@ -39,7 +39,6 @@ import type {
   UserTagKind,
 } from '../../usercards/index.js';
 
-import type { UiCardListTool } from './card-list.js';
 import { isUiDefiniteFailure, readUiFailureCode, readUiFailureMessage } from './failure.js';
 import type { UiEntryTarget, UiOperationOutcome, UiToolRequest } from './list.js';
 
@@ -367,6 +366,27 @@ async function commit<Record>(
  * the outcome of the whole selection; partial work is never reported as saved
  * (docs/user-interface.md#browsing-and-organization).
  */
+export interface UiAddToTagTool {
+  readonly id: string;
+  readonly label: string;
+  readonly tool: {
+    invoke(request: UiToolRequest): Promise<UiAddOutcome>;
+  };
+}
+
+/**
+ * Outcome of one add over a selection, with the number of targets whose change committed. A
+ * caller reconciles its lists whenever a write committed or stays uncertain, so a partial addition
+ * is visible instead of presented as an unchanged result, and only a committed change is reported
+ * as saved (docs/user-interface.md#browsing-and-organization).
+ */
+export interface UiAddOutcome extends UiOperationOutcome {
+  /** Targets whose change committed. */
+  readonly committed: number;
+  /** Targets whose outcome stays unknown. */
+  readonly unknown: number;
+}
+
 export function addToTagTool(options: {
   readonly id: string;
   readonly label: string;
@@ -376,12 +396,12 @@ export function addToTagTool(options: {
   quantity(): number | null;
   /** What the user must choose before the tool can act, reported when `quantity` names none. */
   readonly guidance: string;
-}): UiCardListTool {
+}): UiAddToTagTool {
   return {
     id: options.id,
     label: options.label,
     tool: {
-      invoke(request: UiToolRequest): Promise<UiOperationOutcome> {
+      invoke(request: UiToolRequest): Promise<UiAddOutcome> {
         return addSelection(options, request);
       },
     },
@@ -391,21 +411,35 @@ export function addToTagTool(options: {
 async function addSelection(
   options: Parameters<typeof addToTagTool>[0],
   request: UiToolRequest,
-): Promise<UiOperationOutcome> {
+): Promise<UiAddOutcome> {
   const tag = options.tag();
   if (tag === null) {
-    return { status: 'failed', message: 'The tag is not available.' };
+    return {
+      status: 'failed',
+      message: 'The tag is not available.',
+      committed: 0,
+      unknown: 0,
+    };
   }
   if (request.targets.length === 0) {
-    return { status: 'failed', message: 'Select the entries to add.' };
+    return {
+      status: 'failed',
+      message: 'Select the entries to add.',
+      committed: 0,
+      unknown: 0,
+    };
   }
   const quantity = options.quantity();
   const counts = { committed: 0, conflict: 0, failed: 0, unknown: 0 };
+  const failures: string[] = [];
   for (const target of request.targets) {
     const outcome = await addTarget(options.access, tag, target, quantity, request.signal);
     counts[outcome.status] += 1;
+    if (outcome.status !== 'committed' && outcome.message !== null) {
+      failures.push(outcome.message);
+    }
   }
-  return addOutcome(counts, request.targets.length, options.guidance);
+  return addOutcome(counts, failures, request.targets.length, options.guidance);
 }
 
 /** Adds one selected target to the tag; a location holds copies through their location move. */
@@ -470,35 +504,53 @@ function targetIdOf(target: Exclude<UiEntryTarget, { kind: 'copy' }>): string {
   return target.kind === 'card' ? target.cardId : target.printingId;
 }
 
-/** Outcome of one add over the whole selection; partial work is never reported as saved. */
+/**
+ * Outcome of one add over the whole selection. Committed portions are reported beside the failures
+ * that did not commit, and every per-target failure keeps its own message, so a revision conflict
+ * of a location move is never presented as duplicate membership. Partial work is never reported as
+ * saved.
+ */
 function addOutcome(
   counts: { committed: number; conflict: number; failed: number; unknown: number },
+  failures: readonly string[],
   total: number,
   guidance: string,
-): UiOperationOutcome {
+): UiAddOutcome {
+  const notAdded = counts.conflict + counts.failed;
+  const detail = [...new Set(failures)].join(' ');
+  const partial =
+    counts.committed === 0
+      ? `${notAdded + counts.unknown} of ${total} entries were not added.`
+      : `${counts.committed} of ${total} entries were added; ` +
+        `${notAdded + counts.unknown} were not.`;
   if (counts.unknown > 0) {
     return {
       status: 'unknown',
-      message: `${counts.unknown} of ${total} entries have an unknown outcome. Review them before retrying.`,
+      message: `${partial} ${counts.unknown} of ${total} entries have an unknown outcome. Review them before retrying.`,
+      committed: counts.committed,
+      unknown: counts.unknown,
     };
   }
-  if (counts.conflict > 0) {
+  if (counts.conflict > 0 && counts.failed === 0) {
     return {
       status: 'conflict',
-      message: `${counts.conflict} of ${total} entries are already associated with this tag. Change the existing association instead.`,
+      message: `${partial} ${detail}`.trim(),
+      committed: counts.committed,
+      unknown: 0,
     };
   }
-  if (counts.failed > 0) {
+  if (notAdded > 0) {
     return {
       status: 'failed',
-      message:
-        counts.committed === 0
-          ? `${counts.failed} of ${total} entries were not added. ${guidance}`
-          : `${counts.failed} of ${total} entries were not added; ${counts.committed} were added.`,
+      message: `${partial} ${detail} ${counts.committed === 0 ? guidance : ''}`.trim(),
+      committed: counts.committed,
+      unknown: 0,
     };
   }
   return {
     status: 'committed',
     message: `Added ${total} ${total === 1 ? 'entry' : 'entries'} to the tag.`,
+    committed: counts.committed,
+    unknown: 0,
   };
 }
