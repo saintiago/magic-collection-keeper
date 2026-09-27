@@ -57,96 +57,101 @@ const databaseResourceSchema = z.object({
   database: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/, 'Use a database name.'),
 });
 
-const configurationSchema = z
-  .object({
-    environment: z.enum(applicationEnvironments),
-    /** Region of the deployment's AWS resources and workload credentials. */
+const configurationFields = z.object({
+  environment: z.enum(applicationEnvironments),
+  /** Region of the deployment's AWS resources and workload credentials. */
+  region: regionSchema,
+  browser: z.object({
+    /** Base URL the browser uses to reach the interactive API entry point. */
+    apiBaseUrl: urlSchema,
+  }),
+  resources: z.object({
+    catalogDatabase: databaseResourceSchema,
+    userCardsDatabase: databaseResourceSchema,
+    catalogSnapshots: z.object({
+      bucket: bucketSchema,
+      prefix: z
+        .string()
+        .min(1)
+        .max(APPLICATION_LIMITS.maxBucketPrefixLength)
+        .nullable()
+        .default(null),
+    }),
+  }),
+  authentication: z.object({
+    /** Cognito issuer of this environment's user pool. */
+    issuer: urlSchema,
+    /** App client this environment's tokens are issued for. */
+    appClientId: z.string().min(1).max(APPLICATION_LIMITS.maxAppClientIdLength),
+    /** Region the browser signs in against. */
     region: regionSchema,
-    browser: z.object({
-      /** Base URL the browser uses to reach the interactive API entry point. */
-      apiBaseUrl: urlSchema,
-    }),
-    resources: z.object({
-      catalogDatabase: databaseResourceSchema,
-      userCardsDatabase: databaseResourceSchema,
-      catalogSnapshots: z.object({
-        bucket: bucketSchema,
-        prefix: z
-          .string()
-          .min(1)
-          .max(APPLICATION_LIMITS.maxBucketPrefixLength)
-          .nullable()
-          .default(null),
-      }),
-    }),
-    authentication: z.object({
-      /** Cognito issuer of this environment's user pool. */
-      issuer: urlSchema,
-      /** App client this environment's tokens are issued for. */
-      appClientId: z.string().min(1).max(APPLICATION_LIMITS.maxAppClientIdLength),
-      /** Region the browser signs in against. */
-      region: regionSchema,
-    }),
-    recognition: z.object({
-      /** Base URL of the recognition compute entry point, or null when cloud engines are off. */
-      computeBaseUrl: urlSchema.nullable(),
-    }),
-    capabilities: z.object({
-      /** Enables the remote recognition engines behind the compute entry point. */
-      cloudRecognition: z.boolean(),
-      /** Enables parsing pasted lists, Moxfield decks and reviewed Wizards lists. */
-      sourceImports: z.boolean(),
-    }),
-    transport: z.object({
-      /** Deadline Application enforces on one backend invocation. */
-      requestTimeoutMs: z
-        .number()
-        .int()
-        .min(APPLICATION_LIMITS.minRequestTimeoutMs)
-        .max(APPLICATION_LIMITS.maxRequestTimeoutMs),
-    }),
-  })
-  .superRefine((value, context) => {
-    const computeBaseUrl = value.recognition.computeBaseUrl;
-    if (value.capabilities.cloudRecognition && computeBaseUrl === null) {
-      context.addIssue({
-        code: 'custom',
-        path: ['recognition', 'computeBaseUrl'],
-        message: 'An enabled recognition compute entry point requires its base URL.',
-      });
-    }
-    if (!value.capabilities.cloudRecognition && computeBaseUrl !== null) {
-      context.addIssue({
-        code: 'custom',
-        path: ['recognition', 'computeBaseUrl'],
-        message: 'A disabled recognition compute entry point must not name a base URL.',
-      });
-    }
-    if (value.environment !== 'production') {
-      return;
-    }
-    if (value.browser.apiBaseUrl.startsWith('http://')) {
-      context.addIssue({
-        code: 'custom',
-        path: ['browser', 'apiBaseUrl'],
-        message: 'Production URLs require https.',
-      });
-    }
-    if (computeBaseUrl !== null && computeBaseUrl.startsWith('http://')) {
-      context.addIssue({
-        code: 'custom',
-        path: ['recognition', 'computeBaseUrl'],
-        message: 'Production URLs require https.',
-      });
-    }
-    if (value.authentication.issuer.startsWith('http://')) {
-      context.addIssue({
-        code: 'custom',
-        path: ['authentication', 'issuer'],
-        message: 'Production URLs require https.',
-      });
-    }
-  });
+  }),
+  recognition: z.object({
+    /** Base URL of the recognition compute entry point, or null when cloud engines are off. */
+    computeBaseUrl: urlSchema.nullable(),
+  }),
+  capabilities: z.object({
+    /** Enables the remote recognition engines behind the compute entry point. */
+    cloudRecognition: z.boolean(),
+    /** Enables parsing pasted lists, Moxfield decks and reviewed Wizards lists. */
+    sourceImports: z.boolean(),
+  }),
+  transport: z.object({
+    /** Deadline Application enforces on one backend invocation. */
+    requestTimeoutMs: z
+      .number()
+      .int()
+      .min(APPLICATION_LIMITS.minRequestTimeoutMs)
+      .max(APPLICATION_LIMITS.maxRequestTimeoutMs),
+  }),
+});
+
+function validateRuntimeConfiguration(
+  value: ApplicationRuntimeConfiguration,
+  context: z.RefinementCtx,
+): void {
+  const computeBaseUrl = value.recognition.computeBaseUrl;
+  if (value.capabilities.cloudRecognition && computeBaseUrl === null) {
+    context.addIssue({
+      code: 'custom',
+      path: ['recognition', 'computeBaseUrl'],
+      message: 'An enabled recognition compute entry point requires its base URL.',
+    });
+  }
+  if (!value.capabilities.cloudRecognition && computeBaseUrl !== null) {
+    context.addIssue({
+      code: 'custom',
+      path: ['recognition', 'computeBaseUrl'],
+      message: 'A disabled recognition compute entry point must not name a base URL.',
+    });
+  }
+  if (value.environment !== 'production') {
+    return;
+  }
+  if (value.browser.apiBaseUrl.startsWith('http://')) {
+    context.addIssue({
+      code: 'custom',
+      path: ['browser', 'apiBaseUrl'],
+      message: 'Production URLs require https.',
+    });
+  }
+  if (computeBaseUrl !== null && computeBaseUrl.startsWith('http://')) {
+    context.addIssue({
+      code: 'custom',
+      path: ['recognition', 'computeBaseUrl'],
+      message: 'Production URLs require https.',
+    });
+  }
+  if (value.authentication.issuer.startsWith('http://')) {
+    context.addIssue({
+      code: 'custom',
+      path: ['authentication', 'issuer'],
+      message: 'Production URLs require https.',
+    });
+  }
+}
+
+const configurationSchema = configurationFields.superRefine(validateRuntimeConfiguration);
 
 /**
  * Configuration of one deployment environment: its environment, resources, credential references,
@@ -254,6 +259,17 @@ export function resolveApplicationConfiguration(value: unknown): ApplicationConf
   return parsed.data;
 }
 
+/** Runtime policy is independent of the selected storage resources. */
+export type ApplicationRuntimeConfiguration = Omit<ApplicationConfiguration, 'resources'>;
+const runtimeConfigurationSchema = configurationFields
+  .omit({ resources: true })
+  .superRefine(validateRuntimeConfiguration);
+export function resolveRuntimeConfiguration(value: unknown): ApplicationRuntimeConfiguration {
+  const parsed = runtimeConfigurationSchema.safeParse(value);
+  if (!parsed.success) throw new ConfigurationError(problemList(parsed.error));
+  return parsed.data;
+}
+
 /** Validates the public settings a browser received, rejecting any private setting beside them. */
 export function resolvePublicSettings(value: unknown): PublicApplicationSettings {
   const parsed = publicSettingsSchema.safeParse(value);
@@ -265,7 +281,7 @@ export function resolvePublicSettings(value: unknown): PublicApplicationSettings
 
 /** Projects only the public settings of a validated configuration. */
 export function readPublicSettings(
-  configuration: ApplicationConfiguration,
+  configuration: ApplicationRuntimeConfiguration,
 ): PublicApplicationSettings {
   return {
     environment: configuration.environment,

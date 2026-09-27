@@ -42,6 +42,50 @@ protected views with account scoping enforced at the database boundary. Missing 
 closed; account context cannot leak between reused connections. Private base tables are inaccessible
 through this read contract. Publish a private-data revision for continuation validation.
 
+## Internal design
+
+The public facade assembles focused operations. These are internal units, not separately deployed
+components. Public request/result types are independent of the concrete stores. Operations validate
+intent and interpret outcomes; stores own SQL, locking, atomic changes and persistence failures.
+
+| Unit                      | Owns                                                                         | State and write boundary                                                                                                           |
+| ------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Copies                    | Creation and correction of physical records; physical attribute validation.  | Copy and owned membership change atomically.                                                                                       |
+| Organization              | Tags, association targets and intended quantities; physical location moves.  | Association changes retain identity; a location move atomically replaces the previous membership.                                  |
+| Pending reads             | Bounded session and entry reads, ordering and revision-bound continuation.   | No ownership writes; reject a read assembled from inconsistent revisions.                                                          |
+| Staging                   | Manual entry admission, capture sequence and source-line reconciliation.     | Session, entries, candidates and admission receipts change under the session lock.                                                 |
+| Review                    | Explicit corrections, late candidate attachment and discard.                 | Revision checks preserve user edits; late evidence cannot rewrite reviewed fields.                                                 |
+| Confirmation and recovery | Validate reviewed entries, recognize replay and report the recorded outcome. | One transaction binds acquisition identities, creates copies/owned memberships/provenance, closes entries and records the receipt. |
+| Source conversion         | Fetch and parse supported source formats into staging input.                 | Provider data is input to staging; never writes owned copies directly.                                                             |
+| Query publication         | Read-only projections and private-data revision.                             | Base storage stays private; scope is transaction-local and missing scope returns no private data.                                  |
+
+The import service composes pending reads, staging, review and confirmation. Its persistence layer has
+the same divisions. Shared session access owns session locks, revision reads/advances and bounded entry
+hydration. Shared validation owns identifiers and input bounds. Neither becomes a second workflow
+coordinator. Copy insertion is reused inside confirmation's transaction, rather than calling a public
+copy operation that would start another transaction.
+
+### Import state and identity
+
+A session names an acquisition source and serializes its pending changes. An entry holds reviewed
+printing, finish, condition, quantity, candidate evidence and revision. Pending, confirmed and discarded
+are distinct states. Staging and review never imply ownership; confirmation is the transition that does.
+
+Keep three identities separate:
+
+- Capture or staged-line identity records admission/replay of one input. Consecutive accepted identity
+  is session state; unresolved input does not advance it.
+- Acquisition identity records which source content and occurrence produced copies. Equivalent
+  repeated source imports reuse that outcome; two distinct occurrences remain distinct acquisitions.
+- Operation identity records one confirmation request and its immutable result. Changed input under
+  the same identity conflicts. Recovery reads this result, even after the copies are later edited.
+
+A source replay reconciles stored source lines with current pending state under the session lock.
+It does not overwrite user corrections or infer ownership changes from source additions/removals.
+Discarded entries stay historical; an explicit repeated source import can stage uncovered content
+again for review. A failed confirmation leaves all coupled records unchanged.
+Transaction boundaries stay intact when these units are reorganized.
+
 ## Records and associations
 
 Each physical copy has a stable ID, one printing reference and its physical attributes. Corrections

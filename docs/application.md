@@ -31,6 +31,30 @@ Map validation, unauthorized access, missing records, revision conflict, stale c
 and unavailable outcomes without collapsing them into an empty success. Do not infer a failed write
 from a lost response. The owning component's operation receipt determines its committed outcome.
 
+## Internal design
+
+| Unit                   | Owns                                                                            | Excludes                                                   |
+| ---------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Deployment composition | Concrete construction and resource binding for one runtime.                     | Request handling and business decisions.                   |
+| Runtime boundary       | Validated settings, serving/disposed state, request deadlines and job dispatch. | Database selection and component internals.                |
+| Authentication         | Credential verification and trusted request context.                            | Ownership and membership rules.                            |
+| Transport mapping      | Routes, envelopes, serialization and failure translation.                       | Printing selection, query evaluation and import decisions. |
+| Browser composition    | Authenticated entry-point access and supplied UI/recognition factories.         | Presentation and recognition engine policy.                |
+
+Deployment wiring supplies separate reader and writer executors. Reader credentials can access only
+published views; write credentials stay with the component that owns the mutation. A TypeScript query
+method alone does not enforce database permissions.
+
+The runtime receives ready component implementations. Its settings do not require database or bucket
+coordinates. The default deployment constructor validates those resource settings before composing the
+runtime. Construction checks callable capabilities; behavioral compatibility is established by contract
+tests. Supplied resources remain owned by the caller and are not closed by runtime disposal.
+
+Compatibility endpoints translate retained request and response formats only. They dispatch selection
+to the provider's published lookup policy. They must not scan or filter provider records with their own
+matching rules. Browser composition permits a replacement recognition factory without changing
+transport or page code.
+
 ## Configuration and lifecycle
 
 Use explicit construction functions. Configuration identifies environment, resources, credentials

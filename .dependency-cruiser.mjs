@@ -33,6 +33,26 @@ const publicInterfaceRules = components.map((component) => ({
   },
 }));
 
+// Source dependencies follow the composition graph, including type-only imports.
+const providers = {
+  application: ['catalog', 'recognition', 'search', 'usercards'],
+  ui: ['application', 'catalog', 'recognition', 'search', 'usercards'],
+  catalog: [],
+  recognition: ['catalog'],
+  search: ['catalog', 'usercards'],
+  usercards: ['catalog'],
+};
+const directionRules = components
+  .filter((component) => component !== 'ui')
+  .map((component) => ({
+    name: `allowed-providers-of-${component}`,
+    severity: 'error',
+    from: { path: `^src/${component}/` },
+    to: {
+      path: `^src/(${components.filter((target) => target !== component && !providers[component].includes(target)).join('|')})/`,
+    },
+  }));
+
 /** @type {import('dependency-cruiser').IConfiguration} */
 const config = {
   forbidden: [
@@ -50,6 +70,14 @@ const config = {
       },
     },
     ...publicInterfaceRules,
+    ...directionRules,
+    { name: 'no-circular', severity: 'error', from: { path: '^src/' }, to: { circular: true } },
+    {
+      name: 'no-backend-in-ui',
+      severity: 'error',
+      from: { path: '^src/ui/' },
+      to: { path: '^src/application/backend\\.ts$' },
+    },
   ],
   options: {
     // Dependencies outside the source tree are filtered by path instead of includeOnly: an

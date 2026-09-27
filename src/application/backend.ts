@@ -3,7 +3,7 @@
  * docs/application.md#configuration-and-lifecycle).
  *
  * The backend entry points are the interactive transport and the finite catalog job:
- * `createApplication` validates one environment's settings before serving, constructs Catalog,
+ * `createApplication` validates one environment's settings before serving, receives Catalog,
  * UserCards, Search and the catalog job through their public contracts, derives trusted user context
  * from verified authentication only, maps every component failure to one distinct transport outcome
  * and exposes the public settings the browser may receive. Catalog synchronization stays a separate
@@ -19,6 +19,12 @@ export {
   createApplication,
   type Application,
   type ApplicationDependencies,
-  type ApplicationResources,
+  type ApplicationComponents,
 } from './internal/application.js';
 export { translateFailure } from './internal/errors.js';
+
+export {
+  createPostgresApplication,
+  type ApplicationResources,
+  type PostgresApplicationDependencies,
+} from './internal/postgres-composition.js';

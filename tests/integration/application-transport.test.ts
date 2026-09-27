@@ -1,5 +1,5 @@
 /**
- * Component scope: the interactive backend transport through the Application public contract
+ * Integration scope: the interactive backend transport through the Application public contract
  * (docs/application.md#interface, docs/application.md#construction-and-request-boundary). The real
  * routes, components and identity verification run over a recording SQL substitute, so each case
  * proves which operation ran, which account it was scoped to, and what the caller received.
@@ -7,8 +7,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ApplicationError, type TransportRequest } from '../../../src/application/index.js';
-import { CatalogError } from '../../../src/catalog/index.js';
+import { ApplicationError, type TransportRequest } from '../../src/application/index.js';
+import { CatalogError } from '../../src/catalog/index.js';
 
 import {
   claimsFor,
@@ -17,7 +17,7 @@ import {
   testAccount,
   testConfiguration,
   type TestApplication,
-} from './harness.js';
+} from '../component/application/harness.js';
 
 /** One caller request with the fields the case does not override. */
 function callerRequest(overrides: Partial<TransportRequest>): TransportRequest {

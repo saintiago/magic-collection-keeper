@@ -39,6 +39,21 @@ caller. A replacement provider must preserve its published query surface as well
 mutation interface. Search itself can be tested with minimal implementations of these views, without
 running either provider's business logic.
 
+## Internal design
+
+| Unit           | Owns                                                                                    |
+| -------------- | --------------------------------------------------------------------------------------- |
+| Syntax parsing | Supported text grammar and explicit unsupported-expression errors.                      |
+| Normalization  | One validated query model for text and structured criteria.                             |
+| Evaluation     | Complete membership, grouping, basic-information projection and deterministic ordering. |
+| Continuation   | Query/account/revision binding and restart-required failures.                           |
+| Service        | Request validation, authorized evaluation and bounded result construction.              |
+
+Evaluation owns the combined read statement. Pagination applies only after membership and grouping;
+post-filtering a fetched page is not a substitute. The evaluator receives read access, not a writer.
+Its SQL implementation can change without changing the public query or result contract. There is no
+second query model inside a transport endpoint or a page.
+
 ## Query evaluation
 
 ### Scryfall compatibility

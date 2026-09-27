@@ -52,6 +52,7 @@ export {
   type Catalog,
   type CatalogDependencies,
   type CatalogResolution,
+  type CatalogResolver,
   type ListCardPrintingsOptions,
 } from './internal/service.js';
 export {
@@ -65,3 +66,5 @@ export {
   type CatalogSynchronizationDependencies,
   type CatalogSynchronizer,
 } from './internal/sync.js';
+
+export { findCatalogPrinting, type PrintingLookup } from './internal/printing-lookup.js';

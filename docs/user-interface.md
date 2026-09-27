@@ -30,6 +30,23 @@ an operation outcome. Cancellation or an old page response cannot replace the ac
 Construct the UI with supplied source, tool, identity and device capabilities. Tests can replace
 these boundaries while exercising real navigation and presentation behavior.
 
+## Internal design
+
+| Unit                     | Owns                                                                             |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| Shell and navigation     | Routes, page lifetime, account changes and bounded restoration.                  |
+| Pages                    | Activity-specific composition of sources, lists, details and tools.              |
+| CardList state           | One list's query generation, loaded window, fragment states and selection.       |
+| Source and tool bindings | Conversion from supplied public operations to presentation inputs/actions.       |
+| Rendering                | Accessible visible state and bounded DOM; no authoritative membership decisions. |
+| Device interaction       | Permissions, frame acquisition, geometry admission and cleanup.                  |
+
+A page creates and disposes its lists and device work. A list owns its asynchronous request generation;
+late responses may not mutate a replacement query, disposed page or another account. Sources own
+membership and continuation. Rendering never reconstructs them from enrichment or selection state.
+Pending import records and operation receipts are read through supplied operations, not independently
+maintained in page state. Local unsaved form input remains presentation state until accepted.
+
 ## Pages and navigation
 
 Home, catalog/search, collection, tags, tag views, card details and import are dedicated pages.

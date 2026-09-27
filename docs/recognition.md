@@ -34,6 +34,22 @@ Catalog resolution can enrich an engine result but cannot turn a representative 
 evidence of the observed edition. Preserve raw engine outcomes behind the mapping boundary.
 Transport paths and envelopes can change while these guarantees and engine behavior remain stable.
 
+## Internal design
+
+| Unit              | Owns                                                                             |
+| ----------------- | -------------------------------------------------------------------------------- |
+| Session service   | Preparation, concurrency, attempt identity, cancellation and disposal.           |
+| Pipeline boundary | Conversion between retained engine output and the public reading model.          |
+| Candidate mapping | Identity validation, canonical enrichment and preservation of observed evidence. |
+| Browser engines   | Local model loading, preprocessing and inference.                                |
+| Compute runtime   | Authenticated image requests and retained visual/OCR/remote-model execution.     |
+| Asset manifest    | Engine/model versions, checksums, notices and preservation evidence.             |
+
+Session state is separate from engine state. The service receives its pipeline implementation and
+resolution capability; it does not select transport or storage. The mapping layer cannot convert a
+representative printing into observed evidence. Compatibility changes remain outside the preserved
+engines, whose fixture outcomes and artifact identities are regression gates.
+
 ## Engines and assets
 
 Retain browser ONNX recognition and the Python visual/OCR pipeline: CollectorVision geometry and

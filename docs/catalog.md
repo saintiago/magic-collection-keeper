@@ -29,6 +29,15 @@ eligibility and image references. A card record includes canonical and translate
 text, type information, colors, color identity and mana value. Missing fields remain explicit. Resolution preserves
 requested identities; an unavailable lookup is not a successful missing result.
 
+### Printing selection
+
+The published `findCatalogPrinting` operation accepts a card identity and optional edition, collector
+number and language constraints. Constraints match case-insensitively; unspecified fields do not
+narrow the match. Return the first match in printing-list order and its card from the same revision,
+or explicit absence after the complete list. A changed revision or failed/incomplete read is a
+failure, never absence. This lookup can use any supplied implementation of the public Catalog contract.
+Consumers that only resolve identities depend on the narrower `CatalogResolver` capability.
+
 ### Query surface
 
 Publish read-only card, name and printing relations. Card and printing IDs are unique in their
@@ -38,6 +47,21 @@ carry a card reference. The surface exposes the basic attributes above and the p
 In PostgreSQL these are versioned provider-owned views. Search depends on their declared columns
 and meaning, never underlying table names. A replacement maps its storage to the same views and
 passes the same contract tests. Publishing a revision exposes a mutually consistent set of relations.
+
+## Internal design
+
+| Unit              | Owns                                                                            |
+| ----------------- | ------------------------------------------------------------------------------- |
+| Read service      | Bounded reference resolution, printing lists and revision-bound continuation.   |
+| Printing lookup   | Matching edition, collector number and language within one card identity.       |
+| Read storage      | Local queries and record decoding against the published revision.               |
+| Synchronization   | Source acquisition, normalization, candidate validation and atomic publication. |
+| Query publication | Public relation names, columns and revision semantics; reader permissions.      |
+
+The read service and synchronization have separate construction and execution lifecycles. Interactive
+reads never start synchronization. Selection policy operates on the public read contract, so a storage
+replacement does not duplicate it. Synchronization owns provider-specific parsing and candidate data;
+only a validated complete revision becomes readable.
 
 ## Identities and information
 
