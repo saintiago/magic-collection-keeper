@@ -9,7 +9,8 @@ account-scoped read surface; Search provides its normalized query model, the sup
 subset, the request and continuation contract and its evaluation over both published query
 surfaces; Recognition provides its session lifecycle, its catalog-validated candidate readings and
 the execution bounds around the preserved engines; Application assembles those components behind
-validated configuration and authenticated transports, while UserInterface is not implemented yet.
+validated configuration and authenticated transports, and UserInterface provides the shell the
+dedicated pages, CardList and the card tools are built on.
 
 Start with AGENTS.md for the documentation index and engineering principles.
 The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
@@ -119,6 +120,16 @@ entry point and recognition inference a separate compute runtime reached through
 client; the browser composition supplies UserInterface with the public settings, the authenticated
 transport and the Recognition contract over the preserved engines
 (docs/application.md#interface, docs/application.md#configuration-and-lifecycle).
+
+UserInterface presents the collection behind one shell (docs/user-interface.md#interface,
+docs/user-interface.md#pages-and-navigation): the URL identifies the dedicated view, including the
+three card specificity levels, so a reload or a direct entry presents the same page; Back returns to
+the entry it left and restores its query, selection, scroll and focus from bounded account-isolated
+state that serializes no view content; closing a view aborts its work and detaches its container, so
+a late result cannot replace the new view; and a changed account clears that private presentation
+state, ends the authenticated session so outstanding responses are rejected and releases the device
+resources. A page implementation supplies one page's content and the sources and tools its lists
+use; CardList, the dedicated pages and capture build on that in their own tasks.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without
