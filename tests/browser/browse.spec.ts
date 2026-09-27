@@ -739,7 +739,7 @@ test('further results load with the continuation of the same query', async ({ pa
   expect(errors).toEqual([]);
 });
 
-test('a stale continuation is reported and refreshing restarts the result', async ({ page }) => {
+test('an invalidated continuation restarts the result from its beginning', async ({ page }) => {
   const errors = await openBrowse(page, '#/catalog?query=bolt');
 
   const first = await searchRequest(page);
@@ -758,18 +758,45 @@ test('a stale continuation is reported and refreshing restarts the result', asyn
     message: 'The catalog changed since this page; start the search again.',
   });
 
-  await expect(page.locator('[data-ui-status]')).toHaveText(
-    'The catalog changed since this page; start the search again.',
-  );
-  await expect(page.locator('[data-ui-entry="card:card-1"]')).toContainText('Bolt One');
-
-  await page.getByRole('button', { name: 'Refresh results', exact: true }).click();
+  // The list owns the recovery: it reads the query again from its first page, never with the
+  // continuation Search rejected, and the presented result stays until the fresh page arrives.
   const restart = await searchRequest(page, 2);
   expect(restart.request).toEqual({ resultLevel: 'card', query: 'bolt', pageSize: 50 });
+  await expect(page.locator('[data-ui-entry="card:card-1"]')).toContainText('Bolt One');
+  await expect(page.locator('#catalog-results [data-ui-status]')).toHaveText('');
+
   await settleSearch(page, restart.id, searchPage([cardEntry('card-2', { name: 'Bolt Two' })]));
 
   await expect(page.locator('[data-ui-entry="card:card-1"]')).toHaveCount(0);
   await expect(page.locator('[data-ui-entry="card:card-2"]')).toContainText('Bolt Two');
+  expect(errors).toEqual([]);
+});
+test('the refresh control reads the presented query again from its first page', async ({
+  page,
+}) => {
+  const errors = await openBrowse(page, '#/catalog?query=bolt');
+
+  const first = await searchRequest(page);
+  await settleSearch(
+    page,
+    first.id,
+    searchPage([cardEntry('card-1', { name: 'Bolt One' })], {
+      totalCount: 2,
+      continuation: 'cursor-1',
+    }),
+  );
+  await page.getByRole('button', { name: 'Load more' }).click();
+  const more = await searchRequest(page, 1);
+  await settleSearch(page, more.id, searchPage([cardEntry('card-2', { name: 'Bolt Two' })]));
+
+  await page.getByRole('button', { name: 'Refresh results', exact: true }).click();
+  const refreshed = await searchRequest(page, 2);
+  expect(refreshed.request).toEqual({ resultLevel: 'card', query: 'bolt', pageSize: 50 });
+  await expect(page.locator('[data-ui-entry="card:card-1"]')).toContainText('Bolt One');
+
+  await settleSearch(page, refreshed.id, searchPage([cardEntry('card-3', { name: 'Bolt Three' })]));
+  await expect(page.locator('[data-ui-entry="card:card-1"]')).toHaveCount(0);
+  await expect(page.locator('[data-ui-entry="card:card-3"]')).toContainText('Bolt Three');
   expect(errors).toEqual([]);
 });
 

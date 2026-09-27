@@ -290,11 +290,26 @@ export function createCardDetailsPage(): UiPageDefinition {
       function printingsSource(card: CardRecord): UiListSource<string> {
         return {
           async load(request) {
-            const page = await catalog.listCardPrintings(card.cardId, {
-              pageSize: request.pageSize,
-              ...(request.continuation === null ? {} : { continuation: request.continuation }),
-            });
+            let page: CardPrintingsPage;
+            try {
+              page = await catalog.listCardPrintings(card.cardId, {
+                pageSize: request.pageSize,
+                ...(request.continuation === null ? {} : { continuation: request.continuation }),
+              });
+            } catch (cause) {
+              if (
+                request.continuation !== null &&
+                readUiFailureCode(cause) === 'stale-continuation'
+              ) {
+                // The catalog republished the printings the continuation was bound to: the list
+                // restarts the sequence from its first page instead of repeating the cursor the
+                // catalog keeps refusing (docs/catalog.md#provided-operations).
+                return { status: 'invalidated' };
+              }
+              throw cause;
+            }
             return {
+              status: 'page',
               entries: page.printings.map((printing) => printingEntry(card, printing)),
               continuation: page.continuation,
             };

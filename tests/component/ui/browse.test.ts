@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 
 import { finishes } from '../../../src/catalog/index.js';
 import {
+  SearchError,
   normalizeSearchRequest,
   searchEntryKey,
   searchResultLevels,
@@ -201,6 +202,34 @@ describe('catalog list entries', () => {
         {} as never,
       ),
     ).toThrow(TypeError);
+  });
+
+  it('reports an invalidated continuation instead of failing the read', async () => {
+    let failure = 'stale-continuation';
+    const access = createCatalogSearchAccess(
+      {
+        execute: () => Promise.reject(new SearchError(failure as never, 'The catalog changed.')),
+        counts: () => Promise.reject(new Error('The list source reads no private counts.')),
+      } as never,
+      { resolve: () => Promise.reject(new Error('The list source reads no images.')) } as never,
+    );
+    const request = {
+      context: query(),
+      pageSize: 50,
+      continuation: 'cursor-1',
+      signal: new AbortController().signal,
+    };
+
+    // A continuation the provider invalidated tells the list to restart the sequence; the same
+    // failure on a request that names no continuation stays the read's own failure, and a
+    // temporary failure stays retryable at its position.
+    await expect(access.source.load(request)).resolves.toEqual({ status: 'invalidated' });
+    failure = 'unavailable';
+    await expect(access.source.load(request)).rejects.toMatchObject({ code: 'unavailable' });
+    failure = 'stale-continuation';
+    await expect(access.source.load({ ...request, continuation: null })).rejects.toMatchObject({
+      code: 'stale-continuation',
+    });
   });
 });
 

@@ -237,7 +237,11 @@ function catalogView(query: UiCatalogQuery): UiView {
 function recentSource(recent: UiRecentCards): UiListSource<string> {
   return {
     load(request) {
-      return Promise.resolve({ entries: recent.entries(request.context), continuation: null });
+      return Promise.resolve({
+        status: 'page',
+        entries: recent.entries(request.context),
+        continuation: null,
+      });
     },
   };
 }

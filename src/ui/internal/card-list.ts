@@ -10,6 +10,14 @@
  * obsolete page never replaces the active view, and closing the page cancels its lists' work
  * (docs/user-interface.md#pages-and-navigation).
  *
+ * The list also owns read recovery (docs/user-interface.md#cardlist): a source answer that reports
+ * the requested sequence as invalidated restarts it from its first page, keeping the presented
+ * window, selection and page-owned drafts until the replacement arrives, never appending the new
+ * sequence to the rejected one and leaving no position of the rejected sequence capturable, so a
+ * later visit never repeats it. A read that merely failed temporarily keeps the position it asked
+ * for, and the retry control repeats that position — or the first page of a restart that failed —
+ * without an automatic retry loop.
+ *
  * Basic information renders with the entries. Images, ownership, tags and tool availability are
  * fragments: each kind loads and fails independently of the basic information and of the other
  * kinds, read in bounded batches over the active window and selected tool targets. A failed
@@ -40,6 +48,7 @@ import {
   type UiFragmentResult,
   type UiListEntry,
   type UiListPage,
+  type UiListRead,
   type UiListSource,
   type UiOperationOutcome,
   type UiTool,
@@ -293,7 +302,10 @@ export interface UiCardList<Context = unknown> {
   refine(context: Context): void;
   /** Reloads the active result from its first page, keeping the window until it arrives. */
   refresh(): void;
-  /** Repeats the failed request of the active result; never another query's continuation. */
+  /**
+   * Repeats the failed request of the active result — the position a temporary failure kept, or
+   * the first page of a sequence whose restart failed; never another query's continuation.
+   */
   retry(): void;
   /**
    * Re-reads one fragment of one entry (also tool availability of a selected entry retired by
@@ -426,6 +438,13 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
    */
   const positions = new Map<string, UiListPosition>();
   /**
+   * Start of the replacement sequence a restart reads after the source invalidated the sequence the
+   * presented window came from, or null while the window holds the position of its own sequence.
+   * The replacement's first page clears it and records the positions it begins
+   * (docs/user-interface.md#cardlist).
+   */
+  let restartPosition: UiListPosition | null = null;
+  /**
    * The window one visit restores until the source presented it again, or null once it has; while
    * it is set, the list reports it instead of the partially loaded window.
    */
@@ -529,7 +548,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     error = null;
     failed = null;
     renderStatus();
-    let request: Promise<UiListPage>;
+    let request: Promise<UiListRead>;
     try {
       request = source.load({
         context: activeContext,
@@ -547,7 +566,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       return;
     }
     Promise.resolve(request).then(
-      (page) => settlePage(current, nextContinuation, offset, page),
+      (read) => settleRead(current, nextContinuation, offset, read),
       (cause) =>
         settleFailure(
           current,
@@ -558,7 +577,15 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     );
   }
 
-  function settlePage(
+  /**
+   * Accepts one source answer. A page settles the request it answered. A report that the requested
+   * sequence was invalidated restarts the sequence from its first page, so the rejected
+   * continuation is never repeated, while the presented window, the selection and the page-owned
+   * drafts stay until the replacement arrives and no position of the rejected sequence stays
+   * capturable (docs/user-interface.md#cardlist). A report that names no continuation cannot
+   * restart anything, so it fails at the position it asked for and the retry control repeats it.
+   */
+  function settleRead(
     current: number,
     requested: string | null,
     offset: number,
@@ -567,34 +594,85 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (disposed || current !== generation) {
       return;
     }
-    const read = readCardListPage(value, pageSize);
-    if (!read.ok) {
+    const read = readCardListRead(value, pageSize);
+    if (read.status === 'invalidated') {
+      if (requested === null) {
+        settleFailure(current, requested, offset, 'The list changed while it was read.');
+        return;
+      }
+      // The answer arrived and is dropped with its sequence; the restart asks again from the
+      // beginning of the result rather than from the continuation the source rejected, and the
+      // rejected sequence leaves nothing a later visit could be sent back to.
+      pending = null;
+      forgetSequence();
+      startRequest(null);
+      return;
+    }
+    if (read.status === 'unreadable') {
       settleFailure(current, requested, offset, read.problem);
+      return;
+    }
+    settlePage(current, requested, offset, read.page);
+  }
+
+  function settlePage(
+    current: number,
+    requested: string | null,
+    offset: number,
+    page: UiListPage,
+  ): void {
+    if (disposed || current !== generation) {
       return;
     }
     pending = null;
     loading = false;
     error = null;
     failed = null;
-    const supplied = read.page.entries;
+    const supplied = page.entries;
     const presented = offset === 0 ? supplied : supplied.slice(offset);
-    const previousLength = entries.length;
+    // A page requested without a continuation replaced the presented window with the beginning of
+    // the sequence it belongs to, so the retained window is measured against that sequence's
+    // progress from zero; a page that extends the window is measured against the length the window
+    // reached before the page arrived. Comparing the replacement's length against the length of the
+    // sequence it replaced would treat an equally sized replacement as no progress at all
+    // (docs/user-interface.md#cardlist).
+    const baseline = requested === null ? 0 : entries.length;
     if (requested === null) {
-      // The fresh first page belongs to the active query, so nothing older stays paged. A retained
-      // window being re-acquired keeps the action context the state carried, while a result that
-      // replaced another exposes its selected keys as they are found again.
+      // The fresh first page belongs to the active query and begins its sequence, so nothing older
+      // stays paged and the recorded positions are this sequence's own. A retained window being
+      // re-acquired keeps the action context the state carried, while a result that replaced
+      // another exposes its selected keys as they are found again.
       staleWindow = false;
+      restartPosition = null;
       setWindow(presented, kept !== null);
     } else {
       appendWindow(presented);
     }
     rememberPositions(requested, supplied);
-    continuation = read.page.continuation;
+    continuation = page.continuation;
     continues = continuation !== null;
     renderStatus();
     requestFragments();
     if (kept !== null) {
-      restoreWindow(previousLength);
+      restoreWindow(baseline);
+    }
+  }
+
+  /**
+   * Forgets the source positions of a sequence the source rejected. The restart re-reads the result
+   * from its beginning, so the window the list presents is re-acquired from there until the
+   * replacement's first page records its own positions: neither the retained window's position nor
+   * a presented entry's recorded position may name a rejected continuation when the list is
+   * captured and reacquired (docs/user-interface.md#cardlist,
+   * docs/user-interface.md#state-ownership-and-restoration). Usable content, the intended window
+   * size and the interaction state stay.
+   */
+  function forgetSequence(): void {
+    positions.clear();
+    const start: UiListPosition = { continuation: null, offset: 0 };
+    restartPosition = start;
+    if (kept !== null) {
+      kept = { ...kept, position: start };
     }
   }
 
@@ -623,19 +701,18 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
 
   /**
    * Keeps loading the retained window from its own source position until the list presented the
-   * same number of entries again, the result ends or a page adds nothing: the source stays
-   * authoritative for membership and continuation, so a shorter result presents what it holds.
+   * intended number of entries again, the result ends or a page of the replacement sequence adds
+   * nothing: the source stays authoritative for membership and continuation, so a shorter result
+   * presents what it holds. `baseline` is the window length the previous page of the sequence being
+   * acquired left, so progress is evaluated inside that sequence rather than against a sequence a
+   * restart discarded.
    */
-  function restoreWindow(previousLength: number): void {
+  function restoreWindow(baseline: number): void {
     const window = kept;
     if (window === null) {
       return;
     }
-    if (
-      entries.length >= window.window ||
-      continuation === null ||
-      entries.length === previousLength
-    ) {
+    if (entries.length >= window.window || continuation === null || entries.length === baseline) {
       presentWindow(window);
       return;
     }
@@ -718,7 +795,8 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
    * is the state the list is restoring — the intended window, never the partial one — with the
    * selection and local interaction the user changed in the meantime. A refinement that superseded
    * the presented window retains the query the list intends, whose first page has not arrived yet,
-   * so the captured position always belongs to the captured query.
+   * so the captured position always belongs to the captured query. A restart under way retains the
+   * beginning of the sequence it reads instead of any position of the one the source rejected.
    */
   function capture(): UiCardListState<Context> {
     const window = kept;
@@ -745,7 +823,9 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     return {
       context: activeContext,
       position:
-        window?.position ?? (first === undefined ? null : (positions.get(first.key) ?? null)),
+        window?.position ??
+        restartPosition ??
+        (first === undefined ? null : (positions.get(first.key) ?? null)),
       window: window?.window ?? entries.length,
       ...retainedInteraction,
     };
@@ -1631,40 +1711,51 @@ function entryIdentity(entry: UiListEntry): string {
   return JSON.stringify([entry.key, entry.target, entry.basic]);
 }
 
-/** One source page: at most the requested entries, their keys unique and their information read. */
-function readCardListPage(
-  value: unknown,
-  pageSize: number,
-):
-  | { readonly ok: true; readonly page: UiListPage }
-  | { readonly ok: false; readonly problem: string } {
-  const page = readObject(value);
-  const entries = page?.entries;
-  if (page === null || !Array.isArray(entries)) {
-    return unreadablePage('The list source did not report entries.');
+/** One source answer, read as the page it supplies, its invalidation or the problem it carries. */
+type CardListRead =
+  | { readonly status: 'page'; readonly page: UiListPage }
+  | { readonly status: 'invalidated' }
+  | { readonly status: 'unreadable'; readonly problem: string };
+
+/**
+ * One source answer: a page of at most the requested entries with unique keys and readable
+ * information, or the report that the requested sequence is invalidated
+ * (docs/user-interface.md#list-boundary).
+ */
+function readCardListRead(value: unknown, pageSize: number): CardListRead {
+  const report = readObject(value);
+  if (report?.status === 'invalidated') {
+    return { status: 'invalidated' };
+  }
+  if (report?.status !== 'page') {
+    return unreadableRead('The list source reported neither a page nor an invalidated sequence.');
+  }
+  const entries = report.entries;
+  if (!Array.isArray(entries)) {
+    return unreadableRead('The list source did not report entries.');
   }
   if (entries.length > pageSize) {
-    return unreadablePage(`The list source returned more than the ${pageSize} requested entries.`);
+    return unreadableRead(`The list source returned more than the ${pageSize} requested entries.`);
   }
-  const continuation = page.continuation;
+  const continuation = report.continuation;
   if (continuation !== undefined && continuation !== null && typeof continuation !== 'string') {
-    return unreadablePage('The list source reported an unreadable continuation.');
+    return unreadableRead('The list source reported an unreadable continuation.');
   }
   const read: UiListEntry[] = [];
   const keys = new Set<string>();
   for (const candidate of entries) {
     const entry = readEntry(candidate);
     if (entry === null) {
-      return unreadablePage('The list source reported an unreadable entry.');
+      return unreadableRead('The list source reported an unreadable entry.');
     }
     if (keys.has(entry.key)) {
-      return unreadablePage('The list source reported one entry key twice.');
+      return unreadableRead('The list source reported one entry key twice.');
     }
     keys.add(entry.key);
     read.push(entry);
   }
   return {
-    ok: true,
+    status: 'page',
     page: {
       entries: read,
       continuation:
@@ -1673,8 +1764,8 @@ function readCardListPage(
   };
 }
 
-function unreadablePage(problem: string): { readonly ok: false; readonly problem: string } {
-  return { ok: false, problem };
+function unreadableRead(problem: string): CardListRead {
+  return { status: 'unreadable', problem };
 }
 
 function readEntry(value: unknown): UiListEntry | null {

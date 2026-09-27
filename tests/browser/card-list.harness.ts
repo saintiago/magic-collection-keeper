@@ -22,7 +22,7 @@ import {
   type UiFragmentReader,
   type UiFragmentResult,
   type UiListEntry,
-  type UiListPage,
+  type UiListRead,
   type UiListSource,
   type UiOperationOutcome,
 } from '../../src/ui/index.js';
@@ -116,6 +116,8 @@ export interface UiCardListControl {
     id: number,
     page: { readonly entries: readonly UiListEntry[]; readonly continuation?: string | null },
   ): void;
+  /** Answers a request with the report that its sequence was invalidated and must restart. */
+  invalidatePage(id: number): void;
   failPage(id: number, message: string): void;
   fragmentRequests(): readonly UiCardListFragmentRequest[];
   settleFragment(id: number, results: readonly UiFragmentResult<unknown>[]): void;
@@ -152,7 +154,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
   const fragments: UiCardListFragmentRequest[] = [];
   const invocations: UiCardListToolRequest[] = [];
   const restorations = new Map<string, UiCardListRestorationReport>();
-  const pendingPages = new Map<number, Pending<UiListPage>>();
+  const pendingPages = new Map<number, Pending<UiListRead>>();
   const pendingFragments = new Map<number, Pending<readonly UiFragmentResult<unknown>[]>>();
   const retiredFragments = new Set<number>();
   const pendingTools = new Map<number, Pending<UiOperationOutcome>>();
@@ -274,7 +276,19 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
         throw new Error(`No page request ${id} is waiting.`);
       }
       pendingPages.delete(id);
-      pending.resolve({ entries: page.entries, continuation: page.continuation ?? null });
+      pending.resolve({
+        status: 'page',
+        entries: page.entries,
+        continuation: page.continuation ?? null,
+      });
+    },
+    invalidatePage(id) {
+      const pending = pendingPages.get(id);
+      if (pending === undefined) {
+        throw new Error(`No page request ${id} is waiting.`);
+      }
+      pendingPages.delete(id);
+      pending.resolve({ status: 'invalidated' });
     },
     failPage(id, message) {
       const pending = pendingPages.get(id);
@@ -373,7 +387,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
           continuation: request.continuation,
           isAborted: () => aborted,
         });
-        return new Promise<UiListPage>((resolve, reject) => {
+        return new Promise<UiListRead>((resolve, reject) => {
           pendingPages.set(requestId, { resolve, reject });
         });
       },

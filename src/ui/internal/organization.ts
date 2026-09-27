@@ -16,7 +16,7 @@
 
 import type { SearchClient } from '../../application/index.js';
 import type { CardRecord, Catalog, PrintingRecord } from '../../catalog/index.js';
-import type { SearchRequestInput } from '../../search/index.js';
+import type { SearchPage, SearchRequestInput } from '../../search/index.js';
 import type {
   Association,
   AssociationListResult,
@@ -31,7 +31,7 @@ import {
   type UiCardList,
   type UiEntryOwnership,
 } from './card-list.js';
-import { readUiFailureCode } from './failure.js';
+import { isUiInvalidatedContinuation, readUiFailureCode } from './failure.js';
 import { UI_LIMITS } from './limits.js';
 import type { UiEntryTarget, UiFragmentReader, UiListEntry, UiListSource } from './list.js';
 import { controlLabel, readListState, readPageState } from './page-support.js';
@@ -289,7 +289,7 @@ function tagsPage(): UiPageDefinition {
           if (closed || current !== version) {
             return;
           }
-          if (next !== null && isPrivateContinuationFailure(cause)) {
+          if (next !== null && isUiInvalidatedContinuation(cause)) {
             // The private records changed since this page was read: the window is read again from
             // the account's list instead of repeating a continuation the change invalidated.
             start = null;
@@ -357,7 +357,7 @@ function tagsPage(): UiPageDefinition {
           if (closed || current !== version) {
             return;
           }
-          if (isPrivateContinuationFailure(cause)) {
+          if (isUiInvalidatedContinuation(cause)) {
             // The further page belongs to a superseded revision: the retained window is read from
             // its own position again instead of repeating the unusable cursor.
             start = null;
@@ -637,8 +637,6 @@ function tagViewPage(): UiPageDefinition {
       let locationVersion = 0;
       /** Unsaved association input per association, kept across redraws and with the history entry. */
       const drafts = readAssociationDrafts(restored?.drafts);
-      /** Whether a stale continuation of the association list is already being restarted. */
-      let restartingAssociations = false;
       let associations: UiCardList<string> | null = null;
       let addList: UiCardList<UiTagAddQuery> | null = null;
       /** The retained list states, kept while the lists are not composed yet. */
@@ -737,7 +735,6 @@ function tagViewPage(): UiPageDefinition {
             catalog: context.capabilities.catalog,
             records,
             onWindow: associationWindow,
-            onStaleContinuation: restartAssociations,
           }),
           context: tagId,
           pageSize: UI_LIMITS.associationPage,
@@ -891,7 +888,7 @@ function tagViewPage(): UiPageDefinition {
           if (closed || current !== locationVersion) {
             return;
           }
-          if (continuation !== null && isPrivateContinuationFailure(cause)) {
+          if (continuation !== null && isUiInvalidatedContinuation(cause)) {
             locations = { ...locations, loading: false, continuation: null };
             void readLocations(null);
             return;
@@ -1654,13 +1651,12 @@ function tagViewPage(): UiPageDefinition {
 
       /**
        * Accepts the window of association keys the list now presents: rows the window no longer
-       * holds release their editors, and a restart that read the sequence again is complete. The
-       * unsaved drafts stay under their own bound, so an edit a retired row held survives paging
-       * without retaining every visited association
+       * holds release their editors. The unsaved drafts stay under their own bound, so an edit a
+       * retired row held survives paging — and a restart of the sequence — without retaining every
+       * visited association
        * (docs/user-interface.md#state-ownership-and-restoration).
        */
       function associationWindow(presentedKeys: ReadonlySet<string>, fromStart: boolean): void {
-        restartingAssociations = false;
         if (fromStart) {
           // A replacement window adopts current private state. Even unchanged rows and search
           // candidates can have different counts; supersede reads from before this reload.
@@ -1672,23 +1668,6 @@ function tagViewPage(): UiPageDefinition {
           }
         }
         boundDrafts(drafts);
-      }
-
-      /**
-       * Restarts the association list after its continuation went stale: the account's private
-       * records changed since the failed page was read, so the list reads the sequence again from
-       * its first page while the presented rows, unsaved drafts and selection stay
-       * (docs/user-interface.md#browsing-and-organization,
-       * docs/user-interface.md#state-ownership-and-restoration).
-       */
-      function restartAssociations(): void {
-        if (closed || associations === null || restartingAssociations) {
-          return;
-        }
-        restartingAssociations = true;
-        associationsStatus.textContent =
-          'The associations changed; the list was reloaded from the start.';
-        associations.refresh();
       }
 
       /**
@@ -1757,15 +1736,16 @@ interface UiTagAddQuery {
  * The source of one tag view's association list: the tag's associations with resolved basics and
  * independently loaded private counts. The list reports the window it accumulated, so
  * the page releases the editors of rows that left it, and a continuation the provider rejects as
- * stale tells the page to read the sequence again from its first page instead of repeating an
- * unusable cursor forever (docs/user-interface.md#browsing-and-organization).
+ * stale is reported as an invalidated sequence: the list reads the sequence again from its first
+ * page instead of repeating an unusable cursor forever, and the page keeps the drafts and
+ * selection of the rows it presented (docs/user-interface.md#list-boundary,
+ * docs/user-interface.md#browsing-and-organization).
  */
 function associationSource(options: {
   readonly access: UiTagAccess;
   readonly catalog: Catalog;
   readonly records: Map<string, Association>;
   readonly onWindow: (presentedKeys: ReadonlySet<string>, fromStart: boolean) => void;
-  readonly onStaleContinuation: () => void;
 }): UiListSource<string> {
   /** Keys of the window the list presents, bounded like the list's own working set. */
   const presented: string[] = [];
@@ -1785,9 +1765,11 @@ function associationSource(options: {
         if (
           !request.signal.aborted &&
           request.continuation !== null &&
-          isPrivateContinuationFailure(cause)
+          isUiInvalidatedContinuation(cause)
         ) {
-          options.onStaleContinuation();
+          // The account's private revision the continuation was read at changed: the list restarts
+          // the sequence from its first page, so the page never repeats the unusable cursor.
+          return { status: 'invalidated' };
         }
         throw cause;
       }
@@ -1831,7 +1813,7 @@ function associationSource(options: {
         }
       }
       options.onWindow(window, request.continuation === null);
-      return { entries, continuation: page.continuation };
+      return { status: 'page', entries, continuation: page.continuation };
     },
   };
 }
@@ -2006,11 +1988,22 @@ async function resolveCards(
 function addSource(search: SearchClient): UiListSource<UiTagAddQuery> {
   return {
     async load(request) {
-      const page = await search.execute(
-        addSearchRequest(request.context, request.pageSize, request.continuation),
-        request.signal,
-      );
+      let page: SearchPage;
+      try {
+        page = await search.execute(
+          addSearchRequest(request.context, request.pageSize, request.continuation),
+          request.signal,
+        );
+      } catch (cause) {
+        if (request.continuation !== null && isUiInvalidatedContinuation(cause)) {
+          // The revisions the continuation was bound to changed: the list reads the sequence again
+          // from its first page instead of repeating the unusable cursor.
+          return { status: 'invalidated' };
+        }
+        throw cause;
+      }
       return {
+        status: 'page',
         entries: page.entries.map((entry) => ({ ...searchListEntry(entry), quantity: null })),
         continuation: page.continuation,
       };
@@ -2262,12 +2255,6 @@ function select(
 
 function readMessage(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message.length > 0 ? cause.message : fallback;
-}
-
-/** UserCards invalidates revision-bound continuations with conflict. */
-function isPrivateContinuationFailure(cause: unknown): boolean {
-  const code = readUiFailureCode(cause);
-  return code === 'conflict' || code === 'stale-continuation';
 }
 
 /** Keep selected identities explicit while their page of choices is unavailable. */

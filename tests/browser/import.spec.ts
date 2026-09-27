@@ -1086,6 +1086,43 @@ test('recovers the confirmation a restored page kept', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test('restarts the pending entries when their continuation was invalidated', async ({ page }) => {
+  const all = pendingEntries(51);
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11, m10] });
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, [session({ pendingEntries: 51 })]);
+  const first = await requested<UiImportEntriesRequest>(page, 'entries');
+  await settle(page, 'settleEntries', first.id, {
+    session: session({ pendingEntries: 51 }),
+    entries: all.slice(0, 50),
+    continuation: 'cursor-50',
+  });
+  await page.locator('#import-pending [data-ui-entry="pending:entry-1"] [data-ui-select]').check();
+
+  await page.locator('#import-pending [data-ui-more]').click();
+  const stale = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  expect(stale.arguments.continuation).toBe('cursor-50');
+  await settle(page, 'fail', stale.id, {
+    code: 'conflict',
+    message: 'The private data changed after this page was read; start the pending import again.',
+  });
+
+  // The list restarts the pending entries from their first page, keeps the presented rows and
+  // their selection, and never repeats the continuation the provider rejected.
+  const restart = await requested<UiImportEntriesRequest>(page, 'entries', 2);
+  expect(restart.arguments).toEqual({ sessionId: 'manual', pageSize: 50, continuation: null });
+  await expect(page.locator('#import-pending [data-ui-entry="pending:entry-1"]')).toHaveCount(1);
+  await expect(page.locator('#import-pending [data-ui-selection-count]')).toHaveText('1 selected');
+  await settle(page, 'settleEntries', restart.id, {
+    session: session({ pendingEntries: 51 }),
+    entries: all.slice(0, 50),
+  });
+  await expect(page.locator('#import-pending [data-ui-entry="pending:entry-1"]')).toHaveCount(1);
+  await expect(page.locator('#import-pending [data-ui-more]')).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
 test('confirms a selected entry the loaded window no longer presents', async ({ page }) => {
   const all = pendingEntries(550);
   const errors = await openImport(page, '#/import');

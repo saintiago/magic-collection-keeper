@@ -23,6 +23,7 @@ import type {
 } from '../../search/index.js';
 
 import type { UiEntryImage, UiEntryOwnership } from './card-list.js';
+import { isUiInvalidatedContinuation } from './failure.js';
 import type { UiEntryTarget, UiFragmentReader, UiListEntry, UiListSource } from './list.js';
 import type { UiCatalogLevel, UiCollectionLevel } from './routes.js';
 
@@ -319,13 +320,25 @@ function createSearchSource<Context>(
 ): UiListSource<Context> {
   return {
     async load(request) {
-      const page = readSearchPage(
-        await search.execute(
-          build(request.context, request.pageSize, request.continuation),
-          request.signal,
-        ),
-      );
+      let page: SearchPage;
+      try {
+        page = readSearchPage(
+          await search.execute(
+            build(request.context, request.pageSize, request.continuation),
+            request.signal,
+          ),
+        );
+      } catch (cause) {
+        if (request.continuation !== null && isUiInvalidatedContinuation(cause)) {
+          // Search bound the continuation to the revisions its query used; the changed revisions
+          // invalidate the sequence instead of failing this read temporarily, so the list restarts
+          // it from its first page (docs/search.md#request-and-result).
+          return { status: 'invalidated' };
+        }
+        throw cause;
+      }
       return {
+        status: 'page',
         entries: page.entries.map((entry) => searchListEntry(entry)),
         continuation: page.continuation,
       };
