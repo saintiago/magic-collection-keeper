@@ -1648,3 +1648,191 @@ for (const view of ['tags', 'tag'] as const) {
     ).toMatchObject({ label: 'Next draft', expectedRevision: 2 });
   });
 }
+
+for (const newer of ['Next draft', ''] as const) {
+  test(`create completion preserves newer input ${JSON.stringify(newer)}`, async ({ page }) => {
+    await openTags(page, '#/tags');
+    await settle(page, 'settleListTags', (await requested(page, 'listTags')).id, { tags: [] });
+    await page.fill('#tag-create-label', 'First');
+    await page.click('#tag-create-submit');
+    const create = await requested(page, 'createTag');
+    await page.fill('#tag-create-label', newer);
+    await settle(page, 'settleCreateTag', create.id, tag({ label: 'First' }));
+    await expect(page.locator('#tag-create-label')).toHaveValue(newer);
+    await expect(page.locator('#tags-list')).toContainText('First');
+  });
+
+  test(`initial tag read preserves touched input ${JSON.stringify(newer)}`, async ({ page }) => {
+    await openTags(page, '#/tags/tag-burn');
+    const read = await requested(page, 'readTags');
+    await page.fill('#tag-label', 'My draft');
+    await page.fill('#tag-label', newer);
+    await settle(page, 'settleReadTags', read.id, [tag()]);
+    await expect(page.locator('#tag-heading')).toHaveText('Burn');
+    await expect(page.locator('#tag-label')).toHaveValue(newer);
+  });
+}
+
+async function showBoltSearch(page: Page, index = 0): Promise<void> {
+  await page.click('#tag-add-submit');
+  const search = await requested(page, 'searches', index);
+  await settle(page, 'settleSearch', search.id, {
+    entries: [
+      {
+        entryKey: 'card:card-bolt',
+        target: { kind: 'card', cardId: 'card-bolt' },
+        card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
+        printing: null,
+        quantity: null,
+      },
+    ],
+    continuation: null,
+  });
+}
+
+for (const outcome of ['committed', 'unknown'] as const) {
+  test(`${outcome} quantity edits refresh dependent copy and search counts from ${outcome === 'committed' ? 'ready' : 'pending'} reads`, async ({
+    page,
+  }) => {
+    await openTags(page, '#/tags/tag-burn');
+    await settle(page, 'settleReadTags', (await requested(page, 'readTags')).id, [tag()]);
+    const intention = association({
+      tagId: 'tag-burn',
+      targetLevel: 'card',
+      targetId: 'card-bolt',
+    });
+    const physical = association({
+      associationId: 'physical',
+      tagId: 'tag-burn',
+      targetLevel: 'copy',
+      targetId: 'copy-1',
+      quantity: null,
+    });
+    await settle(page, 'settleListAssociations', (await requested(page, 'listAssociations')).id, {
+      associations: [intention, physical],
+    });
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies')).id, [
+      {
+        copyId: 'copy-1',
+        printingId: 'printing-1',
+        finish: 'nonfoil',
+        condition: 'NM',
+        revision: 1,
+      },
+    ]);
+    await settleCatalog(page, 0, { printings: [boltPrinting] });
+    await settleCatalog(page, 1, { cards: [boltCard] });
+    // Exercise both retained ready fragments and outstanding reads that must be superseded.
+    await requested(page, 'counts');
+    await showBoltSearch(page);
+    await requested(page, 'counts', 1);
+    const oldReads = await control<readonly UiTagsRequest<UiTagsCountsRequest>[]>(page, 'counts');
+    if (outcome === 'committed') {
+      await completeOldCounts();
+      await expect(
+        page.locator('#tag-associations [data-ui-entry="association:physical"] [data-ui-intended]'),
+      ).toHaveText(' Intended: 2');
+      await expect(page.locator('#tag-add-results [data-ui-intended]')).toHaveText(' Intended: 2');
+    }
+    await page.fill('#tag-quantity-association-1', '9');
+    await page.click('#tag-quantity-save-association-1');
+    const save = await requested(page, 'changeAssociation');
+    await page.fill('#tag-quantity-association-1', '12');
+    const saved = { ...intention, quantity: 9, revision: 2 };
+    if (outcome === 'committed') {
+      await settle(page, 'settleChangeAssociation', save.id, saved);
+    } else {
+      await settle(page, 'fail', save.id, { code: 'unavailable', message: 'Response lost' });
+      await settle(page, 'settleReadAssociations', (await requested(page, 'readAssociations')).id, [
+        saved,
+      ]);
+    }
+    await requested(page, 'counts', oldReads.length + 1);
+    const refreshed = (
+      await control<readonly UiTagsRequest<UiTagsCountsRequest>[]>(page, 'counts')
+    ).slice(oldReads.length);
+    for (const read of refreshed) {
+      await settle(page, 'settleCounts', read.id, [
+        ['card:card-bolt', { owned: 1, intended: 9, locations: 1 }],
+        ['copy:copy-1', { owned: 1, intended: 9, locations: 1 }],
+      ]);
+    }
+    if (outcome === 'committed') {
+      await settle(
+        page,
+        'settleListAssociations',
+        (await requested(page, 'listAssociations', 1)).id,
+        { associations: [saved, physical] },
+      );
+      await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', 1)).id, [
+        {
+          copyId: 'copy-1',
+          printingId: 'printing-1',
+          finish: 'nonfoil',
+          condition: 'NM',
+          revision: 1,
+        },
+      ]);
+      await settleCatalog(page, 2, { printings: [boltPrinting] });
+      await settleCatalog(page, 3, { cards: [boltCard] });
+    }
+    if (outcome === 'unknown') {
+      await completeOldCounts();
+      expect(
+        (await control<readonly UiTagsRequest<unknown>[]>(page, 'counts'))
+          .slice(0, oldReads.length)
+          .every((read) => read.aborted),
+      ).toBe(true);
+    }
+    await expect(
+      page.locator('#tag-associations [data-ui-entry="association:physical"] [data-ui-intended]'),
+    ).toHaveText(' Intended: 9');
+    await expect(page.locator('#tag-add-results [data-ui-intended]')).toHaveText(' Intended: 9');
+    await expect(page.locator('#tag-quantity-association-1')).toHaveValue('12');
+    async function completeOldCounts(): Promise<void> {
+      for (const read of oldReads) {
+        await settle(page, 'settleCounts', read.id, [
+          ['card:card-bolt', { owned: 1, intended: 2, locations: 1 }],
+          ['copy:copy-1', { owned: 1, intended: 2, locations: 1 }],
+        ]);
+      }
+    }
+  });
+}
+
+test('addition and repeated search refresh unchanged candidate counts without losing selection', async ({
+  page,
+}) => {
+  await openTags(page, '#/tags/tag-wish');
+  await settle(page, 'settleReadTags', (await requested(page, 'readTags')).id, [
+    tag({ tagId: 'tag-wish', kind: 'wishlist' }),
+  ]);
+  await settle(page, 'settleListAssociations', (await requested(page, 'listAssociations')).id, {
+    associations: [],
+  });
+  await scriptCounts(page, [['card:card-bolt', { owned: 1, intended: null, locations: 1 }]]);
+  await showBoltSearch(page);
+  const result = page.locator('#tag-add-results [data-ui-entry="card:card-bolt"]');
+  await expect(result.locator('[data-ui-copies]')).toHaveText(' Copies: 1');
+  await result.locator('[data-ui-select]').check();
+  await page.fill('#tag-add-quantity', '4');
+  await page.click('#tag-add-results [data-ui-tool="add-to-tag"]');
+  await scriptCounts(page, [['card:card-bolt', { owned: 1, intended: 4, locations: 1 }]]);
+  const saved = association({ targetLevel: 'card', targetId: 'card-bolt', quantity: 4 });
+  await settle(
+    page,
+    'settleCreateAssociation',
+    (await requested(page, 'createAssociation')).id,
+    saved,
+  );
+  await settle(page, 'settleListAssociations', (await requested(page, 'listAssociations', 1)).id, {
+    associations: [saved],
+  });
+  await settleCatalog(page, 0, { cards: [boltCard] });
+  await expect(result.locator('[data-ui-intended]')).toHaveText(' Intended: 4');
+  await scriptCounts(page, [['card:card-bolt', { owned: 3, intended: 4, locations: 2 }]]);
+  await showBoltSearch(page, 1);
+  await expect(result.locator('[data-ui-copies]')).toHaveText(' Copies: 3');
+  await expect(result.locator('[data-ui-locations]')).toHaveText(' Locations: 2');
+  await expect(result.locator('[data-ui-select]')).toBeChecked();
+});

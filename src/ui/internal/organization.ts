@@ -186,7 +186,9 @@ function tagsPage(): UiPageDefinition {
         }
         if (outcome.record !== null) {
           publish(outcome.record);
-          label.value = '';
+          if (outcome.status === 'committed' && label.value.trim() === wanted) {
+            label.value = '';
+          }
         } else if (outcome.status === 'unknown') {
           // A lost create response: the list is read again, so a tag the service committed appears
           // for review while the unsaved label stays in the form.
@@ -562,9 +564,12 @@ function tagViewPage(): UiPageDefinition {
       renameForm.id = 'tag-rename';
       const labelInput = textInput(document, 'tag-label', '');
       labelInput.maxLength = UI_LIMITS.entryKey;
-      // The unsaved label the entry kept stands until it is saved or the tag is read again; an
-      // entry that kept none presents the label the account stores.
+      // Initialize from the saved label only until restoration or user input owns the field.
       const restoredLabel = typeof restored?.label === 'string' ? restored.label : null;
+      let labelTouched = restoredLabel !== null;
+      labelInput.addEventListener('input', () => {
+        labelTouched = true;
+      });
       if (restoredLabel !== null) {
         labelInput.value = restoredLabel;
       }
@@ -704,7 +709,7 @@ function tagViewPage(): UiPageDefinition {
         tag = read;
         heading.textContent = read.label;
         kindLine.textContent = `Kind: ${uiTagKindLabel(kindOf(read.kind))}`;
-        if (restoredLabel === null) {
+        if (!labelTouched) {
           labelInput.value = read.label;
         }
         const levels = uiAssociationLevelsByTagKind[kindOf(read.kind)];
@@ -925,6 +930,7 @@ function tagViewPage(): UiPageDefinition {
           ensureAddList(next);
           return;
         }
+        refreshCounts();
         addList.refine(next);
       }
 
@@ -967,6 +973,7 @@ function tagViewPage(): UiPageDefinition {
                     // Writes committed or stay uncertain: the association list reads them again, so
                     // a partial addition is visible instead of presented as an unchanged result
                     // (docs/user-interface.md#browsing-and-organization).
+                    refreshCounts();
                     associations?.refresh();
                   }
                   return outcome;
@@ -1403,6 +1410,9 @@ function tagViewPage(): UiPageDefinition {
         if (closed) {
           return;
         }
+        if (outcome.status === 'committed' || outcome.status === 'unknown') {
+          refreshCounts();
+        }
         if (outcome.status === 'committed') {
           const draft = drafts.get(association.associationId);
           if (field === undefined) {
@@ -1431,6 +1441,7 @@ function tagViewPage(): UiPageDefinition {
             return;
           }
           const reviewed = reread === null ? null : adoptAssociation(reread);
+          refreshCounts();
           report(
             reviewed === null
               ? (outcome.message ?? 'The association changed. Reload the view before retrying.')
@@ -1449,6 +1460,9 @@ function tagViewPage(): UiPageDefinition {
         } else {
           report(outcome.message ?? 'Saved.');
         }
+        if (outcome.status === 'unknown' && outcome.record === null) {
+          associations?.refresh();
+        }
 
         // Paging may have replaced the initiating editor. Keep the outcome in the live row and
         // at page level, so an uncertain result remains visible through reconciliation.
@@ -1457,6 +1471,12 @@ function tagViewPage(): UiPageDefinition {
           const current = editors.get(associationKey(association))?.status ?? status;
           if (current !== null) current.textContent = message;
         }
+      }
+
+      /** Counts depend on related intentions and locations, even when entry basics are unchanged. */
+      function refreshCounts(): void {
+        associations?.reloadFragments('ownership');
+        addList?.reloadFragments('ownership');
       }
 
       /** Reads one association record the page presents, or null when the read did not answer. */
@@ -1490,7 +1510,6 @@ function tagViewPage(): UiPageDefinition {
           associations?.refresh();
         } else {
           editors.get(key)?.refresh();
-          associations?.reloadFragment(key, 'ownership');
         }
         return next;
       }

@@ -301,6 +301,8 @@ export interface UiCardList<Context = unknown> {
    * is retired instead of answering the fresh one.
    */
   reloadFragment(key: string, kind: UiFragmentKind): void;
+  /** Re-reads one kind across the active working set, superseding its outstanding reads. */
+  reloadFragments(kind: UiFragmentKind): void;
   /** Marks one entry selected; a key may be selected before its entry is loaded. */
   setSelected(key: string, selected: boolean): void;
   /** Unselects every entry. */
@@ -501,6 +503,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     refresh,
     retry,
     reloadFragment,
+    reloadFragments,
     setSelected,
     clearSelection,
     invoke,
@@ -1213,6 +1216,20 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     invalidateFragment(key, kind);
     setFragmentState(key, kind, { status: 'loading', values: null, message: null });
     fragmentQueue(kind).pending.add(key);
+    retireObsoleteFragments();
+    pumpFragments(kind);
+  }
+
+  function reloadFragments(kind: UiFragmentKind): void {
+    if (disposed || !readers.has(kind)) {
+      return;
+    }
+    // Invalidate the whole batch before pumping so no request mixes old and fresh tokens.
+    for (const key of fragmentRequestKeys(kind)) {
+      invalidateFragment(key, kind);
+      setFragmentState(key, kind, { status: 'loading', values: null, message: null });
+      fragmentQueue(kind).pending.add(key);
+    }
     retireObsoleteFragments();
     pumpFragments(kind);
   }
