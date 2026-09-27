@@ -13,6 +13,7 @@ import {
   type ImportCandidate,
   type ImportEntry,
   type ImportSession,
+  type ImportSourceLine,
   type PhysicalCopy,
   type Tag,
 } from './model.js';
@@ -153,6 +154,7 @@ export const importSessionJsonSchema = z.object({
   session_id: z.string().min(1).max(identifierLength),
   source_kind: z.string().min(1).max(identifierLength),
   source_id: z.string().min(1).max(identifierLength),
+  source_reference: z.string().min(1).max(USERCARDS_LIMITS.maxSourceReferenceLength).nullable(),
   state: z.enum(importSessionStates),
   pending_entries: z.number().int().min(0),
   confirmed_entries: z.number().int().min(0),
@@ -167,6 +169,7 @@ function importSessionFromJson(json: ImportSessionJson): ImportSession {
     sessionId: json.session_id,
     sourceKind: json.source_kind,
     sourceId: json.source_id,
+    sourceReference: json.source_reference,
     state: json.state,
     pendingEntries: json.pending_entries,
     confirmedEntries: json.confirmed_entries,
@@ -185,6 +188,47 @@ export function importSessionsFromRows(rows: readonly UserCardsSqlRow[]): Import
     .sort((left, right) => left.sessionId.localeCompare(right.sessionId));
 }
 
+/** One parsed source line as it is read back with its entry (docs/user-cards.md#source-imports). */
+export const importSourceLineJsonSchema = z.object({
+  name: z.string().min(1).max(identifierLength).nullable(),
+  section: z.string().min(1).max(identifierLength).nullable(),
+  set: z.string().min(1).max(identifierLength).nullable(),
+  collector_number: z.string().min(1).max(identifierLength).nullable(),
+  language: z.string().min(1).max(identifierLength).nullable(),
+  finish: z.enum(finishes).nullable(),
+  declared_quantity: z.number().int().min(1).max(USERCARDS_LIMITS.maxCreateQuantity),
+  problem: z.string().min(1).max(USERCARDS_LIMITS.maxSourceProblemLength).nullable(),
+});
+
+type ImportSourceLineJson = z.infer<typeof importSourceLineJsonSchema>;
+
+function importSourceLineFromJson(json: ImportSourceLineJson): ImportSourceLine {
+  return {
+    name: json.name,
+    section: json.section,
+    set: json.set,
+    collectorNumber: json.collector_number,
+    language: json.language,
+    finish: json.finish,
+    declaredQuantity: json.declared_quantity,
+    problem: json.problem,
+  };
+}
+
+/** Stored JSON form of one parsed source line, matching `importSourceLineJsonSchema`. */
+export function importSourceLinePayload(line: ImportSourceLine): string {
+  return JSON.stringify({
+    name: line.name,
+    section: line.section,
+    set: line.set,
+    collector_number: line.collectorNumber,
+    language: line.language,
+    finish: line.finish,
+    declared_quantity: line.declaredQuantity,
+    problem: line.problem,
+  });
+}
+
 export const importEntryJsonSchema = z.object({
   entry_id: z.string().min(1).max(identifierLength),
   session_id: z.string().min(1).max(identifierLength),
@@ -194,6 +238,7 @@ export const importEntryJsonSchema = z.object({
   finish: z.enum(finishes).nullable(),
   condition: z.enum(copyConditions).nullable(),
   quantity: z.number().int().min(1).max(USERCARDS_LIMITS.maxCreateQuantity),
+  source_line: importSourceLineJsonSchema.nullable(),
   revision: z.number().int().min(1),
 });
 
@@ -206,6 +251,7 @@ export const importEntryPayloadSql = `json_build_object(
     'finish', finish,
     'condition', condition,
     'quantity', quantity,
+    'source_line', source_line,
     'revision', revision
   )::text`;
 
@@ -258,6 +304,7 @@ export function importEntriesFromRows(
         finish: json.finish,
         condition: json.condition,
         quantity: json.quantity,
+        sourceLine: json.source_line === null ? null : importSourceLineFromJson(json.source_line),
         revision: json.revision,
         candidates: (candidatesByEntry.get(json.entry_id) ?? []).sort(compareCandidates),
       };

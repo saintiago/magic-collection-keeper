@@ -31,10 +31,11 @@ export async function resolveCatalog(
 /**
  * Resolves the distinct printings of one request in catalog reads that never exceed the provider's
  * published resolution bound, so a valid staging batch is resolved completely instead of failing as
- * a temporary catalog failure. A reference the catalog does not publish is a missing reference: the
- * component never stores one (docs/user-cards.md#records-and-associations).
+ * a temporary catalog failure. A reference the published revision does not contain stays absent
+ * from the result instead of failing the read, so a source line the catalog cannot resolve remains
+ * reviewable (docs/user-cards.md#source-imports).
  */
-export async function resolvePrintings(
+export async function resolveAvailablePrintings(
   catalog: Catalog,
   printingIds: readonly string[],
 ): Promise<ReadonlyMap<string, PrintingRecord>> {
@@ -51,13 +52,67 @@ export async function resolvePrintings(
     );
     for (const printingId of batch) {
       const printing = resolution.printings.get(printingId);
-      if (printing === undefined) {
-        throw new UserCardsError('not-found', 'The printing is not available in the catalog.');
+      if (printing !== undefined) {
+        printings.set(printingId, printing);
       }
-      printings.set(printingId, printing);
     }
   }
   return printings;
+}
+
+/**
+ * Resolves the distinct printings of one request; a reference the published revision does not
+ * contain is a missing reference, because the component never stores one
+ * (docs/user-cards.md#records-and-associations).
+ */
+export async function resolvePrintings(
+  catalog: Catalog,
+  printingIds: readonly string[],
+): Promise<ReadonlyMap<string, PrintingRecord>> {
+  const distinct = [...new Set(printingIds)];
+  const printings = await resolveAvailablePrintings(catalog, distinct);
+  for (const printingId of distinct) {
+    if (!printings.has(printingId)) {
+      throw new UserCardsError('not-found', 'The printing is not available in the catalog.');
+    }
+  }
+  return printings;
+}
+
+/**
+ * The finish a physical copy of `printing` carries: the requested finish when the printing offers
+ * it, otherwise the printing's first offered finish. A printing the catalog does not publish as a
+ * physical card, or one that offers no finish at all, carries no such finish; a source import keeps
+ * such a line reviewable with the returned reason instead of failing the whole import
+ * (docs/user-cards.md#source-imports).
+ */
+export function physicalFinishAvailability(
+  printing: PrintingRecord,
+  requested: Finish | null | undefined,
+):
+  | { readonly outcome: 'available'; readonly finish: Finish }
+  | { readonly outcome: 'unavailable'; readonly problem: string } {
+  if (!printing.physical) {
+    return {
+      outcome: 'unavailable',
+      problem: 'The printing is not available as a physical card.',
+    };
+  }
+  if (requested !== null && requested !== undefined) {
+    return printing.finishes.includes(requested)
+      ? { outcome: 'available', finish: requested }
+      : {
+          outcome: 'unavailable',
+          problem: `The printing is not available in the ${requested} finish.`,
+        };
+  }
+  const offered = printing.finishes[0];
+  return offered === undefined
+    ? {
+        outcome: 'unavailable',
+        problem: 'The printing offers no finish a physical copy could carry.',
+      }
+    : { outcome: 'available', finish: offered };
 }
 
 /**
@@ -69,29 +124,11 @@ export function physicalFinish(
   printing: PrintingRecord,
   requested: Finish | null | undefined,
 ): Finish {
-  if (!printing.physical) {
-    throw new UserCardsError(
-      'invalid-request',
-      'The printing is not available as a physical card.',
-    );
+  const availability = physicalFinishAvailability(printing, requested);
+  if (availability.outcome === 'unavailable') {
+    throw new UserCardsError('invalid-request', availability.problem);
   }
-  if (requested !== null && requested !== undefined) {
-    if (!printing.finishes.includes(requested)) {
-      throw new UserCardsError(
-        'invalid-request',
-        `The printing is not available in the ${requested} finish.`,
-      );
-    }
-    return requested;
-  }
-  const offered = printing.finishes[0];
-  if (offered === undefined) {
-    throw new UserCardsError(
-      'invalid-request',
-      'The printing offers no finish a physical copy could carry.',
-    );
-  }
-  return offered;
+  return availability.finish;
 }
 
 /** Resolves one printing and the finish a physical copy of it carries. */
