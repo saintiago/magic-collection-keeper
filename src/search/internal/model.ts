@@ -266,23 +266,27 @@ export function canonicalizeSearchFilters(
 
 /**
  * Canonical serialization of one filter. Filters that mean the same produce the same key; it
- * orders canonical operands and feeds the continuation fingerprint. Every node is its kind
- * followed by a JSON encoding of its payload, so node borders and literal values stay distinct
- * even when a value contains a delimiter such as `;`, `,`, `:` or `"`.
+ * orders canonical operands and feeds the continuation fingerprint. Each node keeps its kind
+ * and payload in separate slots, so node borders and literal values stay distinct. Serialize the
+ * complete structural value once: escaping serialized children at every level grows exponentially.
  */
 export function searchFilterKey(filter: SearchFilter): string {
+  return JSON.stringify(filterKeyValue(filter));
+}
+
+function filterKeyValue(filter: SearchFilter): SearchFilterKeyValue {
   switch (filter.kind) {
     case 'criterion':
-      return `${filter.criterion.kind}:${JSON.stringify(criterionKeyValue(filter.criterion))}`;
+      return [filter.criterion.kind, criterionKeyValue(filter.criterion)];
     case 'not':
-      return `not:${JSON.stringify(searchFilterKey(filter.operand))}`;
+      return ['not', filterKeyValue(filter.operand)];
     case 'and':
     case 'or':
-      return `${filter.kind}:${JSON.stringify(filter.operands.map(searchFilterKey))}`;
+      return [filter.kind, filter.operands.map(filterKeyValue)];
   }
 }
 
-/** JSON value of one criterion's payload: every field that gives it its meaning, in its own slot. */
+/** Structural JSON value, with each node and criterion field in its own slot. */
 type SearchFilterKeyValue = readonly (string | number | SearchFilterKeyValue)[];
 
 function criterionKeyValue(criterion: SearchCriterion): SearchFilterKeyValue {

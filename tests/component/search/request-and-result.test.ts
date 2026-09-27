@@ -15,6 +15,7 @@ import {
   normalizeSearchRequest,
   searchEntryKey,
   type SearchContinuationBinding,
+  type SearchFilter,
   type SearchPage,
   type SearchQuery,
 } from '../../../src/search/index.js';
@@ -223,6 +224,80 @@ describe('search requests', () => {
 });
 
 describe('search continuations', () => {
+  it.each([28, 248])('preserves and resumes a query with %i nested negations', (depth) => {
+    const expression = `${'- '.repeat(depth)}bolt`;
+    expect(expression.length).toBeLessThanOrEqual(SEARCH_LIMITS.maxQueryLength);
+    const query = normalizeSearchRequest({ resultLevel: 'card', query: expression });
+    let expected: SearchFilter = {
+      kind: 'criterion',
+      criterion: { kind: 'name', text: 'bolt' },
+    };
+    for (let level = 0; level < depth; level += 1) {
+      expected = { kind: 'not', operand: expected };
+    }
+    expect(query.filters).toEqual([expected]);
+
+    const binding = bindingFor(query);
+    const token = encodeSearchContinuation({ ...binding, offset: 50 });
+    expect(decodeSearchContinuation(token, binding)).toBe(50);
+    const changed = normalizeSearchRequest({
+      resultLevel: 'card',
+      query: `${'- '.repeat(depth - 1)}bolt`,
+    });
+    expect(
+      captureSearchError(() => decodeSearchContinuation(token, { ...binding, query: changed }))
+        .code,
+    ).toBe('stale-continuation');
+  });
+
+  it.each([26, 40])(
+    'preserves ordering and continuation binding through %i alternating Boolean groups',
+    (depth) => {
+      let expression = 'bolt';
+      let reordered = 'BOLT';
+      let changed = 'elf';
+      for (let level = 0; level < depth; level += 1) {
+        const operator = level % 2 === 0 ? ' ' : ' or ';
+        expression = `(${expression}${operator}name:x)`;
+        reordered = `(name:x${operator}${reordered})`;
+        changed = `(${changed}${operator}name:x)`;
+      }
+      expect(expression.length).toBeLessThanOrEqual(SEARCH_LIMITS.maxQueryLength);
+      const query = normalizeSearchRequest({ resultLevel: 'card', query: expression });
+      const equivalent = normalizeSearchRequest({ resultLevel: 'card', query: reordered });
+      expect(query.filters).toEqual(equivalent.filters);
+      // Every alternating group must survive normalization, including the innermost leaf.
+      let filter = query.filters[0];
+      for (let level = depth - 1; level >= 0; level -= 1) {
+        expect(filter?.kind).toBe(level % 2 === 0 ? 'and' : 'or');
+        if (filter?.kind !== 'and' && filter?.kind !== 'or') {
+          throw new Error('Expected a Boolean group');
+        }
+        expect(filter.operands).toHaveLength(2);
+        expect(filter.operands).toContainEqual({
+          kind: 'criterion',
+          criterion: { kind: 'name', text: 'x' },
+        });
+        filter = filter.operands.find(
+          (operand) =>
+            operand.kind !== 'criterion' ||
+            operand.criterion.kind !== 'name' ||
+            operand.criterion.text !== 'x',
+        );
+      }
+      expect(filter).toEqual({ kind: 'criterion', criterion: { kind: 'name', text: 'bolt' } });
+
+      const binding = bindingFor(query);
+      const token = encodeSearchContinuation({ ...binding, offset: 50 });
+      expect(decodeSearchContinuation(token, { ...binding, query: equivalent })).toBe(50);
+      const different = normalizeSearchRequest({ resultLevel: 'card', query: changed });
+      expect(
+        captureSearchError(() => decodeSearchContinuation(token, { ...binding, query: different }))
+          .code,
+      ).toBe('stale-continuation');
+    },
+  );
+
   it('resumes the next page of the same query, user and revisions', () => {
     const binding = bindingFor(privateQuery());
     const token = encodeSearchContinuation({ ...binding, offset: 50 });
