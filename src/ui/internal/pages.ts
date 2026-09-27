@@ -53,7 +53,9 @@ export interface UiPageHandle {
    * presented content, and it keeps the entry's saved context instead of capturing the partially
    * presented view until the page reports the presentation. A page whose own presentation
    * supersedes the restored context — explicit input taking over, or a failed restore — reports
-   * that through this same result (docs/user-interface.md#pages-and-navigation).
+   * that through this same result. A page that presents another view from this hook hands the entry
+   * over to that view, which captures and restores its own interaction context
+   * (docs/user-interface.md#pages-and-navigation).
    */
   presented?(): void | Promise<void>;
   /** Releases the page; the shell has already aborted the context signal. */

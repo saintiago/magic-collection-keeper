@@ -412,7 +412,19 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
       presented = handle.presented();
     } catch {
       // A page that cannot report its presentation keeps the restoration the shell already made.
-      restoringEntry = false;
+      if (ownsPage(handle, currentGeneration)) {
+        restoringEntry = false;
+      }
+      return;
+    }
+    if (!ownsPage(handle, currentGeneration)) {
+      // The page presented another view while starting its presentation: that view owns the shared
+      // restoration now, so the departed page may neither keep nor release it, and no listener of
+      // it may outlive the view. Its result can no longer change the presented view, but its
+      // failure must still not escape it.
+      void Promise.resolve(presented).catch(() => {
+        // The departed page's failure is not the presented view's to report.
+      });
       return;
     }
     restoringEntry = true;
@@ -430,7 +442,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     }
     void Promise.resolve(presented).then(
       () => {
-        if (disposed || generation !== currentGeneration || pageHandle !== handle) {
+        if (!ownsPage(handle, currentGeneration)) {
           return;
         }
         restoringEntry = false;
@@ -441,12 +453,21 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
       },
       () => {
         // A page that could not present its content keeps the restoration the shell already made.
-        if (generation === currentGeneration && pageHandle === handle) {
+        if (ownsPage(handle, currentGeneration)) {
           restoringEntry = false;
         }
         stopApplying();
       },
     );
+  }
+
+  /**
+   * Whether one page still owns the shell's shared presentation state. A page that navigated or
+   * was closed while running its own code owns neither that state nor its listeners; the view it
+   * presented owns them instead.
+   */
+  function ownsPage(handle: UiPageHandle | null, currentGeneration: number): boolean {
+    return !disposed && generation === currentGeneration && pageHandle === handle;
   }
 
   /** Dialogs of one presented page; a page the shell has left can no longer open one. */

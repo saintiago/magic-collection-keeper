@@ -7,7 +7,8 @@
  * restored query, selection, focus and scroll, browser-driven traversals that capture the entry
  * they leave, interruption of a restoration a page still presents asynchronously, token lifetime
  * across reload, a late result, dialog or device release of a closed page, delayed, rejected and
- * completed sign-out, a redirect that happens while a page mounts, and a brief dialog.
+ * completed sign-out, a redirect that happens while a page mounts or presents the restored entry,
+ * and a brief dialog.
  */
 
 import path from 'node:path';
@@ -36,6 +37,7 @@ function shellBundle(): Promise<string> {
           '  deferredSignOut: globalThis.keeperUiDeferredSignOut === true,',
           '  deviceRelease: globalThis.keeperUiDeviceRelease,',
           '  asyncResults: globalThis.keeperUiAsyncResults === true,',
+          '  presentedRedirect: globalThis.keeperUiPresentedRedirect,',
           '});',
         ].join('\n'),
         resolveDir: repoRoot,
@@ -72,6 +74,7 @@ async function openShell(page: Page, hash: string, start: UiShellStart = {}): Pr
     globals.keeperUiDeferredSignOut = flags.deferredSignOut === true;
     globals.keeperUiDeviceRelease = flags.deviceRelease;
     globals.keeperUiAsyncResults = flags.asyncResults === true;
+    globals.keeperUiPresentedRedirect = flags.presentedRedirect;
   }, start);
   await loadShell(page);
   return errors;
@@ -413,6 +416,35 @@ test('an account change during a pending restoration presents the new account al
   await expect(page.locator('#async-result-100')).not.toBeFocused();
   expect(errors).toEqual([]);
 });
+
+for (const redirect of ['navigate', 'replace'] as const) {
+  test(`a page that ${redirect}s while presenting leaves the destination restoring`, async ({
+    page,
+  }) => {
+    const errors = await openShell(page, '#/', { asyncResults: true, presentedRedirect: redirect });
+    await completeAsyncResults(page, 100);
+    await page.locator('#async-result-100').click();
+    await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+
+    // Back restores the entry; while presenting the kept window, Home sends the user to Collection.
+    await page.goBack();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+
+    // The destination owns the shell's restoration from here: leaving it captures its focused
+    // link and scroll offset, and Back returns them.
+    await page.locator('#collection-open').focus();
+    await page.evaluate(() => window.scrollTo(0, 459));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(459);
+    await page.locator('#collection-open').click();
+    await expect(page.getByRole('heading', { name: 'Tags' })).toBeVisible();
+
+    await page.goBack();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+    await expect(page.locator('#collection-open')).toBeFocused();
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(459);
+    expect(errors).toEqual([]);
+  });
+}
 
 test('a reload never lets a new capture reach a surviving history entry', async ({ page }) => {
   await openShell(page, '#/');

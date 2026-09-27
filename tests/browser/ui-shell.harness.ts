@@ -49,6 +49,11 @@ export interface UiShellStart {
   readonly deviceRelease?: 'deferred' | 'throw';
   /** Presents the asynchronous Home page instead of the immediate one. */
   readonly asyncResults?: boolean;
+  /**
+   * Presents the asynchronous page's restored entry by sending the user on to Collection, as a
+   * page that redirects while presenting the entry does; `replace` keeps no way back to the entry.
+   */
+  readonly presentedRedirect?: 'navigate' | 'replace';
 }
 
 /** Installs the shell into `root`; its identity starts signed in unless `signedOut` is set. */
@@ -128,7 +133,12 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
         }
       },
     },
-    pages: fixturePages(document, log, start.asyncResults === true ? asyncResults : null),
+    pages: fixturePages(
+      document,
+      log,
+      start.asyncResults === true ? asyncResults : null,
+      start.presentedRedirect ?? null,
+    ),
   });
 
   function report(next: UiAccount | null): void {
@@ -180,9 +190,12 @@ function fixturePages(
   document: Document,
   log: string[],
   asyncResults: AsyncResults | null,
+  presentedRedirect: 'navigate' | 'replace' | null,
 ): readonly UiPageDefinition[] {
   return [
-    asyncResults === null ? homePage(document, log) : asyncHomePage(document, log, asyncResults),
+    asyncResults === null
+      ? homePage(document, log)
+      : asyncHomePage(document, log, asyncResults, presentedRedirect),
     catalogPage(document),
     cardPage(document, log),
     collectionPage(document),
@@ -225,9 +238,15 @@ const asyncResultPageSize = 50;
  * Asynchronous Home of the interrupted-restoration journeys: it serves its results in pages a
  * journey answers one response at a time, keeps the entries it presented as its own restoration
  * state, and a visit that restores them reports the presentation only once the window the history
- * entry kept is back (docs/user-interface.md#pages-and-navigation).
+ * entry kept is back (docs/user-interface.md#pages-and-navigation). A visit that redirects while
+ * presenting sends the user to Collection instead.
  */
-function asyncHomePage(document: Document, log: string[], results: AsyncResults): UiPageDefinition {
+function asyncHomePage(
+  document: Document,
+  log: string[],
+  results: AsyncResults,
+  redirect: 'navigate' | 'replace' | null,
+): UiPageDefinition {
   return {
     page: 'home',
     mount(container, context) {
@@ -248,8 +267,24 @@ function asyncHomePage(document: Document, log: string[], results: AsyncResults)
       load();
       return {
         capture: () => ({ loaded }),
-        ...(kept > 0 ? { presented: () => presented.promise } : {}),
+        ...(kept > 0 ? { presented: () => presentKeptWindow() } : {}),
       };
+
+      /**
+       * Reports the presentation of the kept window, or — a page that presents the restored entry
+       * by redirecting — sends the user on while the shell is restoring that entry.
+       */
+      function presentKeptWindow(): void | Promise<void> {
+        if (redirect === null) {
+          return presented.promise;
+        }
+        log.push(`async-presented:${redirect}`);
+        if (redirect === 'replace') {
+          context.replace({ page: 'collection' });
+          return;
+        }
+        context.navigate({ page: 'collection' });
+      }
 
       /** Asks for the next page of the result; the journey answers it as the source would. */
       function load(): void {
