@@ -34,9 +34,9 @@ these boundaries while exercising real navigation and presentation behavior.
 
 | Unit                     | Owns                                                                             |
 | ------------------------ | -------------------------------------------------------------------------------- |
-| Shell and navigation     | Routes, page lifetime, account changes and bounded restoration.                  |
-| Pages                    | Activity-specific composition of sources, lists, details and tools.              |
-| CardList state           | One list's query generation, loaded window, fragment states and selection.       |
+| Shell and navigation     | Routes, page lifetime, account changes and retention of opaque page state.       |
+| Pages                    | Activity-specific composition and restoration of form state, lists and tools.    |
+| CardList state           | One list's contents, loading, interaction state and capture/restoration.         |
 | Source and tool bindings | Conversion from supplied public operations to presentation inputs/actions.       |
 | Rendering                | Accessible visible state and bounded DOM; no authoritative membership decisions. |
 | Device interaction       | Permissions, frame acquisition, geometry admission and cleanup.                  |
@@ -58,15 +58,41 @@ Reserve dialogs for brief confirmations and small auxiliary actions.
 
 Back follows navigation history. Restore relevant query, selection, scroll and focus using bounded,
 account-isolated state. Closing a page cancels its work or prevents late results from changing the
-new view. A page whose restored content arrives asynchronously reports when it presented the entry,
-so the shell restores that entry's scroll and focus over the presented content, and an interrupted
-restoration keeps the context the entry had instead of capturing the partially presented view.
+new view.
+
+### State ownership and restoration
+
+Navigation retains an opaque page-state reference and asks the page to restore it. It owns the
+lifetime and eviction of history entries, without inspecting or restricting the page's state
+representation. It does not interpret card identities, selection arrays, list cursors or loading
+progress. Evicting an old history entry releases its retained state.
+
+The page owns form and page-level interaction state and composes the states exposed by its lists.
+It delegates list capture and restoration through CardList's contract; it does not reconstruct a
+list snapshot from selected identities, loaded rows or pagination fields. Each list owns its query,
+selection, content position and list-local scroll/focus, including their retained representation.
+
+Restoration keeps the intended context while contents are unavailable. A loading view cannot
+overwrite that context with a partially restored state. Explicit user changes supersede the affected
+state; cancelling automatic scroll/focus must not prevent later edits from being captured. Pages and
+lists report restoration completion or interruption through their lifecycle contracts. Navigation
+coordinates page lifetime without reproducing list restoration logic. Late work from a departed page
+or account cannot change the current view.
+
+Bound history retention and each owner's retained resources independently. History storage limits
+must not become card-selection limits or reject unrelated page state. No 100-card selection cap is
+part of the product; changing snapshot representation must not change supported selection behavior.
 
 ## CardList
 
 Keep each list's query, loaded window, selection and scroll independent. Stable entry keys preserve
 interaction during enrichment or refinement. Group equivalent copies for convenient bulk actions
 without losing access to individual copies.
+
+CardList decides how to acquire and restore its contents through its supplied source and fragment
+capabilities. It can reuse available data or request data as needed; pages and navigation do not
+choose between cache reuse and backend loading or drive pagination to rebuild a list. Sources remain
+authoritative for membership, ordering and continuation. This boundary does not require a new cache.
 
 Render basic information with initial resolved entries. Images, ownership, tags and tool availability
 have separate loading and failure states. Refresh preserves usable content; unavailable data is not

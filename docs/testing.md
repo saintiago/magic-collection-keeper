@@ -128,6 +128,12 @@ public settings and diagnostic failures contain no secrets or private record con
 - **CardList:** control response ordering and independent fragment failure/retry. Use a large
   source to verify bounded requests/rendering, stable selection during enrichment and refinement,
   empty versus failed results, and independent state in two lists.
+- **State ownership:** exercise navigation with page-owned state without depending on its shape,
+  and list capture/restoration through its public contract with available and delayed source data.
+  Cover repeated interruption during initial and subsequent loading, edits during restoration,
+  selection outside the loaded window and later user interaction. Selecting more than 100 entries
+  must not lose selection or unrelated form state because of history storage. Verify history
+  eviction and account changes release retained state without altering active-list behavior.
 - **Browsing and organization:** cover filters, unsupported search expressions, recent cards,
   set browsing, all three detail levels, grouped-to-individual selection, tag rename, wishlist
   specificity, intended versus owned counts and physical-location changes.

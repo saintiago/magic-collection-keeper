@@ -175,7 +175,9 @@ card activity. Sources preserve the meaning of their entries and quantities. Sta
 allows refinement and enrichment without losing interaction context.
 
 A page can contain multiple independent CardLists. Each retains its own query, loading state,
-selection and scroll.
+selection and scroll. CardList owns capture, restoration and content loading through supplied sources;
+pages compose list state, and navigation retains opaque page state. The
+[state ownership contract](user-interface.md#state-ownership-and-restoration) defines these boundaries.
 
 Resolved entries arrive with basic card information. Images, ownership, tags and tool availability
 load and refresh independently on demand. Data access is batched where appropriate. A fragment's
