@@ -7,8 +7,50 @@
  * before it could commit — or leaves its outcome open because the response was lost, the service
  * was busy or the invocation was withdrawn after dispatch. The views report the first as a
  * definite failure and recover the second through a read of the record, so a lost response is
- * never presented as a saved change.
+ * never presented as a saved change. The classification and the resulting outcome live here, so
+ * every view that changes a private record presents the same statuses.
  */
+
+/** Outcome of one private change as a view presents it. */
+export interface UiChangeCommit<Record> {
+  readonly status: 'committed' | 'conflict' | 'failed' | 'unknown';
+  /** User-facing explanation, or null when the committed change needs none. */
+  readonly message: string | null;
+  /** Committed record, or the record a recovery read observed; null when neither is available. */
+  readonly record: Record | null;
+}
+
+/**
+ * One private change: a success reports its committed record; a revision conflict and a definite
+ * failure report the operation's own outcome; every other rejection stays unknown and recovers the
+ * record for review without inferring the operation's outcome
+ * (docs/application.md#construction-and-request-boundary).
+ */
+export async function commitUiChange<Record>(
+  change: () => Promise<Record>,
+  recover: () => Promise<Record | null>,
+  fallback: string,
+  unknown = 'The outcome is unknown. Reload the view before retrying.',
+): Promise<UiChangeCommit<Record>> {
+  try {
+    return { status: 'committed', message: null, record: await change() };
+  } catch (cause) {
+    const code = readUiFailureCode(cause);
+    if (code === 'conflict') {
+      return { status: 'conflict', message: readUiFailureMessage(cause, fallback), record: null };
+    }
+    if (code !== null && isUiDefiniteFailure(code)) {
+      return { status: 'failed', message: readUiFailureMessage(cause, fallback), record: null };
+    }
+    const record = await recover();
+    return {
+      status: 'unknown',
+      message:
+        record === null ? unknown : 'The outcome is unknown. Review the record before retrying.',
+      record,
+    };
+  }
+}
 
 /**
  * Failure codes that establish the change was not applied: the request was rejected before it

@@ -13,7 +13,13 @@
 export type UiEntryTarget =
   | { readonly kind: 'card'; readonly cardId: string }
   | { readonly kind: 'printing'; readonly printingId: string }
-  | { readonly kind: 'copy'; readonly copyId: string };
+  | { readonly kind: 'copy'; readonly copyId: string }
+  /**
+   * One pending import entry. It is not an owned record yet: the Import page reviews and corrects
+   * the entry under its own identity before a confirmation creates the copies it represents
+   * (docs/user-cards.md#import-and-capture-state).
+   */
+  | { readonly kind: 'pending'; readonly entryId: string };
 
 /** Basic card information resolved with an entry. */
 export interface UiEntryCard {

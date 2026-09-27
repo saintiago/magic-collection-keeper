@@ -95,6 +95,9 @@ export function cardViewOf(entry: UiListEntry): UiView | null {
             copyId: entry.target.copyId,
           };
     }
+    case 'pending':
+      // A pending import entry has no catalog record to open before its confirmation.
+      return null;
   }
 }
 

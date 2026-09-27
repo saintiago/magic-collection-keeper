@@ -437,5 +437,7 @@ export function describeTarget(target: UiListEntry['target']): string {
       return `printing:${target.printingId}`;
     case 'copy':
       return `copy:${target.copyId}`;
+    case 'pending':
+      return `pending:${target.entryId}`;
   }
 }

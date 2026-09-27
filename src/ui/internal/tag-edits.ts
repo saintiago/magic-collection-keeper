@@ -39,7 +39,7 @@ import type {
   UserTagKind,
 } from '../../usercards/index.js';
 
-import { isUiDefiniteFailure, readUiFailureCode, readUiFailureMessage } from './failure.js';
+import { commitUiChange, readUiFailureMessage, type UiChangeCommit } from './failure.js';
 import type { UiEntryTarget, UiOperationOutcome, UiToolRequest } from './list.js';
 
 /**
@@ -209,13 +209,7 @@ export function createTagAccess(userCards: UiTagClient): UiTagAccess {
 }
 
 /** Outcome of one private change as an organization view presents it. */
-export interface UiChangeOutcome<Record> {
-  readonly status: UiOperationOutcome['status'];
-  /** User-facing explanation, or null when the committed change needs none. */
-  readonly message: string | null;
-  /** Committed record, or the record a recovery read observed; null when neither is available. */
-  readonly record: Record | null;
-}
+export type UiChangeOutcome<Record> = UiChangeCommit<Record>;
 
 /** Creates one tag through the private contract. */
 export async function createTag(
@@ -223,7 +217,7 @@ export async function createTag(
   input: CreateTagInput,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<Tag>> {
-  return commit(
+  return commitUiChange(
     () => access.createTag(input, signal).then((result) => result.tag),
     async () => null,
     'The tag was not created.',
@@ -239,7 +233,7 @@ export async function renameTag(
   input: RenameTagInput,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<Tag>> {
-  return commit(
+  return commitUiChange(
     () => access.renameTag(input, signal).then((result) => result.tag),
     async () => {
       try {
@@ -259,7 +253,7 @@ export async function addAssociation(
   input: CreateAssociationInput,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<Association>> {
-  return commit(
+  return commitUiChange(
     () => access.createAssociation(input, signal).then((result) => result.association),
     async () => null,
     'The association was not added.',
@@ -275,7 +269,7 @@ export async function saveAssociation(
   input: AssociationCorrection,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<Association>> {
-  return commit(
+  return commitUiChange(
     () => access.changeAssociation(input, signal).then((result) => result.association),
     async () => {
       try {
@@ -295,7 +289,7 @@ export async function removeAssociation(
   input: AssociationRemoval,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<string>> {
-  return commit(
+  return commitUiChange(
     () => access.removeAssociation(input, signal).then((result) => result.associationId),
     async () => null,
     'The association was not removed.',
@@ -311,7 +305,7 @@ async function moveCopyLocation(
   input: SetCopyLocationInput,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<PhysicalCopy>> {
-  return commit(
+  return commitUiChange(
     () => access.setCopyLocation(input, signal).then((result) => result.copy),
     async () => {
       try {
@@ -323,39 +317,6 @@ async function moveCopyLocation(
     },
     'The copy’s location was not saved.',
   );
-}
-
-/**
- * One private change: a success reports its committed record; a revision conflict and a definite
- * failure report the operation's own outcome; every other rejection stays unknown and recovers the
- * record for review without inferring the operation's outcome
- * (docs/application.md#construction-and-request-boundary).
- */
-async function commit<Record>(
-  change: () => Promise<Record>,
-  recover: () => Promise<Record | null>,
-  fallback: string,
-): Promise<UiChangeOutcome<Record>> {
-  try {
-    return { status: 'committed', message: null, record: await change() };
-  } catch (cause) {
-    const code = readUiFailureCode(cause);
-    if (code === 'conflict') {
-      return { status: 'conflict', message: readUiFailureMessage(cause, fallback), record: null };
-    }
-    if (code !== null && isUiDefiniteFailure(code)) {
-      return { status: 'failed', message: readUiFailureMessage(cause, fallback), record: null };
-    }
-    const record = await recover();
-    return {
-      status: 'unknown',
-      message:
-        record === null
-          ? 'The outcome is unknown. Reload the view before retrying.'
-          : 'The outcome is unknown. Review the record before retrying.',
-      record,
-    };
-  }
 }
 
 /**
@@ -459,6 +420,13 @@ async function addTarget(
           signal,
         );
   }
+  if (target.kind === 'pending') {
+    return {
+      status: 'failed',
+      message: 'A pending import entry is not a catalog entry a tag can hold.',
+      record: null,
+    };
+  }
   if (quantity === null) {
     return { status: 'failed', message: 'Choose the intended quantity to add.', record: null };
   }
@@ -500,7 +468,7 @@ export async function moveCopyById(
   );
 }
 
-function targetIdOf(target: Exclude<UiEntryTarget, { kind: 'copy' }>): string {
+function targetIdOf(target: Extract<UiEntryTarget, { kind: 'card' | 'printing' }>): string {
   return target.kind === 'card' ? target.cardId : target.printingId;
 }
 
