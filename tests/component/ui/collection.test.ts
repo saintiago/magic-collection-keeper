@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { Catalog, PrintingRecord } from '../../../src/catalog/index.js';
 import type { SearchEntry, SearchPage } from '../../../src/search/index.js';
-import type { SearchClient, UserCardsClient } from '../../../src/application/index.js';
+import type { SearchClient } from '../../../src/application/index.js';
 import type { PhysicalCopy } from '../../../src/usercards/index.js';
 import {
   collectionSearchRequest,
@@ -28,6 +28,7 @@ import {
   uiEntryKey,
   uiHref,
   type UiCopyAccess,
+  type UiCopyClient,
   type UiCopyCorrection,
   type UiListEntry,
 } from '../../../src/ui/index.js';
@@ -562,7 +563,7 @@ describe('copy access', () => {
       },
       correctCopy: (input: UiCopyCorrection) =>
         Promise.resolve({ privateRevision: 'private-2', copies: [copy({ ...input })] }),
-    } as UserCardsClient;
+    } as UiCopyClient;
     const access = createCopyAccess(userCards);
 
     await expect(access.read(['copy-1', 'copy-2'])).resolves.toEqual({

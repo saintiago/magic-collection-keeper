@@ -85,6 +85,7 @@ export function createApplication(dependencies: ApplicationDependencies): Applic
     'correctCopy',
     'readTags',
     'listTags',
+    'listAssociations',
     'createTag',
     'renameTag',
     'readAssociations',

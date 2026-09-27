@@ -167,6 +167,17 @@ export function createRoutes(dependencies: RouteDependencies): readonly Route[] 
         userCards.listTags(context(call), readPageQuery(call.query) as TagListOptions),
     },
     {
+      operation: 'usercards.listAssociations',
+      method: 'GET',
+      path: applicationRoutes.tagAssociations,
+      access: 'authenticated',
+      call: (call) =>
+        userCards.listAssociations(context(call), {
+          ...readPageQuery(call.query),
+          tagId: readParam(call.params, 'tagId'),
+        }),
+    },
+    {
       operation: 'usercards.readTags',
       method: 'POST',
       path: applicationRoutes.tagsRead,

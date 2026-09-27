@@ -129,6 +129,107 @@ describe('usercards associations', () => {
     expect(read.missing).toEqual(['association-unknown']);
   });
 
+  it('lists one tag’s associations in stable identity order with a bounded continuation', async () => {
+    const wishlist = await userCards.createTag(alice, { kind: 'wishlist', label: 'To buy' });
+    const deck = await createDeck();
+    const created = [
+      (
+        await userCards.createAssociation(alice, {
+          tagId: wishlist.tag.tagId,
+          targetLevel: 'card',
+          targetId: lightningBolt.cardId,
+          quantity: 2,
+        })
+      ).association,
+      (
+        await userCards.createAssociation(alice, {
+          tagId: wishlist.tag.tagId,
+          targetLevel: 'printing',
+          targetId: m11Printing.printingId,
+          quantity: 4,
+        })
+      ).association,
+    ];
+    const deckAssociation = await userCards.createAssociation(alice, {
+      tagId: deck,
+      targetLevel: 'printing',
+      targetId: m10Printing.printingId,
+      quantity: 1,
+    });
+    const ordered = created.map((association) => association.associationId).sort();
+
+    const first = await userCards.listAssociations(alice, {
+      tagId: wishlist.tag.tagId,
+      pageSize: 1,
+    });
+    expect(first.associations.map((association) => association.associationId)).toEqual(
+      ordered.slice(0, 1),
+    );
+    expect(first.continuation).not.toBeNull();
+
+    const second = await userCards.listAssociations(alice, {
+      tagId: wishlist.tag.tagId,
+      pageSize: 1,
+      continuation: first.continuation as string,
+    });
+    expect(second.associations.map((association) => association.associationId)).toEqual(
+      ordered.slice(1),
+    );
+    expect(second.continuation).toBeNull();
+    // The listed page carries only the requested tag's associations, never another tag's.
+    expect([
+      ...first.associations.map((association) => association.associationId),
+      ...second.associations.map((association) => association.associationId),
+    ]).not.toContain(deckAssociation.association.associationId);
+
+    // A change after the page was read invalidates its continuation instead of skipping a record.
+    await userCards.changeAssociation(alice, {
+      associationId: created[0]?.associationId as string,
+      expectedRevision: 1,
+      targetLevel: 'card',
+      targetId: lightningBolt.cardId,
+      quantity: 3,
+    });
+    const stale = await captureUserCardsError(
+      userCards.listAssociations(alice, {
+        tagId: wishlist.tag.tagId,
+        pageSize: 1,
+        continuation: first.continuation as string,
+      }),
+    );
+    expect(stale.code).toBe('conflict');
+
+    // Another account's page names its own tags only: a foreign tag has no associations to list.
+    const foreign = await userCards.listAssociations(bob, {
+      tagId: wishlist.tag.tagId,
+      pageSize: 1,
+    });
+    expect(foreign.associations).toEqual([]);
+    expect(foreign.continuation).toBeNull();
+  });
+
+  it('rejects malformed association list requests', async () => {
+    const deck = await createDeck();
+    for (const pageSize of [0, USERCARDS_LIMITS.maxAssociationPageSize + 1, 1.5]) {
+      const error = await captureUserCardsError(
+        userCards.listAssociations(alice, { tagId: deck, pageSize }),
+      );
+      expect(error.code).toBe('invalid-request');
+    }
+    for (const tagId of ['', 'x'.repeat(USERCARDS_LIMITS.maxIdentifierLength + 1)]) {
+      const error = await captureUserCardsError(userCards.listAssociations(alice, { tagId }));
+      expect(error.code).toBe('invalid-request');
+    }
+    const unreadable = await captureUserCardsError(
+      userCards.listAssociations(alice, { tagId: deck, continuation: 'not-a-continuation' }),
+    );
+    expect(unreadable.code).toBe('invalid-request');
+    const missingContext = await captureUserCardsError(
+      userCards.listAssociations(callerInput<TrustedUserContext>(undefined), { tagId: deck }),
+    );
+    expect(missingContext.code).toBe('invalid-request');
+  });
+
   it('keeps the association identity while refining and broadening the target level', async () => {
     const wishlist = await userCards.createTag(alice, { kind: 'wishlist', label: 'To buy' });
     const created = await userCards.createAssociation(alice, {

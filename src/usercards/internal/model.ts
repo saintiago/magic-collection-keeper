@@ -207,6 +207,13 @@ export const USERCARDS_LIMITS = {
   defaultTagPageSize: 50,
   minTagPageSize: 1,
   maxTagPageSize: 100,
+  /**
+   * Page bounds of one tag's associations. A tag with more associations than one page is read
+   * through its bounded continuation, like the tags themselves.
+   */
+  defaultAssociationPageSize: 50,
+  minAssociationPageSize: 1,
+  maxAssociationPageSize: 100,
   /** Largest number of pending entries one staging call stages. */
   maxStageEntries: 50,
   /** Largest number of reviewed entries one confirmation covers. */

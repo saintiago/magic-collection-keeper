@@ -37,6 +37,8 @@ import {
   type UserInterface,
 } from '../../src/ui/index.js';
 
+import { unusedUserCards } from './unused-usercards.js';
+
 /** One Search request the collection view issued. */
 export interface UiCollectionSearchRequest {
   readonly id: number;
@@ -221,6 +223,7 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
     },
   };
   const userCards: UserCardsClient = {
+    ...unusedUserCards,
     readCopies(copyIds, signal) {
       const id = next();
       copyReads.push({

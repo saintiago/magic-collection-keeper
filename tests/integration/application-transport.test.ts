@@ -161,6 +161,39 @@ describe('application transport', () => {
     expect(harness.sql.statements).toHaveLength(1);
   });
 
+  it('lists one tag’s association page for the verified account through its route', async () => {
+    const response = await harness.application.handle(
+      callerRequest({
+        method: 'GET',
+        path: '/api/collection/tags/tag-1/associations',
+        query: { pageSize: '2' },
+        authentication: { claims: claimsFor(testAccount) },
+      }),
+    );
+
+    // The recording executor answers no rows, so the component reports its read as unreadable; the
+    // statement it ran is scoped to the verified account and carries the requested page bound.
+    expect(response.status).toBe(503);
+    expect(harness.sql.statements).toHaveLength(1);
+    expect(harness.sql.statements[0]?.parameters['account_id']).toBe(testAccount);
+    expect(harness.sql.statements[0]?.parameters['tag_id']).toBe('tag-1');
+    expect(harness.sql.statements[0]?.parameters['offset']).toBe(0);
+    expect(harness.sql.statements[0]?.parameters['limit']).toBe(3);
+  });
+
+  it('rejects an association page of a tag route without identity', async () => {
+    const response = await harness.application.handle(
+      callerRequest({
+        method: 'GET',
+        path: '/api/collection/tags/tag-1/associations',
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(readError(response)['code']).toBe('unauthorized');
+    expect(harness.sql.statements).toEqual([]);
+  });
+
   it('keeps an unsupported query and unauthorized private criteria distinct', async () => {
     const unsupported = await harness.application.handle(
       callerRequest({ body: JSON.stringify({ resultLevel: 'card', query: 'banned:1' }) }),

@@ -41,11 +41,29 @@ import type {
 // authenticated contract, and a value import would pull the component's Node-only internals into
 // the browser bundle.
 import type {
+  Association,
+  AssociationChangeResult,
+  AssociationListResult,
+  AssociationReadResult,
+  AssociationRemovalResult,
+  ChangeAssociationInput,
   CopyChangeResult,
+  CopyLocationResult,
   CopyId,
   CopyReadResult,
   CorrectCopyInput,
+  CreateAssociationInput,
+  CreateTagInput,
+  ListAssociationsOptions,
   PhysicalCopy,
+  RemoveAssociationInput,
+  RenameTagInput,
+  SetCopyLocationInput,
+  Tag,
+  TagChangeResult,
+  TagListOptions,
+  TagListResult,
+  TagReadResult,
 } from '../../usercards/index.js';
 
 import {
@@ -213,19 +231,57 @@ export function createSearchClient(request: RequestTransport): SearchClient {
 /**
  * The private UserCards operations the UserInterface presents
  * (docs/user-interface.md#interface, docs/user-cards.md#interface). The caller sends explicit copy
- * references and the change it read them from; the transport derives the trusted account from the
- * verified identity, so no account crosses into the browser and every private read and change is
- * scoped to the caller at the backend boundary. A correction quotes the revision the caller read,
- * and an operation that leaves records unchanged reports its failure instead of an empty success.
+ * or tag references and the change it read them from; the transport derives the trusted account
+ * from the verified identity, so no account crosses into the browser and every private read and
+ * change is scoped to the caller at the backend boundary. Tags are read as bounded pages, a tag's
+ * associations are listed under the same rule, copy corrections and association changes quote the
+ * revision the caller read, and an operation that leaves records unchanged reports its failure
+ * instead of an empty success.
  */
 export interface UserCardsClient {
   /** Authorized copies of the requested references, with the references this account has none for. */
   readCopies(copyIds: readonly CopyId[], signal?: AbortSignal): Promise<CopyReadResult>;
   /** The corrected state of one copy, guarded by the revision the caller read. */
   correctCopy(input: CorrectCopyInput, signal?: AbortSignal): Promise<CopyChangeResult>;
+  /** Page of the account's tags, ordered by stable tag identity. */
+  listTags(options?: TagListOptions, signal?: AbortSignal): Promise<TagListResult>;
+  /** Authorized tags of the requested references, with the references this account has none for. */
+  readTags(tagIds: readonly string[], signal?: AbortSignal): Promise<TagReadResult>;
+  /** One new tag of the account. */
+  createTag(input: CreateTagInput, signal?: AbortSignal): Promise<TagChangeResult>;
+  /** The renamed state of one tag, guarded by the revision the caller read. */
+  renameTag(input: RenameTagInput, signal?: AbortSignal): Promise<TagChangeResult>;
+  /** Page of one tag's associations, ordered by stable association identity. */
+  listAssociations(
+    tagId: string,
+    options?: Omit<ListAssociationsOptions, 'tagId'>,
+    signal?: AbortSignal,
+  ): Promise<AssociationListResult>;
+  /** Authorized associations of the requested references, for reviewing a change's outcome. */
+  readAssociations(
+    associationIds: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<AssociationReadResult>;
+  /** One new association of a tag; a card or printing target carries its intended quantity. */
+  createAssociation(
+    input: CreateAssociationInput,
+    signal?: AbortSignal,
+  ): Promise<AssociationChangeResult>;
+  /** The changed state of one association, guarded by the revision the caller read. */
+  changeAssociation(
+    input: ChangeAssociationInput,
+    signal?: AbortSignal,
+  ): Promise<AssociationChangeResult>;
+  /** The removal of one association, guarded by the revision the caller read. */
+  removeAssociation(
+    input: RemoveAssociationInput,
+    signal?: AbortSignal,
+  ): Promise<AssociationRemovalResult>;
+  /** The new single physical location of one copy, guarded by the revision the caller read. */
+  setCopyLocation(input: SetCopyLocationInput, signal?: AbortSignal): Promise<CopyLocationResult>;
 }
 
-/** Builds the private copy contract the collection views read and correct copies through. */
+/** Builds the private contract the collection and organization views read and change through. */
 export function createUserCardsClient(request: RequestTransport): UserCardsClient {
   if (typeof request !== 'function') {
     throw new TypeError('createUserCardsClient requires the authenticated request contract.');
@@ -255,6 +311,140 @@ export function createUserCardsClient(request: RequestTransport): UserCardsClien
         },
       );
       return readCopyChangeResult(payload);
+    },
+
+    async listTags(options: TagListOptions = {}, signal?: AbortSignal): Promise<TagListResult> {
+      const path = withQuery(applicationRoutes.tags, {
+        pageSize: options.pageSize,
+        continuation: options.continuation,
+      });
+      return readTagListResult(await request(path, signal === undefined ? {} : { signal }));
+    },
+
+    async readTags(tagIds: readonly string[], signal?: AbortSignal): Promise<TagReadResult> {
+      const payload = await request(applicationRoutes.tagsRead, {
+        method: 'POST',
+        body: JSON.stringify({ tagIds }),
+        ...(signal === undefined ? {} : { signal }),
+      });
+      return readTagReadResult(payload);
+    },
+
+    async createTag(input: CreateTagInput, signal?: AbortSignal): Promise<TagChangeResult> {
+      const payload = await request(applicationRoutes.tags, {
+        method: 'POST',
+        body: JSON.stringify(input),
+        ...(signal === undefined ? {} : { signal }),
+      });
+      return readTagChangeResult(payload);
+    },
+
+    async renameTag(input: RenameTagInput, signal?: AbortSignal): Promise<TagChangeResult> {
+      const payload = await request(
+        applicationPath(applicationRoutes.tagRename, { tagId: input.tagId }),
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            expectedRevision: input.expectedRevision,
+            label: input.label,
+          }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      return readTagChangeResult(payload);
+    },
+
+    async listAssociations(
+      tagId: string,
+      options: Omit<ListAssociationsOptions, 'tagId'> = {},
+      signal?: AbortSignal,
+    ): Promise<AssociationListResult> {
+      const path = withQuery(applicationPath(applicationRoutes.tagAssociations, { tagId }), {
+        pageSize: options.pageSize,
+        continuation: options.continuation,
+      });
+      return readAssociationListResult(await request(path, signal === undefined ? {} : { signal }));
+    },
+
+    async readAssociations(
+      associationIds: readonly string[],
+      signal?: AbortSignal,
+    ): Promise<AssociationReadResult> {
+      const payload = await request(applicationRoutes.associationsRead, {
+        method: 'POST',
+        body: JSON.stringify({ associationIds }),
+        ...(signal === undefined ? {} : { signal }),
+      });
+      return readAssociationReadResult(payload);
+    },
+
+    async createAssociation(
+      input: CreateAssociationInput,
+      signal?: AbortSignal,
+    ): Promise<AssociationChangeResult> {
+      const payload = await request(applicationRoutes.associations, {
+        method: 'POST',
+        body: JSON.stringify(input),
+        ...(signal === undefined ? {} : { signal }),
+      });
+      return readAssociationChangeResult(payload);
+    },
+
+    async changeAssociation(
+      input: ChangeAssociationInput,
+      signal?: AbortSignal,
+    ): Promise<AssociationChangeResult> {
+      const payload = await request(
+        applicationPath(applicationRoutes.associationChanges, {
+          associationId: input.associationId,
+        }),
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            expectedRevision: input.expectedRevision,
+            targetLevel: input.targetLevel,
+            targetId: input.targetId,
+            quantity: input.quantity ?? null,
+          }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      return readAssociationChangeResult(payload);
+    },
+
+    async removeAssociation(
+      input: RemoveAssociationInput,
+      signal?: AbortSignal,
+    ): Promise<AssociationRemovalResult> {
+      const payload = await request(
+        applicationPath(applicationRoutes.associationRemoval, {
+          associationId: input.associationId,
+        }),
+        {
+          method: 'POST',
+          body: JSON.stringify({ expectedRevision: input.expectedRevision }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      return readAssociationRemovalResult(payload);
+    },
+
+    async setCopyLocation(
+      input: SetCopyLocationInput,
+      signal?: AbortSignal,
+    ): Promise<CopyLocationResult> {
+      const payload = await request(
+        applicationPath(applicationRoutes.copyLocation, { copyId: input.copyId }),
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            expectedRevision: input.expectedRevision,
+            locationTagId: input.locationTagId,
+          }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      return readCopyLocationResult(payload);
     },
   };
 }
@@ -771,6 +961,218 @@ function readIdentifiers(value: unknown): string[] | null {
 
 function unreadableCopies(): ApplicationError {
   return new ApplicationError('unavailable', 'The collection response could not be read.');
+}
+
+/** Reads one tag record. A response outside the declared shape is never presented as a tag. */
+function readTag(value: unknown): Tag | null {
+  const tag = readObject(value);
+  const tagId = tag?.tagId;
+  const kind = tag?.kind;
+  const label = tag?.label;
+  const system = tag?.system;
+  const revision = tag?.revision;
+  if (
+    tag === null ||
+    !isIdentifier(tagId) ||
+    typeof kind !== 'string' ||
+    !isIdentifier(label) ||
+    typeof system !== 'boolean' ||
+    !isCopyRevision(revision)
+  ) {
+    return null;
+  }
+  return {
+    tagId,
+    kind: kind as Tag['kind'],
+    label,
+    system,
+    revision,
+  };
+}
+
+function readTagRecords(value: unknown): Tag[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const tags: Tag[] = [];
+  for (const candidate of value) {
+    const tag = readTag(candidate);
+    if (tag === null) {
+      return null;
+    }
+    tags.push(tag);
+  }
+  return tags;
+}
+
+/** Reads one private tag read: the authorized tags and the references this account has none for. */
+function readTagReadResult(payload: unknown): TagReadResult {
+  const record = readObject(payload);
+  const tags = readTagRecords(record?.tags);
+  const missing = readIdentifiers(record?.missing);
+  const privateRevision = record?.privateRevision;
+  if (record === null || tags === null || missing === null || !isIdentifier(privateRevision)) {
+    throw unreadableTags();
+  }
+  return {
+    privateRevision,
+    tags: new Map(tags.map((tag) => [tag.tagId, tag] as const)),
+    missing,
+  };
+}
+
+/** Reads one page of tags; a page without a readable continuation ends nothing on its own. */
+function readTagListResult(payload: unknown): TagListResult {
+  const record = readObject(payload);
+  const tags = readTagRecords(record?.tags);
+  const continuation = record?.continuation;
+  const privateRevision = record?.privateRevision;
+  if (
+    record === null ||
+    tags === null ||
+    !isIdentifier(privateRevision) ||
+    (continuation !== null && !isIdentifier(continuation))
+  ) {
+    throw unreadableTags();
+  }
+  return { privateRevision, tags, continuation };
+}
+
+/** Reads one tag change: the committed tag and the private revision the change published. */
+function readTagChangeResult(payload: unknown): TagChangeResult {
+  const record = readObject(payload);
+  const tag = readTag(record?.tag);
+  const privateRevision = record?.privateRevision;
+  if (record === null || tag === null || !isIdentifier(privateRevision)) {
+    throw unreadableTags();
+  }
+  return { privateRevision, tag };
+}
+
+/** Reads one association record; card and printing targets carry a quantity, copy targets none. */
+function readAssociation(value: unknown): Association | null {
+  const association = readObject(value);
+  const associationId = association?.associationId;
+  const tagId = association?.tagId;
+  const targetLevel = association?.targetLevel;
+  const targetId = association?.targetId;
+  const quantity = association?.quantity ?? null;
+  const revision = association?.revision;
+  if (
+    association === null ||
+    !isIdentifier(associationId) ||
+    !isIdentifier(tagId) ||
+    (targetLevel !== 'card' && targetLevel !== 'printing' && targetLevel !== 'copy') ||
+    !isIdentifier(targetId) ||
+    (quantity !== null && !isSearchCount(quantity)) ||
+    !isCopyRevision(revision)
+  ) {
+    return null;
+  }
+  return { associationId, tagId, targetLevel, targetId, quantity, revision };
+}
+
+function readAssociationRecords(value: unknown): Association[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const associations: Association[] = [];
+  for (const candidate of value) {
+    const association = readAssociation(candidate);
+    if (association === null) {
+      return null;
+    }
+    associations.push(association);
+  }
+  return associations;
+}
+
+/** Reads one page of one tag's associations with the identity and revision an edit quotes. */
+function readAssociationListResult(payload: unknown): AssociationListResult {
+  const record = readObject(payload);
+  const associations = readAssociationRecords(record?.associations);
+  const continuation = record?.continuation;
+  const privateRevision = record?.privateRevision;
+  if (
+    record === null ||
+    associations === null ||
+    !isIdentifier(privateRevision) ||
+    (continuation !== null && !isIdentifier(continuation))
+  ) {
+    throw unreadableAssociations();
+  }
+  return { privateRevision, associations, continuation };
+}
+
+/** Reads one private association read: authorized associations and the references that were absent. */
+function readAssociationReadResult(payload: unknown): AssociationReadResult {
+  const record = readObject(payload);
+  const associations = readAssociationRecords(record?.associations);
+  const missing = readIdentifiers(record?.missing);
+  const privateRevision = record?.privateRevision;
+  if (
+    record === null ||
+    associations === null ||
+    missing === null ||
+    !isIdentifier(privateRevision)
+  ) {
+    throw unreadableAssociations();
+  }
+  return {
+    privateRevision,
+    associations: new Map(
+      associations.map((association) => [association.associationId, association] as const),
+    ),
+    missing,
+  };
+}
+
+/** Reads one association change: the committed association and the published private revision. */
+function readAssociationChangeResult(payload: unknown): AssociationChangeResult {
+  const record = readObject(payload);
+  const association = readAssociation(record?.association);
+  const privateRevision = record?.privateRevision;
+  if (record === null || association === null || !isIdentifier(privateRevision)) {
+    throw unreadableAssociations();
+  }
+  return { privateRevision, association };
+}
+
+/** Reads one association removal: the removed identity and the published private revision. */
+function readAssociationRemovalResult(payload: unknown): AssociationRemovalResult {
+  const record = readObject(payload);
+  const associationId = record?.associationId;
+  const privateRevision = record?.privateRevision;
+  if (record === null || !isIdentifier(associationId) || !isIdentifier(privateRevision)) {
+    throw unreadableAssociations();
+  }
+  return { privateRevision, associationId };
+}
+
+/** Reads the new single location of one copy; an absent location is an explicit null. */
+function readCopyLocationResult(payload: unknown): CopyLocationResult {
+  const record = readObject(payload);
+  const copies = readCopyRecords(record === null ? null : [record.copy]);
+  const location = readAssociation(record?.location);
+  const privateRevision = record?.privateRevision;
+  if (
+    record === null ||
+    copies === null ||
+    copies[0] === undefined ||
+    !isIdentifier(privateRevision) ||
+    (record.location !== null && location === null)
+  ) {
+    throw unreadableCopies();
+  }
+  return { privateRevision, copy: copies[0], location };
+}
+
+function unreadableTags(): ApplicationError {
+  return new ApplicationError('unavailable', 'The tag response could not be read.');
+}
+
+function unreadableAssociations(): ApplicationError {
+  return new ApplicationError('unavailable', 'The association response could not be read.');
 }
 
 function readObject(value: unknown): Readonly<Record<string, unknown>> | null {

@@ -21,6 +21,8 @@ import {
 } from '../../src/ui/index.js';
 import type { UserInterfaceCapabilities } from '../../src/application/index.js';
 
+import { unusedUserCards } from './unused-usercards.js';
+
 export interface UiShellControl {
   /** Verified account the shell presents, or null while signed out. */
   accountId(): string | null;
@@ -132,10 +134,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     search: {
       execute: () => Promise.reject(new Error('The shell journey runs no search.')),
     },
-    userCards: {
-      readCopies: () => Promise.reject(new Error('The shell journey reads no copies.')),
-      correctCopy: () => Promise.reject(new Error('The shell journey corrects no copies.')),
-    },
+    userCards: unusedUserCards,
     createRecognition: () => {
       throw new Error('The shell journey does not run recognition.');
     },

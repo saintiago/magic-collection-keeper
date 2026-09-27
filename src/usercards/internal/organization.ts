@@ -169,6 +169,29 @@ function insertAssociationStatement(
   };
 }
 
+/** Boundary-tagged page of one tag's associations, ordered by stable association identity. */
+function listAssociationsStatement(
+  accountId: string,
+  tagId: string,
+  offset: number,
+  limit: number,
+): { statement: string; parameters: Record<string, UserCardsSqlValue> } {
+  return {
+    statement: `${revisionBranchSql()}
+union all
+select 'association' as row_kind,
+  (row_number() over (order by entry.association_id))::int as row_position,
+  to_jsonb(entry)::text as payload
+from (select association_id, tag_id, target_level, target_id, quantity, revision
+      from usercards_private.association
+      where account_id = :account_id and tag_id = :tag_id
+      order by association_id
+      limit :limit offset :offset) as entry
+order by row_kind, row_position`,
+    parameters: { account_id: accountId, tag_id: tagId, offset, limit },
+  };
+}
+
 /**
  * Serializes the writers of one tag's associations on the tag's own row. A competing writer's claim
  * is invisible to another writer's duplicate check until it commits, so waiting here makes the
@@ -437,6 +460,23 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
 
     async readAssociations(accountId, associationIds): Promise<AssociationsData> {
       const request = readAssociationsStatement(accountId, associationIds);
+      const rows = groupRows(
+        await readRows(
+          sql,
+          request.statement,
+          request.parameters,
+          'The private associations could not be read.',
+        ),
+        ['revision', 'association'] as const,
+      );
+      return {
+        privateRevision: revisionFromPayload(rows.revision[0]?.payload),
+        associations: associationsFromRows(rows.association),
+      };
+    },
+
+    async listAssociations(accountId, tagId, offset, limit): Promise<AssociationsData> {
+      const request = listAssociationsStatement(accountId, tagId, offset, limit);
       const rows = groupRows(
         await readRows(
           sql,

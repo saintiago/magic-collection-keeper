@@ -91,6 +91,7 @@ export interface UserCardsSpy {
   readonly readTags: Mock;
   readonly createTag: Mock;
   readonly renameTag: Mock;
+  readonly listAssociations: Mock;
   readonly readAssociations: Mock;
   readonly createAssociation: Mock;
   readonly changeAssociation: Mock;
@@ -133,6 +134,11 @@ export function createUserCardsSpy(): UserCardsSpy {
     readTags,
     createTag: vi.fn(async () => ({ privateRevision: 'r1', tag: null })),
     renameTag: vi.fn(async () => ({ privateRevision: 'r1', tag: null })),
+    listAssociations: vi.fn(async () => ({
+      privateRevision: 'r1',
+      associations: [],
+      continuation: null,
+    })),
     readAssociations,
     createAssociation: vi.fn(async () => ({ privateRevision: 'r1', association: null })),
     changeAssociation: vi.fn(async () => ({ privateRevision: 'r1', association: null })),

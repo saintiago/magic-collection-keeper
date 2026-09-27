@@ -507,6 +507,155 @@ describe('user cards client', () => {
       });
     }
   });
+
+  it('reads one bounded page of tags and one tag’s associations', async () => {
+    const tags = {
+      privateRevision: 'private-1',
+      tags: [{ tagId: 'tag-1', kind: 'wishlist', label: 'Wanted', system: false, revision: 2 }],
+      continuation: 'next-tags',
+    };
+    const { fetch, calls } = jsonFetch(tags);
+    const request = createAuthenticatedRequest({
+      baseUrl: 'https://api.test.keeper.example',
+      token: () => 'id-token-value',
+      fetch,
+    });
+    const client = createUserCardsClient(request);
+
+    const page = await client.listTags({ pageSize: 1, continuation: 'page-1' });
+
+    expect(calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/tags?pageSize=1&continuation=page-1',
+    );
+    expect(page.tags).toEqual(tags.tags);
+    expect(page.continuation).toBe('next-tags');
+
+    const associations = {
+      privateRevision: 'private-1',
+      associations: [
+        {
+          associationId: 'association-1',
+          tagId: 'tag-1',
+          targetLevel: 'printing',
+          targetId: 'printing-1',
+          quantity: 4,
+          revision: 3,
+        },
+      ],
+      continuation: null,
+    };
+    const listed = jsonFetch(associations);
+    const associationClient = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch: listed.fetch,
+      }),
+    );
+
+    const associationPage = await associationClient.listAssociations('tag/1', { pageSize: 50 });
+
+    expect(listed.calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/tags/tag%2F1/associations?pageSize=50',
+    );
+    expect(associationPage.associations).toEqual(associations.associations);
+    expect(associationPage.continuation).toBeNull();
+  });
+
+  it('renames a tag, changes an association and moves a copy’s location', async () => {
+    const renamed = {
+      privateRevision: 'private-2',
+      tag: { tagId: 'tag/1', kind: 'deck', label: 'Burn deck', system: false, revision: 2 },
+    };
+    const rename = jsonFetch(renamed);
+    const renameClient = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch: rename.fetch,
+      }),
+    );
+
+    const result = await renameClient.renameTag({
+      tagId: 'tag/1',
+      expectedRevision: 1,
+      label: 'Burn deck',
+    });
+
+    expect(rename.calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/tags/tag%2F1/rename',
+    );
+    expect(rename.calls[0]?.init.body).toBe('{"expectedRevision":1,"label":"Burn deck"}');
+    expect(result.tag.label).toBe('Burn deck');
+
+    const changed = {
+      privateRevision: 'private-3',
+      association: {
+        associationId: 'association-1',
+        tagId: 'tag-1',
+        targetLevel: 'card',
+        targetId: 'card-bolt',
+        quantity: 4,
+        revision: 4,
+      },
+    };
+    const association = jsonFetch(changed);
+    const associationClient = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch: association.fetch,
+      }),
+    );
+
+    await associationClient.changeAssociation({
+      associationId: 'association/1',
+      expectedRevision: 3,
+      targetLevel: 'card',
+      targetId: 'card-bolt',
+      quantity: 4,
+    });
+
+    expect(association.calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/associations/association%2F1/changes',
+    );
+    expect(association.calls[0]?.init.body).toBe(
+      '{"expectedRevision":3,"targetLevel":"card","targetId":"card-bolt","quantity":4}',
+    );
+
+    const moved = {
+      privateRevision: 'private-4',
+      copy: {
+        copyId: 'copy-1',
+        printingId: 'printing-1',
+        finish: 'nonfoil',
+        condition: null,
+        revision: 6,
+      },
+      location: null,
+    };
+    const location = jsonFetch(moved);
+    const locationClient = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch: location.fetch,
+      }),
+    );
+
+    const movedResult = await locationClient.setCopyLocation({
+      copyId: 'copy-1',
+      locationTagId: null,
+      expectedRevision: 5,
+    });
+
+    expect(location.calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/copies/copy-1/location',
+    );
+    expect(location.calls[0]?.init.body).toBe('{"expectedRevision":5,"locationTagId":null}');
+    expect(movedResult.location).toBeNull();
+    expect(movedResult.copy.revision).toBe(6);
+  });
 });
 
 describe('browser application', () => {

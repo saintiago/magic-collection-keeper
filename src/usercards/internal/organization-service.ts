@@ -19,6 +19,7 @@ import {
 } from './model.js';
 import { decodeContinuation, encodeContinuation } from './pagination.js';
 import type {
+  AssociationListResult,
   AssociationChangeResult,
   AssociationReadResult,
   AssociationRemovalResult,
@@ -26,6 +27,7 @@ import type {
   CopyLocationResult,
   CreateAssociationInput,
   CreateTagInput,
+  ListAssociationsOptions,
   RemoveAssociationInput,
   RenameTagInput,
   SetCopyLocationInput,
@@ -70,6 +72,12 @@ const tagPageSizeSchema = z
   .int()
   .min(USERCARDS_LIMITS.minTagPageSize)
   .max(USERCARDS_LIMITS.maxTagPageSize);
+
+const associationPageSizeSchema = z
+  .number()
+  .int()
+  .min(USERCARDS_LIMITS.minAssociationPageSize)
+  .max(USERCARDS_LIMITS.maxAssociationPageSize);
 
 const associationTargetSchema = z.object({
   targetLevel: z.enum(associationTargetLevels),
@@ -228,6 +236,7 @@ export function createOrganizationOperations(dependencies: {
   | 'createTag'
   | 'renameTag'
   | 'readAssociations'
+  | 'listAssociations'
   | 'createAssociation'
   | 'changeAssociation'
   | 'removeAssociation'
@@ -288,6 +297,61 @@ export function createOrganizationOperations(dependencies: {
       return {
         privateRevision: data.privateRevision,
         tags: hasMore ? data.tags.slice(0, pageSize) : data.tags,
+        continuation: hasMore
+          ? encodeContinuation({
+              version: 1,
+              offset: offset + pageSize,
+              revision: data.privateRevision,
+            })
+          : null,
+      };
+    },
+    /**
+     * Lists one page of one tag's associations, ordered by stable association identity. A tag this
+     * account does not own has no associations to publish, and the page carries the identity and
+     * revision the tag view quotes when it changes an intended quantity or refines a target level
+     * (docs/user-cards.md#records-and-associations).
+     */
+    async listAssociations(
+      context: TrustedUserContext,
+      options: ListAssociationsOptions,
+    ): Promise<AssociationListResult> {
+      const accountId = accountIdFrom(context);
+      const tagId = options?.tagId;
+      if (!referenceSchema.safeParse(tagId).success) {
+        throw new UserCardsError(
+          'invalid-request',
+          `A tag reference of 1 to ${identifierLength} characters is required.`,
+        );
+      }
+      const pageSize = options?.pageSize ?? USERCARDS_LIMITS.defaultAssociationPageSize;
+      if (!associationPageSizeSchema.safeParse(pageSize).success) {
+        throw new UserCardsError(
+          'invalid-request',
+          `An association page size from ${USERCARDS_LIMITS.minAssociationPageSize} to ` +
+            `${USERCARDS_LIMITS.maxAssociationPageSize} is required.`,
+        );
+      }
+      const continuation =
+        options?.continuation === undefined
+          ? null
+          : decodeContinuation(
+              options.continuation,
+              'This continuation is not readable; start the association list again.',
+            );
+      const offset = continuation?.offset ?? 0;
+
+      const data = await organization.listAssociations(accountId, tagId, offset, pageSize + 1);
+      if (continuation !== null && continuation.revision !== data.privateRevision) {
+        throw new UserCardsError(
+          'conflict',
+          'The private data changed after this page was read; start the association list again.',
+        );
+      }
+      const hasMore = data.associations.length > pageSize;
+      return {
+        privateRevision: data.privateRevision,
+        associations: hasMore ? data.associations.slice(0, pageSize) : data.associations,
         continuation: hasMore
           ? encodeContinuation({
               version: 1,

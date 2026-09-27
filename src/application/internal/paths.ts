@@ -20,6 +20,8 @@ export const applicationRoutes = {
   tags: '/api/collection/tags',
   tagsRead: '/api/collection/tags/read',
   tagRename: '/api/collection/tags/:tagId/rename',
+  /** Bounded page of one tag's associations, ordered by stable association identity. */
+  tagAssociations: '/api/collection/tags/:tagId/associations',
   associations: '/api/collection/associations',
   associationsRead: '/api/collection/associations/read',
   associationChanges: '/api/collection/associations/:associationId/changes',

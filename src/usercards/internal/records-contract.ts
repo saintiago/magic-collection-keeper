@@ -92,6 +92,27 @@ export interface TagChangeResult {
 }
 
 /**
+ * One page of a tag's associations (docs/user-cards.md#records-and-associations). The tag view
+ * changes an association's intended quantity or refines its target level, and both quote the
+ * association identity and revision this bounded read publishes.
+ */
+export interface ListAssociationsOptions {
+  /** Tag whose associations the page lists. A tag this account does not own has none. */
+  readonly tagId: TagId;
+  readonly pageSize?: number;
+  /** Continuation from the previous page of the same tag's associations. */
+  readonly continuation?: string;
+}
+
+export interface AssociationListResult {
+  readonly privateRevision: string;
+  /** Page of associations ordered by stable association identity. */
+  readonly associations: readonly Association[];
+  /** Continuation for the next page, or null when this page ends the list. */
+  readonly continuation: string | null;
+}
+
+/**
  * One new association. A card or printing target carries its intended quantity; a copy target is
  * physical membership and carries none.
  */
@@ -174,6 +195,10 @@ export interface UserCards extends ImportOperations {
     context: TrustedUserContext,
     associationIds: readonly AssociationId[],
   ): Promise<AssociationReadResult>;
+  listAssociations(
+    context: TrustedUserContext,
+    options: ListAssociationsOptions,
+  ): Promise<AssociationListResult>;
   createAssociation(
     context: TrustedUserContext,
     input: CreateAssociationInput,

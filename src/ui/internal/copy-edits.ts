@@ -14,11 +14,18 @@
  * (docs/user-interface.md#browsing-and-organization, docs/application.md#interface).
  */
 
-import type { UserCardsClient } from '../../application/index.js';
 import type { Finish } from '../../catalog/index.js';
-import type { CopyCondition, PhysicalCopy } from '../../usercards/index.js';
+import type {
+  CopyChangeResult,
+  CopyCondition,
+  CopyId,
+  CopyReadResult,
+  CorrectCopyInput,
+  PhysicalCopy,
+} from '../../usercards/index.js';
 
 import type { UiCardListTool } from './card-list.js';
+import { isUiDefiniteFailure, readUiFailureCode, readUiFailureMessage } from './failure.js';
 import { UI_LIMITS } from './limits.js';
 import type { UiOperationOutcome, UiToolRequest } from './list.js';
 
@@ -58,8 +65,18 @@ export interface UiCopyAccess {
   correct(input: UiCopyCorrection, signal?: AbortSignal): Promise<PhysicalCopy>;
 }
 
+/**
+ * The private copy operations the collection views present. It is the narrow part of Application's
+ * browser contract these views use, so a consumer depends only on the capabilities it presents
+ * (docs/architecture.md#composition-and-replacement).
+ */
+export interface UiCopyClient {
+  readCopies(copyIds: readonly CopyId[], signal?: AbortSignal): Promise<CopyReadResult>;
+  correctCopy(input: CorrectCopyInput, signal?: AbortSignal): Promise<CopyChangeResult>;
+}
+
 /** Builds the copy access over the private contract Application supplies. */
-export function createCopyAccess(userCards: UserCardsClient): UiCopyAccess {
+export function createCopyAccess(userCards: UiCopyClient): UiCopyAccess {
   if (typeof userCards?.readCopies !== 'function' || typeof userCards.correctCopy !== 'function') {
     throw new TypeError('The collection views read and correct copies through UserCards.');
   }
@@ -102,7 +119,7 @@ export async function correctCopy(
   try {
     return { status: 'committed', message: null, copy: await access.correct(input, signal) };
   } catch (cause) {
-    const code = readFailureCode(cause);
+    const code = readUiFailureCode(cause);
     if (code === 'conflict') {
       return {
         status: 'conflict',
@@ -110,10 +127,10 @@ export async function correctCopy(
         copy: null,
       };
     }
-    if (code !== null && isDefiniteFailure(code)) {
+    if (code !== null && isUiDefiniteFailure(code)) {
       return {
         status: 'failed',
-        message: readMessage(cause, 'The change was not saved.'),
+        message: readUiFailureMessage(cause, 'The change was not saved.'),
         copy: null,
       };
     }
@@ -207,7 +224,7 @@ async function applyCopyChange(
   } catch (cause) {
     return {
       status: 'failed',
-      message: `The selected copies could not be read: ${readMessage(cause, 'unknown failure')}`,
+      message: `The selected copies could not be read: ${readUiFailureMessage(cause, 'unknown failure')}`,
     };
   }
   const byId = new Map(copies.map((copy) => [copy.copyId, copy] as const));
@@ -291,34 +308,4 @@ async function readCopies(
     }
   }
   return copies;
-}
-
-/**
- * Failure codes that establish the change was not applied: the request was rejected before it
- * could commit, so the view reports a definite failure instead of recovering a recorded outcome.
- * A cancellation, a timeout, a busy service, an unavailable service and every other outcome after
- * dispatch leave the change's commitment open; reading the copy cannot resolve that uncertainty.
- */
-function isDefiniteFailure(code: string): boolean {
-  return (
-    code === 'invalid-request' ||
-    code === 'unsupported-query' ||
-    code === 'not-found' ||
-    code === 'unauthorized' ||
-    code === 'route-not-found' ||
-    code === 'method-not-allowed'
-  );
-}
-
-/** Failure code of one rejected operation, or null when the cause carries none. */
-function readFailureCode(cause: unknown): string | null {
-  if (typeof cause !== 'object' || cause === null) {
-    return null;
-  }
-  const code = Reflect.get(cause, 'code');
-  return typeof code === 'string' && code.length > 0 ? code : null;
-}
-
-function readMessage(cause: unknown, fallback: string): string {
-  return cause instanceof Error && cause.message.length > 0 ? cause.message : fallback;
 }

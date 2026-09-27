@@ -35,6 +35,10 @@ export const UI_LIMITS = {
   fragmentBatch: 100,
   /** Items one entry's fragment result may present, so a broken source cannot grow one row. */
   fragmentItems: 20,
+  /** Tags one page of the tags page asks the UserCards contract for. */
+  tagPage: 50,
+  /** Associations one page of a tag view asks the UserCards contract for. */
+  associationPage: 50,
   /**
    * Copy references one private copy read asks for at most. The bound mirrors the copy references
    * a UserCards read accepts, so a selection larger than one read is read in further bounded
