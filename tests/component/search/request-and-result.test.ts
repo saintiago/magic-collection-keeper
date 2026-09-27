@@ -195,6 +195,31 @@ describe('search requests', () => {
       pageSize: 25,
     });
   });
+
+  it('keeps both groups of a conjunction whose values contain a delimiter', () => {
+    const query = normalizeSearchRequest(
+      callerInput({
+        resultLevel: 'card',
+        query: '(name:"a;name:b" or c) (a or name:"b;name:c")',
+      }),
+    );
+
+    expect(query.filters).toHaveLength(2);
+    expect(query.filters).toContainEqual({
+      kind: 'or',
+      operands: [
+        { kind: 'criterion', criterion: { kind: 'name', text: 'a;name:b' } },
+        { kind: 'criterion', criterion: { kind: 'name', text: 'c' } },
+      ],
+    });
+    expect(query.filters).toContainEqual({
+      kind: 'or',
+      operands: [
+        { kind: 'criterion', criterion: { kind: 'name', text: 'a' } },
+        { kind: 'criterion', criterion: { kind: 'name', text: 'b;name:c' } },
+      ],
+    });
+  });
 });
 
 describe('search continuations', () => {
@@ -228,6 +253,22 @@ describe('search continuations', () => {
     const token = encodeSearchContinuation({ ...binding, offset: 20 });
 
     expect(decodeSearchContinuation(token, { ...binding, query: equivalent })).toBe(20);
+  });
+
+  it('does not let lookalike criteria resume another result sequence', () => {
+    const revisions = { catalogRevision: 'catalog-7', privateRevision: null };
+    const left = normalizeSearchRequest(
+      callerInput({ resultLevel: 'card', query: 'name:"a;name:b" or c' }),
+    );
+    const right = normalizeSearchRequest(
+      callerInput({ resultLevel: 'card', query: 'a or name:"b;name:c"' }),
+    );
+    const token = encodeSearchContinuation({ query: left, revisions, offset: 50 });
+
+    expect(left.filters).not.toEqual(right.filters);
+    expect(
+      captureSearchError(() => decodeSearchContinuation(token, { query: right, revisions })).code,
+    ).toBe('stale-continuation');
   });
 
   it('treats changed criteria, ordering, user or revisions as stale', () => {

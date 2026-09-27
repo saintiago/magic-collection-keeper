@@ -62,11 +62,45 @@ describe('supported search expressions', () => {
       comparison: '<=',
       colors: ['W', 'U'],
     });
-    expect(parsed('color_identity:u')).toEqual({
-      kind: 'colorIdentity',
-      comparison: '>=',
-      colors: ['U'],
-    });
+  });
+
+  it('reads a color-identity colon as at most the named colors, unlike card color', () => {
+    for (const key of ['id', 'identity', 'color_identity']) {
+      expect(parsed(`${key}:uw`)).toEqual({
+        kind: 'colorIdentity',
+        comparison: '<=',
+        colors: ['W', 'U'],
+      });
+      expect(parsed(`${key}>=uw`)).toEqual({
+        kind: 'colorIdentity',
+        comparison: '>=',
+        colors: ['W', 'U'],
+      });
+    }
+    expect(parseScryfallQuery('id:wu')).toEqual(parseScryfallQuery('id<=wu'));
+    expect(parseScryfallQuery('id:wu')).not.toEqual(parseScryfallQuery('c:wu'));
+  });
+
+  it('normalizes an identity expression and the equivalent structured criterion into one query', () => {
+    const fromText = normalizeSearchRequest(
+      callerInput({ resultLevel: 'card', query: 'identity:WU' }),
+    );
+    const fromControls = normalizeSearchRequest(
+      callerInput({
+        resultLevel: 'card',
+        criteria: [{ kind: 'colorIdentity', comparison: '<=', colors: ['U', 'W'] }],
+      }),
+    );
+
+    expect(fromText.filters).toEqual(fromControls.filters);
+    expect(fromText.filters).toEqual([
+      criterionFilter({ kind: 'colorIdentity', comparison: '<=', colors: ['W', 'U'] }),
+    ]);
+  });
+
+  it('keeps a slash inside a quoted or unquoted text value as text', () => {
+    expect(parsed('name:"a/b"')).toEqual({ kind: 'name', text: 'a/b' });
+    expect(parsed('name:a/b')).toEqual({ kind: 'name', text: 'a/b' });
   });
 
   it('reads mana value, set, language and finish filters', () => {
@@ -210,6 +244,11 @@ describe('unsupported search expressions', () => {
     'mv:even',
     'mv:three',
     't:/elf/',
+    'o:/draw a card/',
+    'name:/lightning bolt/',
+    't:/legendary creature/',
+    'o:/(sacrifice a creature|draw a card)/',
+    'o:/draw a card',
     '!"Lightning Bolt"',
     'o:"~ enters tapped"',
     'unique:prints',

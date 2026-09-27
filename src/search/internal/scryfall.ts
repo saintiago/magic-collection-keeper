@@ -13,9 +13,10 @@ import {
 /**
  * The supported subset of Scryfall's public search syntax (docs/search.md#scryfall-compatibility).
  *
- * Supported: loose name words, `name:`, `oracle:`/`o:`, `type:`/`t:`, `color:`/`c:`,
- * `color_identity:`/`identity:`/`id:`, `mana_value:`/`mv:`/`cmc:`, `set:`/`s:`/`e:`/`edition:`,
- * `lang:`/`language:`, the finish keywords `is:foil`, `is:nonfoil` and `is:etched`, `:` and
+ * Supported: loose name words, `name:`, `oracle:`/`o:`, `type:`/`t:`, `color:`/`c:` (a colon
+ * means at least the named colors), `color_identity:`/`identity:`/`id:` (a colon means at most the
+ * named colors), `mana_value:`/`mv:`/`cmc:` (a colon means exactly), `set:`/`s:`/`e:`/`edition:`,
+ * `lang:`/`language:`, the finish keywords `is:foil`, `is:nonfoil` and `is:etched`, explicit
  * comparison operators, quoted values, implicit AND, the `or` keyword, parentheses and `-`
  * negation. Operators, comparisons, values and combinations outside this subset are rejected with
  * an explicit unsupported-query error naming the expression; they are never ignored, reinterpreted
@@ -46,6 +47,7 @@ function tokenize(expression: string): readonly SearchToken[] {
   const tokens: SearchToken[] = [];
   let current = '';
   let quoted = false;
+  let regex = false;
   const flush = (): void => {
     if (current !== '') {
       tokens.push({ kind: 'term', text: current });
@@ -53,6 +55,15 @@ function tokenize(expression: string): readonly SearchToken[] {
     }
   };
   for (const character of expression) {
+    if (regex) {
+      // A `/…/` value stays one term up to its closing delimiter, so its whitespace, quotes and
+      // parentheses are never split into separate search terms before it is rejected.
+      current += character;
+      if (character === '/') {
+        throw unsupportedRegex(current);
+      }
+      continue;
+    }
     if (character === '"') {
       quoted = !quoted;
       current += character;
@@ -67,13 +78,28 @@ function tokenize(expression: string): readonly SearchToken[] {
       flush();
       continue;
     }
+    if (!quoted && character === '/' && endsAtComparison(current)) {
+      regex = true;
+    }
     current += character;
+  }
+  if (regex) {
+    throw unsupportedRegex(current);
   }
   if (quoted) {
     throw unsupported(expression, 'The expression contains an unterminated quote.');
   }
   flush();
   return tokens;
+}
+
+/**
+ * Whether one term buffer ends exactly at its first comparison outside quotes. A `/` directly
+ * after it opens a regular-expression value (docs/search.md#scryfall-compatibility).
+ */
+function endsAtComparison(term: string): boolean {
+  const comparison = findComparison(term);
+  return comparison !== null && comparison.operator !== '!' && comparison.end === term.length;
 }
 
 function parseTokens(tokens: readonly SearchToken[], expression: string): SearchFilter {
@@ -162,7 +188,7 @@ function predicateFilter(term: string): SearchFilter {
     return criterionFilter({ kind: 'name', text: value }, term);
   }
   if (/^\/.*\/$/su.test(value)) {
-    throw unsupported(term, 'Regular expression matching is not supported.');
+    throw unsupportedRegex(term);
   }
   const name = key.toLowerCase();
   if (!/^[a-z_][a-z0-9_]*$/u.test(name)) {
@@ -209,13 +235,19 @@ interface SplitTerm {
   readonly value: string;
 }
 
+/** The first comparison of one term, outside quotes: its operator text and the index after it. */
+interface TermComparison {
+  readonly operator: string;
+  readonly end: number;
+}
+
 /**
- * Splits one term at its first comparison outside quotes. A term without a comparison is a loose
- * name word, exactly as Scryfall reads it; `!` never silently becomes name text.
+ * Finds the comparison a term is split at, so splitting and the unsupported-regex check read the
+ * same operator vocabulary. A lone `!` is returned as its own operator and rejected by the caller.
  */
-function splitOperator(term: string): SplitTerm {
+function findComparison(term: string): TermComparison | null {
   const twoCharacter = ['!=', '>=', '<='];
-  const oneCharacter = [':', '=', '>', '<'];
+  const oneCharacter = [':', '=', '>', '<', '!'];
   let quoted = false;
   for (let index = 0; index < term.length; index += 1) {
     const character = term.charAt(index);
@@ -226,21 +258,34 @@ function splitOperator(term: string): SplitTerm {
     if (quoted) {
       continue;
     }
-    if (character === '!') {
-      if (term.charAt(index + 1) !== '=') {
-        throw unsupported(term, 'Exact-name matching with "!" is not supported.');
-      }
-      return { key: term.slice(0, index), operator: '!=', value: term.slice(index + 2) };
-    }
     const pair = term.slice(index, index + 2);
     if (twoCharacter.includes(pair)) {
-      return { key: term.slice(0, index), operator: pair, value: term.slice(index + 2) };
+      return { operator: pair, end: index + 2 };
     }
     if (oneCharacter.includes(character)) {
-      return { key: term.slice(0, index), operator: character, value: term.slice(index + 1) };
+      return { operator: character, end: index + 1 };
     }
   }
-  return { key: null, operator: null, value: term };
+  return null;
+}
+
+/**
+ * Splits one term at its first comparison outside quotes. A term without a comparison is a loose
+ * name word, exactly as Scryfall reads it; `!` never silently becomes name text.
+ */
+function splitOperator(term: string): SplitTerm {
+  const comparison = findComparison(term);
+  if (comparison === null) {
+    return { key: null, operator: null, value: term };
+  }
+  if (comparison.operator === '!') {
+    throw unsupported(term, 'Exact-name matching with "!" is not supported.');
+  }
+  return {
+    key: term.slice(0, comparison.end - comparison.operator.length),
+    operator: comparison.operator,
+    value: term.slice(comparison.end),
+  };
 }
 
 function readTermValue(raw: string, term: string): string {
@@ -295,12 +340,22 @@ function colorCriterion(
   return criterionFilter(
     {
       kind,
-      comparison: comparisonFor(operator, '>=', term),
+      comparison: comparisonFor(operator, colonComparison[kind], term),
       colors: [...value.toUpperCase()],
     },
     term,
   );
 }
+
+/**
+ * Meaning of a `:` comparison: card color selects cards that are at least the named colors, while
+ * color identity selects cards whose identity is at most the named colors, so the two criteria
+ * never share a default (docs/search.md#scryfall-compatibility).
+ */
+const colonComparison: Record<'color' | 'colorIdentity', SearchComparison> = {
+  color: '>=',
+  colorIdentity: '<=',
+};
 
 function manaValueCriterion(operator: string | null, value: string, term: string): SearchFilter {
   if (!/^[0-9]+(?:\.[0-9]+)?$/u.test(value)) {
@@ -364,4 +419,9 @@ function unsupported(term: string, problem: string): SearchError {
     'unsupported-query',
     `The search expression "${term}" is not supported. ${problem}`,
   );
+}
+
+/** Rejection of a `/…/` regular-expression value, which this subset does not evaluate. */
+function unsupportedRegex(expression: string): SearchError {
+  return unsupported(expression, 'Regular expression matching is not supported.');
 }

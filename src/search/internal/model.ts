@@ -119,7 +119,11 @@ export interface SearchColorCriterion {
   readonly colors: SearchColorSet;
 }
 
-/** A playable-identity criterion on color identity, with the same comparisons as card color. */
+/**
+ * A playable-identity criterion on color identity. `:` normalizes to `<=`, its Scryfall meaning:
+ * the identity stays within the named colors. Card color keeps `>=`, so the two kinds never share
+ * a default.
+ */
 export interface SearchColorIdentityCriterion {
   readonly kind: 'colorIdentity';
   readonly comparison: SearchComparison;
@@ -262,43 +266,46 @@ export function canonicalizeSearchFilters(
 
 /**
  * Canonical serialization of one filter. Filters that mean the same produce the same key; it
- * orders canonical operands and feeds the continuation fingerprint.
+ * orders canonical operands and feeds the continuation fingerprint. Every node is its kind
+ * followed by a JSON encoding of its payload, so node borders and literal values stay distinct
+ * even when a value contains a delimiter such as `;`, `,`, `:` or `"`.
  */
 export function searchFilterKey(filter: SearchFilter): string {
   switch (filter.kind) {
     case 'criterion':
-      return searchCriterionKey(filter.criterion);
+      return `${filter.criterion.kind}:${JSON.stringify(criterionKeyValue(filter.criterion))}`;
     case 'not':
-      return `not(${searchFilterKey(filter.operand)})`;
+      return `not:${JSON.stringify(searchFilterKey(filter.operand))}`;
     case 'and':
-    case 'or': {
-      const operands = filter.operands.map(searchFilterKey);
-      return `${filter.kind}(${operands.join(';')})`;
-    }
+    case 'or':
+      return `${filter.kind}:${JSON.stringify(filter.operands.map(searchFilterKey))}`;
   }
 }
 
-function searchCriterionKey(criterion: SearchCriterion): string {
+/** JSON value of one criterion's payload: every field that gives it its meaning, in its own slot. */
+type SearchFilterKeyValue = readonly (string | number | SearchFilterKeyValue)[];
+
+function criterionKeyValue(criterion: SearchCriterion): SearchFilterKeyValue {
   switch (criterion.kind) {
     case 'name':
     case 'rulesText':
     case 'type':
-      return `${criterion.kind}:${criterion.text}`;
+      return [criterion.text];
     case 'color':
     case 'colorIdentity':
-      return `${criterion.kind}:${criterion.comparison}:${criterion.colors.join('')}`;
+      return [criterion.comparison, criterion.colors.join('')];
     case 'manaValue':
-      return `manaValue:${criterion.comparison}:${criterion.value}`;
+      return [criterion.comparison, criterion.value];
     case 'set':
-      return `set:${criterion.edition}`;
+      return [criterion.edition];
     case 'language':
-      return `language:${criterion.language}`;
+      return [criterion.language];
     case 'finish':
-      return `finish:${criterion.finish}`;
+      return [criterion.finish];
     case 'owned':
-      return 'owned';
+      return [];
     case 'tag':
-      return `tag:${criterion.tagId}`;
+      return [criterion.tagId];
   }
 }
 
