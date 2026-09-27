@@ -31,6 +31,10 @@ export interface UiShellControl {
   failSignOut(message: string): void;
   /** Settles the controlled device release, rejecting when a message is supplied. */
   completeDeviceRelease(message?: string): void;
+  /** Answers the asynchronous page's held result requests, as the source's response arriving would. */
+  answerAsyncResults(): void;
+  /** Result requests the asynchronous page holds, waiting for the journey to answer them. */
+  asyncPending(): number;
   /** Notes the harness recorded, oldest first. */
   log(): string[];
   /** Releases the shell and its listeners. */
@@ -43,6 +47,8 @@ export interface UiShellStart {
   /** Holds each sign-out until the journey completes or rejects it through the control. */
   readonly deferredSignOut?: boolean;
   readonly deviceRelease?: 'deferred' | 'throw';
+  /** Presents the asynchronous Home page instead of the immediate one. */
+  readonly asyncResults?: boolean;
 }
 
 /** Installs the shell into `root`; its identity starts signed in unless `signedOut` is set. */
@@ -58,6 +64,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
   let pendingSignOut: { resolve(): void; reject(cause: Error): void } | null = null;
 
   let pendingDeviceRelease: { resolve(): void; reject(cause: Error): void } | null = null;
+  const asyncResults = createAsyncResults();
 
   const identity: UiIdentity = {
     current: () => account,
@@ -121,7 +128,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
         }
       },
     },
-    pages: fixturePages(document, log),
+    pages: fixturePages(document, log, start.asyncResults === true ? asyncResults : null),
   });
 
   function report(next: UiAccount | null): void {
@@ -157,6 +164,10 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       if (message === undefined) pending.resolve();
       else pending.reject(new Error(message));
     },
+    answerAsyncResults: () => {
+      asyncResults.answer();
+    },
+    asyncPending: () => asyncResults.pending(),
     log: () => [...log],
     dispose: () => {
       shell.dispose();
@@ -165,15 +176,136 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
 }
 
 /** The pages this harness presents: the shell frame plus the content the journeys assert on. */
-function fixturePages(document: Document, log: string[]): readonly UiPageDefinition[] {
+function fixturePages(
+  document: Document,
+  log: string[],
+  asyncResults: AsyncResults | null,
+): readonly UiPageDefinition[] {
   return [
-    homePage(document, log),
+    asyncResults === null ? homePage(document, log) : asyncHomePage(document, log, asyncResults),
     catalogPage(document),
     cardPage(document, log),
     collectionPage(document),
     redirectPage(document, log),
     devicePage(document, log),
   ];
+}
+
+/**
+ * Held result requests of the asynchronous fixture. A journey answers them one response at a time,
+ * so it can interrupt a history restoration before or between the pages it reloads.
+ */
+interface AsyncResults {
+  /** Waits until the journey answers this request. */
+  hold(): Promise<void>;
+  /** Answers every request waiting now, as those source responses arriving would. */
+  answer(): void;
+  /** Requests waiting for their answer. */
+  pending(): number;
+}
+
+function createAsyncResults(): AsyncResults {
+  const waiting: (() => void)[] = [];
+  return {
+    hold: () => new Promise<void>((resolve) => waiting.push(resolve)),
+    answer: () => {
+      for (const resolve of waiting.splice(0)) {
+        resolve();
+      }
+    },
+    pending: () => waiting.length,
+  };
+}
+
+/** Entries the asynchronous fixture serves and the entries one response of it carries. */
+const asyncResultTotal = 100;
+const asyncResultPageSize = 50;
+
+/**
+ * Asynchronous Home of the interrupted-restoration journeys: it serves its results in pages a
+ * journey answers one response at a time, keeps the entries it presented as its own restoration
+ * state, and a visit that restores them reports the presentation only once the window the history
+ * entry kept is back (docs/user-interface.md#pages-and-navigation).
+ */
+function asyncHomePage(document: Document, log: string[], results: AsyncResults): UiPageDefinition {
+  return {
+    page: 'home',
+    mount(container, context) {
+      const restored = context.restored?.state ?? null;
+      const kept = readLoadedWindow(restored);
+      const target = kept > 0 ? kept : asyncResultTotal;
+      const status = document.createElement('p');
+      status.id = 'async-loaded';
+      const host = document.createElement('ol');
+      const tail = document.createElement('div');
+      tail.style.height = '600px';
+      container.append(status, host, tail);
+      const presented = Promise.withResolvers<void>();
+      let loaded = 0;
+      let next = 1;
+      let done = false;
+      renderLoaded();
+      load();
+      return {
+        capture: () => ({ loaded }),
+        ...(kept > 0 ? { presented: () => presented.promise } : {}),
+      };
+
+      /** Asks for the next page of the result; the journey answers it as the source would. */
+      function load(): void {
+        if (done || next > asyncResultTotal) {
+          return;
+        }
+        const from = next;
+        const to = Math.min(from + asyncResultPageSize - 1, asyncResultTotal);
+        next = to + 1;
+        void results.hold().then(() => {
+          if (context.signal.aborted) {
+            return;
+          }
+          for (let index = from; index <= to; index += 1) {
+            host.append(resultRow(document, index));
+          }
+          loaded = to;
+          renderLoaded();
+          log.push(`async-loaded:${loaded}`);
+          if (loaded >= target) {
+            done = true;
+            presented.resolve();
+            return;
+          }
+          load();
+        });
+      }
+
+      function renderLoaded(): void {
+        status.textContent = `${loaded} results`;
+      }
+    },
+  };
+}
+
+/** One result of the asynchronous fixture; a journey focuses and opens it. */
+function resultRow(document: Document, index: number): HTMLLIElement {
+  const row = document.createElement('li');
+  row.style.height = '60px';
+  const link = document.createElement('a');
+  link.id = `async-result-${index}`;
+  link.href = uiHref({ page: 'card', cardId: `card-${index}`, printingId: null, copyId: null });
+  link.textContent = `Result ${index}`;
+  row.append(link);
+  return row;
+}
+
+/** Entries the restored history entry had presented, or zero when it kept none. */
+function readLoadedWindow(restored: Readonly<Record<string, unknown>> | null): number {
+  const value = restored?.loaded;
+  return typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= asyncResultTotal
+    ? value
+    : 0;
 }
 
 /** Home keeps a query, two independent selections, an opening link, a dialog and long content. */
