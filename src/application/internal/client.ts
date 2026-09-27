@@ -44,10 +44,7 @@ export interface AuthenticatedRequestInit {
 }
 
 /** The callable part of a transport: everything a consumer needs to reach one entry point. */
-export type RequestTransport = (
-  path: string,
-  init?: AuthenticatedRequestInit,
-) => Promise<unknown>;
+export type RequestTransport = (path: string, init?: AuthenticatedRequestInit) => Promise<unknown>;
 
 /**
  * One authenticated request to a backend entry point. A caller that has no current identity, or
