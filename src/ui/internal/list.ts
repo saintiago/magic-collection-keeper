@@ -132,5 +132,9 @@ export interface UiOperationOutcome {
 }
 
 export interface UiTool {
+  /**
+   * Invokes the operation for the explicit targets. A rejection carries no receipt, so the caller
+   * reports its outcome as unknown; a definite failure is the operation's own `failed` outcome.
+   */
   invoke(request: UiToolRequest): Promise<UiOperationOutcome>;
 }
