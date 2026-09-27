@@ -94,6 +94,10 @@ readers see a coherent published revision.
 - **Source imports:** cover each supported format with representative fixtures, invalid rows,
   unresolved identities, repeated sources, changed quantities, duplicate lines and partial parsing
   failure. Verify provenance and require review before ownership changes.
+- **Import identity:** two new imports with identical contents or source references remain separate
+  lists and can each create their confirmed copies. Retry, reopen and reconciliation within one
+  import preserve its identity and do not duplicate its acquisitions. Cover lost responses and
+  reload for pasted lists, Moxfield and reviewed Wizards sources.
 
 ### Search
 
