@@ -37,6 +37,16 @@ import type {
   SearchPage,
   SearchRequestInput,
 } from '../../search/index.js';
+// UserCards follows the same rule: the collection views reach its private operations through this
+// authenticated contract, and a value import would pull the component's Node-only internals into
+// the browser bundle.
+import type {
+  CopyChangeResult,
+  CopyId,
+  CopyReadResult,
+  CorrectCopyInput,
+  PhysicalCopy,
+} from '../../usercards/index.js';
 
 import {
   isApplicationFailureCode,
@@ -200,6 +210,55 @@ export function createSearchClient(request: RequestTransport): SearchClient {
   };
 }
 
+/**
+ * The private UserCards operations the UserInterface presents
+ * (docs/user-interface.md#interface, docs/user-cards.md#interface). The caller sends explicit copy
+ * references and the change it read them from; the transport derives the trusted account from the
+ * verified identity, so no account crosses into the browser and every private read and change is
+ * scoped to the caller at the backend boundary. A correction quotes the revision the caller read,
+ * and an operation that leaves records unchanged reports its failure instead of an empty success.
+ */
+export interface UserCardsClient {
+  /** Authorized copies of the requested references, with the references this account has none for. */
+  readCopies(copyIds: readonly CopyId[], signal?: AbortSignal): Promise<CopyReadResult>;
+  /** The corrected state of one copy, guarded by the revision the caller read. */
+  correctCopy(input: CorrectCopyInput, signal?: AbortSignal): Promise<CopyChangeResult>;
+}
+
+/** Builds the private copy contract the collection views read and correct copies through. */
+export function createUserCardsClient(request: RequestTransport): UserCardsClient {
+  if (typeof request !== 'function') {
+    throw new TypeError('createUserCardsClient requires the authenticated request contract.');
+  }
+  return {
+    async readCopies(copyIds: readonly CopyId[], signal?: AbortSignal): Promise<CopyReadResult> {
+      const payload = await request(applicationRoutes.copiesRead, {
+        method: 'POST',
+        body: JSON.stringify({ copyIds }),
+        ...(signal === undefined ? {} : { signal }),
+      });
+      return readCopyReadResult(payload);
+    },
+
+    async correctCopy(input: CorrectCopyInput, signal?: AbortSignal): Promise<CopyChangeResult> {
+      const payload = await request(
+        applicationPath(applicationRoutes.copyCorrections, { copyId: input.copyId }),
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            expectedRevision: input.expectedRevision,
+            printingId: input.printingId,
+            finish: input.finish,
+            condition: input.condition,
+          }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      return readCopyChangeResult(payload);
+    },
+  };
+}
+
 /** Component access and public configuration the UserInterface receives (docs/user-interface.md#interface). */
 export interface UserInterfaceCapabilities {
   readonly settings: PublicApplicationSettings;
@@ -209,6 +268,8 @@ export interface UserInterfaceCapabilities {
   readonly catalog: Catalog;
   /** Combined Catalog and UserCards queries with their ordering and continuation. */
   readonly search: SearchClient;
+  /** Private copy reads and corrections of the presented account. */
+  readonly userCards: UserCardsClient;
   /** Builds the Recognition contract over the browser's preserved engines. */
   readonly createRecognition: () => Recognition<HTMLCanvasElement>;
 }
@@ -261,6 +322,7 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
   const request = createEntryPointRequest(api, compute);
   const catalog = createCatalogClient(request);
   const search = createSearchClient(request);
+  const userCards = createUserCardsClient(request);
   const createRecognitionContract = () =>
     options.createRecognition !== undefined
       ? options.createRecognition({ settings, request })
@@ -280,6 +342,7 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
           request,
           catalog,
           search,
+          userCards,
           createRecognition: createRecognitionContract,
         })
       : null;
@@ -498,8 +561,8 @@ function readSearchPage(payload: unknown): SearchPage {
   if (
     !isSearchCountOrNull(totalCount) ||
     (continuation !== null && typeof continuation !== 'string') ||
-    !isSearchIdentifier(catalogRevision) ||
-    !isSearchIdentifierOrNull(privateRevision)
+    !isIdentifier(catalogRevision) ||
+    !isIdentifierOrNull(privateRevision)
   ) {
     throw unreadableSearch();
   }
@@ -523,10 +586,10 @@ function readSearchEntry(value: unknown): SearchEntry | null {
   if (
     entry === null ||
     target === null ||
-    !isSearchIdentifier(entryKey) ||
+    !isIdentifier(entryKey) ||
     card === null ||
-    !isSearchIdentifier(cardId) ||
-    !isSearchIdentifier(name) ||
+    !isIdentifier(cardId) ||
+    !isIdentifier(name) ||
     (matchedName !== null && typeof matchedName !== 'string')
   ) {
     return null;
@@ -555,13 +618,13 @@ function readSearchTarget(value: unknown): SearchEntryTarget | null {
   const cardId = target?.cardId;
   const printingId = target?.printingId;
   const copyId = target?.copyId;
-  if (kind === 'card' && isSearchIdentifier(cardId)) {
+  if (kind === 'card' && isIdentifier(cardId)) {
     return { kind, cardId };
   }
-  if (kind === 'printing' && isSearchIdentifier(printingId)) {
+  if (kind === 'printing' && isIdentifier(printingId)) {
     return { kind, printingId };
   }
-  if (kind === 'copy' && isSearchIdentifier(copyId)) {
+  if (kind === 'copy' && isIdentifier(copyId)) {
     return { kind, copyId };
   }
   return null;
@@ -579,10 +642,10 @@ function readSearchPrinting(value: unknown): SearchEntry['printing'] {
   const language = printing?.language;
   if (
     printing === null ||
-    !isSearchIdentifier(printingId) ||
-    !isSearchIdentifier(edition) ||
-    !isSearchIdentifier(collectorNumber) ||
-    !isSearchIdentifier(language)
+    !isIdentifier(printingId) ||
+    !isIdentifier(edition) ||
+    !isIdentifier(collectorNumber) ||
+    !isIdentifier(language)
   ) {
     return null;
   }
@@ -610,20 +673,104 @@ function isSearchCountOrNull(value: unknown): value is number | null {
   return value === null || isSearchCount(value);
 }
 
-function isSearchIdentifierOrNull(value: unknown): value is string | null {
-  return value === null || isSearchIdentifier(value);
+function isIdentifierOrNull(value: unknown): value is string | null {
+  return value === null || isIdentifier(value);
 }
 
 function isSearchCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-function isSearchIdentifier(value: unknown): value is string {
+function isIdentifier(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
 function unreadableSearch(): ApplicationError {
   return new ApplicationError('unavailable', 'The search response could not be read.');
+}
+
+/** Reads one private copy read. A response outside the declared shape is unavailable, never an
+ * empty result that would present an account's copies as absent. */
+function readCopyReadResult(payload: unknown): CopyReadResult {
+  const record = readObject(payload);
+  const copies = readCopyRecords(record?.copies);
+  const missing = readIdentifiers(record?.missing);
+  const privateRevision = record?.privateRevision;
+  if (record === null || copies === null || missing === null || !isIdentifier(privateRevision)) {
+    throw unreadableCopies();
+  }
+  return {
+    privateRevision,
+    copies: new Map(copies.map((copy) => [copy.copyId, copy] as const)),
+    missing,
+  };
+}
+
+/** Reads one copy change: the committed copies and the private revision the change published. */
+function readCopyChangeResult(payload: unknown): CopyChangeResult {
+  const record = readObject(payload);
+  const copies = readCopyRecords(record?.copies);
+  const privateRevision = record?.privateRevision;
+  if (record === null || copies === null || !isIdentifier(privateRevision)) {
+    throw unreadableCopies();
+  }
+  return { privateRevision, copies };
+}
+
+function readCopyRecords(value: unknown): PhysicalCopy[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const copies: PhysicalCopy[] = [];
+  for (const candidate of value) {
+    const copy = readObject(candidate);
+    const copyId = copy?.copyId;
+    const printingId = copy?.printingId;
+    const finish = copy?.finish;
+    const condition = copy?.condition;
+    const revision = copy?.revision;
+    if (
+      copy === null ||
+      !isIdentifier(copyId) ||
+      !isIdentifier(printingId) ||
+      !isIdentifier(finish) ||
+      (condition !== null && !isIdentifier(condition)) ||
+      !isCopyRevision(revision)
+    ) {
+      return null;
+    }
+    copies.push({
+      copyId,
+      printingId,
+      finish: finish as PhysicalCopy['finish'],
+      condition: condition as PhysicalCopy['condition'],
+      revision,
+    });
+  }
+  return copies;
+}
+
+/** Provider record revision of one copy: a positive whole number. */
+function isCopyRevision(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
+function readIdentifiers(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const identifiers: string[] = [];
+  for (const candidate of value) {
+    if (!isIdentifier(candidate)) {
+      return null;
+    }
+    identifiers.push(candidate);
+  }
+  return identifiers;
+}
+
+function unreadableCopies(): ApplicationError {
+  return new ApplicationError('unavailable', 'The collection response could not be read.');
 }
 
 function readObject(value: unknown): Readonly<Record<string, unknown>> | null {

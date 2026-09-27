@@ -34,6 +34,7 @@ export {
   createAuthenticatedRequest,
   createCatalogClient,
   createSearchClient,
+  createUserCardsClient,
   inspectCanvasFrame,
   type AuthenticatedRequest,
   type AuthenticatedRequestInit,
@@ -42,6 +43,7 @@ export {
   type BrowserApplicationOptions,
   type RequestTransport,
   type SearchClient,
+  type UserCardsClient,
   type UserInterfaceCapabilities,
 } from './internal/client.js';
 export {

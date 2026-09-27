@@ -17,11 +17,20 @@
  * leaves it (docs/user-interface.md#capture-and-review).
  */
 
-import type { UiCardList, UiCardListState } from './card-list.js';
-import { cardListBasicContent, createCardList } from './card-list.js';
+import { createCardList } from './card-list.js';
 import { UI_LIMITS } from './limits.js';
-import type { UiListEntry, UiListSource } from './list.js';
-import type { UiPageDefinition, UiPageHandle } from './pages.js';
+import type { UiListSource } from './list.js';
+import type { UiPageDefinition } from './pages.js';
+import {
+  controlLabel,
+  openEntryPresentation,
+  pageHandle,
+  readListState,
+  readPageState,
+  searchForm,
+  searchInput,
+  selectControl,
+} from './page-support.js';
 import { createRecentCards, type UiRecentCards } from './recent.js';
 import {
   readUiCatalogFinish,
@@ -119,7 +128,7 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
       const restored = readPageState(context.restored?.state);
       const input = searchInput(document, 'catalog-search');
       input.value = view.query;
-      const level = levelSelect(document);
+      const level = catalogLevelSelect(document);
       level.id = 'catalog-level';
       level.value = view.level;
       const owned = document.createElement('input');
@@ -202,20 +211,6 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
   };
 }
 
-/**
- * One page's handle: the page keeps its own form state beside the state its list retains, and it
- * reports the list's restoration lifecycle while the list is still acquiring a retained window
- * (docs/user-interface.md#state-ownership-and-restoration).
- */
-function pageHandle<Context>(list: UiCardList<Context>, capture: () => unknown): UiPageHandle {
-  const restoration = list.restoration;
-  return {
-    capture,
-    ...(restoration === null ? {} : { presented: () => restoration.presented }),
-    dispose: () => list.dispose(),
-  };
-}
-
 /** The query the catalog page presents for one view. */
 function catalogQueryOf(view: Extract<UiView, { page: 'catalog' }>): UiCatalogQuery {
   return {
@@ -246,105 +241,16 @@ function recentSource(recent: UiRecentCards): UiListSource<string> {
   };
 }
 
-/**
- * Presentation that opens one entry's card details and records the entry as the account's recent
- * activity. The link carries a stable identity of the entry it opens, so the list and the shell
- * restore the focused and visible result of a history entry by that identity; an entry without
- * resolved basic information has no details to open and keeps the default rendering.
- */
-function openEntryPresentation(
-  document: Document,
-  idPrefix: string,
-  onOpen: (entry: UiListEntry) => void,
-): { renderEntry(entry: UiListEntry): Node | null } {
-  return {
-    renderEntry(entry) {
-      const content = cardListBasicContent(document, entry);
-      const view = cardViewOf(entry);
-      if (view === null) {
-        return content;
-      }
-      const link = document.createElement('a');
-      link.id = `${idPrefix}-${encodeURIComponent(entry.key)}`;
-      link.href = uiHref(view);
-      link.dataset.uiOpen = entry.key;
-      link.append(content);
-      link.addEventListener('click', () => onOpen(entry));
-      return link;
-    },
-  };
-}
-
-/** Card details view of one entry, or null when the entry carries no identity to open. */
-function cardViewOf(entry: UiListEntry): UiView | null {
-  const basic = entry.basic;
-  if (basic === null) {
-    return null;
-  }
-  switch (entry.target.kind) {
-    case 'card':
-      return { page: 'card', cardId: entry.target.cardId, printingId: null, copyId: null };
-    case 'printing':
-      return {
-        page: 'card',
-        cardId: basic.card.cardId,
-        printingId: entry.target.printingId,
-        copyId: null,
-      };
-    case 'copy': {
-      const printingId = basic.printing?.printingId ?? null;
-      return printingId === null
-        ? null
-        : {
-            page: 'card',
-            cardId: basic.card.cardId,
-            printingId,
-            copyId: entry.target.copyId,
-          };
-    }
-  }
-}
-
-/**
- * The search expression field both browsing pages present. The field carries an id, so the shell
- * restores this page's focus to it when the user returns to the view
- * (docs/user-interface.md#pages-and-navigation).
- */
-function searchInput(document: Document, id: string): HTMLInputElement {
-  const input = document.createElement('input');
-  input.id = id;
-  input.type = 'search';
-  input.name = 'query';
-  // The page bounds the draft it keeps and the URL of a catalog query it links, so the captured
-  // input always fits the state the page retains.
-  input.maxLength = UI_LIMITS.catalogQuery;
-  return input;
-}
-
-/** One search form: the expression, the catalog controls and the control that submits them. */
-function searchForm(
-  document: Document,
-  input: HTMLInputElement,
-  controls: readonly HTMLElement[] = [],
-): HTMLFormElement {
-  const form = document.createElement('form');
-  const submit = document.createElement('button');
-  submit.type = 'submit';
-  submit.textContent = 'Search';
-  form.append(controlLabel(document, 'Search cards', input), ...controls, submit);
-  return form;
-}
-
 /** Result level control of the catalog page. */
-function levelSelect(document: Document): HTMLSelectElement {
-  const select = document.createElement('select');
-  for (const level of uiCatalogLevels) {
-    const option = document.createElement('option');
-    option.value = level;
-    option.textContent = level === 'card' ? 'Cards' : 'Printings';
-    select.append(option);
-  }
-  return select;
+function catalogLevelSelect(document: Document): HTMLSelectElement {
+  return selectControl(
+    document,
+    uiCatalogLevels.map((level) => ({
+      value: level,
+      label: level === 'card' ? 'Cards' : 'Printings',
+    })),
+    'card',
+  );
 }
 
 /** Finish control of the catalog page; the empty value means the query constrains no finish. */
@@ -361,35 +267,4 @@ function finishSelect(document: Document): HTMLSelectElement {
     select.append(option);
   }
   return select;
-}
-
-/** One control beside its caption; the label names the control it contains. */
-function controlLabel(document: Document, text: string, control: HTMLElement): HTMLLabelElement {
-  const label = document.createElement('label');
-  const caption = document.createElement('span');
-  caption.textContent = text;
-  label.append(caption, control);
-  return label;
-}
-
-/**
- * The page state a history entry kept, or null when it kept none. The page owns this shape and
- * interprets it; the shell hands it back without reading or restricting it
- * (docs/user-interface.md#state-ownership-and-restoration).
- */
-function readPageState(value: unknown): Readonly<Record<string, unknown>> | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return null;
-  }
-  return value as Readonly<Record<string, unknown>>;
-}
-
-/** The list state one page kept, or undefined when this visit restored none. */
-function readListState<Context>(
-  state: Readonly<Record<string, unknown>> | null,
-): UiCardListState<Context> | undefined {
-  const list = state?.list;
-  return typeof list === 'object' && list !== null && !Array.isArray(list)
-    ? (list as UiCardListState<Context>)
-    : undefined;
 }

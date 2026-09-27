@@ -10,8 +10,9 @@ subset, the request and continuation contract and its evaluation over both publi
 surfaces; Recognition provides its session lifecycle, its catalog-validated candidate readings and
 the execution bounds around the preserved engines; Application assembles those components behind
 validated configuration and authenticated transports, and UserInterface provides the shell the
-dedicated pages, CardList and the card tools are built on, with Home's recent card activity and the
-catalog/search browser built over the Search and Catalog contracts Application supplies.
+dedicated pages, CardList and the card tools are built on, with Home's recent card activity, the
+catalog/search browser and the collection and card-details views built over the Search, Catalog and
+UserCards contracts Application supplies.
 
 Start with AGENTS.md for the documentation index and engineering principles.
 The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
@@ -47,6 +48,8 @@ npm run build            # compile the component public entry points into build/
 
 Focus a scope with a path filter, for example `npm run test:component -- public-contracts`. Component
 tests are organised as tests/component/<component>/ so one component's tests can be selected by path.
+Vitest shares a two-worker pool across component and integration suites to keep simultaneous
+PostgreSQL-in-WebAssembly startups from exhausting setup deadlines on hosts with many CPUs.
 The Python runner provisions the pinned `src/recognition/python/requirements-tests.txt` wheels into
 the ignored `.recognition-python/` environment once so the retained engine regressions run without
 extra setup. The check requires the complete 27-regression suite: when the dependencies are missing
@@ -119,8 +122,8 @@ exposing storage details or credentials, and reports a deadline as an unknown ou
 replayable operation names the receipt to recover. Catalog synchronization stays a separate job
 entry point and recognition inference a separate compute runtime reached through the authenticated
 client; the browser composition supplies UserInterface with the public settings, the authenticated
-transport, the Catalog and Search contracts and the Recognition contract over the preserved engines
-(docs/application.md#interface, docs/application.md#configuration-and-lifecycle).
+transport, the Catalog, Search and private-copy contracts and the Recognition contract over the
+preserved engines (docs/application.md#interface, docs/application.md#configuration-and-lifecycle).
 
 UserInterface presents the collection behind one shell (docs/user-interface.md#interface,
 docs/user-interface.md#pages-and-navigation): the URL identifies the dedicated view, including the
@@ -152,7 +155,17 @@ entries show their basic information and quantities, printing images load and re
 fragment, an unsupported expression stays a distinct reported failure, and opening an entry records
 it and presents its card details. Both pages hand the state of their list back through CardList's
 own capture and restoration contract, so the list decides how to re-acquire the window it held. The
-remaining dedicated pages and capture build on that in their own tasks.
+collection views build on the same boundaries (docs/user-interface.md#browsing-and-organization):
+the collection presents the account's owned cards, printings or physical copies — the level and
+text expression its URL names — with the physical-copy and intended counts the query evaluated kept
+distinct, individually selectable copies group by printing for the bulk changes that act on their
+explicit selected identities, and each entry opens the card, printing or copy details it names. The
+card-details page presents the published catalog information of the named level and corrects one
+physical copy's printing and language, finish and condition under the revision it read: a conflict
+or a failed edit keeps the unsaved change for review and retry. After a lost response, the outcome
+stays unknown while the current copy is read for review and revision-guarded retry; matching
+attributes cannot establish commitment. A saved outcome is presented only once the change reports
+it committed. The remaining dedicated pages and capture build on that in their own tasks.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without

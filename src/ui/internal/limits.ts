@@ -19,10 +19,12 @@ export const UI_LIMITS = {
   viewStates: 20,
   /** Characters one entry key or target identity may carry before the source answer is rejected. */
   entryKey: 500,
-  /** Characters one catalog search expression may carry before the route is rejected. */
+  /** Characters one browsing text expression (a catalog or collection query) may carry. */
   catalogQuery: 500,
   /** Entries one catalog page asks the Search contract for. */
   catalogPage: 50,
+  /** Printings one page of a card's published printings asks the Catalog contract for. */
+  printingPage: 100,
   /** Recent card entries Home presents for one account, most recent first. */
   recentCards: 24,
   /** Entries one CardList request asks a source for at most. */
@@ -33,4 +35,10 @@ export const UI_LIMITS = {
   fragmentBatch: 100,
   /** Items one entry's fragment result may present, so a broken source cannot grow one row. */
   fragmentItems: 20,
+  /**
+   * Copy references one private copy read asks for at most. The bound mirrors the copy references
+   * a UserCards read accepts, so a selection larger than one read is read in further bounded
+   * batches instead of being rejected by the provider.
+   */
+  copyBatch: 100,
 } as const;

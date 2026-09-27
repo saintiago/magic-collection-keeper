@@ -9,14 +9,27 @@
  * page implementation owns one page's content, its retained state and the sources and tools its
  * lists use, and each CardList owns its own capture, restoration and content loading. The browsing
  * pages present Home's bounded, account-isolated recent card activity and the catalog/search query
- * a URL names, both over the supplied Search and Catalog contracts. Application supplies the public
- * configuration, the authenticated transport and the component access, and the deployment supplies
- * the verified identity and its device capability. Other components import UserInterface through
- * this module only; its internal modules stay private to the component (docs/architecture.md,
- * .dependency-cruiser.mjs).
+ * a URL names, both over the supplied Search and Catalog contracts, and the collection pages
+ * present the account's owned records with their copy corrections over the supplied UserCards
+ * contract. Application supplies the public configuration, the authenticated transport and the
+ * component access, and the deployment supplies the verified identity and its device capability.
+ * Other components import UserInterface through this module only; its internal modules stay
+ * private to the component (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
 export { createBrowsePages } from './internal/browse.js';
+export {
+  copyChangeTool,
+  correctCopy,
+  createCopyAccess,
+  uiCopyConditions,
+  type UiCopyAccess,
+  type UiCopyChange,
+  type UiCopyCorrection,
+  type UiCopyCorrectionOutcome,
+  type UiCopyRead,
+} from './internal/copy-edits.js';
+export { createCollectionPages } from './internal/collection.js';
 export {
   cardListBasicContent,
   createCardList,
@@ -70,24 +83,31 @@ export {
 export {
   readUiCatalogFinish,
   readUiCatalogLevel,
+  readUiCollectionLevel,
   readUiView,
   uiCatalogFinishes,
   uiCatalogLevels,
+  uiCollectionLevels,
   uiHref,
   uiPageNames,
   uiViewTitle,
   UI_ROUTE_PREFIX,
   type UiCatalogLevel,
+  type UiCollectionLevel,
   type UiPageName,
   type UiView,
 } from './internal/routes.js';
 export {
   catalogSearchRequest,
+  collectionSearchRequest,
   createCatalogSearchAccess,
+  createCollectionSearchAccess,
   searchListEntry,
   uiEntryKey,
   type UiCatalogQuery,
   type UiCatalogSearchAccess,
+  type UiCollectionQuery,
+  type UiCollectionSearchAccess,
 } from './internal/search-source.js';
 export {
   createUserInterface,

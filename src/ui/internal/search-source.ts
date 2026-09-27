@@ -22,7 +22,7 @@ import type {
 
 import type { UiEntryImage } from './card-list.js';
 import type { UiEntryTarget, UiFragmentReader, UiListEntry, UiListSource } from './list.js';
-import type { UiCatalogLevel } from './routes.js';
+import type { UiCatalogLevel, UiCollectionLevel } from './routes.js';
 
 /** One catalog query: the text expression and the structured controls the page presents. */
 export interface UiCatalogQuery {
@@ -33,6 +33,17 @@ export interface UiCatalogQuery {
   readonly owned: boolean;
   /** Required printing finish, or null when the query does not constrain it. */
   readonly finish: Finish | null;
+}
+
+/**
+ * One collection query: the text expression and the level of the account's owned records the
+ * collection view presents. The owned membership is not a control of this query — every collection
+ * entry is owned — so the adapter always evaluates it as the private criterion it is.
+ */
+export interface UiCollectionQuery {
+  /** Scryfall-compatible text expression; empty presents every owned entry of the level. */
+  readonly text: string;
+  readonly level: UiCollectionLevel;
 }
 
 /**
@@ -57,6 +68,27 @@ export function catalogSearchRequest(
     resultLevel: query.level,
     ...(text.length === 0 ? {} : { query: text }),
     ...(criteria.length === 0 ? {} : { criteria }),
+    pageSize,
+    ...(continuation === null ? {} : { continuation }),
+  };
+}
+
+/**
+ * One Search request for a collection query and a page boundary: the text expression stays one
+ * expression beside the owned criterion, so Search normalizes it into the same query model a
+ * catalog query with the owned control uses, and the opaque continuation names the page of the
+ * account-scoped query that produced it.
+ */
+export function collectionSearchRequest(
+  query: UiCollectionQuery,
+  pageSize: number,
+  continuation: string | null,
+): SearchRequestInput {
+  const text = query.text.trim();
+  return {
+    resultLevel: query.level,
+    ...(text.length === 0 ? {} : { query: text }),
+    criteria: [{ kind: 'owned' }],
     pageSize,
     ...(continuation === null ? {} : { continuation }),
   };
@@ -111,6 +143,13 @@ export interface UiCatalogSearchAccess {
   readonly images: UiFragmentReader<readonly UiEntryImage[]>;
 }
 
+/** One collection result's data access: the owned-record list source and its printing images. */
+export interface UiCollectionSearchAccess {
+  readonly source: UiListSource<UiCollectionQuery>;
+  /** Images of the printings the presented entries represent, read through Catalog. */
+  readonly images: UiFragmentReader<readonly UiEntryImage[]>;
+}
+
 /** Builds the list source and fragment readers of one catalog page over the supplied contracts. */
 export function createCatalogSearchAccess(
   search: SearchClient,
@@ -119,25 +158,48 @@ export function createCatalogSearchAccess(
   if (typeof search?.execute !== 'function') {
     throw new TypeError('The catalog page reads its results through the Search contract.');
   }
-  if (typeof catalog?.resolve !== 'function') {
-    throw new TypeError('Printing images are read through the Catalog contract.');
+  return {
+    source: createSearchSource(search, catalogSearchRequest),
+    images: createPrintingImagesReader(catalog),
+  };
+}
+
+/** Builds the owned-record list source and images reader of the collection view. */
+export function createCollectionSearchAccess(
+  search: SearchClient,
+  catalog: Catalog,
+): UiCollectionSearchAccess {
+  if (typeof search?.execute !== 'function') {
+    throw new TypeError('The collection page reads its results through the Search contract.');
   }
   return {
-    source: {
-      async load(request) {
-        const page = readSearchPage(
-          await search.execute(
-            catalogSearchRequest(request.context, request.pageSize, request.continuation),
-            request.signal,
-          ),
-        );
-        return {
-          entries: page.entries.map((entry) => searchListEntry(entry)),
-          continuation: page.continuation,
-        };
-      },
-    },
+    source: createSearchSource(search, collectionSearchRequest),
     images: createPrintingImagesReader(catalog),
+  };
+}
+
+/**
+ * One Search-backed list source: the adapter builds the request of its own presentation contract
+ * and keeps the provider's answer, so the list presents the membership, ordering and continuation
+ * Search evaluated rather than reconstructing them.
+ */
+function createSearchSource<Context>(
+  search: SearchClient,
+  build: (context: Context, pageSize: number, continuation: string | null) => SearchRequestInput,
+): UiListSource<Context> {
+  return {
+    async load(request) {
+      const page = readSearchPage(
+        await search.execute(
+          build(request.context, request.pageSize, request.continuation),
+          request.signal,
+        ),
+      );
+      return {
+        entries: page.entries.map((entry) => searchListEntry(entry)),
+        continuation: page.continuation,
+      };
+    },
   };
 }
 

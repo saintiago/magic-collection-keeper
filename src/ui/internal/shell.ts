@@ -70,7 +70,7 @@ const primaryLinks: readonly { readonly view: UiView; readonly label: string }[]
     view: { page: 'catalog', query: '', level: 'card', owned: false, finish: null },
     label: 'Catalog',
   },
-  { view: { page: 'collection' }, label: 'Collection' },
+  { view: { page: 'collection', query: '', level: 'card' }, label: 'Collection' },
   { view: { page: 'tags' }, label: 'Tags' },
   { view: { page: 'import' }, label: 'Import' },
 ];
@@ -784,12 +784,15 @@ function readRoot(value: unknown): Element {
 function readCapabilities(value: unknown): UserInterfaceCapabilities {
   const record = readObject(value);
   const request = record?.request;
+  const userCards = readObject(record?.userCards);
   if (
     record === null ||
     typeof record.createRecognition !== 'function' ||
     readObject(record.settings) === null ||
     typeof readObject(record.catalog)?.resolve !== 'function' ||
     typeof readObject(record.search)?.execute !== 'function' ||
+    typeof userCards?.readCopies !== 'function' ||
+    typeof userCards.correctCopy !== 'function' ||
     typeof request !== 'function' ||
     typeof (request as { endSession?: unknown }).endSession !== 'function'
   ) {

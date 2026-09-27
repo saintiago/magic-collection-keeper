@@ -132,6 +132,10 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     search: {
       execute: () => Promise.reject(new Error('The shell journey runs no search.')),
     },
+    userCards: {
+      readCopies: () => Promise.reject(new Error('The shell journey reads no copies.')),
+      correctCopy: () => Promise.reject(new Error('The shell journey corrects no copies.')),
+    },
     createRecognition: () => {
       throw new Error('The shell journey does not run recognition.');
     },
@@ -357,9 +361,9 @@ function asyncHomePage(
         }
         log.push(`async-presented:${redirect}`);
         if (redirect === 'replace') {
-          context.replace({ page: 'collection' });
+          context.replace({ page: 'collection', query: '', level: 'card' });
         } else {
-          context.navigate({ page: 'collection' });
+          context.navigate({ page: 'collection', query: '', level: 'card' });
         }
         if (rejectRedirect) {
           return Promise.reject(new Error('Departed presentation failure'));
@@ -473,7 +477,7 @@ function homePage(document: Document, log: string[]): UiPageDefinition {
       go.type = 'button';
       go.textContent = 'Go to collection';
       go.addEventListener('click', () => {
-        context.navigate({ page: 'collection' });
+        context.navigate({ page: 'collection', query: '', level: 'card' });
       });
       const answer = document.createElement('p');
       answer.id = 'home-dialog-answer';
@@ -526,7 +530,7 @@ function statePage(document: Document): UiPageDefinition {
       count.id = 'state-count';
       const open = document.createElement('a');
       open.id = 'state-open';
-      open.href = uiHref({ page: 'collection' });
+      open.href = uiHref({ page: 'collection', query: '', level: 'card' });
       open.textContent = 'Open collection';
       container.append(draft, selectMany, count, open);
 
@@ -695,7 +699,9 @@ function devicePage(document: Document, log: string[]): UiPageDefinition {
       });
       const replace = document.createElement('button');
       replace.textContent = 'Replace with collection';
-      replace.addEventListener('click', () => context.replace({ page: 'collection' }));
+      replace.addEventListener('click', () =>
+        context.replace({ page: 'collection', query: '', level: 'card' }),
+      );
       container.append(release, replace, result);
       context.signal.addEventListener('abort', () => {
         context.device.release();
