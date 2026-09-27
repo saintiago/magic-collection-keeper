@@ -11,9 +11,11 @@
  * from the next settled frame without another control — and the provider's accepted-identity
  * sequence suppresses a repeated observation, so one card never becomes two entries. A success cue
  * means a candidate was accepted into review, never that the card is owned; an unresolved capture
- * receives no success cue, and an attempt never repeats its error cue. Late readings of the same
- * capture are attached as alternatives, leaving the owner's reviewed values untouched, and a
- * comparison that finds no usable identity never retracts an accepted capture. An observation
+ * receives no success cue, geometry that does not admit a capture withdraws the cue of the frame
+ * before it instead of leaving a success cue presented for it, and an attempt never repeats its
+ * error cue. Late readings of the same capture are attached as alternatives, leaving the owner's
+ * reviewed values untouched, and a comparison that finds no usable identity never retracts an
+ * accepted capture. An observation
  * whose staging response was lost stays retained and is recovered by replaying it identically, so
  * the provider returns its recorded decision instead of the same capture staging changed content.
  * Recovery retains late alternatives and pauses new attempts until the writes resolve; its control
@@ -719,11 +721,18 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
     }
   }
 
-  /** Presents one attempt's outcome and the cue it earns, at most once each. */
+  /**
+   * Presents one attempt's outcome and the cue it earns, at most once each. Geometry guidance
+   * earns no cue of its own, so it withdraws the cue of the attempt before it: a frame that was
+   * never admitted is never presented with a success cue
+   * (docs/user-interface.md#capture-and-review).
+   */
   function settle(record: UiCaptureAttempt, outcome: UiCaptureOutcome, message: string): void {
     const cue = admission.settled(record.id, outcome, browser.performance.now());
     if (cue !== null) {
       presentCue(cue);
+    } else if (outcome === 'guidance') {
+      clearCue();
     }
     say(message, null);
   }
@@ -839,6 +848,11 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
 
   function presentCue(cue: UiCaptureCue): void {
     status.dataset.uiCaptureCue = cue;
+  }
+
+  /** Withdraws the presented cue, so no frame is presented with the cue of an earlier attempt. */
+  function clearCue(): void {
+    status.dataset.uiCaptureCue = 'idle';
   }
 
   /** Samples the live preview into a bounded brightness signature. */

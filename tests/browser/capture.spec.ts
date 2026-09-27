@@ -758,6 +758,94 @@ test('geometry decides admission independently of the identity the engine report
   expect(errors).toEqual([]);
 });
 
+/**
+ * One frame per documented geometry that does not admit a capture, with the feedback it earns:
+ * no-card, multiple-card and ambiguous geometry guide the owner without a cue, while a frame
+ * whose geometry is not established is unresolved with its bounded error cue
+ * (docs/user-interface.md#capture-and-review, docs/testing.md#userinterface).
+ */
+const nonAdmittingFrames: {
+  readonly name: string;
+  readonly reading: UiCaptureReading;
+  readonly message: string;
+  readonly cue: string;
+}[] = [
+  {
+    name: 'an empty frame',
+    reading: { status: 'unknown', cardPresence: 'none' },
+    message: 'Place one card inside the frame.',
+    cue: 'idle',
+  },
+  {
+    name: 'a frame holding more than one card',
+    reading: {
+      candidates: [hostName('ring')],
+      printingId: 'printing-ring',
+      cardPresence: 'multiple',
+    },
+    message: 'Wait until only one card is visible.',
+    cue: 'idle',
+  },
+  {
+    name: 'a frame with ambiguous geometry',
+    reading: {
+      candidates: [hostName('ring')],
+      printingId: 'printing-ring',
+      cardPresence: 'ambiguous',
+    },
+    message: 'Wait until only one card is visible.',
+    cue: 'idle',
+  },
+  {
+    name: 'a frame whose geometry is not established',
+    reading: {
+      candidates: [hostName('ring')],
+      printingId: 'printing-ring',
+      cardPresence: null,
+    },
+    message:
+      'The frame was not admitted as one card. Hold one card still to retry; no card was counted.',
+    cue: 'error',
+  },
+];
+
+for (const { name, reading, message, cue } of nonAdmittingFrames) {
+  test(`${name} after an accepted capture stages nothing and presents no success cue`, async ({
+    page,
+  }) => {
+    const errors = await openCapture(page);
+    await settleSessions(page, 0, []);
+    await control(page, 'scriptReading', {
+      candidates: [hostName('bolt')],
+      printingId: 'printing-bolt',
+    });
+    await page.click('#import-camera-start');
+    const staged = await requested<Record<string, unknown>>(page, 'captures');
+    await control(page, 'settleCapture', staged.id, {
+      outcome: 'admitted',
+      replayed: false,
+      session: captureSession(),
+      entry: captureEntry(),
+    });
+    // The frame after the accepted capture is the next one the runtime reports; scripting it for
+    // the attempts that follow keeps that frame presented while the journey observes it.
+    await control(page, 'scriptReading', reading);
+    await control(page, 'scriptReading', reading);
+    await expect(page.locator('#import-camera-status')).toHaveAttribute(
+      'data-ui-capture-cue',
+      'accepted',
+    );
+
+    // The frame that was not admitted stages nothing and is never presented with the success cue
+    // of the attempt before it.
+    await control(page, 'show', 'empty');
+    await expect(page.locator('#import-camera-status')).toHaveText(message);
+    await expect(page.locator('#import-camera-status')).toHaveAttribute('data-ui-capture-cue', cue);
+    expect(await control(page, 'captures')).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+}
+
 test('repeated lost responses retain the capture and its final alternatives through completion', async ({
   page,
 }) => {
