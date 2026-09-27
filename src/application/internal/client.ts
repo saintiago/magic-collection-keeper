@@ -50,6 +50,7 @@ import type {
   AssociationReadResult,
   AssociationRemovalResult,
   ChangeAssociationInput,
+  ConfirmImportInput,
   CopyChangeResult,
   CopyLocationResult,
   CopyId,
@@ -57,11 +58,30 @@ import type {
   CorrectCopyInput,
   CreateAssociationInput,
   CreateTagInput,
+  DiscardImportEntryInput,
+  DiscardImportSessionInput,
+  ImportCandidate,
+  ImportConfirmationResult,
+  ImportEntry,
+  ImportEntryChangeResult,
+  ImportEntryListResult,
+  ImportEntryState,
+  ImportOperationRecoveryResult,
+  ImportReceipt,
+  ImportSession,
+  ImportSessionChange,
+  ImportSessionListResult,
+  ImportSourceLine,
+  ImportStageResult,
   ListAssociationsOptions,
+  ListImportEntriesOptions,
+  ListImportSessionsOptions,
   PhysicalCopy,
   RemoveAssociationInput,
   RenameTagInput,
+  ReviewImportEntryInput,
   SetCopyLocationInput,
+  StageImportEntriesInput,
   Tag,
   TagChangeResult,
   TagListOptions,
@@ -254,7 +274,10 @@ export function createSearchClient(request: RequestTransport): SearchClient {
  * change is scoped to the caller at the backend boundary. Tags are read as bounded pages, a tag's
  * associations are listed under the same rule, copy corrections and association changes quote the
  * revision the caller read, and an operation that leaves records unchanged reports its failure
- * instead of an empty success.
+ * instead of an empty success. Pending imports are read as bounded session and entry pages, a
+ * staged line, review or discard quotes the entry identity the caller read, and a confirmation
+ * carries the operation identity a retry or recovery refers to
+ * (docs/user-cards.md#import-and-capture-state).
  */
 export interface UserCardsClient {
   /** Authorized copies of the requested references, with the references this account has none for. */
@@ -297,9 +320,46 @@ export interface UserCardsClient {
   ): Promise<AssociationRemovalResult>;
   /** The new single physical location of one copy, guarded by the revision the caller read. */
   setCopyLocation(input: SetCopyLocationInput, signal?: AbortSignal): Promise<CopyLocationResult>;
+  /** Page of the account's pending import sessions, ordered by stable session identity. */
+  listImportSessions(
+    options?: ListImportSessionsOptions,
+    signal?: AbortSignal,
+  ): Promise<ImportSessionListResult>;
+  /** Page of one pending import session's entries, in capture order. */
+  listImportEntries(
+    input: ListImportEntriesOptions,
+    signal?: AbortSignal,
+  ): Promise<ImportEntryListResult>;
+  /** Stages parsed or manually entered lines as pending entries of one session. */
+  stageImportEntries(
+    input: StageImportEntriesInput,
+    signal?: AbortSignal,
+  ): Promise<ImportStageResult>;
+  /** One pending entry's reviewed values, guarded by the revision the caller read. */
+  reviewImportEntry(
+    input: ReviewImportEntryInput,
+    signal?: AbortSignal,
+  ): Promise<ImportEntryChangeResult>;
+  /** Ends one pending entry without creating owned copies. */
+  discardImportEntry(
+    input: DiscardImportEntryInput,
+    signal?: AbortSignal,
+  ): Promise<ImportEntryChangeResult>;
+  /** Ends every pending entry of one import without creating owned copies. */
+  discardImportSession(
+    input: DiscardImportSessionInput,
+    signal?: AbortSignal,
+  ): Promise<ImportSessionChange>;
+  /** Confirms reviewed entries under one operation identity, creating their copies. */
+  confirmImport(input: ConfirmImportInput, signal?: AbortSignal): Promise<ImportConfirmationResult>;
+  /** The recorded outcome of one operation identity, or its explicit absence. */
+  recoverImportOperation(
+    operationId: string,
+    signal?: AbortSignal,
+  ): Promise<ImportOperationRecoveryResult>;
 }
 
-/** Builds the private contract the collection and organization views read and change through. */
+/** Builds the private contract the collection, organization and import views read and change through. */
 export function createUserCardsClient(request: RequestTransport): UserCardsClient {
   if (typeof request !== 'function') {
     throw new TypeError('createUserCardsClient requires the authenticated request contract.');
@@ -463,6 +523,123 @@ export function createUserCardsClient(request: RequestTransport): UserCardsClien
         },
       );
       return readCopyLocationResult(payload);
+    },
+
+    async listImportSessions(
+      options: ListImportSessionsOptions = {},
+      signal?: AbortSignal,
+    ): Promise<ImportSessionListResult> {
+      const path = withQuery(applicationRoutes.imports, {
+        pageSize: options.pageSize,
+        continuation: options.continuation,
+      });
+      return readImportSessionListResult(
+        await request(path, signal === undefined ? {} : { signal }),
+      );
+    },
+
+    async listImportEntries(
+      input: ListImportEntriesOptions,
+      signal?: AbortSignal,
+    ): Promise<ImportEntryListResult> {
+      const path = withQuery(
+        applicationPath(applicationRoutes.importEntries, { sessionId: input.sessionId }),
+        { pageSize: input.pageSize, continuation: input.continuation },
+      );
+      return readImportEntryListResult(await request(path, signal === undefined ? {} : { signal }));
+    },
+
+    async stageImportEntries(
+      input: StageImportEntriesInput,
+      signal?: AbortSignal,
+    ): Promise<ImportStageResult> {
+      const payload = await request(
+        applicationPath(applicationRoutes.importEntries, { sessionId: input.sessionId }),
+        {
+          method: 'POST',
+          // The session identity is the route; the lines and their source stay the body.
+          body: JSON.stringify({ source: input.source, entries: input.entries }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      return readImportStageResult(payload);
+    },
+
+    async reviewImportEntry(
+      input: ReviewImportEntryInput,
+      signal?: AbortSignal,
+    ): Promise<ImportEntryChangeResult> {
+      const payload = await request(
+        applicationPath(applicationRoutes.importEntryReview, { entryId: input.entryId }),
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            expectedRevision: input.expectedRevision,
+            printingId: input.printingId,
+            finish: input.finish,
+            condition: input.condition,
+            quantity: input.quantity,
+          }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      return readImportEntryChangeResult(payload);
+    },
+
+    async discardImportEntry(
+      input: DiscardImportEntryInput,
+      signal?: AbortSignal,
+    ): Promise<ImportEntryChangeResult> {
+      const payload = await request(
+        applicationPath(applicationRoutes.importEntryDiscard, { entryId: input.entryId }),
+        {
+          method: 'POST',
+          body: JSON.stringify({ expectedRevision: input.expectedRevision }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      return readImportEntryChangeResult(payload);
+    },
+
+    async discardImportSession(
+      input: DiscardImportSessionInput,
+      signal?: AbortSignal,
+    ): Promise<ImportSessionChange> {
+      const payload = await request(
+        applicationPath(applicationRoutes.importDiscard, { sessionId: input.sessionId }),
+        {
+          method: 'POST',
+          body: JSON.stringify({ expectedRevision: input.expectedRevision }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      return readImportSessionChange(payload);
+    },
+
+    async confirmImport(
+      input: ConfirmImportInput,
+      signal?: AbortSignal,
+    ): Promise<ImportConfirmationResult> {
+      const payload = await request(
+        applicationPath(applicationRoutes.importConfirmation, { sessionId: input.sessionId }),
+        {
+          method: 'POST',
+          body: JSON.stringify({ operationId: input.operationId, entries: input.entries }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      return readImportConfirmationResult(payload);
+    },
+
+    async recoverImportOperation(
+      operationId: string,
+      signal?: AbortSignal,
+    ): Promise<ImportOperationRecoveryResult> {
+      const payload = await request(
+        applicationPath(applicationRoutes.importOperation, { operationId }),
+        signal === undefined ? {} : { signal },
+      );
+      return readImportOperationRecoveryResult(payload);
     },
   };
 }
@@ -1223,6 +1400,340 @@ function unreadableTags(): ApplicationError {
 
 function unreadableAssociations(): ApplicationError {
   return new ApplicationError('unavailable', 'The association response could not be read.');
+}
+
+/**
+ * Reads one pending import session. A response outside the declared shape is unavailable rather
+ * than an import without pending entries (docs/user-cards.md#import-and-capture-state).
+ */
+function readImportSession(value: unknown): ImportSession | null {
+  const session = readObject(value);
+  const sessionId = session?.sessionId;
+  const sourceKind = session?.sourceKind;
+  const sourceId = session?.sourceId;
+  const sourceReference = session?.sourceReference ?? null;
+  const state = session?.state;
+  const pendingEntries = session?.pendingEntries;
+  const confirmedEntries = session?.confirmedEntries;
+  const discardedEntries = session?.discardedEntries;
+  const revision = session?.revision;
+  if (
+    session === null ||
+    !isIdentifier(sessionId) ||
+    !isIdentifier(sourceKind) ||
+    !isIdentifier(sourceId) ||
+    (sourceReference !== null && !isIdentifier(sourceReference)) ||
+    !isImportState(state) ||
+    !isSearchCount(pendingEntries) ||
+    !isSearchCount(confirmedEntries) ||
+    !isSearchCount(discardedEntries) ||
+    !isCopyRevision(revision)
+  ) {
+    return null;
+  }
+  return {
+    sessionId,
+    sourceKind,
+    sourceId,
+    sourceReference,
+    state,
+    pendingEntries,
+    confirmedEntries,
+    discardedEntries,
+    revision,
+  };
+}
+
+/** One stored recognition alternative; a value outside the declared shape is not a candidate. */
+function readImportCandidate(value: unknown): ImportCandidate | null {
+  const candidate = readObject(value);
+  const printingId = candidate?.printingId;
+  const provider = candidate?.provider;
+  const evidence = candidate?.evidence;
+  if (
+    candidate === null ||
+    !isIdentifier(printingId) ||
+    !isIdentifier(provider) ||
+    !isIdentifier(evidence)
+  ) {
+    return null;
+  }
+  return { printingId, provider, evidence };
+}
+
+/** The parsed source line of one pending entry, or null when it carries none. */
+function readImportSourceLine(value: unknown): ImportSourceLine | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const line = readObject(value);
+  const name = line?.name ?? null;
+  const section = line?.section ?? null;
+  const set = line?.set ?? null;
+  const collectorNumber = line?.collectorNumber ?? null;
+  const language = line?.language ?? null;
+  const finish = line?.finish ?? null;
+  const declaredQuantity = line?.declaredQuantity;
+  const problem = line?.problem ?? null;
+  if (
+    line === null ||
+    !isTextOrNull(name) ||
+    !isTextOrNull(section) ||
+    !isTextOrNull(set) ||
+    !isTextOrNull(collectorNumber) ||
+    !isTextOrNull(language) ||
+    (finish !== null && !isIdentifier(finish)) ||
+    !isSearchCount(declaredQuantity) ||
+    !isTextOrNull(problem)
+  ) {
+    return null;
+  }
+  return {
+    name,
+    section,
+    set,
+    collectorNumber,
+    language,
+    finish: finish as ImportSourceLine['finish'],
+    declaredQuantity,
+    problem,
+  };
+}
+
+/**
+ * Reads one pending entry; a response outside the declared shape is unavailable rather than a
+ * pending entry the review could not confirm (docs/user-cards.md#import-and-capture-state).
+ */
+function readImportEntry(value: unknown): ImportEntry | null {
+  const entry = readObject(value);
+  const entryId = entry?.entryId;
+  const sessionId = entry?.sessionId;
+  const position = entry?.position;
+  const state = entry?.state;
+  const printingId = entry?.printingId ?? null;
+  const finish = entry?.finish ?? null;
+  const condition = entry?.condition ?? null;
+  const quantity = entry?.quantity;
+  const candidates = readImportCandidates(entry?.candidates);
+  const sourceLine = readImportSourceLine(entry?.sourceLine);
+  const revision = entry?.revision;
+  if (
+    entry === null ||
+    !isIdentifier(entryId) ||
+    !isIdentifier(sessionId) ||
+    !isSearchCount(position) ||
+    !isImportState(state) ||
+    (printingId !== null && !isIdentifier(printingId)) ||
+    (finish !== null && !isIdentifier(finish)) ||
+    (condition !== null && !isIdentifier(condition)) ||
+    !isSearchCount(quantity) ||
+    candidates === null ||
+    (entry.sourceLine !== null && sourceLine === null) ||
+    !isCopyRevision(revision)
+  ) {
+    return null;
+  }
+  return {
+    entryId,
+    sessionId,
+    position,
+    state,
+    printingId,
+    finish: finish as ImportEntry['finish'],
+    condition: condition as ImportEntry['condition'],
+    quantity,
+    candidates,
+    sourceLine,
+    revision,
+  };
+}
+
+/** The stored recognition alternatives of one entry; null when the response is unreadable. */
+function readImportCandidates(value: unknown): ImportCandidate[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const candidates: ImportCandidate[] = [];
+  for (const candidate of value) {
+    const read = readImportCandidate(candidate);
+    if (read === null) {
+      return null;
+    }
+    candidates.push(read);
+  }
+  return candidates;
+}
+
+function readImportEntryRecords(value: unknown): ImportEntry[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const entries: ImportEntry[] = [];
+  for (const candidate of value) {
+    const entry = readImportEntry(candidate);
+    if (entry === null) {
+      return null;
+    }
+    entries.push(entry);
+  }
+  return entries;
+}
+
+/** Reads one page of pending sessions; a page without a readable continuation ends nothing. */
+function readImportSessionListResult(payload: unknown): ImportSessionListResult {
+  const record = readObject(payload);
+  const privateRevision = record?.privateRevision;
+  const sessions = record?.sessions;
+  const continuation = record?.continuation ?? null;
+  const read: ImportSession[] = [];
+  let readable = Array.isArray(sessions);
+  if (Array.isArray(sessions)) {
+    for (const candidate of sessions) {
+      const session = readImportSession(candidate);
+      if (session === null) {
+        readable = false;
+        break;
+      }
+      read.push(session);
+    }
+  }
+  if (
+    record === null ||
+    !isIdentifier(privateRevision) ||
+    !readable ||
+    (continuation !== null && !isIdentifier(continuation))
+  ) {
+    throw unreadableImports();
+  }
+  return { privateRevision, sessions: read, continuation };
+}
+
+/** Reads one page of a session's pending entries with the session the page belongs to. */
+function readImportEntryListResult(payload: unknown): ImportEntryListResult {
+  const record = readObject(payload);
+  const privateRevision = record?.privateRevision;
+  const session = readImportSession(record?.session);
+  const entries = readImportEntryRecords(record?.entries);
+  const continuation = record?.continuation ?? null;
+  if (
+    record === null ||
+    !isIdentifier(privateRevision) ||
+    session === null ||
+    entries === null ||
+    (continuation !== null && !isIdentifier(continuation))
+  ) {
+    throw unreadableImports();
+  }
+  return { privateRevision, session, entries, continuation };
+}
+
+/** Reads one staging outcome: the staged entries, the session and how many lines were new. */
+function readImportStageResult(payload: unknown): ImportStageResult {
+  const record = readObject(payload);
+  const privateRevision = record?.privateRevision;
+  const session = readImportSession(record?.session);
+  const entries = readImportEntryRecords(record?.entries);
+  const staged = record?.staged;
+  const replayed = record?.replayed;
+  if (
+    record === null ||
+    !isIdentifier(privateRevision) ||
+    session === null ||
+    entries === null ||
+    !isSearchCount(staged) ||
+    typeof replayed !== 'boolean'
+  ) {
+    throw unreadableImports();
+  }
+  return { privateRevision, session, entries, staged, replayed };
+}
+
+/** Reads one entry change: the committed entry and the session it stays pending in. */
+function readImportEntryChangeResult(payload: unknown): ImportEntryChangeResult {
+  const record = readObject(payload);
+  const privateRevision = record?.privateRevision;
+  const session = readImportSession(record?.session);
+  const entry = readImportEntry(record?.entry);
+  if (record === null || !isIdentifier(privateRevision) || session === null || entry === null) {
+    throw unreadableImports();
+  }
+  return { privateRevision, session, entry };
+}
+
+/** Reads one session change: the session a discard or review left behind. */
+function readImportSessionChange(payload: unknown): ImportSessionChange {
+  const record = readObject(payload);
+  const privateRevision = record?.privateRevision;
+  const session = readImportSession(record?.session);
+  if (record === null || !isIdentifier(privateRevision) || session === null) {
+    throw unreadableImports();
+  }
+  return { privateRevision, session };
+}
+
+/** One recorded confirmation: the operation, its acquisition source and the copies it created. */
+function readImportReceipt(value: unknown): ImportReceipt | null {
+  const receipt = readObject(value);
+  const operationId = receipt?.operationId;
+  const sessionId = receipt?.sessionId;
+  const sourceKind = receipt?.sourceKind;
+  const sourceId = receipt?.sourceId;
+  const copies = readCopyRecords(receipt?.copies);
+  if (
+    receipt === null ||
+    !isIdentifier(operationId) ||
+    !isIdentifier(sessionId) ||
+    !isIdentifier(sourceKind) ||
+    !isIdentifier(sourceId) ||
+    copies === null
+  ) {
+    return null;
+  }
+  return { operationId, sessionId, sourceKind, sourceId, copies };
+}
+
+/** Reads one confirmation: its receipt, whether it replayed a recorded outcome and its revision. */
+function readImportConfirmationResult(payload: unknown): ImportConfirmationResult {
+  const record = readObject(payload);
+  const receipt = readImportReceipt(record);
+  const replayed = record?.replayed;
+  const privateRevision = record?.privateRevision;
+  if (
+    record === null ||
+    receipt === null ||
+    typeof replayed !== 'boolean' ||
+    !isIdentifier(privateRevision)
+  ) {
+    throw unreadableImports();
+  }
+  return { ...receipt, replayed, privateRevision };
+}
+
+/** Reads one operation recovery: the recorded receipt or its explicit absence. */
+function readImportOperationRecoveryResult(payload: unknown): ImportOperationRecoveryResult {
+  const record = readObject(payload);
+  if (record?.outcome === 'absent') {
+    return { outcome: 'absent' };
+  }
+  const receipt = readImportReceipt(record?.receipt);
+  if (record?.outcome !== 'recorded' || receipt === null) {
+    throw unreadableImports();
+  }
+  return { outcome: 'recorded', receipt };
+}
+
+/** Entry and session lifecycle states of a pending import. */
+function isImportState(value: unknown): value is ImportEntryState {
+  return value === 'pending' || value === 'confirmed' || value === 'discarded';
+}
+
+/** A text field of a parsed source line: a bounded string or an explicit null. */
+function isTextOrNull(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function unreadableImports(): ApplicationError {
+  return new ApplicationError('unavailable', 'The import response could not be read.');
 }
 
 function readObject(value: unknown): Readonly<Record<string, unknown>> | null {

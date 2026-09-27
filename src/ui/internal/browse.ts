@@ -37,6 +37,7 @@ import {
   readUiCatalogLevel,
   uiCatalogFinishes,
   uiCatalogLevels,
+  uiFinishLabel,
   uiHref,
   type UiView,
 } from './routes.js';
@@ -263,7 +264,7 @@ function finishSelect(document: Document): HTMLSelectElement {
   for (const finish of uiCatalogFinishes) {
     const option = document.createElement('option');
     option.value = finish;
-    option.textContent = finish === 'nonfoil' ? 'Nonfoil' : finish === 'foil' ? 'Foil' : 'Etched';
+    option.textContent = uiFinishLabel(finish);
     select.append(option);
   }
   return select;

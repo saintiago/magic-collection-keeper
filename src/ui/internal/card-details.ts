@@ -45,7 +45,7 @@ import {
   readPageState,
 } from './page-support.js';
 import type { UiPageDefinition } from './pages.js';
-import { uiCatalogFinishes, uiHref, type UiView } from './routes.js';
+import { uiCatalogFinishes, uiFinishLabel, uiHref, type UiView } from './routes.js';
 
 /**
  * The copy form's values as the page keeps them: the language the printing choices are narrowed
@@ -481,7 +481,7 @@ export function createCardDetailsPage(): UiPageDefinition {
               ? uiCatalogFinishes
               : selected.finishes;
           finish.replaceChildren(
-            ...finishes.map((value) => option(document, value, finishLabel(value))),
+            ...finishes.map((value) => option(document, value, uiFinishLabel(value))),
           );
           const finishValue = finishes.includes(wanted.finish as Finish)
             ? wanted.finish
@@ -822,10 +822,6 @@ function printingEntry(card: CardRecord, printing: PrintingRecord): UiListEntry 
 /** One printing as the page presents it: its edition, collector number and language. */
 function printingLine(printing: PrintingRecord): string {
   return `${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
-}
-
-function finishLabel(finish: Finish): string {
-  return finish === 'nonfoil' ? 'Nonfoil' : finish === 'foil' ? 'Foil' : 'Etched';
 }
 
 function conditionLabel(condition: string | null): string {

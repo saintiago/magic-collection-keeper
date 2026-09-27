@@ -656,6 +656,176 @@ describe('user cards client', () => {
     expect(movedResult.location).toBeNull();
     expect(movedResult.copy.revision).toBe(6);
   });
+
+  it('reads, stages, reviews and confirms pending imports through their routes', async () => {
+    const session = {
+      sessionId: 'manual',
+      sourceKind: 'manual',
+      sourceId: 'manual',
+      sourceReference: null,
+      state: 'pending',
+      pendingEntries: 1,
+      confirmedEntries: 0,
+      discardedEntries: 0,
+      revision: 2,
+    };
+    const storedEntry = {
+      entryId: 'entry-1',
+      sessionId: 'manual',
+      position: 1,
+      state: 'pending',
+      printingId: 'printing-1',
+      finish: 'nonfoil',
+      condition: null,
+      quantity: 1,
+      candidates: [],
+      sourceLine: null,
+      revision: 3,
+    };
+    const { fetch, calls } = jsonFetch({
+      privateRevision: 'private-1',
+      session,
+      entries: [storedEntry],
+      continuation: null,
+    });
+    const client = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch,
+      }),
+    );
+
+    const page = await client.listImportEntries({
+      sessionId: 'manual',
+      pageSize: 50,
+      continuation: 'pending-1',
+    });
+
+    expect(calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/imports/manual/entries?pageSize=50&continuation=pending-1',
+    );
+    expect(calls[0]?.init.method).toBe('GET');
+    expect(page.session.sourceKind).toBe('manual');
+    expect(page.entries).toEqual([storedEntry]);
+
+    const stage = jsonFetch({
+      privateRevision: 'private-2',
+      session,
+      entries: [{ ...storedEntry, printingId: 'printing-2' }],
+      staged: 1,
+      replayed: false,
+    });
+    const stageClient = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch: stage.fetch,
+      }),
+    );
+
+    const staged = await stageClient.stageImportEntries({
+      sessionId: 'manual',
+      source: { kind: 'manual', id: 'manual' },
+      entries: [{ entryId: 'entry-2', printingId: 'printing-2', quantity: 2 }],
+    });
+
+    expect(stage.calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/imports/manual/entries',
+    );
+    expect(stage.calls[0]?.init.body).toBe(
+      '{"source":{"kind":"manual","id":"manual"},"entries":[{"entryId":"entry-2","printingId":"printing-2","quantity":2}]}',
+    );
+    expect(staged.staged).toBe(1);
+
+    const review = jsonFetch({
+      privateRevision: 'private-3',
+      session,
+      entry: { ...storedEntry, quantity: 2, revision: 4 },
+    });
+    const reviewClient = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch: review.fetch,
+      }),
+    );
+
+    const reviewed = await reviewClient.reviewImportEntry({
+      entryId: 'entry/1',
+      expectedRevision: 3,
+      printingId: 'printing-1',
+      finish: 'foil',
+      condition: null,
+      quantity: 2,
+    });
+
+    expect(review.calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/imports/entries/entry%2F1/review',
+    );
+    expect(review.calls[0]?.init.body).toBe(
+      '{"expectedRevision":3,"printingId":"printing-1","finish":"foil","condition":null,"quantity":2}',
+    );
+    expect(reviewed.entry.revision).toBe(4);
+
+    const confirmation = jsonFetch({
+      operationId: 'operation-1',
+      sessionId: 'manual',
+      sourceKind: 'manual',
+      sourceId: 'manual',
+      copies: [
+        {
+          copyId: 'copy-1',
+          printingId: 'printing-1',
+          finish: 'nonfoil',
+          condition: null,
+          revision: 1,
+        },
+      ],
+      replayed: true,
+      privateRevision: 'private-4',
+    });
+    const confirmationClient = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch: confirmation.fetch,
+      }),
+    );
+
+    const confirmed = await confirmationClient.confirmImport({
+      operationId: 'operation-1',
+      sessionId: 'manual',
+      entries: [{ entryId: 'entry-1', expectedRevision: 4 }],
+    });
+
+    expect(confirmation.calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/imports/manual/confirmation',
+    );
+    expect(confirmation.calls[0]?.init.body).toBe(
+      '{"operationId":"operation-1","entries":[{"entryId":"entry-1","expectedRevision":4}]}',
+    );
+    expect(confirmed.replayed).toBe(true);
+    expect(confirmed.copies.map((copy) => copy.copyId)).toEqual(['copy-1']);
+  });
+
+  it('reads the recorded outcome of one confirmation operation', async () => {
+    const { fetch, calls } = jsonFetch({ outcome: 'absent' });
+    const client = createUserCardsClient(
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: () => 'id-token-value',
+        fetch,
+      }),
+    );
+
+    await expect(client.recoverImportOperation('operation/1')).resolves.toEqual({
+      outcome: 'absent',
+    });
+    expect(calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/imports/operations/operation%2F1',
+    );
+  });
 });
 
 describe('browser application', () => {

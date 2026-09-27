@@ -44,6 +44,7 @@ import {
   readUiCollectionLevel,
   uiCatalogFinishes,
   uiCollectionLevels,
+  uiFinishLabel,
   uiHref,
   type UiView,
 } from './routes.js';
@@ -269,13 +270,7 @@ function placeholderOption(document: Document, label: string): HTMLOptionElement
 }
 
 function finishOptions(document: Document): HTMLOptionElement[] {
-  return uiCatalogFinishes.map((finish) =>
-    valueOption(
-      document,
-      finish,
-      finish === 'nonfoil' ? 'Nonfoil' : finish === 'foil' ? 'Foil' : 'Etched',
-    ),
-  );
+  return uiCatalogFinishes.map((finish) => valueOption(document, finish, uiFinishLabel(finish)));
 }
 
 function valueOption(document: Document, value: string, label: string): HTMLOptionElement {

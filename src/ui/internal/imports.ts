@@ -1,0 +1,1642 @@
+/**
+ * Import page of the UserInterface (docs/user-interface.md#capture-and-review,
+ * docs/user-cards.md#import-and-capture-state).
+ *
+ * The page stages manually entered cards as pending entries and presents the account's pending
+ * imports for review. A manual entry searches the catalog for printings, and the selected printing
+ * becomes one pending entry carrying the quantity, finish and condition the owner chose; a success
+ * cue means the line was accepted into review, never that it is owned. Pending entries are read
+ * through the supplied import operations and presented through the list boundary, each row exposing
+ * the reviewed printing, finish, condition and quantity, its stored recognition alternatives and the
+ * controls that correct them under the revision the page read. A confirmation quotes the reviewed
+ * revisions under one operation identity and reports the copies its receipt names; a lost response
+ * is recovered through that recorded outcome instead of being presented as a saved change
+ * (docs/user-cards.md#interface).
+ *
+ * The page owns its form input, its per-entry review drafts and the session it presents, and keeps
+ * them with its history entry; the lists own their windows, selection and restoration, and the
+ * pending entries and operation receipts themselves stay with UserCards. Leaving the view releases
+ * its lists and aborts their work, so a late response cannot change another view or account.
+ */
+
+import type { SearchClient } from '../../application/index.js';
+import type { CardRecord, Catalog, Finish, PrintingRecord } from '../../catalog/index.js';
+import type {
+  ConfirmImportEntryInput,
+  CopyCondition,
+  ImportEntry,
+  ImportReceipt,
+  ImportSession,
+  ImportSessionListResult,
+  ImportStageResult,
+  ImportSourceLine,
+} from '../../usercards/index.js';
+
+import {
+  cardListBasicContent,
+  createCardList,
+  type UiCardList,
+  type UiCardListState,
+  type UiCardListTool,
+} from './card-list.js';
+import { uiCopyConditions } from './copy-edits.js';
+import {
+  confirmImport,
+  createImportAccess,
+  discardImportEntry,
+  discardImportSession,
+  reviewImportEntry,
+  stageImportLines,
+  uiImportCandidates,
+  uiImportIdentity,
+  uiImportSourceLabel,
+  type UiImportLine,
+} from './import-edits.js';
+import { type UiChangeCommit } from './failure.js';
+import { UI_LIMITS } from './limits.js';
+import type {
+  UiEntryTarget,
+  UiFragmentReader,
+  UiListEntry,
+  UiListSource,
+  UiOperationOutcome,
+  UiToolRequest,
+} from './list.js';
+import type { UiPageDefinition } from './pages.js';
+import {
+  controlLabel,
+  readListState,
+  readPageState,
+  selectControl,
+  type UiSelectOption,
+} from './page-support.js';
+import { uiCatalogFinishes, uiFinishLabel } from './routes.js';
+import { createCatalogSearchAccess, uiEntryKey, type UiCatalogQuery } from './search-source.js';
+
+/** The one manual entry queue of an account; its lines are reviewed and confirmed like any import. */
+const manualImport = {
+  sessionId: 'manual',
+  source: { kind: 'manual', id: 'manual' },
+} as const;
+
+/** Largest pending quantity one manual line may declare; the value mirrors the provider's bound. */
+export const uiMaxImportQuantity = 100;
+
+/** The Import page: manual entry beside the pending review and confirmation of one import. */
+export function createImportPages(): readonly UiPageDefinition[] {
+  return [importPage()];
+}
+
+/** One pending entry as the page interprets it: its stored record and the catalog record it names. */
+interface UiPendingRecord {
+  readonly entry: ImportEntry;
+  /** Printing the entry names, or null while the entry is unresolved. */
+  readonly printing: PrintingRecord | null;
+  /** Card of the printing, used to render the entry's basic information. */
+  readonly card: CardRecord | null;
+}
+
+/** Unsaved review input of one entry, kept outside the rendered controls. */
+interface UiReviewDraft {
+  query: string;
+  printingId: string;
+  finish: string;
+  condition: string;
+  quantity: string;
+}
+
+/** One manual line a failed or uncertain staging keeps, so its retry reuses its identity. */
+interface UiStagingDraft {
+  readonly entryId: string;
+  readonly finish: string;
+  readonly condition: string;
+  readonly quantity: number;
+}
+
+/** One confirmation the page keeps, so a retry of the same reviewed entries reuses its identity. */
+interface UiConfirmationDraft {
+  readonly operationId: string;
+  readonly entries: readonly ConfirmImportEntryInput[];
+}
+
+/** One presented pending-entry editor, redrawn as its draft or its stored record changes. */
+interface UiImportEditor {
+  readonly controls: HTMLSpanElement;
+  readonly entry: UiListEntry;
+  readonly status: HTMLParagraphElement;
+}
+
+function importPage(): UiPageDefinition {
+  return {
+    page: 'import',
+    mount(container, context) {
+      const document = container.ownerDocument;
+      const access = createImportAccess(context.capabilities.userCards);
+      const catalog = context.capabilities.catalog;
+      const search = context.capabilities.search;
+      const restored = readPageState(context.restored?.state);
+      const presented = Promise.withResolvers<void>();
+      // A page whose presentation the shell never awaits must still not surface a rejection.
+      presented.promise.catch(() => {});
+      let closed = false;
+      context.signal.addEventListener(
+        'abort',
+        () => {
+          closed = true;
+        },
+        { once: true },
+      );
+
+      const manualHeading = text(document, 'h3', 'import-manual-heading', 'Manual entry');
+      const manualForm = document.createElement('form');
+      manualForm.id = 'import-manual';
+      const manual = readManualDraft(restored?.manual);
+      const query = textInput(document, 'import-manual-query', manual.text);
+      query.type = 'search';
+      query.maxLength = UI_LIMITS.catalogQuery;
+      const quantity = numberInput(
+        document,
+        'import-manual-quantity',
+        manual.quantity,
+        uiMaxImportQuantity,
+      );
+      const finish = select(document, finishOptions(), manual.finish);
+      finish.id = 'import-manual-finish';
+      const condition = select(document, conditionOptions(), manual.condition);
+      condition.id = 'import-manual-condition';
+      const manualSubmit = submitButton(document, 'import-manual-submit', 'Find cards');
+      manualForm.append(
+        controlLabel(document, 'Card', query),
+        controlLabel(document, 'Quantity', quantity),
+        controlLabel(document, 'Finish', finish),
+        controlLabel(document, 'Condition', condition),
+        manualSubmit,
+      );
+      const manualStatus = statusLine(document, 'import-manual-status');
+      const resultsHost = document.createElement('div');
+      resultsHost.id = 'import-results';
+      const resultsHeading = text(document, 'h3', 'import-results-heading', 'Add a printing');
+
+      const reviewHeading = text(document, 'h3', 'import-review-heading', 'Pending review');
+      const sessionSelect = document.createElement('select');
+      sessionSelect.id = 'import-session';
+      const sessionsMore = button(document, 'import-sessions-more', 'More imports');
+      sessionsMore.hidden = true;
+      const refresh = button(document, 'import-refresh', 'Refresh imports');
+      const reviewStatus = statusLine(document, 'import-review-status');
+      const pendingHost = document.createElement('div');
+      pendingHost.id = 'import-pending';
+      const discard = button(document, 'import-discard-session', 'Discard this import');
+      discard.disabled = true;
+      container.append(
+        manualHeading,
+        manualForm,
+        manualStatus,
+        resultsHeading,
+        resultsHost,
+        reviewHeading,
+        controlLabel(document, 'Import', sessionSelect),
+        sessionsMore,
+        refresh,
+        reviewStatus,
+        pendingHost,
+        discard,
+      );
+
+      /** Session whose pending entries the review presents; null before one is read. */
+      let sessionId: string | null = readSessionId(restored?.sessionId);
+      /** Pending sessions the account reported, oldest page first. */
+      let sessions: readonly ImportSession[] = [];
+      let sessionsContinuation: string | null = null;
+      /** Session record the pending entries were read with; its revision guards a discard. */
+      let session: ImportSession | null = null;
+      /** Stored records of the presented pending entries, keyed by their entry key. */
+      const records = new Map<string, UiPendingRecord>();
+      /** Per-entry messages the page presents, kept across the redraws of their editor. */
+      const messages = new Map<string, string>();
+      /** Printings one row's own search offered, keyed by entry identity. */
+      const printings = new Map<string, readonly PrintingRecord[]>();
+      /** Unsaved manual lines kept for an idempotent retry, keyed by the entry key they stage. */
+      const staging = readStagingDrafts(restored?.staging);
+      /** Unsaved review input per entry, kept across redraws and with the history entry. */
+      const drafts = readReviewDrafts(restored?.review);
+      let confirmation = readConfirmationDraft(restored?.confirmation);
+      let results: UiCardList<UiCatalogQuery> | null = null;
+      let pending: UiCardList<string> | null = null;
+      /** The retained list states, kept while the lists are not composed yet. */
+      const retainedResults = readPageState(restored?.results);
+      const retainedPending = readRetainedPending(restored?.pending, sessionId);
+
+      manualForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        findCards();
+      });
+      sessionSelect.addEventListener('change', () => {
+        present(readSessionId(sessionSelect.value));
+      });
+      sessionsMore.addEventListener('click', () => {
+        void readSessions(sessionsContinuation, true);
+      });
+      refresh.addEventListener('click', () => {
+        void reconcileImport();
+      });
+      discard.addEventListener('click', () => {
+        void discardImport();
+      });
+
+      if (retainedResults !== null) {
+        composeResults(readListState<UiCatalogQuery>(retainedResults));
+      }
+      if (retainedPending !== null) {
+        composePending(retainedPending.sessionId, readListState<string>(retainedPending.state));
+      }
+      void open();
+
+      return {
+        capture: captureState,
+        presented: () => presented.promise,
+        dispose: () => {
+          results?.dispose();
+          pending?.dispose();
+        },
+      };
+
+      /** State this page retains for its history entry: its draft input and its lists' states. */
+      function captureState(): unknown {
+        return {
+          sessionId,
+          manual: {
+            text: query.value,
+            quantity: quantity.value,
+            finish: finish.value,
+            condition: condition.value,
+          },
+          // Unsaved lines and review input stay with the entry, so leaving the view and returning to
+          // it keeps the edits the user must review and retry
+          // (docs/user-interface.md#state-ownership-and-restoration).
+          staging: Object.fromEntries([...staging].map(([key, line]) => [key, { ...line }])),
+          review: Object.fromEntries([...drafts].map(([id, draft]) => [id, { ...draft }])),
+          confirmation:
+            confirmation === null
+              ? null
+              : {
+                  operationId: confirmation.operationId,
+                  entries: confirmation.entries.map((entry) => ({ ...entry })),
+                },
+          // A list not composed yet keeps the state its entry handed back instead of overwriting it
+          // with a partially presented view (docs/user-interface.md#state-ownership-and-restoration).
+          results: results === null ? retainedResults : { list: results.capture() },
+          pending:
+            pending === null
+              ? retainedPending
+              : sessionId === null
+                ? null
+                : { sessionId, list: pending.capture() },
+        };
+      }
+
+      /** Reads the account's pending sessions and presents the review of the chosen one. */
+      async function open(): Promise<void> {
+        await readSessions(null, false);
+        if (closed) {
+          return;
+        }
+        const target = sessionId ?? defaultSessionId(sessions);
+        present(target);
+        const restorations: (Promise<void> | null)[] = [
+          results?.restoration?.presented ?? null,
+          pending?.restoration?.presented ?? null,
+        ];
+        const outstanding = restorations.filter(
+          (restoration): restoration is Promise<void> => restoration !== null,
+        );
+        if (outstanding.length === 0) {
+          presented.resolve();
+          return;
+        }
+        void Promise.all(outstanding).then(
+          () => presented.resolve(),
+          (cause) => presented.reject(cause),
+        );
+      }
+
+      /** One page of the account's pending sessions, appended to the ones already presented. */
+      async function readSessions(continuation: string | null, append: boolean): Promise<void> {
+        let page: ImportSessionListResult;
+        try {
+          page = await access.sessions(
+            {
+              pageSize: UI_LIMITS.importSessions,
+              ...(continuation === null ? {} : { continuation }),
+            },
+            context.signal,
+          );
+        } catch (cause) {
+          if (closed) {
+            return;
+          }
+          reviewStatus.textContent = `The pending imports could not be read: ${readMessage(
+            cause,
+            'unknown failure',
+          )}`;
+          return;
+        }
+        if (closed) {
+          return;
+        }
+        sessions = append ? [...sessions, ...page.sessions] : [...page.sessions];
+        sessionsContinuation = page.continuation;
+        paintSessions();
+      }
+
+      /** Draws the session control and the control that reads further session pages. */
+      function paintSessions(): void {
+        const options: UiSelectOption[] = [];
+        const current = session;
+        if (current !== null && !sessions.some((one) => one.sessionId === current.sessionId)) {
+          // The presented import was read beyond the page now listed; it stays selectable, so a
+          // review of an import outside the first page survives leaving and returning to the view.
+          options.push({
+            value: current.sessionId,
+            label:
+              `${uiImportSourceLabel(current.sourceKind)} · ` + `${current.pendingEntries} pending`,
+          });
+        }
+        for (const candidate of sessions) {
+          options.push({
+            value: candidate.sessionId,
+            label:
+              `${uiImportSourceLabel(candidate.sourceKind)} · ` +
+              `${candidate.pendingEntries} pending`,
+          });
+        }
+        sessionSelect.replaceChildren(
+          ...options.map((option) => {
+            const element = document.createElement('option');
+            element.value = option.value;
+            element.textContent = option.label;
+            return element;
+          }),
+        );
+        if (options.length === 0) {
+          const empty = document.createElement('option');
+          empty.value = '';
+          empty.textContent = 'No pending imports';
+          sessionSelect.replaceChildren(empty);
+          sessionSelect.disabled = true;
+        } else {
+          sessionSelect.disabled = false;
+          const listed = options.some((option) => option.value === sessionId);
+          sessionSelect.value = listed ? (sessionId ?? '') : (options[0]?.value ?? '');
+        }
+        sessionsMore.hidden = sessionsContinuation === null;
+        sessionsMore.disabled = sessionsContinuation === null;
+      }
+
+      /**
+       * Presents one session's pending entries. The list is composed again for another session, so
+       * a chosen session keeps its own review and no row carries another import's record.
+       */
+      function present(next: string | null): void {
+        if (next === sessionId && pending !== null) {
+          // The session is already presented: its window, selection and drafts stay as they are.
+          return;
+        }
+        sessionId = next;
+        records.clear();
+        messages.clear();
+        session = null;
+        discard.disabled = true;
+        paintSessions();
+        if (next === null) {
+          pending?.dispose();
+          pending = null;
+          pendingHost.replaceChildren(note(document, 'No pending entries to review.'));
+          return;
+        }
+        composePending(next, undefined);
+      }
+
+      /** Composes the pending-entry list of one session, restoring the state the entry retained. */
+      function composePending(
+        presentedSession: string,
+        restoredState: UiCardListState<string> | undefined,
+      ): void {
+        pending?.dispose();
+        pending = createCardList<string>({
+          container: pendingHost,
+          source: pendingSource(),
+          context: presentedSession,
+          pageSize: UI_LIMITS.importPage,
+          restored: restoredState,
+          fragments: { tools: pendingToolsReader() },
+          tools: [confirmTool()],
+          presentation: {
+            renderEntry: (entry) => entryContent(entry),
+            renderFragment: (kind, entry) => (kind === 'tools' ? entryEditor(entry) : null),
+          },
+          signal: context.signal,
+        });
+      }
+
+      /** Composes the catalog result list of the manual entry search. */
+      function composeResults(restoredState: UiCardListState<UiCatalogQuery> | undefined): void {
+        const resultsAccess = createCatalogSearchAccess(search, catalog);
+        results = createCardList<UiCatalogQuery>({
+          container: resultsHost,
+          source: resultsAccess.source,
+          context: { text: query.value.trim(), level: 'printing', owned: false, finish: null },
+          pageSize: UI_LIMITS.importPrintings,
+          restored: restoredState,
+          fragments: { tools: resultToolsReader() },
+          tools: [addTool()],
+          signal: context.signal,
+        });
+      }
+
+      /** Searches the catalog for the printings the manual entry form names. */
+      function findCards(): void {
+        const text = query.value.trim();
+        if (text.length === 0) {
+          manualStatus.textContent = 'Enter a card name or expression to find its printings.';
+          return;
+        }
+        manualStatus.textContent = '';
+        const wanted: UiCatalogQuery = {
+          text,
+          level: 'printing',
+          owned: false,
+          finish: null,
+        };
+        if (results === null) {
+          composeResults(undefined);
+        } else {
+          results.refine(wanted);
+        }
+      }
+
+      /**
+       * Stages the selected printings as manual pending lines with the quantity, finish and
+       * condition the form presents. The line identity of a line that did not commit stays, so a
+       * retry replays the same staging instead of adding the line twice
+       * (docs/user-cards.md#import-and-capture-state).
+       */
+      async function addSelection(request: UiToolRequest): Promise<UiOperationOutcome> {
+        const wantedQuantity = readQuantity(quantity, uiMaxImportQuantity);
+        if (wantedQuantity === null) {
+          return {
+            status: 'failed',
+            message: `Choose a quantity from 1 to ${uiMaxImportQuantity}.`,
+          };
+        }
+        const wantedFinish = readFinishValue(finish.value);
+        const wantedCondition = readConditionValue(condition.value);
+        const lines: UiImportLine[] = [];
+        for (const target of request.targets) {
+          if (target.kind !== 'printing') {
+            continue;
+          }
+          const key = uiEntryKey(target);
+          const kept = staging.get(key);
+          const line: UiImportLine =
+            kept !== undefined &&
+            kept.finish === finish.value &&
+            kept.condition === condition.value &&
+            kept.quantity === wantedQuantity
+              ? {
+                  entryId: kept.entryId,
+                  printingId: target.printingId,
+                  finish: wantedFinish,
+                  condition: wantedCondition,
+                  quantity: wantedQuantity,
+                }
+              : {
+                  entryId: uiImportIdentity(),
+                  printingId: target.printingId,
+                  finish: wantedFinish,
+                  condition: wantedCondition,
+                  quantity: wantedQuantity,
+                };
+          staging.delete(key);
+          staging.set(key, {
+            entryId: line.entryId,
+            finish: finish.value,
+            condition: condition.value,
+            quantity: wantedQuantity,
+          });
+          boundByWindow(staging);
+          lines.push(line);
+        }
+        if (lines.length === 0) {
+          return { status: 'failed', message: 'Select the printings to add to review.' };
+        }
+        const outcome = await stageImportLines(
+          access,
+          {
+            sessionId: manualImport.sessionId,
+            source: manualImport.source,
+            entries: lines.map((line) => ({
+              entryId: line.entryId,
+              printingId: line.printingId,
+              finish: line.finish,
+              condition: line.condition,
+              quantity: line.quantity,
+            })),
+          },
+          request.signal,
+        );
+        return applyStaging(lines, outcome);
+      }
+
+      /** Presents one staging outcome and reconciles the pending list it may have changed. */
+      function applyStaging(
+        lines: readonly UiImportLine[],
+        outcome: UiChangeCommit<ImportStageResult>,
+      ): UiOperationOutcome {
+        const keys = new Set(lines.map((line) => uiEntryKey(stagedLineTarget(line))));
+        if (outcome.status === 'committed') {
+          const staged = outcome.record?.staged ?? 0;
+          // The lines are in review now; only a confirmation creates the physical copies.
+          const message =
+            staged === 0
+              ? 'Those lines were already in review; no new entries were added.'
+              : `${staged} ${staged === 1 ? 'line is' : 'lines are'} in review. ` +
+                'Confirmation creates the physical copies.';
+          forgetStaged(keys);
+          void reconcileImport();
+          return { status: 'committed', message };
+        }
+        if (outcome.status === 'conflict') {
+          // A line identity that conflicts cannot be retried as it is; the next attempt stages a
+          // fresh identity instead of overwriting the recorded line.
+          forgetStaged(keys);
+          void reconcileImport();
+          return { status: 'conflict', message: outcome.message };
+        }
+        if (outcome.status === 'unknown') {
+          // Reading the pending entries shows whether the staging committed even though its
+          // response was lost (docs/user-interface.md#capture-and-review).
+          void reconcileImport();
+          return { status: 'unknown', message: outcome.message };
+        }
+        return { status: 'failed', message: outcome.message };
+      }
+
+      /** Drops the kept line identities of the given entries after their staging was decided. */
+      function forgetStaged(keys: ReadonlySet<string>): void {
+        for (const key of keys) {
+          staging.delete(key);
+        }
+      }
+
+      /** Reloads the pending sessions and entries after a change that may have committed. */
+      async function reconcileImport(): Promise<void> {
+        await readSessions(null, false);
+        if (closed) {
+          return;
+        }
+        if (sessionId === null) {
+          // No import was presented yet: the review opens the one the account has pending.
+          present(defaultSessionId(sessions));
+          return;
+        }
+        const listed = sessions.some((one) => one.sessionId === sessionId);
+        if (!listed && session !== null && session.pendingEntries === 0) {
+          // The presented import has no pending entries left: the review moves to an import that
+          // still has some.
+          present(defaultSessionId(sessions));
+          return;
+        }
+        pending?.refresh();
+      }
+
+      /** One row's basic information: the printing it will create and its reviewed values. */
+      function entryContent(entry: UiListEntry): Node {
+        return cardListBasicContent(document, entry);
+      }
+
+      /**
+       * The editor of one pending entry: the reviewed printing, finish, condition and quantity it
+       * exposes before confirmation, the printing search that corrects them and the controls that
+       * save the review or discard the entry (docs/user-interface.md#capture-and-review).
+       */
+      function entryEditor(entry: UiListEntry): Node | null {
+        const record = records.get(entry.key);
+        if (record === undefined) {
+          return null;
+        }
+        const controls = document.createElement('span');
+        controls.dataset.uiImportEditor = entry.key;
+        const status = statusLine(
+          document,
+          `import-entry-status-${encodeURIComponent(record.entry.entryId)}`,
+        );
+        controls.append(status);
+        const editor: UiImportEditor = { controls, entry, status };
+        // The row keeps the reviewed values the page read until the list presents the new ones.
+        paintEditor(editor);
+        return controls;
+      }
+
+      /**
+       * Draws one entry's reviewed values and controls. The unsaved input lives in the page's
+       * drafts rather than in the rendered controls, so a redraw, paging or leaving and returning
+       * to the view keeps what the user must review; only a committed change clears its own draft
+       * (docs/user-interface.md#state-ownership-and-restoration).
+       */
+      function paintEditor(editor: UiImportEditor): void {
+        const record = records.get(editor.entry.key);
+        if (record === undefined) {
+          editor.controls.replaceChildren(editor.status);
+          return;
+        }
+        const entry = record.entry;
+        const draft = drafts.get(entry.entryId) ?? null;
+        editor.status.textContent = messages.get(editor.entry.key) ?? '';
+        const content: Node[] = [editor.status, reviewedContent(record)];
+        const found = printings.get(entry.entryId) ?? [];
+        const chosenPrintingId = draft?.printingId ?? entry.printingId ?? '';
+        const chosenPrinting =
+          record.printing ??
+          found.find((printing) => printing.printingId === chosenPrintingId) ??
+          null;
+        const query = textInput(
+          document,
+          `import-printing-query-${encodeURIComponent(entry.entryId)}`,
+          draft?.query ?? '',
+        );
+        query.type = 'search';
+        query.maxLength = UI_LIMITS.catalogQuery;
+        const find = button(
+          document,
+          `import-printing-find-${encodeURIComponent(entry.entryId)}`,
+          'Find printings',
+        );
+        const chosen = printingSelect(document, record, found, chosenPrintingId);
+        chosen.id = `import-review-printing-${encodeURIComponent(entry.entryId)}`;
+        const wantedFinish = finishSelect(
+          document,
+          chosenPrinting,
+          draft?.finish ?? entry.finish ?? '',
+        );
+        wantedFinish.id = `import-review-finish-${encodeURIComponent(entry.entryId)}`;
+        const wantedCondition = select(
+          document,
+          conditionOptions(),
+          draft?.condition ?? entry.condition ?? '',
+        );
+        wantedCondition.id = `import-review-condition-${encodeURIComponent(entry.entryId)}`;
+        const wantedQuantity = numberInput(
+          document,
+          `import-review-quantity-${encodeURIComponent(entry.entryId)}`,
+          draft?.quantity ?? String(entry.quantity),
+          uiMaxImportQuantity,
+        );
+        const save = button(
+          document,
+          `import-review-save-${encodeURIComponent(entry.entryId)}`,
+          'Save review',
+        );
+        const remove = button(
+          document,
+          `import-review-discard-${encodeURIComponent(entry.entryId)}`,
+          'Discard entry',
+        );
+        query.addEventListener('input', () => {
+          clearMessage(editor);
+          draftFor(entry.entryId).query = query.value;
+        });
+        find.addEventListener('click', () => {
+          void findPrintings(editor, query.value);
+        });
+        chosen.addEventListener('change', () => {
+          clearMessage(editor);
+          const next = draftFor(entry.entryId);
+          next.printingId = chosen.value;
+          const known =
+            found.find((printing) => printing.printingId === chosen.value) ??
+            (record.printing?.printingId === chosen.value ? record.printing : null);
+          if (known !== null && !known.finishes.includes(next.finish as Finish)) {
+            next.finish = '';
+          }
+          paintEditor(editor);
+        });
+        wantedFinish.addEventListener('change', () => {
+          clearMessage(editor);
+          draftFor(entry.entryId).finish = wantedFinish.value;
+        });
+        wantedCondition.addEventListener('change', () => {
+          clearMessage(editor);
+          draftFor(entry.entryId).condition = wantedCondition.value;
+        });
+        wantedQuantity.addEventListener('input', () => {
+          clearMessage(editor);
+          draftFor(entry.entryId).quantity = wantedQuantity.value;
+        });
+        save.addEventListener('click', () => {
+          void saveReview(editor, {
+            printingId: chosen.value,
+            finish: wantedFinish.value,
+            condition: wantedCondition.value,
+            quantity: wantedQuantity.value,
+          });
+        });
+        remove.addEventListener('click', () => {
+          void removeEntry(editor);
+        });
+        content.push(
+          controlLabel(document, 'Printing search', query),
+          find,
+          controlLabel(document, 'Printing', chosen),
+          controlLabel(document, 'Finish', wantedFinish),
+          controlLabel(document, 'Condition', wantedCondition),
+          controlLabel(document, 'Quantity', wantedQuantity),
+          save,
+          remove,
+        );
+        editor.controls.replaceChildren(...content);
+      }
+
+      /** The reviewed values one entry exposes before its confirmation is decided. */
+      function reviewedContent(record: UiPendingRecord): Node {
+        const entry = record.entry;
+        const values = document.createElement('span');
+        values.dataset.uiImportReview = entry.entryId;
+        const printing = document.createElement('span');
+        printing.dataset.uiImportPrinting = '';
+        printing.textContent = `Printing: ${
+          record.printing === null ? 'unresolved' : printingLine(record.printing)
+        }`;
+        const finishLine = document.createElement('span');
+        finishLine.dataset.uiImportFinish = '';
+        finishLine.textContent = ` Finish: ${entry.finish ?? 'not chosen yet'}`;
+        const conditionLine = document.createElement('span');
+        conditionLine.dataset.uiImportCondition = '';
+        conditionLine.textContent = ` Condition: ${entry.condition ?? 'unknown'}`;
+        const quantityLine = document.createElement('span');
+        quantityLine.dataset.uiImportQuantity = '';
+        quantityLine.textContent = ` Quantity: ${entry.quantity}`;
+        values.append(printing, finishLine, conditionLine, quantityLine);
+        const source = entry.sourceLine;
+        if (source !== null) {
+          const line = document.createElement('span');
+          line.dataset.uiImportSource = '';
+          line.textContent = ` Source: ${sourceLineText(source)}`;
+          values.append(line);
+        }
+        const candidates = uiImportCandidates(entry);
+        if (candidates.length > 0) {
+          const alternatives = document.createElement('span');
+          alternatives.dataset.uiImportCandidates = '';
+          alternatives.textContent = ` Candidates: ${candidates
+            .map(
+              (candidate) =>
+                `${candidate.printingId} (${candidate.provider}, ${candidate.evidence})`,
+            )
+            .join('; ')}`;
+          values.append(alternatives);
+        }
+        return values;
+      }
+
+      /** Searches the catalog for printings one entry's review may choose instead. */
+      async function findPrintings(editor: UiImportEditor, text: string): Promise<void> {
+        const record = records.get(editor.entry.key);
+        if (record === undefined) {
+          return;
+        }
+        const wanted = text.trim();
+        if (wanted.length === 0) {
+          editor.status.textContent = 'Enter a card name to find its printings.';
+          return;
+        }
+        editor.status.textContent = 'Searching for printings…';
+        let offered: readonly PrintingRecord[];
+        try {
+          offered = await searchPrintings(search, catalog, wanted, context.signal);
+        } catch (cause) {
+          if (closed) {
+            return;
+          }
+          editor.status.textContent = `The printings could not be read: ${readMessage(
+            cause,
+            'unknown failure',
+          )}`;
+          return;
+        }
+        if (closed) {
+          return;
+        }
+        printings.set(record.entry.entryId, offered);
+        boundByWindow(printings);
+        editor.status.textContent =
+          offered.length === 0 ? 'The catalog published no printing for that search.' : '';
+        paintEditor(editor);
+      }
+
+      /**
+       * Saves one entry's reviewed printing, finish, condition and quantity under the revision the
+       * page read. A conflict keeps the draft for review; a lost response keeps it too and reloads
+       * the stored values instead of presenting the review as saved.
+       */
+      async function saveReview(
+        editor: UiImportEditor,
+        submitted: {
+          readonly printingId: string;
+          readonly finish: string;
+          readonly condition: string;
+          readonly quantity: string;
+        },
+      ): Promise<void> {
+        const record = records.get(editor.entry.key);
+        if (record === undefined) {
+          return;
+        }
+        const printingId = submitted.printingId.length > 0 ? submitted.printingId : null;
+        if (printingId === null) {
+          report(editor, 'Choose the printing this entry describes.');
+          return;
+        }
+        const wantedFinish = readFinishValue(submitted.finish);
+        if (submitted.finish.length > 0 && wantedFinish === null) {
+          report(editor, 'Choose the finish of the printing.');
+          return;
+        }
+        const wantedQuantity = readQuantityValue(submitted.quantity, uiMaxImportQuantity);
+        if (wantedQuantity === null) {
+          report(editor, `Choose a quantity from 1 to ${uiMaxImportQuantity}.`);
+          return;
+        }
+        const chosenPrinting =
+          printings
+            .get(record.entry.entryId)
+            ?.find((printing) => printing.printingId === printingId) ??
+          (record.printing?.printingId === printingId ? record.printing : null);
+        const outcome = await reviewImportEntry(
+          access,
+          {
+            entryId: record.entry.entryId,
+            expectedRevision: record.entry.revision,
+            printingId,
+            finish: wantedFinish ?? firstFinish(chosenPrinting) ?? 'nonfoil',
+            condition: readConditionValue(submitted.condition),
+            quantity: wantedQuantity,
+          },
+          context.signal,
+        );
+        if (closed) {
+          return;
+        }
+        if (outcome.status === 'committed' && outcome.record !== null) {
+          drafts.delete(record.entry.entryId);
+          report(editor, 'Review saved.');
+          adoptEntry(outcome.record.entry, outcome.record.session);
+          // The stored values and the printing the entry now names are read again, so the row
+          // presents what the review committed rather than the values it started from.
+          pending?.refresh();
+          return;
+        }
+        report(editor, outcome.message ?? 'The review was not saved.');
+        if (outcome.status !== 'failed') {
+          // A conflict or a lost response: the stored values are read again for review.
+          await reconcileImport();
+          if (closed) {
+            return;
+          }
+          pending?.reloadFragment(editor.entry.key, 'tools');
+        }
+      }
+
+      /** Discards one pending entry after a brief confirmation; no copy is created. */
+      async function removeEntry(editor: UiImportEditor): Promise<void> {
+        const record = records.get(editor.entry.key);
+        if (record === undefined) {
+          return;
+        }
+        const accepted = await context.dialogs.confirm({
+          title: 'Discard this pending entry?',
+          message: 'The entry ends without creating a copy.',
+          confirmLabel: 'Discard entry',
+          cancelLabel: 'Keep it',
+        });
+        if (!accepted || closed) {
+          return;
+        }
+        const outcome = await discardImportEntry(
+          access,
+          { entryId: record.entry.entryId, expectedRevision: record.entry.revision },
+          context.signal,
+        );
+        if (closed) {
+          return;
+        }
+        if (outcome.status === 'committed') {
+          drafts.delete(record.entry.entryId);
+          printings.delete(record.entry.entryId);
+          messages.delete(editor.entry.key);
+        } else {
+          report(editor, outcome.message ?? 'The entry was not discarded.');
+        }
+        await reconcileImport();
+      }
+
+      /** Discards every pending entry of the presented import after a brief confirmation. */
+      async function discardImport(): Promise<void> {
+        const current = session;
+        if (sessionId === null || current === null) {
+          reviewStatus.textContent = 'Read the pending import before discarding it.';
+          return;
+        }
+        const accepted = await context.dialogs.confirm({
+          title: 'Discard this import?',
+          message: 'Every pending entry of this import ends without creating a copy.',
+          confirmLabel: 'Discard import',
+          cancelLabel: 'Keep it',
+        });
+        if (!accepted || closed) {
+          return;
+        }
+        const outcome = await discardImportSession(
+          access,
+          { sessionId, expectedRevision: current.revision },
+          context.signal,
+        );
+        if (closed) {
+          return;
+        }
+        reviewStatus.textContent =
+          outcome.status === 'committed'
+            ? 'The import was discarded; no copies were created.'
+            : (outcome.message ?? 'The import was not discarded.');
+        if (outcome.status === 'committed') {
+          drafts.clear();
+          printings.clear();
+          records.clear();
+          confirmation = null;
+        }
+        await reconcileImport();
+      }
+
+      /** One entry's confirmation: the reviewed revisions under one operation identity. */
+      function confirmationFor(entries: readonly ConfirmImportEntryInput[]): UiConfirmationDraft {
+        if (confirmation !== null && sameConfirmation(confirmation.entries, entries)) {
+          return confirmation;
+        }
+        confirmation = { operationId: uiImportIdentity(), entries: [...entries] };
+        return confirmation;
+      }
+
+      /** Confirms the selected entries and presents the copies its receipt names. */
+      async function confirmSelection(request: UiToolRequest): Promise<UiOperationOutcome> {
+        if (sessionId === null) {
+          return { status: 'failed', message: 'Read the pending import before confirming it.' };
+        }
+        const entries: ConfirmImportEntryInput[] = [];
+        for (const target of request.targets) {
+          const record = target.kind === 'pending' ? records.get(uiEntryKey(target)) : undefined;
+          if (record === undefined) {
+            return {
+              status: 'failed',
+              message: 'Reload the pending import before confirming these entries.',
+            };
+          }
+          entries.push({
+            entryId: record.entry.entryId,
+            expectedRevision: record.entry.revision,
+          });
+        }
+        if (entries.length === 0) {
+          return { status: 'failed', message: 'Select the entries to confirm.' };
+        }
+        const operation = confirmationFor(entries);
+        const outcome = await confirmImport(
+          access,
+          { operationId: operation.operationId, sessionId, entries },
+          request.signal,
+        );
+        if (closed) {
+          return { status: 'unknown', message: null };
+        }
+        const receipt = outcome.record;
+        if (outcome.status === 'committed' && receipt !== null) {
+          confirmation = null;
+          const message = confirmationMessage(receipt, outcome.message);
+          reviewStatus.textContent = message;
+          pending?.clearSelection();
+          for (const entry of entries) {
+            drafts.delete(entry.entryId);
+            printings.delete(entry.entryId);
+          }
+          void reconcileImport();
+          return { status: 'committed', message };
+        }
+        if (outcome.status === 'conflict') {
+          // The reviewed revisions changed under the selection; the page presents the stored
+          // entries again before another confirmation.
+          void reconcileImport();
+        }
+        return { status: outcome.status, message: outcome.message };
+      }
+
+      /** Takes the committed entry and session into the page's own view of them. */
+      function adoptEntry(entry: ImportEntry, changed: ImportSession): void {
+        session = changed;
+        const key = uiEntryKey({ kind: 'pending', entryId: entry.entryId });
+        const record = records.get(key);
+        if (record !== undefined) {
+          records.delete(key);
+          records.set(key, { ...record, entry });
+        }
+        adoptSession(changed);
+        pending?.reloadFragment(key, 'tools');
+      }
+
+      /** Updates the presented session counts after a change that reported them. */
+      function adoptSession(changed: ImportSession): void {
+        session = changed;
+        sessions = sessions.map((candidate) =>
+          candidate.sessionId === changed.sessionId ? changed : candidate,
+        );
+        paintSessions();
+        discard.disabled = changed.state !== 'pending';
+        if (changed.state !== 'pending' && changed.sessionId === sessionId) {
+          // Every entry of the presented import is decided: the review moves to an import that
+          // still has pending entries instead of presenting a finished one.
+          present(defaultSessionId(sessions.filter((one) => one.pendingEntries > 0)));
+        }
+      }
+
+      /** Keeps one message with its entry, so a redraw of the row presents it again. */
+      function report(editor: UiImportEditor, message: string): void {
+        messages.set(editor.entry.key, message);
+        boundByWindow(messages);
+        editor.status.textContent = message;
+      }
+
+      /** Drops the message of one entry when its owner edits the reviewed values again. */
+      function clearMessage(editor: UiImportEditor): void {
+        messages.delete(editor.entry.key);
+        editor.status.textContent = '';
+      }
+
+      /** The unsaved review input of one entry, created from the stored values when first edited. */
+      function draftFor(entryId: string): UiReviewDraft {
+        const existing = drafts.get(entryId);
+        if (existing !== undefined) {
+          return existing;
+        }
+        const created: UiReviewDraft = {
+          query: '',
+          printingId: '',
+          finish: '',
+          condition: '',
+          quantity: '',
+        };
+        drafts.set(entryId, created);
+        boundByWindow(drafts);
+        return created;
+      }
+
+      /** Whether each presented entry's stored revision is known for a confirmation. */
+      function pendingToolsReader(): UiFragmentReader<readonly string[]> {
+        return {
+          read(request) {
+            return Promise.resolve(
+              request.keys.map((key) => ({
+                key,
+                status: 'ready' as const,
+                values: records.has(key) ? ['confirm-import'] : [],
+              })),
+            );
+          },
+        };
+      }
+
+      /** Whether each printed search result can enter the manual import. */
+      function resultToolsReader(): UiFragmentReader<readonly string[]> {
+        return {
+          read(request) {
+            return Promise.resolve(
+              request.keys.map((key) => ({
+                key,
+                status: 'ready' as const,
+                values: key.startsWith('printing:') ? ['add-to-review'] : [],
+              })),
+            );
+          },
+        };
+      }
+
+      /** The tool that stages the explicit selected printings as manual pending lines. */
+      function addTool(): UiCardListTool {
+        return {
+          id: 'add-to-review',
+          label: 'Add to review',
+          tool: {
+            invoke: (request: UiToolRequest): Promise<UiOperationOutcome> => addSelection(request),
+          },
+        };
+      }
+
+      /** The tool that confirms the explicit selected pending entries. */
+      function confirmTool(): UiCardListTool {
+        return {
+          id: 'confirm-import',
+          label: 'Confirm selected',
+          tool: {
+            invoke: (request: UiToolRequest): Promise<UiOperationOutcome> =>
+              confirmSelection(request),
+          },
+        };
+      }
+
+      /**
+       * The pending entries of one session through the list boundary: each entry keeps its own
+       * identity as a pending target and is enriched with the catalog record its printing names.
+       * An entry the catalog cannot resolve stays explicitly unresolved instead of presenting
+       * another card's information.
+       */
+      function pendingSource(): UiListSource<string> {
+        return {
+          async load(request) {
+            const page = await access.entries(
+              {
+                sessionId: request.context,
+                pageSize: request.pageSize,
+                ...(request.continuation === null ? {} : { continuation: request.continuation }),
+              },
+              request.signal,
+            );
+            const read = await resolvePending(catalog, page.entries);
+            if (page.session.sessionId === sessionId) {
+              adoptSession(page.session);
+              discard.disabled = page.session.state !== 'pending';
+            }
+            for (const record of read) {
+              const key = uiEntryKey({ kind: 'pending', entryId: record.entry.entryId });
+              records.delete(key);
+              records.set(key, record);
+            }
+            boundByWindow(records);
+            return {
+              entries: read.map((record) =>
+                pendingListEntry(
+                  uiEntryKey({ kind: 'pending', entryId: record.entry.entryId }),
+                  record,
+                ),
+              ),
+              continuation: page.continuation,
+            };
+          },
+        };
+      }
+    },
+  };
+}
+
+/** One pending entry as the list boundary presents it, with the catalog record it names. */
+function pendingListEntry(key: string, record: UiPendingRecord): UiListEntry {
+  const printing = record.printing;
+  return {
+    key,
+    target: { kind: 'pending', entryId: record.entry.entryId },
+    // The reviewed quantity is pending input, not an owned copy count, so the entry carries no
+    // quantity context and the review presents its own value.
+    quantity: null,
+    basic:
+      printing === null || record.card === null
+        ? null
+        : {
+            card: {
+              cardId: record.card.cardId,
+              name: record.card.name,
+              matchedName: null,
+            },
+            printing: {
+              printingId: printing.printingId,
+              edition: printing.edition,
+              collectorNumber: printing.collectorNumber,
+              language: printing.language,
+            },
+          },
+  };
+}
+
+/** Resolves the printings and cards the pending entries name through Catalog. */
+async function resolvePending(
+  catalog: Catalog,
+  entries: readonly ImportEntry[],
+): Promise<readonly UiPendingRecord[]> {
+  const printingIds = entries.flatMap((entry) =>
+    entry.printingId === null ? [] : [entry.printingId],
+  );
+  const printings = await resolvePrintings(catalog, printingIds);
+  const cardIds = [...new Set([...printings.values()].map((printing) => printing.cardId))];
+  const cards = await resolveCards(catalog, cardIds);
+  return entries.map((entry) => {
+    const printing = entry.printingId === null ? null : (printings.get(entry.printingId) ?? null);
+    const card = printing === null ? null : (cards.get(printing.cardId) ?? null);
+    return { entry, printing, card };
+  });
+}
+
+/** Printings one pending entry may name, resolved through Catalog in bounded batches. */
+async function resolvePrintings(
+  catalog: Catalog,
+  printingIds: readonly string[],
+): Promise<ReadonlyMap<string, PrintingRecord>> {
+  const printings = new Map<string, PrintingRecord>();
+  const distinct = [...new Set(printingIds)];
+  for (let index = 0; index < distinct.length; index += UI_LIMITS.copyBatch) {
+    const batch = distinct.slice(index, index + UI_LIMITS.copyBatch);
+    const resolution = await catalog.resolve(
+      batch.map((printingId) => ({ kind: 'printing' as const, printingId })),
+    );
+    for (const printing of resolution.printings.values()) {
+      printings.set(printing.printingId, printing);
+    }
+  }
+  return printings;
+}
+
+/** Cards the pending entries reach, resolved through Catalog in bounded batches. */
+async function resolveCards(
+  catalog: Catalog,
+  cardIds: readonly string[],
+): Promise<ReadonlyMap<string, CardRecord>> {
+  const cards = new Map<string, CardRecord>();
+  const distinct = [...new Set(cardIds)];
+  for (let index = 0; index < distinct.length; index += UI_LIMITS.copyBatch) {
+    const batch = distinct.slice(index, index + UI_LIMITS.copyBatch);
+    const resolution = await catalog.resolve(
+      batch.map((cardId) => ({ kind: 'card' as const, cardId })),
+    );
+    for (const card of resolution.cards.values()) {
+      cards.set(card.cardId, card);
+    }
+  }
+  return cards;
+}
+
+/** Printings one review search offers for a card name or expression. */
+async function searchPrintings(
+  search: SearchClient,
+  catalog: Catalog,
+  text: string,
+  signal: AbortSignal,
+): Promise<readonly PrintingRecord[]> {
+  const page = await search.execute(
+    { resultLevel: 'printing', query: text, pageSize: UI_LIMITS.importPrintings },
+    signal,
+  );
+  const printingIds = page.entries.flatMap((entry) =>
+    entry.printing === null ? [] : [entry.printing.printingId],
+  );
+  const resolution = await catalog.resolve(
+    printingIds.map((printingId) => ({ kind: 'printing' as const, printingId })),
+  );
+  return [...resolution.printings.values()];
+}
+
+/** The manual entry form state one history entry kept, or its defaults. */
+function readManualDraft(value: unknown): {
+  readonly text: string;
+  readonly quantity: string;
+  readonly finish: string;
+  readonly condition: string;
+} {
+  const record = readPageState(value);
+  return {
+    text: readDraftValue(record?.text, UI_LIMITS.catalogQuery) ?? '',
+    quantity: readDraftValue(record?.quantity, 8) ?? '1',
+    finish: readDraftValue(record?.finish, 16) ?? '',
+    condition: readDraftValue(record?.condition, 8) ?? '',
+  };
+}
+
+/** The session identity one history entry kept, or null when it names none. */
+function readSessionId(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 && value.length <= UI_LIMITS.entryKey
+    ? value
+    : null;
+}
+
+/** The manual lines a history entry kept for an idempotent retry. */
+function readStagingDrafts(value: unknown): Map<string, UiStagingDraft> {
+  const drafts = new Map<string, UiStagingDraft>();
+  const record = readPageState(value);
+  if (record === null) {
+    return drafts;
+  }
+  for (const [key, candidate] of Object.entries(record)) {
+    const line = readPageState(candidate);
+    const entryId = readDraftValue(line?.entryId, UI_LIMITS.entryKey);
+    const quantity = readQuantityValue(line?.quantity, uiMaxImportQuantity);
+    if (line === null || entryId === null || quantity === null) {
+      continue;
+    }
+    drafts.set(key, {
+      entryId,
+      finish: readDraftValue(line.finish, 16) ?? '',
+      condition: readDraftValue(line.condition, 8) ?? '',
+      quantity,
+    });
+  }
+  boundByWindow(drafts);
+  return drafts;
+}
+
+/** The unsaved review input a history entry kept, keyed by entry identity. */
+function readReviewDrafts(value: unknown): Map<string, UiReviewDraft> {
+  const drafts = new Map<string, UiReviewDraft>();
+  const record = readPageState(value);
+  if (record === null) {
+    return drafts;
+  }
+  for (const [entryId, candidate] of Object.entries(record)) {
+    const draft = readPageState(candidate);
+    if (draft === null || entryId.length === 0 || entryId.length > UI_LIMITS.entryKey) {
+      continue;
+    }
+    drafts.set(entryId, {
+      query: readDraftValue(draft.query, UI_LIMITS.catalogQuery) ?? '',
+      printingId: readDraftValue(draft.printingId, UI_LIMITS.entryKey) ?? '',
+      finish: readDraftValue(draft.finish, 16) ?? '',
+      condition: readDraftValue(draft.condition, 8) ?? '',
+      quantity: readDraftValue(draft.quantity, 8) ?? '',
+    });
+  }
+  boundByWindow(drafts);
+  return drafts;
+}
+
+/** The confirmation one history entry kept, so a retry reuses the recorded operation identity. */
+function readConfirmationDraft(value: unknown): UiConfirmationDraft | null {
+  const record = readPageState(value);
+  const operationId = readDraftValue(record?.operationId, UI_LIMITS.entryKey);
+  const entries = record?.entries;
+  if (operationId === null || !Array.isArray(entries)) {
+    return null;
+  }
+  const read: ConfirmImportEntryInput[] = [];
+  for (const candidate of entries) {
+    const entry = readPageState(candidate);
+    const entryId = readDraftValue(entry?.entryId, UI_LIMITS.entryKey);
+    const revision = entry?.expectedRevision;
+    if (entryId === null || !Number.isSafeInteger(revision) || Number(revision) < 1) {
+      return null;
+    }
+    read.push({ entryId, expectedRevision: Number(revision) });
+  }
+  return read.length === 0 ? null : { operationId, entries: read };
+}
+
+/** The pending list state one history entry kept, with the session it belongs to. */
+function readRetainedPending(
+  value: unknown,
+  sessionId: string | null,
+): { readonly sessionId: string; readonly state: Readonly<Record<string, unknown>> | null } | null {
+  const record = readPageState(value);
+  const retainedSession = readSessionId(record?.sessionId);
+  if (record === null || retainedSession === null || retainedSession !== sessionId) {
+    return null;
+  }
+  return { sessionId: retainedSession, state: readPageState(record.list) };
+}
+
+/** One retained draft value, bounded like the control that produced it. */
+function readDraftValue(value: unknown, bound: number): string | null {
+  return typeof value === 'string' ? value.slice(0, bound) : null;
+}
+
+/** The quantity one control names, or null when it is not a bounded positive whole number. */
+function readQuantity(input: HTMLInputElement, bound: number): number | null {
+  return readQuantityValue(input.value, bound);
+}
+
+/** One quantity value, or null when it is not a bounded positive whole number. */
+function readQuantityValue(value: unknown, bound: number): number | null {
+  const wanted = typeof value === 'number' ? value : Number(value);
+  return Number.isSafeInteger(wanted) && wanted >= 1 && wanted <= bound ? wanted : null;
+}
+
+/** Finish one control value names, or null when it is empty or outside the vocabulary. */
+function readFinishValue(value: string): Finish | null {
+  return (uiCatalogFinishes as readonly string[]).includes(value) ? (value as Finish) : null;
+}
+
+/** Condition one control value names; an empty value is the explicit unknown condition. */
+function readConditionValue(value: string): CopyCondition | null {
+  return (uiCopyConditions as readonly string[]).includes(value) ? (value as CopyCondition) : null;
+}
+
+/** The first finish a printing offers as a physical card, or null when it is not known. */
+function firstFinish(printing: PrintingRecord | null): Finish | null {
+  return printing?.physical === true ? (printing.finishes[0] ?? null) : null;
+}
+
+/** The finishes one review may choose: the vocabulary, narrowed to a known printing's own. */
+function finishOptions(): readonly UiSelectOption[] {
+  return [
+    { value: '', label: 'First offered finish' },
+    ...uiCatalogFinishes.map((value) => ({ value, label: uiFinishLabel(value) })),
+  ];
+}
+
+/** The conditions one review may choose; an empty value stays explicitly unknown. */
+function conditionOptions(): readonly UiSelectOption[] {
+  return [
+    { value: '', label: 'Condition unknown' },
+    ...uiCopyConditions.map((value) => ({ value, label: value })),
+  ];
+}
+
+/**
+ * The printing choices of one review: the printing the entry already names and the printings its
+ * own search found. A named printing outside those choices stays selectable, so a stored value is
+ * never silently replaced by another printing.
+ */
+function printingSelect(
+  document: Document,
+  record: UiPendingRecord,
+  found: readonly PrintingRecord[],
+  value: string,
+): HTMLSelectElement {
+  const known = [
+    ...(record.printing === null ? [] : [record.printing]),
+    ...found.filter((printing) => printing.printingId !== record.printing?.printingId),
+  ];
+  const options: UiSelectOption[] = [
+    { value: '', label: 'Choose a printing' },
+    ...known.map((printing) => ({ value: printing.printingId, label: printingLine(printing) })),
+  ];
+  if (value.length > 0 && !options.some((option) => option.value === value)) {
+    options.push({ value, label: 'Selected printing (not loaded)' });
+  }
+  return selectControl(document, options, value);
+}
+
+/**
+ * The finish choices of one review. A printing that the page could read narrows them to the
+ * finishes it offers; a finish the entry already carries stays selectable, so reviewing another
+ * field never changes the stored finish.
+ */
+function finishSelect(
+  document: Document,
+  printing: PrintingRecord | null,
+  value: string,
+): HTMLSelectElement {
+  const offered = printing === null || !printing.physical ? uiCatalogFinishes : printing.finishes;
+  const options: UiSelectOption[] = [
+    { value: '', label: 'First offered finish' },
+    ...offered.map((finish) => ({ value: finish, label: uiFinishLabel(finish) })),
+  ];
+  if (value.length > 0 && !options.some((option) => option.value === value)) {
+    options.push({ value, label: `${value} (stored)` });
+  }
+  return selectControl(document, options, value);
+}
+
+/** One printing as the page presents it: its edition, collector number and language. */
+function printingLine(printing: PrintingRecord): string {
+  return `${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
+}
+
+/** The source line of one pending entry as the review presents it. */
+function sourceLineText(line: ImportSourceLine): string {
+  const parts: string[] = [];
+  if (line.name !== null) {
+    parts.push(line.name);
+  }
+  if (line.set !== null || line.collectorNumber !== null) {
+    parts.push(`(${line.set ?? ''} ${line.collectorNumber ?? ''})`.trim());
+  }
+  if (line.section !== null) {
+    parts.push(line.section);
+  }
+  if (line.problem !== null) {
+    parts.push(line.problem);
+  }
+  return parts.length === 0 ? 'the parsed source line' : parts.join(' · ');
+}
+
+/** One confirmation's receipt as the page presents it; a recovered outcome stays explicit. */
+function confirmationMessage(receipt: ImportReceipt, recovered: string | null): string {
+  const copies = receipt.copies.length;
+  const line = `Confirmed: ${copies} ${copies === 1 ? 'physical copy' : 'physical copies'} created.`;
+  return recovered === null ? line : `${line} ${recovered}`;
+}
+
+/** Whether two confirmations name the same reviewed entries at the same revisions. */
+function sameConfirmation(
+  kept: readonly ConfirmImportEntryInput[],
+  wanted: readonly ConfirmImportEntryInput[],
+): boolean {
+  if (kept.length !== wanted.length) {
+    return false;
+  }
+  return wanted.every(
+    (entry, index) =>
+      kept[index]?.entryId === entry.entryId &&
+      kept[index]?.expectedRevision === entry.expectedRevision,
+  );
+}
+
+/** The printing target whose entry key keeps one staged line's identity for an idempotent retry. */
+function stagedLineTarget(line: UiImportLine): UiEntryTarget {
+  return { kind: 'printing', printingId: line.printingId };
+}
+
+/** The first pending session of a page, preferring the account's manual entry queue. */
+function defaultSessionId(sessions: readonly ImportSession[]): string | null {
+  const manual = sessions.find((session) => session.sessionId === manualImport.sessionId);
+  return manual?.sessionId ?? sessions[0]?.sessionId ?? null;
+}
+
+/** Each page keeps at most one window of drafts and records, independently of its rows. */
+function boundByWindow<Value>(map: Map<string, Value>): void {
+  while (map.size > UI_LIMITS.listWindow) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    map.delete(oldest);
+  }
+}
+
+/** One note the page presents when it holds no list for an action. */
+function note(document: Document, content: string): HTMLParagraphElement {
+  const element = document.createElement('p');
+  element.textContent = content;
+  return element;
+}
+
+function text<K extends 'h2' | 'h3' | 'p'>(
+  document: Document,
+  tag: K,
+  id: string,
+  content: string,
+): HTMLElementTagNameMap[K] {
+  const element = document.createElement(tag);
+  element.id = id;
+  element.textContent = content;
+  return element;
+}
+
+function statusLine(document: Document, id: string): HTMLParagraphElement {
+  const element = document.createElement('p');
+  element.id = id;
+  element.setAttribute('role', 'status');
+  element.setAttribute('aria-live', 'polite');
+  return element;
+}
+
+function button(document: Document, id: string, label: string): HTMLButtonElement {
+  const element = document.createElement('button');
+  element.type = 'button';
+  element.id = id;
+  element.textContent = label;
+  return element;
+}
+
+function submitButton(document: Document, id: string, label: string): HTMLButtonElement {
+  const element = button(document, id, label);
+  element.type = 'submit';
+  return element;
+}
+
+function textInput(document: Document, id: string, value: string): HTMLInputElement {
+  const element = document.createElement('input');
+  element.id = id;
+  element.type = 'text';
+  element.value = value;
+  return element;
+}
+
+function numberInput(
+  document: Document,
+  id: string,
+  value: string,
+  bound: number,
+): HTMLInputElement {
+  const element = document.createElement('input');
+  element.id = id;
+  element.type = 'number';
+  element.min = '1';
+  element.max = String(bound);
+  element.value = value;
+  return element;
+}
+
+/** One select control with the supplied options and initial value. */
+function select(
+  document: Document,
+  options: readonly UiSelectOption[],
+  value: string,
+): HTMLSelectElement {
+  return selectControl(document, options, value);
+}
+
+function readMessage(cause: unknown, fallback: string): string {
+  return cause instanceof Error && cause.message.length > 0 ? cause.message : fallback;
+}

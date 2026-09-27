@@ -59,6 +59,18 @@ export type UiCollectionLevel = (typeof uiCollectionLevels)[number];
  */
 export const uiCatalogFinishes = ['nonfoil', 'foil', 'etched'] as const satisfies readonly Finish[];
 
+/** Display name of one printing finish. */
+export function uiFinishLabel(finish: Finish): string {
+  switch (finish) {
+    case 'nonfoil':
+      return 'Nonfoil';
+    case 'foil':
+      return 'Foil';
+    case 'etched':
+      return 'Etched';
+  }
+}
+
 /**
  * One presented view. `printingId` and `copyId` are null above their level, and a copy-level view
  * always names its printing.

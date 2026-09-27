@@ -23,4 +23,12 @@ export const unusedUserCards: UserCardsClient = {
   changeAssociation: unused,
   removeAssociation: unused,
   setCopyLocation: unused,
+  listImportSessions: unused,
+  listImportEntries: unused,
+  stageImportEntries: unused,
+  reviewImportEntry: unused,
+  discardImportEntry: unused,
+  discardImportSession: unused,
+  confirmImport: unused,
+  recoverImportOperation: unused,
 };

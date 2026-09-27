@@ -39,6 +39,12 @@ export const UI_LIMITS = {
   tagPage: 50,
   /** Associations one page of a tag view asks the UserCards contract for. */
   associationPage: 50,
+  /** Pending import entries one page of the Import page asks UserCards for. */
+  importPage: 50,
+  /** Pending import sessions one page of the Import page asks UserCards for. */
+  importSessions: 50,
+  /** Printings one page of a manual entry search asks Search for. */
+  importPrintings: 20,
   /**
    * Copy references one private copy read asks for at most. The bound mirrors the copy references
    * a UserCards read accepts, so a selection larger than one read is read in further bounded

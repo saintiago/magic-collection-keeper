@@ -109,6 +109,8 @@ export function uiEntryKey(target: UiEntryTarget): string {
       return `${printingKeyPrefix}${target.printingId}`;
     case 'copy':
       return `copy:${target.copyId}`;
+    case 'pending':
+      return `pending:${target.entryId}`;
   }
 }
 
@@ -126,6 +128,8 @@ export function uiEntryTargetOfKey(key: string): UiEntryTarget | null {
       return { kind: 'printing', printingId: identity };
     case 'copy':
       return { kind: 'copy', copyId: identity };
+    case 'pending':
+      return { kind: 'pending', entryId: identity };
     default:
       return null;
   }
@@ -186,6 +190,10 @@ function referenceOfTarget(target: UiEntryTarget): SearchCountReference {
       return { kind: 'printing', printingId: target.printingId };
     case 'copy':
       return { kind: 'copy', copyId: target.copyId };
+    case 'pending':
+      // Pending import entries are excluded from every ownership count, so Search has no
+      // reference for them (docs/user-cards.md#import-and-capture-state).
+      throw new TypeError('A pending import entry carries no private count reference.');
   }
 }
 

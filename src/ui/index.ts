@@ -11,10 +11,13 @@
  * pages present Home's bounded, account-isolated recent card activity and the catalog/search query
  * a URL names, both over the supplied Search and Catalog contracts, and the collection pages
  * present the account's owned records with their copy corrections over the supplied UserCards
- * contract. Application supplies the public configuration, the authenticated transport and the
- * component access, and the deployment supplies the verified identity and its device capability.
- * Other components import UserInterface through this module only; its internal modules stay
- * private to the component (docs/architecture.md, .dependency-cruiser.mjs).
+ * contract. The Import page stages manually entered cards as pending entries and presents the
+ * account's pending imports for review and confirmation through the same private contract, so a
+ * staged line is never presented as owned before its confirmation reports the copies it created.
+ * Application supplies the public configuration, the authenticated transport and the component
+ * access, and the deployment supplies the verified identity and its device capability. Other
+ * components import UserInterface through this module only; its internal modules stay private to
+ * the component (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
 export { createBrowsePages } from './internal/browse.js';
@@ -53,6 +56,22 @@ export {
 export type { UiDevice } from './internal/device.js';
 export type { UiDialogOptions, UiDialogs } from './internal/dialogs.js';
 export type { UiAccount, UiIdentity } from './internal/identity.js';
+export {
+  confirmImport,
+  createImportAccess,
+  discardImportEntry,
+  discardImportSession,
+  reviewImportEntry,
+  stageImportLines,
+  uiImportCandidates,
+  uiImportIdentity,
+  uiImportSourceLabel,
+  type UiImportAccess,
+  type UiImportCandidate,
+  type UiImportClient,
+  type UiImportLine,
+} from './internal/import-edits.js';
+export { createImportPages, uiMaxImportQuantity } from './internal/imports.js';
 export { UI_LIMITS } from './internal/limits.js';
 export {
   uiFragmentKinds,
@@ -110,6 +129,7 @@ export {
   uiCatalogFinishes,
   uiCatalogLevels,
   uiCollectionLevels,
+  uiFinishLabel,
   uiHref,
   uiPageNames,
   uiViewTitle,

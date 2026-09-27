@@ -1710,14 +1710,7 @@ function readEntry(value: unknown): UiListEntry | null {
 function readTarget(value: unknown): UiListEntry['target'] | null {
   const target = readObject(value);
   const kind = target?.kind;
-  const id =
-    kind === 'card'
-      ? target?.cardId
-      : kind === 'printing'
-        ? target?.printingId
-        : kind === 'copy'
-          ? target?.copyId
-          : undefined;
+  const id = targetIdentity(kind, target);
   if (typeof id !== 'string' || id.length === 0 || id.length > UI_LIMITS.entryKey) {
     return null;
   }
@@ -1728,8 +1721,26 @@ function readTarget(value: unknown): UiListEntry['target'] | null {
       return { kind: 'printing', printingId: id };
     case 'copy':
       return { kind: 'copy', copyId: id };
+    case 'pending':
+      return { kind: 'pending', entryId: id };
     default:
       return null;
+  }
+}
+
+/** Identity one retained entry target names, or undefined when the target names no known level. */
+function targetIdentity(kind: unknown, target: Readonly<Record<string, unknown>> | null): unknown {
+  switch (kind) {
+    case 'card':
+      return target?.cardId;
+    case 'printing':
+      return target?.printingId;
+    case 'copy':
+      return target?.copyId;
+    case 'pending':
+      return target?.entryId;
+    default:
+      return undefined;
   }
 }
 
