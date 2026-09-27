@@ -7,7 +7,9 @@ atomic bulk synchronization and its published query surface with their contract 
 UserCards provides physical-copy storage, tags, associations and physical locations with their
 account-scoped read surface; Search provides its normalized query model, the supported Scryfall
 subset, the request and continuation contract and its evaluation over both published query
-surfaces, while the remaining components are not implemented yet.
+surfaces; Recognition provides its session lifecycle, its catalog-validated candidate readings and
+the execution bounds around the preserved engines, while the remaining components are not
+implemented yet.
 
 Start with AGENTS.md for the documentation index and engineering principles.
 The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
@@ -90,6 +92,17 @@ queries read the Catalog views alone, while private criteria or a physical-copy 
 UserCards' account-scoped views inside the scope Application binds, so a missing scope fails instead
 of reading another account's rows. A continuation resumes only the same criteria, ordering, user and
 revisions; anything else is a stale continuation that restarts the result.
+
+Recognition prepares a session for its enabled engines on demand, runs one capture attempt at a time
+per session and releases that session's local work on disposal (docs/recognition.md#interface).
+Requests, capture/attempt identities and frame bounds are validated before inference. A reading
+carries catalog-validated candidates in engine order, an editable suggestion that always belongs to
+that set and stays distinguishable from engine-supported printing evidence, provisional state,
+disagreement, engine versions and timings, and never ownership or physical condition. Later readings
+of the hybrid comparison keep the attempt identity; cancellation suppresses later output; no-card,
+multiple-card and ambiguous geometry stay unknown; and invalid input, busy, cancelled and
+unavailable outcomes remain distinct. The preserved browser and Python engines plug in as the
+runtime pipeline Application supplies, so their matching policies stay unchanged.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without

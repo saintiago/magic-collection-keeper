@@ -5,8 +5,10 @@ owns the behavior; this file records how the retained baseline is packaged.
 
 ## Layout
 
-- `index.ts` is the component's provider-owned public entry point. The lifecycle and candidate
-  contract arrives with KAN-17.
+- `index.ts` is the component's provider-owned public entry point (docs/recognition.md#interface,
+  docs/recognition.md#execution): the Prepare/Recognize/Dispose session lifecycle, the reading and
+  candidate model, the failure contract and the engine-pipeline port. `internal/` holds the
+  lifecycle service and the mapping boundary that validates candidate identities against Catalog.
 - `python/` is the preserved visual/OCR pipeline (CollectorVision geometry and artwork matching,
   Paddle-based OCR, bounded Nova Lite title fallback and the independent Nova Pro identity path)
   with its policies, preparation scripts, model/catalog manifests, public fixtures, notices and
@@ -25,6 +27,28 @@ check use (`sources.json` for `prepare.py`, `phone-sources.json` for `replay_pub
 retained browser regressions live in [tests/recognition](../../tests/recognition). The component's
 internals stay private; other components import `index.ts` only (`.dependency-cruiser.mjs`).
 
+## Public contract
+
+`createRecognition` owns the session lifecycle around a run-time engine pipeline that Application
+supplies: preparation is demand-driven for the enabled engines, one capture attempt runs at a time
+per session, requests and frame bounds are validated before inference, and disposal releases the
+session's local work. An attempt returns its initial reading and completion; later readings of the
+same attempt, for example the later comparison of the hybrid path, arrive through the request's
+callback and keep the session/capture/attempt identity. Cancellation suppresses later readings and
+lets the pipeline release local work without promising to cancel an already submitted remote model
+call.
+
+Every reading is mapped at one boundary: candidate identities are validated against the published
+Catalog and enriched with its canonical names, a suggestion always belongs to the candidate set and
+stays `representative` unless engine printing evidence corroborates it, and disagreement is explicit
+instead of presenting competing identities as certain. No-card, multiple-card and ambiguous
+geometry, a possible outcome without a usable candidate and candidates the published Catalog cannot
+validate all stay `unknown`; invalid input, a busy session, cancellation and unavailable inference
+remain distinct failures, and a reading never carries ownership or physical condition. The
+supplied pipeline keeps engine behaviour: the preserved browser/Python engines, their matching
+policies, the hybrid early/later comparison, the independent identity session call limit and at
+most one independent request in flight.
+
 ## Checks
 
 `npm run test:python` runs the preserved Python suite (27 regressions). The runner installs the
@@ -39,6 +63,12 @@ The browser modules resolve their models, catalog and ONNX runtime next to thems
 `browser/vendor/`; `python/scripts/browser_assets.py` prepares that content (ignored by git) and the
 delivery build copies the runtime there (KAN-29).
 
+`tests/component/recognition` covers the public lifecycle and candidate contract with a controlled
+pipeline and Catalog substitute: demand-driven and shared preparation, preparation failure and
+retry, invalid requests and frames before inference, busy inference, initial and later readings,
+completion, cancellation and disposal, candidate validation and ordering, suggestion and evidence,
+geometry, disagreement and the reading shape.
+
 ## Provenance
 
 `python/LICENSE` is AGPL-3.0-only and upstream notices are in `python/notices/`; the
@@ -49,4 +79,5 @@ corresponding-source bundle is assembled by `python/scripts/source_bundle.py`
 application code.
 
 Matching policies, preprocessing, model versions and expected outcomes are unchanged. Transport
-boundaries, browser delivery packaging and UI integration remain with KAN-17, KAN-25 and KAN-29.
+delivery, composing the preserved engines behind the pipeline port and UI integration remain with
+KAN-18, KAN-25 and KAN-29.
