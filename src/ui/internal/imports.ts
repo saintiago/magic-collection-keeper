@@ -121,8 +121,7 @@ interface UiStagingDraft {
 }
 
 /**
- * One confirmation the page keeps, so a retry of the same reviewed entries reuses its identity and
- * a lost response stays recoverable through its operation identity.
+ * One outstanding confirmation, retained until its own operation outcome is established.
  */
 interface UiConfirmationDraft {
   /** Import session the confirmed entries belong to. */
@@ -239,6 +238,8 @@ function importPage(): UiPageDefinition {
       const messages = new Map<string, string>();
       /** Printings one row's own search offered, keyed by entry identity. */
       const printings = new Map<string, readonly PrintingRecord[]>();
+      /** Current search per entry; editing its query or leaving its session retires the request. */
+      const printingSearches = new Map<string, symbol>();
       /** Unsaved manual lines kept for an idempotent retry, keyed by the entry key they stage. */
       const staging = readStagingDrafts(restored?.staging);
       /** Unsaved review input per entry, kept across redraws and with the history entry. */
@@ -452,6 +453,7 @@ function importPage(): UiPageDefinition {
           return;
         }
         sessionId = next;
+        printingSearches.clear();
         records.clear();
         selectedRevisions.clear();
         messages.clear();
@@ -542,39 +544,33 @@ function importPage(): UiPageDefinition {
         const wantedFinish = readFinishValue(finish.value);
         const wantedCondition = readConditionValue(condition.value);
         const lines: UiImportLine[] = [];
+        const retained = new Set(staging.keys());
         for (const target of request.targets) {
           if (target.kind !== 'printing') {
             continue;
           }
           const key = uiEntryKey(target);
           const kept = staging.get(key);
-          const line: UiImportLine =
+          if (
             kept !== undefined &&
-            kept.finish === finish.value &&
-            kept.condition === condition.value &&
-            kept.quantity === wantedQuantity
-              ? {
-                  entryId: kept.entryId,
-                  printingId: target.printingId,
-                  finish: wantedFinish,
-                  condition: wantedCondition,
-                  quantity: wantedQuantity,
-                }
-              : {
-                  entryId: uiImportIdentity(),
-                  printingId: target.printingId,
-                  finish: wantedFinish,
-                  condition: wantedCondition,
-                  quantity: wantedQuantity,
-                };
-          staging.delete(key);
-          staging.set(key, {
-            entryId: line.entryId,
-            finish: finish.value,
-            condition: condition.value,
+            (kept.finish !== finish.value ||
+              kept.condition !== condition.value ||
+              kept.quantity !== wantedQuantity)
+          ) {
+            return {
+              status: 'failed',
+              message:
+                'Retry the pending staging with its original finish, condition and quantity ' +
+                'before adding changed values.',
+            };
+          }
+          const line: UiImportLine = {
+            entryId: kept?.entryId ?? uiImportIdentity(),
+            printingId: target.printingId,
+            finish: wantedFinish,
+            condition: wantedCondition,
             quantity: wantedQuantity,
-          });
-          boundByWindow(staging);
+          };
           lines.push(line);
         }
         if (lines.length === 0) {
@@ -587,6 +583,14 @@ function importPage(): UiPageDefinition {
         let reported: UiOperationOutcome | null = null;
         for (const batch of inBatches(lines, UI_LIMITS.importBatch)) {
           const keys = batch.map((line) => uiEntryKey(stagedLineTarget(line)));
+          for (const line of batch) {
+            staging.set(uiEntryKey(stagedLineTarget(line)), {
+              entryId: line.entryId,
+              finish: line.finish ?? '',
+              condition: line.condition ?? '',
+              quantity: line.quantity,
+            });
+          }
           const outcome = await stageImportLines(
             access,
             {
@@ -602,16 +606,22 @@ function importPage(): UiPageDefinition {
             },
             request.signal,
           );
+          if (closed) {
+            return { status: 'unknown', message: null };
+          }
           if (outcome.status === 'committed') {
+            for (const key of keys) {
+              results?.setSelected(key, false);
+            }
             // The lines are in review now; only a confirmation creates the physical copies.
             forgetStaged(keys);
             inReview += outcome.record?.staged ?? 0;
             continue;
           }
-          if (outcome.status === 'conflict') {
-            // A line identity that conflicts cannot be retried as it is; the next attempt stages a
-            // fresh identity instead of overwriting the recorded line.
-            forgetStaged(keys);
+          if (outcome.status === 'failed') {
+            // A first attempt rejected before writing can be corrected. A rejected retry does
+            // not establish the outcome of an earlier uncertain attempt with that identity.
+            forgetStaged(keys.filter((key) => !retained.has(key)));
           }
           reported = stagingOutcome(inReview, outcome);
           break;
@@ -742,6 +752,7 @@ function importPage(): UiPageDefinition {
         query.addEventListener('input', () => {
           clearMessage(editor);
           draftFor(record).query = query.value;
+          printingSearches.delete(entry.entryId);
         });
         find.addEventListener('click', () => {
           void findPrintings(editor, query.value);
@@ -770,6 +781,7 @@ function importPage(): UiPageDefinition {
         });
         save.addEventListener('click', () => {
           void saveReview(editor, {
+            query: query.value,
             printingId: chosen.value,
             finish: wantedFinish.value,
             condition: wantedCondition.value,
@@ -840,33 +852,43 @@ function importPage(): UiPageDefinition {
         if (record === undefined) {
           return;
         }
+        const entryId = record.entry.entryId;
+        const request = Symbol();
+        printingSearches.set(entryId, request);
+        const current = () => !closed && printingSearches.get(entryId) === request;
         const wanted = text.trim();
         if (wanted.length === 0) {
-          editor.status.textContent = 'Enter a card name to find its printings.';
+          report(editor, 'Enter a card name to find its printings.');
+          printingSearches.delete(entryId);
           return;
         }
-        editor.status.textContent = 'Searching for printings…';
-        let offered: readonly PrintingRecord[];
+        report(editor, 'Searching for printings…');
         try {
-          offered = await searchPrintings(search, catalog, wanted, context.signal);
-        } catch (cause) {
-          if (closed) {
+          const offered = await searchPrintings(search, catalog, wanted, context.signal);
+          if (!current()) {
             return;
           }
-          editor.status.textContent = `The printings could not be read: ${readMessage(
-            cause,
-            'unknown failure',
-          )}`;
-          return;
+          printings.set(entryId, offered);
+          boundByWindow(printings);
+          report(
+            editor,
+            offered.length === 0 ? 'The catalog published no printing for that search.' : '',
+          );
+        } catch (cause) {
+          if (!current()) {
+            return;
+          }
+          report(
+            editor,
+            `The printings could not be read: ${readMessage(cause, 'unknown failure')}`,
+          );
+        } finally {
+          if (current()) {
+            printingSearches.delete(entryId);
+            // The row may have been redrawn while the search ran; update its current editor.
+            pending?.reloadFragment(editor.entry.key, 'tools');
+          }
         }
-        if (closed) {
-          return;
-        }
-        printings.set(record.entry.entryId, offered);
-        boundByWindow(printings);
-        editor.status.textContent =
-          offered.length === 0 ? 'The catalog published no printing for that search.' : '';
-        paintEditor(editor);
       }
 
       /**
@@ -876,12 +898,7 @@ function importPage(): UiPageDefinition {
        */
       async function saveReview(
         editor: UiImportEditor,
-        submitted: {
-          readonly printingId: string;
-          readonly finish: string;
-          readonly condition: string;
-          readonly quantity: string;
-        },
+        submitted: Readonly<UiReviewDraft>,
       ): Promise<void> {
         const record = records.get(editor.entry.key);
         if (record === undefined) {
@@ -902,18 +919,40 @@ function importPage(): UiPageDefinition {
           report(editor, `Choose a quantity from 1 to ${uiMaxImportQuantity}.`);
           return;
         }
-        const chosenPrinting = knownPrinting(
+        let chosenPrinting = knownPrinting(
           record,
           printings.get(record.entry.entryId) ?? [],
           printingId,
         );
+        if (chosenPrinting === null) {
+          try {
+            chosenPrinting =
+              (await resolvePrintings(catalog, [printingId])).get(printingId) ?? null;
+          } catch (cause) {
+            if (!closed && sessionId === record.entry.sessionId) {
+              report(
+                editor,
+                `The selected printing could not be read: ${readMessage(cause, 'unknown failure')}`,
+              );
+            }
+            return;
+          }
+        }
+        if (closed) {
+          return;
+        }
+        const resolvedFinish = wantedFinish ?? firstFinish(chosenPrinting);
+        if (chosenPrinting === null || resolvedFinish === null) {
+          report(editor, 'The selected printing is unavailable. Find its printing before saving.');
+          return;
+        }
         const outcome = await reviewImportEntry(
           access,
           {
             entryId: record.entry.entryId,
             expectedRevision: record.entry.revision,
             printingId,
-            finish: wantedFinish ?? firstFinish(chosenPrinting) ?? 'nonfoil',
+            finish: resolvedFinish,
             condition: readConditionValue(submitted.condition),
             quantity: wantedQuantity,
           },
@@ -976,6 +1015,7 @@ function importPage(): UiPageDefinition {
         if (outcome.status === 'committed') {
           drafts.delete(record.entry.entryId);
           printings.delete(record.entry.entryId);
+          printingSearches.delete(record.entry.entryId);
           messages.delete(editor.entry.key);
         } else {
           report(editor, outcome.message ?? 'The entry was not discarded.');
@@ -1016,9 +1056,6 @@ function importPage(): UiPageDefinition {
           // Only the discarded import's own review input ends; the unsaved work of another import
           // the page still presents stays (docs/user-interface.md#state-ownership-and-restoration).
           forgetPresentedEntries();
-          if (confirmation !== null && confirmation.sessionId === presented) {
-            confirmation = null;
-          }
           paintConfirmation();
         }
         await reconcileImport();
@@ -1029,40 +1066,26 @@ function importPage(): UiPageDefinition {
         for (const [key, record] of records) {
           drafts.delete(record.entry.entryId);
           printings.delete(record.entry.entryId);
+          printingSearches.delete(record.entry.entryId);
           messages.delete(key);
         }
         records.clear();
         selectedRevisions.clear();
       }
 
-      /** One entry's confirmation: the reviewed revisions under one operation identity. */
-      function confirmationFor(
-        presented: string,
-        entries: readonly ConfirmImportEntryInput[],
-      ): UiConfirmationDraft {
-        if (
-          confirmation !== null &&
-          confirmation.sessionId === presented &&
-          sameConfirmation(confirmation.entries, entries)
-        ) {
-          return confirmation;
-        }
-        confirmation = {
-          sessionId: presented,
-          operationId: uiImportIdentity(),
-          entries: [...entries],
-        };
-        paintConfirmation();
-        return confirmation;
-      }
-
       /** Confirms the selected entries and presents the copies its receipt names. */
       async function confirmSelection(request: UiToolRequest): Promise<UiOperationOutcome> {
+        if (confirming || recovering || confirmation !== null) {
+          return {
+            status: 'failed',
+            message: 'Check the outstanding confirmation outcome before confirming more entries.',
+          };
+        }
         const presented = sessionId;
         if (presented === null) {
           return { status: 'failed', message: 'Read the pending import before confirming it.' };
         }
-        const chosen: { readonly key: string; readonly entry: ConfirmImportEntryInput }[] = [];
+        const chosen: ConfirmImportEntryInput[] = [];
         for (const target of request.targets) {
           if (target.kind !== 'pending') {
             continue;
@@ -1078,7 +1101,7 @@ function importPage(): UiPageDefinition {
               message: 'Reload the pending import before confirming these entries.',
             };
           }
-          chosen.push({ key, entry: { entryId: target.entryId, expectedRevision: revision } });
+          chosen.push({ entryId: target.entryId, expectedRevision: revision });
         }
         if (chosen.length === 0) {
           return { status: 'failed', message: 'Select the entries to confirm.' };
@@ -1092,9 +1115,14 @@ function importPage(): UiPageDefinition {
         let note: string | null = null;
         let reported: UiOperationOutcome | null = null;
         try {
-          for (const batch of inBatches(chosen, UI_LIMITS.importBatch)) {
-            const entries = batch.map((one) => one.entry);
-            const operation = confirmationFor(presented, entries);
+          for (const entries of inBatches(chosen, UI_LIMITS.importBatch)) {
+            const operation: UiConfirmationDraft = {
+              sessionId: presented,
+              operationId: uiImportIdentity(),
+              entries,
+            };
+            confirmation = operation;
+            paintConfirmation();
             const outcome = await confirmImport(
               access,
               { operationId: operation.operationId, sessionId: presented, entries },
@@ -1102,6 +1130,9 @@ function importPage(): UiPageDefinition {
             );
             if (closed) {
               return { status: 'unknown', message: null };
+            }
+            if (outcome.status !== 'unknown' && confirmation === operation) {
+              confirmation = null;
             }
             if (outcome.status !== 'committed' || outcome.record === null) {
               reported = {
@@ -1117,14 +1148,7 @@ function importPage(): UiPageDefinition {
             }
             copies += outcome.record.copies.length;
             note ??= outcome.message;
-            // Only the entries this confirmation covered leave the review; the ones a failed
-            // request left undecided stay selected for their own confirmation.
-            for (const one of batch) {
-              pending?.setSelected(one.key, false);
-              drafts.delete(one.entry.entryId);
-              printings.delete(one.entry.entryId);
-              selectedRevisions.delete(one.key);
-            }
+            forgetConfirmed(operation);
           }
         } finally {
           confirming = false;
@@ -1136,12 +1160,24 @@ function importPage(): UiPageDefinition {
           void reconcileImport();
           return reported;
         }
-        confirmation = null;
-        paintConfirmation();
         const message = confirmationMessage(copies, note);
         reviewStatus.textContent = message;
         void reconcileImport();
         return { status: 'committed', message };
+      }
+
+      /** Clears only the selection and drafts covered by this established confirmation. */
+      function forgetConfirmed(operation: UiConfirmationDraft): void {
+        for (const entry of operation.entries) {
+          const key = uiEntryKey({ kind: 'pending', entryId: entry.entryId });
+          if (sessionId === operation.sessionId) {
+            pending?.setSelected(key, false);
+            selectedRevisions.delete(key);
+          }
+          drafts.delete(entry.entryId);
+          printings.delete(entry.entryId);
+          printingSearches.delete(entry.entryId);
+        }
       }
 
       /** Takes the committed entry and session into the page's own view of them. */
@@ -1242,12 +1278,15 @@ function importPage(): UiPageDefinition {
           recovering = false;
           paintConfirmation();
         }
-        if (closed) {
+        if (closed || confirmation !== outstanding) {
           return;
         }
-        if (outcome.status === 'committed' && outcome.record !== null) {
+        if (outcome.status !== 'unknown') {
           confirmation = null;
           paintConfirmation();
+        }
+        if (outcome.status === 'committed' && outcome.record !== null) {
+          forgetConfirmed(outstanding);
           const message = confirmationMessage(outcome.record.copies.length, outcome.message);
           reviewStatus.textContent = message;
           void reconcileImport();
@@ -1561,7 +1600,7 @@ function readStagingDrafts(value: unknown): Map<string, UiStagingDraft> {
       quantity,
     });
   }
-  boundByWindow(drafts);
+  // Retry identities belong to the outstanding action, not the rendered working window.
   return drafts;
 }
 
@@ -1590,9 +1629,8 @@ function readReviewDrafts(value: unknown): Map<string, UiReviewDraft> {
 }
 
 /**
- * The confirmation one history entry kept, so a retry of the same reviewed entries reuses the
- * recorded operation identity and a lost response stays recoverable independently of the pending
- * entries it covered.
+ * The outstanding confirmation one history entry kept, recoverable through its operation identity
+ * independently of the pending entries it covered.
  */
 function readConfirmationDraft(value: unknown): UiConfirmationDraft | null {
   const record = readPageState(value);
@@ -1828,32 +1866,10 @@ function inBatches<Value>(values: readonly Value[], size: number): readonly (rea
   return batches;
 }
 
-/** Whether two confirmations name the same reviewed entries at the same revisions. */
-function sameConfirmation(
-  kept: readonly ConfirmImportEntryInput[],
-  wanted: readonly ConfirmImportEntryInput[],
-): boolean {
-  if (kept.length !== wanted.length) {
-    return false;
-  }
-  return wanted.every(
-    (entry, index) =>
-      kept[index]?.entryId === entry.entryId &&
-      kept[index]?.expectedRevision === entry.expectedRevision,
-  );
-}
-
 /** Whether one draft still holds exactly the reviewed input a save submitted. */
-function sameReviewDraft(
-  draft: UiReviewDraft,
-  submitted: {
-    readonly printingId: string;
-    readonly finish: string;
-    readonly condition: string;
-    readonly quantity: string;
-  },
-): boolean {
+function sameReviewDraft(draft: UiReviewDraft, submitted: Readonly<UiReviewDraft>): boolean {
   return (
+    draft.query === submitted.query &&
     draft.printingId === submitted.printingId &&
     draft.finish === submitted.finish &&
     draft.condition === submitted.condition &&

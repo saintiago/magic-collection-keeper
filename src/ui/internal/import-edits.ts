@@ -239,7 +239,7 @@ export async function discardImportSession(
  * Confirms reviewed entries under one operation identity. A successful response or the operation's
  * recorded outcome reports the receipt that names the created copies; an explicit absence of a
  * recorded outcome says that the confirmation did not commit, so the page keeps the reviewed
- * entries for an idempotent retry under the same identity
+ * entries for another explicit confirmation
  * (docs/user-cards.md#interface, docs/user-interface.md#capture-and-review).
  */
 export async function confirmImport(
@@ -278,7 +278,7 @@ const recordedConfirmationNote =
 /**
  * Reads the recorded outcome of one confirmation operation independently of the entries it
  * covered. The receipt of a recorded outcome is reported as committed; an explicit absence says
- * that no copies were created, so the page may retry the same operation identity; an unreadable
+ * that no copies were created, so the page can release the operation identity; an unreadable
  * outcome stays unknown, so the page keeps the identity instead of inferring commitment
  * (docs/application.md#construction-and-request-boundary).
  */
@@ -298,7 +298,7 @@ export async function recoverConfirmation(
   }
   if (recovered?.outcome === 'absent') {
     return {
-      status: 'unknown',
+      status: 'failed',
       message:
         'This confirmation is not recorded, so no copies were created. Review the entries and ' +
         'confirm them again.',
@@ -308,8 +308,7 @@ export async function recoverConfirmation(
   return {
     status: 'unknown',
     message:
-      'The confirmation outcome could not be read. Retry the same confirmation before ' +
-      'changing the reviewed entries.',
+      'The confirmation outcome could not be read. Check its outcome before confirming more entries.',
     record: null,
   };
 }

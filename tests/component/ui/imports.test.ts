@@ -354,7 +354,7 @@ describe('import confirmation', () => {
       },
     );
 
-    expect(outcome.status).toBe('unknown');
+    expect(outcome.status).toBe('failed');
     expect(outcome.record).toBeNull();
     expect(outcome.message).toContain('not recorded');
   });
@@ -425,7 +425,7 @@ describe('import confirmation', () => {
 
     expect(recorded).toMatchObject({ status: 'committed', record: { copies: receipt.copies } });
     expect(recorded.message).toContain('already been recorded');
-    expect(absent).toMatchObject({ status: 'unknown', record: null });
+    expect(absent).toMatchObject({ status: 'failed', record: null });
     expect(absent.message).toContain('not recorded');
     expect(unreadable).toMatchObject({ status: 'unknown', record: null });
     expect(unreadable.message).toContain('could not be read');

@@ -1143,3 +1143,372 @@ test('confirms a selected entry the loaded window no longer presents', async ({ 
   });
   expect(errors).toEqual([]);
 });
+
+for (const obsolete of ['success', 'failure', 'edited query', 'changed session'] as const) {
+  test(`ignores an obsolete printing search after ${obsolete}`, async ({ page }) => {
+    const other = session({ sessionId: 'capture', sourceKind: 'capture' });
+    const errors = await openPendingReview(page, [entry()], [session(), other]);
+    await page.fill('#import-printing-query-entry-1', 'older');
+    await page.click('#import-printing-find-entry-1');
+    const older = await requested(page, 'searches');
+    await page.fill('#import-printing-query-entry-1', 'newer');
+    if (obsolete === 'changed session') {
+      await page.selectOption('#import-session', 'capture');
+      const otherRead = await requested(page, 'entries', 1);
+      await settle(page, 'settleEntries', otherRead.id, {
+        session: other,
+        entries: [entry({ entryId: 'other', sessionId: 'capture' })],
+      });
+      await page.selectOption('#import-session', 'manual');
+      const back = await requested(page, 'entries', 2);
+      await settle(page, 'settleEntries', back.id, { session: session(), entries: [entry()] });
+    } else if (obsolete !== 'edited query') {
+      await page.click('#import-printing-find-entry-1');
+      const newer = await requested(page, 'searches', 1);
+      if (obsolete === 'failure') {
+        await control(page, 'fail', older.id, { code: 'unavailable', message: 'Obsolete failure' });
+        await expect(page.locator('#import-entry-status-entry-1')).toHaveText(
+          'Searching for printings…',
+        );
+      }
+      await settle(page, 'settleSearch', newer.id, searchPage([m10]));
+      await expect(page.locator('#import-review-printing-entry-1 option')).toHaveCount(3);
+    }
+    if (obsolete !== 'failure') {
+      await settle(page, 'settleSearch', older.id, searchPage(obsolete === 'success' ? [] : [m10]));
+    }
+    // Redraw from page state as well as checking the current controls, so a detached editor
+    // cannot hide an obsolete result stored for the next render.
+    await page.selectOption('#import-review-printing-entry-1', m11.printingId);
+    await expect(page.locator('#import-printing-query-entry-1')).toHaveValue('newer');
+    await expect(page.locator('#import-entry-status-entry-1')).toBeEmpty();
+    await expect(page.locator('#import-review-printing-entry-1 option')).toHaveCount(
+      obsolete === 'success' || obsolete === 'failure' ? 3 : 2,
+    );
+    expect(errors).toEqual([]);
+  });
+}
+
+test('keeps printing search input typed during a review save', async ({ page }) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.fill('#import-review-quantity-entry-1', '2');
+  await page.click('#import-review-save-entry-1');
+  const review = await requested(page, 'review');
+  await page.fill('#import-printing-query-entry-1', 'set:m10');
+  await settle(page, 'settleReview', review.id, {
+    entry: entry({ quantity: 2, revision: 4 }),
+    session: session({ revision: 5 }),
+  });
+  const refresh = await requested(page, 'entries', 1);
+  await settle(page, 'settleEntries', refresh.id, {
+    session: session({ revision: 5 }),
+    entries: [entry({ quantity: 2, revision: 4 })],
+  });
+  await expect(page.locator('#import-printing-query-entry-1')).toHaveValue('set:m10');
+  await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('2');
+  expect(errors).toEqual([]);
+});
+
+/** Loads and selects a manual search across pages, including selections beyond the DOM window. */
+async function selectManualPrintings(page: Page, count: number): Promise<string[]> {
+  const printings = Array.from({ length: count }, (_, index) => printingWith(200 + index));
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings });
+  const listing = await requested(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, []);
+  await page.fill('#import-manual-query', 'Lightning Bolt');
+  await page.click('#import-manual-submit');
+  for (let offset = 0; offset < count; offset += 20) {
+    if (offset > 0) {
+      await page.locator('#import-results [data-ui-more]').click();
+    }
+    const read = await requested(page, 'searches', offset / 20);
+    await settle(
+      page,
+      'settleSearch',
+      read.id,
+      searchSlice(
+        printings.slice(offset, offset + 20),
+        offset + 20 < count ? `cursor-${offset + 20}` : null,
+      ),
+    );
+    await page.locator('#import-results [data-ui-select]:not(:checked)').evaluateAll((inputs) => {
+      for (const input of inputs) (input as HTMLInputElement).click();
+    });
+  }
+  await expect(page.locator('#import-results [data-ui-selection-count]')).toHaveText(
+    `${count} selected`,
+  );
+  return errors;
+}
+
+/** Answers the restored result window through the same bounded search boundary. */
+async function restoreManualPrintings(page: Page, count: number): Promise<void> {
+  let index = Math.ceil(count / 20);
+  for (;;) {
+    const read = await requested<{ continuation?: string }>(page, 'searches', index++);
+    const offset = Number(read.arguments.continuation?.replace('cursor-', '') ?? 0);
+    const end = Math.min(count, offset + 20);
+    await settle(
+      page,
+      'settleSearch',
+      read.id,
+      searchSlice(
+        Array.from({ length: end - offset }, (_, i) => printingWith(200 + offset + i)),
+        end < count ? `cursor-${end}` : null,
+      ),
+    );
+    if (end === count) return;
+  }
+}
+
+test('retries only the unresolved staging batch after a partial bulk success and Back', async ({
+  page,
+}) => {
+  const errors = await selectManualPrintings(page, 51);
+  await page.click('#import-results [data-ui-tool="add-to-review"]');
+  const first = await requested(page, 'stage');
+  await settle(page, 'settleStage', first.id, {
+    session: session(),
+    entries: [],
+    staged: 50,
+    replayed: false,
+  });
+  const last = await requested<Record<string, unknown>>(page, 'stage', 1);
+  await control(page, 'fail', last.id, { code: 'unavailable', message: 'Lost response' });
+  await expect(page.locator('#import-results [data-ui-selection-count]')).toHaveText('1 selected');
+  const refresh = await requested(page, 'sessions', 1);
+  await settle(page, 'settleSessions', refresh.id, []);
+  await control(page, 'navigate', { page: 'home' });
+  await control(page, 'back');
+  const restored = await requested(page, 'sessions', 2);
+  await settle(page, 'settleSessions', restored.id, []);
+  await restoreManualPrintings(page, 51);
+  await page.click('#import-results [data-ui-tool="add-to-review"]');
+  const retry = await requested<Record<string, unknown>>(page, 'stage', 2);
+  expect(retry.arguments.entries).toEqual(last.arguments.entries);
+  await settle(page, 'settleStage', retry.id, {
+    session: session(),
+    entries: [],
+    staged: 0,
+    replayed: true,
+  });
+  await expect(page.locator('#import-results [data-ui-selection-count]')).toHaveText('0 selected');
+  expect(errors).toEqual([]);
+});
+
+test('retains staging identities beyond the rendering window and through Back', async ({
+  page,
+}) => {
+  const errors = await selectManualPrintings(page, 501);
+  await page.click('#import-results [data-ui-tool="add-to-review"]');
+  const first = await requested<Record<string, unknown>>(page, 'stage');
+  await control(page, 'fail', first.id, { code: 'unavailable', message: 'Lost response' });
+  await expect(page.locator('#import-results [data-ui-outcome]')).toContainText('unknown');
+  const refresh = await requested(page, 'sessions', 1);
+  await settle(page, 'settleSessions', refresh.id, []);
+  // Changing the manual input cannot mint new identities for an uncertain acquisition.
+  await page.fill('#import-manual-quantity', '2');
+  await page.click('#import-results [data-ui-tool="add-to-review"]');
+  await expect(page.locator('#import-results [data-ui-outcome]')).toContainText('original finish');
+  expect(await control<unknown[]>(page, 'stage')).toHaveLength(1);
+  await page.fill('#import-manual-quantity', '1');
+  await control(page, 'navigate', { page: 'home' });
+  await control(page, 'back');
+  const restored = await requested(page, 'sessions', 2);
+  await settle(page, 'settleSessions', restored.id, []);
+  await restoreManualPrintings(page, 501);
+  await page.click('#import-results [data-ui-tool="add-to-review"]');
+  const retry = await requested<Record<string, unknown>>(page, 'stage', 1);
+  expect(retry.arguments.entries).toEqual(first.arguments.entries);
+  expect(retry.arguments.entries as unknown[]).toHaveLength(50);
+  expect(errors).toEqual([]);
+});
+
+for (const recovered of ['recorded', 'absent'] as const) {
+  test(`protects unresolved confirmation during other actions until recovery is ${recovered}`, async ({
+    page,
+  }) => {
+    const errors = await openPendingReview(page, pendingEntries(2));
+    const select = (id: number) =>
+      page.locator(`#import-pending [data-ui-entry="pending:entry-${id}"] [data-ui-select]`);
+    await select(1).check();
+    await page.click('#import-pending [data-ui-tool="confirm-import"]');
+    const first = await requested<Record<string, unknown>>(page, 'confirm');
+    await control(page, 'fail', first.id, { code: 'unavailable', message: 'Lost' });
+    const lost = await requested(page, 'recover');
+    await control(page, 'fail', lost.id, { code: 'unavailable', message: 'Offline' });
+    await expect(page.locator('#import-recover')).toBeEnabled();
+    await select(1).uncheck();
+    await select(2).check();
+    await page.click('#import-pending [data-ui-tool="confirm-import"]');
+    await expect(page.locator('#import-pending [data-ui-outcome]')).toContainText(
+      'outstanding confirmation',
+    );
+    expect(await control<unknown[]>(page, 'confirm')).toHaveLength(1);
+    await page.click('#import-recover');
+    const recovery = await requested<string>(page, 'recover', 1);
+    expect(recovery.arguments).toBe(first.arguments.operationId);
+    await page.click('#import-pending [data-ui-tool="confirm-import"]');
+    await expect(page.locator('#import-pending [data-ui-outcome]')).toContainText(
+      'outstanding confirmation',
+    );
+    expect(await control<unknown[]>(page, 'confirm')).toHaveLength(1);
+    await page.click('#import-discard-session');
+    await page
+      .locator('dialog')
+      .getByRole('button', { name: 'Discard import', exact: true })
+      .click();
+    const discarded = await requested(page, 'discardSession');
+    await settle(
+      page,
+      'settleDiscardSession',
+      discarded.id,
+      session({ state: 'discarded', pendingEntries: 0 }),
+    );
+    await expect(page.locator('#import-recover')).toBeVisible();
+    await settle(
+      page,
+      'settleRecover',
+      recovery.id,
+      recovered === 'absent'
+        ? { outcome: 'absent' }
+        : {
+            outcome: 'recorded',
+            receipt: {
+              operationId: recovery.arguments,
+              sessionId: 'manual',
+              sourceKind: 'manual',
+              sourceId: 'manual',
+              copies: receiptCopies(1),
+            },
+          },
+    );
+    await expect(page.locator('#import-recover')).toBeHidden();
+    await expect(page.locator('#import-review-status')).toContainText(
+      recovered === 'absent' ? 'not recorded' : '1 physical copy',
+    );
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const context of ['Back', 'another search', 'missing lookup', 'failed lookup'] as const) {
+  test(`resolves the selected printing finish after ${context}`, async ({ page }) => {
+    const errors = await openPendingReview(page, [entry()]);
+    const foil: PrintingRecord = { ...m10, finishes: ['foil'] };
+    await scriptCatalog(page, { cards: [boltCard], printings: [m11, foil] });
+    await page.fill('#import-printing-query-entry-1', 'set:m10');
+    await page.click('#import-printing-find-entry-1');
+    const search = await requested(page, 'searches');
+    await settle(page, 'settleSearch', search.id, searchPage([foil]));
+    await page.selectOption('#import-review-printing-entry-1', foil.printingId);
+    await expect(page.locator('#import-review-finish-entry-1')).toHaveValue('');
+    if (context === 'another search') {
+      await page.fill('#import-printing-query-entry-1', 'set:m11');
+      await page.click('#import-printing-find-entry-1');
+      const newer = await requested(page, 'searches', 1);
+      await settle(page, 'settleSearch', newer.id, searchPage([m11]));
+      await expect(page.locator('#import-review-printing-entry-1')).toHaveValue(foil.printingId);
+    } else {
+      await control(page, 'navigate', { page: 'home' });
+      await control(page, 'back');
+      const sessions = await requested(page, 'sessions', 1);
+      await settle(page, 'settleSessions', sessions.id, [session()]);
+      const entries = await requested(page, 'entries', 1);
+      await settle(page, 'settleEntries', entries.id, { session: session(), entries: [entry()] });
+      await expect(page.locator('#import-review-printing-entry-1')).toHaveValue(foil.printingId);
+    }
+    if (context === 'missing lookup')
+      await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+    const catalogCount = (await control<unknown[]>(page, 'catalogRequests')).length;
+    if (context === 'failed lookup') await control(page, 'scriptCatalog', null);
+    await page.click('#import-review-save-entry-1');
+    if (context === 'failed lookup') {
+      const lookup = await requested(page, 'catalogRequests', catalogCount);
+      await control(page, 'fail', lookup.id, { code: 'unavailable', message: 'Offline' });
+    }
+    if (context === 'missing lookup' || context === 'failed lookup') {
+      await expect(page.locator('#import-entry-status-entry-1')).toContainText(
+        context === 'missing lookup' ? 'unavailable' : 'could not be read',
+      );
+      expect(await control<unknown[]>(page, 'review')).toHaveLength(0);
+      await expect(page.locator('#import-review-printing-entry-1')).toHaveValue(foil.printingId);
+      await expect(page.locator('#import-printing-query-entry-1')).toHaveValue('set:m10');
+    } else {
+      const review = await requested<Record<string, unknown>>(page, 'review');
+      expect(review.arguments).toMatchObject({ printingId: foil.printingId, finish: 'foil' });
+    }
+    expect(errors).toEqual([]);
+  });
+}
+
+test('serializes confirmation across sessions and releases it after explicit absence', async ({
+  page,
+}) => {
+  const other = session({ sessionId: 'capture', sourceKind: 'capture' });
+  const errors = await openPendingReview(page, [entry()], [session(), other]);
+  await page.locator('#import-pending [data-ui-select]').check();
+  await page.click('#import-pending [data-ui-tool="confirm-import"]');
+  const first = await requested<Record<string, unknown>>(page, 'confirm');
+  await expect(page.locator('#import-recover')).toBeDisabled();
+  await page.selectOption('#import-session', 'capture');
+  const read = await requested(page, 'entries', 1);
+  await settle(page, 'settleEntries', read.id, {
+    session: other,
+    entries: [entry({ entryId: 'other', sessionId: 'capture' })],
+  });
+  await page.locator('#import-pending [data-ui-select]').check();
+  await page.click('#import-pending [data-ui-tool="confirm-import"]');
+  await expect(page.locator('#import-pending [data-ui-outcome]')).toContainText(
+    'outstanding confirmation',
+  );
+  expect(await control<unknown[]>(page, 'confirm')).toHaveLength(1);
+  await control(page, 'fail', first.id, { code: 'unavailable', message: 'Lost response' });
+  const recover = await requested<string>(page, 'recover');
+  expect(recover.arguments).toBe(first.arguments.operationId);
+  await settle(page, 'settleRecover', recover.id, { outcome: 'absent' });
+  await expect(page.locator('#import-recover')).toBeHidden();
+  await page.click('#import-pending [data-ui-tool="confirm-import"]');
+  const second = await requested<Record<string, unknown>>(page, 'confirm', 1);
+  expect(second.arguments.sessionId).toBe('capture');
+  expect(second.arguments.operationId).not.toBe(first.arguments.operationId);
+  expect(second.arguments.entries).toEqual([{ entryId: 'other', expectedRevision: 3 }]);
+  expect(errors).toEqual([]);
+});
+
+for (const priorUnknown of [false, true]) {
+  test(`allows staging corrections only after a definite first-attempt failure (prior unknown: ${priorUnknown})`, async ({
+    page,
+  }) => {
+    const errors = await selectManualPrintings(page, 1);
+    await page.click('#import-results [data-ui-tool="add-to-review"]');
+    let attempt = await requested<Record<string, unknown>>(page, 'stage');
+    const original = attempt.arguments.entries;
+    if (priorUnknown) {
+      await control(page, 'fail', attempt.id, { code: 'unavailable', message: 'Lost response' });
+      await expect(page.locator('#import-results [data-ui-outcome]')).toContainText('unknown');
+      await page.click('#import-results [data-ui-tool="add-to-review"]');
+      attempt = await requested<Record<string, unknown>>(page, 'stage', 1);
+      expect(attempt.arguments.entries).toEqual(original);
+    }
+    await control(page, 'fail', attempt.id, {
+      code: 'invalid-request',
+      message: 'Unsupported attributes',
+    });
+    await expect(page.locator('#import-results [data-ui-outcome]')).toContainText(
+      'Unsupported attributes',
+    );
+    await page.fill('#import-manual-quantity', '2');
+    await page.click('#import-results [data-ui-tool="add-to-review"]');
+    if (priorUnknown) {
+      await expect(page.locator('#import-results [data-ui-outcome]')).toContainText(
+        'original finish',
+      );
+      expect(await control<unknown[]>(page, 'stage')).toHaveLength(2);
+    } else {
+      const corrected = await requested<Record<string, unknown>>(page, 'stage', 1);
+      expect(corrected.arguments.entries).toMatchObject([{ quantity: 2 }]);
+    }
+    expect(errors).toEqual([]);
+  });
+}
