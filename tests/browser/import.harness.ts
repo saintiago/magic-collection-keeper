@@ -146,6 +146,8 @@ export interface UiImportControl {
     id: number,
     failure: { readonly code: ApplicationFailureCode; readonly message: string },
   ): void;
+  /** Presents another verified account of the same deployment, as a sign-in does. */
+  signInAs(accountId: string): void;
   signOut(): void;
   navigate(view: UiView): void;
   back(): void;
@@ -458,6 +460,7 @@ export function installImportHarness(
       waiting.reject(new ApplicationError(failure.code, failure.message));
     },
     signOut: () => report(null),
+    signInAs: (accountId) => report({ accountId, displayName: accountId }),
     navigate: (view) => shell.navigate(view),
     back: () => shell.back(),
     dispose: () => shell.dispose(),

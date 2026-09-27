@@ -237,6 +237,14 @@ export async function stageCaptureObservation(
 }
 
 /**
+ * What one source import whose outcome is not established reports: the input it composes is kept
+ * under its identity, so importing the same source again reads the rows the provider recorded
+ * (docs/user-interface.md#source-imports).
+ */
+export const uiUnfinishedSourceMessage =
+  'The staging outcome is unknown. Import the same source again to read its recorded rows.';
+
+/**
  * Stages one supported source into review. The provider parses inside its own boundary and
  * reconciles every parsed line with what the import the caller identified already staged or
  * acquired, so a source whose response was lost is recovered by importing it again under that
@@ -253,7 +261,7 @@ export async function stageSourceImport(
     () => access.source(input, signal),
     async () => null,
     'The source lines were not added to review.',
-    'The staging outcome is unknown. Import the same source again to read its recorded rows.',
+    uiUnfinishedSourceMessage,
   );
 }
 

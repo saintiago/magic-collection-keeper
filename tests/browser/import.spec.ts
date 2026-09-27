@@ -7,7 +7,10 @@
  * pending line and only its confirmation creates copies, a reviewed entry exposes and corrects its
  * printing, finish, condition and quantity, an unresolved entry is resolved before confirmation, a
  * lost confirmation response is recovered through the recorded outcome of its operation, and
- * discarding ends pending membership without creating copies.
+ * discarding ends pending membership without creating copies. A source import keeps the identity of
+ * the list it composes with its input through a pending or lost response, a reload, a source-method
+ * switch and the account that dispatched it, so importing the same source again retries that list
+ * instead of staging a second one.
  */
 
 import path from 'node:path';
@@ -2251,9 +2254,161 @@ for (const method of sourceMethods) {
       page.locator(`#import-pending [data-ui-entry="pending:${recordedEntry.entryId}"]`),
     ).toBeVisible();
     await expect(page.locator('#import-provenance')).toHaveText(method.provenance);
+
+    // The unfinished import survives the reload: its input and the identity it was dispatched
+    // under are presented again, so importing that input retries this import instead of staging
+    // another list (docs/user-interface.md#source-imports).
+    await expect(page.locator('#import-source-status')).toHaveText(
+      'The staging outcome is unknown. Import the same source again to read its recorded rows.',
+    );
+    await page.click('#import-source-submit');
+    const retried = await requested<StageSourceImportInput>(page, 'source');
+    expect(retried.arguments).toEqual(parsed.arguments);
     expect(errors).toEqual([]);
   });
 }
+
+test('keeps the unfinished import of a source method across a method switch', async ({ page }) => {
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, []);
+
+  await page.selectOption('#import-source-format', 'moxfield');
+  await page.fill('#import-source-url', 'https://moxfield.com/decks/deck-switch-0001');
+  await page.click('#import-source-submit');
+  const moxfield = await requested<StageSourceImportInput>(page, 'source');
+  await control(page, 'fail', moxfield.id, {
+    code: 'unavailable',
+    message: 'Moxfield could not be reached within the time limit; no import is proven.',
+  });
+  const reconcile = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', reconcile.id, []);
+
+  // Another method's import is a list of its own and does not take over the identity of the
+  // unfinished deck (docs/user-interface.md#source-imports).
+  await page.selectOption('#import-source-format', 'pasted-list');
+  await page.fill('#import-source-text', '4 Lightning Bolt (M11) 149');
+  await page.click('#import-source-submit');
+  const pasted = await requested<StageSourceImportInput>(page, 'source', 1);
+  expect(pasted.arguments).toMatchObject({ format: 'pasted-list' });
+  expect(pasted.arguments.sessionId).not.toBe(moxfield.arguments.sessionId);
+  await control(page, 'fail', pasted.id, {
+    code: 'invalid-request',
+    message: 'The source listed no card lines this import can parse.',
+  });
+
+  // Coming back to the unfinished method presents its own input again, and importing it retries
+  // that import instead of staging a second deck
+  // (docs/user-interface.md#source-imports).
+  await page.selectOption('#import-source-format', 'moxfield');
+  await expect(page.locator('#import-source-url')).toHaveValue(
+    'https://moxfield.com/decks/deck-switch-0001',
+  );
+  await expect(page.locator('#import-source-status')).toHaveText(
+    'The staging outcome is unknown. Import the same source again to read its recorded rows.',
+  );
+  await page.click('#import-source-submit');
+  const retry = await requested<StageSourceImportInput>(page, 'source', 2);
+  expect(retry.arguments).toEqual(moxfield.arguments);
+  expect(errors).toEqual([]);
+});
+
+test('keeps a source import whose request is still pending across a reload', async ({ page }) => {
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, []);
+
+  await page.selectOption('#import-source-format', 'moxfield');
+  await page.fill('#import-source-url', 'https://moxfield.com/decks/deck-pending-0001');
+  await page.click('#import-source-submit');
+  const first = await requested<StageSourceImportInput>(page, 'source');
+
+  // The response never arrived: the page is reloaded while its request is still pending, and the
+  // import it composes keeps its identity (docs/user-interface.md#source-imports).
+  await page.reload();
+  await loadImport(page);
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  const reopened = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', reopened.id, []);
+  await page.click('#import-source-submit');
+  const retry = await requested<StageSourceImportInput>(page, 'source');
+  expect(retry.arguments).toEqual(first.arguments);
+  expect(errors).toEqual([]);
+});
+
+test('keeps an unfinished source import out of another account', async ({ page }) => {
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, []);
+
+  await page.selectOption('#import-source-format', 'moxfield');
+  await page.fill('#import-source-url', 'https://moxfield.com/decks/deck-shared-0001');
+  await page.click('#import-source-submit');
+  const first = await requested<StageSourceImportInput>(page, 'source');
+  await control(page, 'fail', first.id, {
+    code: 'unavailable',
+    message: 'Moxfield could not be reached within the time limit; no import is proven.',
+  });
+  const reconcile = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', reconcile.id, []);
+
+  // The unfinished import belongs to the account that dispatched it: another account neither sees
+  // its input nor retries its identity (docs/user-cards.md#persistence-and-recovery).
+  await control(page, 'signOut');
+  await control(page, 'signInAs', 'bob');
+  const next = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
+  await settle(page, 'settleSessions', next.id, []);
+  await page.selectOption('#import-source-format', 'moxfield');
+  await expect(page.locator('#import-source-url')).toHaveValue('');
+  await page.fill('#import-source-url', 'https://moxfield.com/decks/deck-shared-0001');
+  await page.click('#import-source-submit');
+  const second = await requested<StageSourceImportInput>(page, 'source', 1);
+  expect(second.arguments.sessionId).not.toBe(first.arguments.sessionId);
+  expect(errors).toEqual([]);
+});
+
+test('excludes the fields of other source methods from this submission', async ({ page }) => {
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, []);
+
+  // A link the hidden Moxfield field still holds is not this paste's input, so it cannot refuse
+  // the submission (docs/user-interface.md#source-imports).
+  await page.selectOption('#import-source-format', 'moxfield');
+  await page.fill('#import-source-url', 'not a deck link');
+  await page.selectOption('#import-source-format', 'pasted-list');
+  await expect(page.locator('#import-source-url')).toBeDisabled();
+  await page.fill('#import-source-text', '4 Lightning Bolt (M11) 149');
+  await page.click('#import-source-submit');
+  const pasted = await requested<StageSourceImportInput>(page, 'source');
+  expect(pasted.arguments).toMatchObject({
+    format: 'pasted-list',
+    text: '4 Lightning Bolt (M11) 149',
+  });
+  await control(page, 'fail', pasted.id, {
+    code: 'invalid-request',
+    message: 'The source listed no card lines this import can parse.',
+  });
+
+  // The same holds for the official reference of a reviewed Wizards list.
+  await page.selectOption('#import-source-format', 'wizards-precon');
+  await page.fill('#import-source-identity', 'wizards:mkm:deadly-disguise:regular:en');
+  await page.fill('#import-source-reference', 'not an official link');
+  await page.fill('#import-source-lines', '1 Kadena, Slinking Sorcerer');
+  await page.selectOption('#import-source-format', 'pasted-list');
+  await expect(page.locator('#import-source-reference')).toBeDisabled();
+  await page.click('#import-source-submit');
+  const again = await requested<StageSourceImportInput>(page, 'source', 1);
+  expect(again.arguments).toMatchObject({
+    format: 'pasted-list',
+    text: '4 Lightning Bolt (M11) 149',
+  });
+  expect(errors).toEqual([]);
+});
 
 test('presents no source method when the deployment disables source imports', async ({ page }) => {
   const errors = await openImport(page, '#/import', { sourceImports: false });
