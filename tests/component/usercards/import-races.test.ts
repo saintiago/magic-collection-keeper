@@ -489,7 +489,7 @@ describe('usercards confirmation races', () => {
     expect(await sessionCopyCount(contender, 'alias-winner')).toBe(1);
   });
 
-  it('replays a source entry another session acquired concurrently', async () => {
+  it('keeps a concurrent confirmation of another import independent', async () => {
     if (fixture === undefined) {
       throw new Error(`A local PostgreSQL server is unavailable. ${unavailable}`.trim());
     }
@@ -520,37 +520,26 @@ describe('usercards confirmation races', () => {
     });
     await waitFor(held.claimed, 'session lock');
 
-    // The contender holds its own session and waits for the acquisition row the holder keeps until
-    // it commits, then replays that recorded acquisition instead of adding the source entry twice.
-    const acquisitionClaim = sessionLockWatcher();
-    const contenderCards = createUserCards({
-      sql: contender.transactor({
-        onStatement: (statement) => {
-          if (statement.includes('insert into usercards_private.import_acquisition')) {
-            acquisitionClaim.onStatement();
-          }
-        },
-      }),
-      catalog,
-    });
-    const second = contenderCards.confirmImport(alice, {
+    // Another import of the same content owns its own acquisition, so its confirmation is not
+    // blocked by the held import and creates its own copy
+    // (docs/user-cards.md#import-state-and-identity).
+    const second = cards.confirmImport(alice, {
       operationId: 'operation-7',
       sessionId: 'session-7',
       entries: [{ entryId: 'line-7', expectedRevision: 1 }],
     });
-    await waitFor(acquisitionClaim.reached, 'acquisition claim');
     held.release();
 
     const firstResult = await first;
     const secondResult = await second;
     expect(firstResult.replayed).toBe(false);
-    expect(secondResult.replayed).toBe(true);
-    expect(secondResult.copies).toEqual(firstResult.copies);
+    expect(secondResult.replayed).toBe(false);
+    expect(
+      new Set([...firstResult.copies, ...secondResult.copies].map((copy) => copy.copyId)).size,
+    ).toBe(2);
     expect(await sessionCopyCount(contender, 'session-6')).toBe(1);
     expect(await sessionCopyCount(contender, 'session-7')).toBe(1);
     expect(await acquisitionCount(contender, 'session-6')).toBe(1);
     expect(await acquisitionCount(contender, 'session-7')).toBe(1);
-    const entries = await cards.listImportEntries(alice, { sessionId: 'session-7' });
-    expect(entries.entries).toEqual([]);
   });
 });

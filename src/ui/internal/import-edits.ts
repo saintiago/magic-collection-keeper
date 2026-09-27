@@ -11,9 +11,9 @@
  * other private edit, and a confirmation that lost its response is recovered through the recorded
  * outcome of its operation identity instead of inferring commitment
  * (docs/application.md#construction-and-request-boundary). A source whose parsing response was lost
- * is replayed by importing the same source again, which returns the recorded rows. Nothing here
- * reports ownership: a staged line, source row or capture is a candidate in review, and only a
- * confirmation creates the physical copies.
+ * is replayed by importing the same source again under the identity of the import it belongs to,
+ * which returns the recorded rows. Nothing here reports ownership: a staged line, source row or
+ * capture is a candidate in review, and only a confirmation creates the physical copies.
  */
 
 import type { UserCardsClient } from '../../application/index.js';
@@ -144,8 +144,8 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
 }
 
 /**
- * Display name of one acquisition source a pending import session names. The values are the
- * provider's published source families; an unknown family is presented by its own name.
+ * Display name of the source one pending import session names. The values are the provider's
+ * published source families; an unknown family is presented by its own name.
  */
 export function uiImportSourceLabel(sourceKind: string): string {
   switch (sourceKind) {
@@ -238,10 +238,11 @@ export async function stageCaptureObservation(
 
 /**
  * Stages one supported source into review. The provider parses inside its own boundary and
- * reconciles every parsed line with what the source already staged or acquired, so a source whose
- * response was lost is recovered by importing the same source again: the recorded rows tell which
- * lines staged nothing, which stayed in review and which the source already acquired
- * (docs/user-interface.md#source-imports, docs/user-cards.md#source-imports).
+ * reconciles every parsed line with what the import the caller identified already staged or
+ * acquired, so a source whose response was lost is recovered by importing it again under that
+ * identity: the recorded rows tell which lines staged nothing, which stayed in review and which the
+ * import already acquired (docs/user-interface.md#source-imports,
+ * docs/user-cards.md#source-imports).
  */
 export async function stageSourceImport(
   access: UiImportAccess,
@@ -411,9 +412,10 @@ const captureIdentityPrefix = 'ui-capture';
 let importSerial = 0;
 
 /**
- * One stable identity for a staged line or a confirmation operation. It is unique inside this
- * presentation and bounded like every identifier UserCards accepts, so a retry of the same input
- * refers to the recorded staging or confirmation instead of creating a second one.
+ * One stable identity for an import the page composes, a staged line or a confirmation operation.
+ * It is unique inside this presentation and bounded like every identifier UserCards accepts, so a
+ * retry of the same input refers to the recorded import, staging or confirmation instead of
+ * creating a second one.
  */
 export function uiImportIdentity(): string {
   return uiIdentity(importIdentityPrefix);

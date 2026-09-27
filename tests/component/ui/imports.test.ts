@@ -250,7 +250,7 @@ describe('import staging', () => {
           staged: 0,
         }),
       }),
-      { format: 'pasted-list', text: 'not a line' },
+      { format: 'pasted-list', sessionId: 'paste-import-1', text: 'not a line' },
     );
 
     expect(outcome).toMatchObject({
@@ -262,7 +262,11 @@ describe('import staging', () => {
   it('keeps an unreported source recoverable by importing it again', async () => {
     const outcome = await stageSourceImport(
       access({ source: () => Promise.reject(new ApplicationError('busy', 'Try again.')) }),
-      { format: 'moxfield', url: 'https://moxfield.com/decks/deck-1' },
+      {
+        format: 'moxfield',
+        sessionId: 'deck-import-1',
+        url: 'https://moxfield.com/decks/deck-1',
+      },
     );
 
     expect(outcome.status).toBe('unknown');
@@ -276,7 +280,7 @@ describe('import staging', () => {
         source: () =>
           Promise.reject(new ApplicationError('invalid-request', 'Enter a public deck link.')),
       }),
-      { format: 'moxfield', url: 'https://example.test/deck' },
+      { format: 'moxfield', sessionId: 'deck-import-2', url: 'https://example.test/deck' },
     );
 
     expect(outcome).toMatchObject({

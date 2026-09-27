@@ -1,9 +1,9 @@
 /**
  * Source imports over real PostgreSQL (docs/user-cards.md#source-imports,
  * docs/user-cards.md#persistence-and-recovery). The cases cover each supported format, unreadable
- * rows and partial parsing failure, unresolved names and printings that stay reviewable, repeated
- * sources, changed quantities, duplicate lines, provenance and the rule that a source change never
- * moves physical ownership on its own.
+ * rows and partial parsing failure, unresolved names and printings that stay reviewable, the
+ * identity of each import, retries of one list, changed quantities, duplicate lines, provenance and
+ * the rule that a source change never moves physical ownership on its own.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -243,7 +243,11 @@ describe('usercards source imports', () => {
       catalog,
       decks: createMoxfieldDeckSource({ fetcher: fetcher as typeof fetch }),
     });
-    const result = await reading.stageSourceImport(alice, { format: 'moxfield', url: deckUrl });
+    const result = await reading.stageSourceImport(alice, {
+      format: 'moxfield',
+      sessionId: 'fetch-deck-import',
+      url: deckUrl,
+    });
     expect(result.staged).toBe(1);
     expect(requested).toEqual(['https://api2.moxfield.com/v3/decks/all/keeper_test_deck_01']);
 
@@ -279,21 +283,33 @@ describe('usercards source imports', () => {
     expect(
       (
         await captureUserCardsError(
-          throughImport(missing).stageSourceImport(alice, { format: 'moxfield', url: deckUrl }),
+          throughImport(missing).stageSourceImport(alice, {
+            format: 'moxfield',
+            sessionId: 'missing-deck-import',
+            url: deckUrl,
+          }),
         )
       ).code,
     ).toBe('not-found');
     expect(
       (
         await captureUserCardsError(
-          throughImport(denied).stageSourceImport(alice, { format: 'moxfield', url: deckUrl }),
+          throughImport(denied).stageSourceImport(alice, {
+            format: 'moxfield',
+            sessionId: 'denied-deck-import',
+            url: deckUrl,
+          }),
         )
       ).code,
     ).toBe('invalid-request');
     expect(
       (
         await captureUserCardsError(
-          throughImport(unreadable).stageSourceImport(alice, { format: 'moxfield', url: deckUrl }),
+          throughImport(unreadable).stageSourceImport(alice, {
+            format: 'moxfield',
+            sessionId: 'unreadable-deck-import',
+            url: deckUrl,
+          }),
         )
       ).code,
     ).toBe('unavailable');
@@ -306,20 +322,32 @@ describe('usercards source imports', () => {
         })) as typeof fetch,
     });
     const oversizedOutcome = await captureUserCardsError(
-      throughImport(oversized).stageSourceImport(alice, { format: 'moxfield', url: deckUrl }),
+      throughImport(oversized).stageSourceImport(alice, {
+        format: 'moxfield',
+        sessionId: 'oversized-deck-import',
+        url: deckUrl,
+      }),
     );
     expect(oversizedOutcome.code).toBe('invalid-request');
     expect(oversizedOutcome.message).toContain('larger than one import reads');
     expect(await countCopies(database, alice.accountId)).toBe(0);
   });
 
-  /** Reads one deck through the import and returns its result. */
+  /** Identity of the import the deck cases compose; a case may name another list explicitly. */
+  const deckImport = 'keeper-test-deck-import';
+
+  /** Reads one deck into one import and returns its result. */
   async function stageDeck(
     boards: Readonly<Record<string, readonly DeckLine[]>> = { mainboard: [boltLine(1)] },
     context: TrustedUserContext = alice,
+    sessionId: string = deckImport,
   ): Promise<SourceImportResult> {
     deckDocumentValue = deckDocument(boards);
-    return sourceImports.stageSourceImport(context, { format: 'moxfield', url: deckUrl });
+    return sourceImports.stageSourceImport(context, {
+      format: 'moxfield',
+      sessionId,
+      url: deckUrl,
+    });
   }
 
   /** Confirms every pending entry of one session under one operation identity. */
@@ -338,14 +366,16 @@ describe('usercards source imports', () => {
   it('parses a pasted card list into reviewable pending entries without ownership', async () => {
     const result = await sourceImports.stageSourceImport(alice, {
       format: 'pasted-list',
-      sourceId: 'wishlist-paste',
+      sessionId: 'wishlist-paste',
       text: ['Deck', '4 Lightning Bolt (M11) 149', '2x Counterspell', '# note', 'not a line'].join(
         '\n',
       ),
     });
 
     expect(result.session).toMatchObject({
+      sessionId: 'wishlist-paste',
       sourceKind: 'pasted-list',
+      // A pasted list publishes no identity of its own, so the import identity is its provenance.
       sourceId: 'wishlist-paste',
       sourceReference: null,
       pendingEntries: 2,
@@ -394,42 +424,48 @@ describe('usercards source imports', () => {
     expect(pending.entries.every((entry) => entry.printingId === null)).toBe(true);
   });
 
-  it('derives the identity of an unnamed pasted list from its lines and replays it', async () => {
-    const first = await sourceImports.stageSourceImport(alice, {
-      format: 'pasted-list',
-      text: ['# my deck', '4 Lightning Bolt (M11) 149', '2 Counterspell'].join('\n'),
+  it('keeps each identified import as its own list and replays only that import', async () => {
+    const paste = (sessionId: string, lines: readonly string[]) => ({
+      format: 'pasted-list' as const,
+      sessionId,
+      text: lines.join('\n'),
     });
+    const first = await sourceImports.stageSourceImport(
+      alice,
+      paste('wishlist-paste', ['# my deck', '4 Lightning Bolt (M11) 149', '2 Counterspell']),
+    );
     expect(first.staged).toBe(2);
-    expect(first.session.sourceKind).toBe('pasted-list');
-    expect(first.session.sourceId.length).toBeLessThanOrEqual(200);
-    expect(first.session.pendingEntries).toBe(2);
-
-    // The same list, reformatted and with a changed quantity, is the same source: the covered
-    // quantity is reused and only the uncovered difference enters review.
-    const repeated = await sourceImports.stageSourceImport(alice, {
-      format: 'pasted-list',
-      text: ['Deck', '5 Lightning Bolt (M11) 149', '2x Counterspell'].join('\n'),
+    expect(first.session).toMatchObject({
+      sessionId: 'wishlist-paste',
+      sourceKind: 'pasted-list',
+      sourceId: 'wishlist-paste',
+      pendingEntries: 2,
     });
+
+    // The identified import, reformatted and with a changed quantity, reconciles with its own
+    // lines: the covered quantity is reused and only the uncovered difference enters review.
+    const repeated = await sourceImports.stageSourceImport(
+      alice,
+      paste('wishlist-paste', ['Deck', '5 Lightning Bolt (M11) 149', '2x Counterspell']),
+    );
     expect(repeated.session.sessionId).toBe(first.session.sessionId);
     expect(repeated.staged).toBe(1);
     expect(repeated.rows.map((row) => row.outcome)).toEqual(['staged', 'pending']);
     expect(await countCopies(database, alice.accountId)).toBe(0);
 
-    // A line that names another printing belongs to another source, so the two stay distinct.
-    const other = await sourceImports.stageSourceImport(alice, {
-      format: 'pasted-list',
-      text: '4 Lightning Bolt (STA) 117',
-    });
-    expect(other.session.sessionId).not.toBe(first.session.sessionId);
-    expect(other.staged).toBe(1);
-
-    // A caller that names the source keeps that identity instead of the derived one.
-    const named = await sourceImports.stageSourceImport(alice, {
-      format: 'pasted-list',
-      sourceId: 'named-paste',
-      text: '1 Lightning Bolt',
-    });
-    expect(named.session).toMatchObject({ sourceId: 'named-paste', pendingEntries: 1 });
+    // Another import of the same contents is a list of its own: its lines are staged for review
+    // instead of merging with the first list (docs/user-cards.md#import-state-and-identity).
+    const other = await sourceImports.stageSourceImport(
+      alice,
+      paste('unrelated-paste', ['# my deck', '4 Lightning Bolt (M11) 149', '2 Counterspell']),
+    );
+    expect(other.session.sessionId).toBe('unrelated-paste');
+    expect(other.staged).toBe(2);
+    expect(other.rows.map((row) => row.outcome)).toEqual(['staged', 'staged']);
+    expect(
+      (await userCards.listImportEntries(alice, { sessionId: 'unrelated-paste' })).entries,
+    ).toHaveLength(2);
+    expect(await countCopies(database, alice.accountId)).toBe(0);
   });
 
   it('resolves published Moxfield printings and keeps the rest reviewable', async () => {
@@ -582,6 +618,7 @@ describe('usercards source imports', () => {
     };
     const result = await sourceImports.stageSourceImport(alice, {
       format: 'moxfield',
+      sessionId: 'top-level-deck-import',
       url: deckUrl,
     });
 
@@ -603,6 +640,7 @@ describe('usercards source imports', () => {
     };
     const result = await sourceImports.stageSourceImport(alice, {
       format: 'moxfield',
+      sessionId: 'keeper-test-deck-import',
       url: deckUrl,
     });
 
@@ -615,6 +653,7 @@ describe('usercards source imports', () => {
     const reference = 'https://magic.wizards.com/en/news/feature/deadly-disguise-decklist';
     const result = await sourceImports.stageSourceImport(alice, {
       format: 'wizards-precon',
+      sessionId: 'wizards-deadly-disguise',
       sourceId: 'wizards:mkm:deadly-disguise:regular:en',
       reference,
       entries: [
@@ -625,6 +664,7 @@ describe('usercards source imports', () => {
     });
 
     expect(result.session).toMatchObject({
+      sessionId: 'wizards-deadly-disguise',
       sourceKind: 'wizards-precon',
       sourceId: 'wizards:mkm:deadly-disguise:regular:en',
       sourceReference: reference,
@@ -649,7 +689,7 @@ describe('usercards source imports', () => {
     const unreadablePaste = await captureUserCardsError(
       sourceImports.stageSourceImport(alice, {
         format: 'pasted-list',
-        sourceId: 'paste-1',
+        sessionId: 'paste-1',
         text: 'this is not a card list',
       }),
     );
@@ -658,6 +698,7 @@ describe('usercards source imports', () => {
     const nonOfficialReference = await captureUserCardsError(
       sourceImports.stageSourceImport(alice, {
         format: 'wizards-precon',
+        sessionId: 'wizards-paste-1',
         sourceId: 'wizards:mkm:deadly-disguise:regular:en',
         reference: 'https://example.com/decklist',
         entries: [{ name: 'Forest', quantity: 1 }],
@@ -668,7 +709,7 @@ describe('usercards source imports', () => {
     const oversized = await captureUserCardsError(
       sourceImports.stageSourceImport(alice, {
         format: 'pasted-list',
-        sourceId: 'paste-1',
+        sessionId: 'paste-1',
         text: Array.from({ length: 501 }, () => '1 Forest').join('\n'),
       }),
     );
@@ -680,34 +721,43 @@ describe('usercards source imports', () => {
     expect(await countCopies(database, alice.accountId)).toBe(0);
   });
 
-  /** Offers the same named rows through each parser, without explicit printing references. */
+  /**
+   * Offers the same named rows through each parser, without explicit printing references, into one
+   * identified import.
+   */
   async function stageNamedRows(
     format: 'moxfield' | 'wizards-precon' | 'pasted-list',
     entries: readonly ReviewedWizardsLine[],
+    sessionId = 'named-rows-import',
   ): Promise<SourceImportResult> {
     if (format === 'moxfield') {
-      return stageDeck({
-        mainboard: entries.map((entry) => ({
-          quantity: entry.quantity,
-          card: {
-            name: entry.name,
-            set: entry.set ?? 'm11',
-            cn: entry.collectorNumber ?? '149',
-            ...(entry.language === undefined ? {} : { lang: entry.language ?? '' }),
-          },
-        })),
-      });
+      return stageDeck(
+        {
+          mainboard: entries.map((entry) => ({
+            quantity: entry.quantity,
+            card: {
+              name: entry.name,
+              set: entry.set ?? 'm11',
+              cn: entry.collectorNumber ?? '149',
+              ...(entry.language === undefined ? {} : { lang: entry.language ?? '' }),
+            },
+          })),
+        },
+        alice,
+        sessionId,
+      );
     }
     return sourceImports.stageSourceImport(
       alice,
       format === 'pasted-list'
         ? {
             format,
-            sourceId: 'ordered-paste',
+            sessionId,
             text: entries.map((entry) => `${entry.quantity} ${entry.name}`).join('\n'),
           }
         : {
             format,
+            sessionId,
             sourceId: 'wizards:mkm:deadly-disguise:regular:en',
             reference: 'https://magic.wizards.com/en/news/feature/deadly-disguise-decklist',
             entries,
@@ -829,11 +879,11 @@ describe('usercards source imports', () => {
     },
   );
 
-  it('stages nothing when a source is imported again and adds nothing twice', async () => {
+  it('stages nothing when the same import is imported again and adds nothing twice', async () => {
     const first = await stageDeck({ mainboard: [boltLine(2), counterLine(1)] });
     expect(first.staged).toBe(2);
 
-    // A re-import of the same source while its lines are pending adds no second pending entry.
+    // Re-importing the same list while its lines are pending adds no second pending entry.
     const pendingAgain = await stageDeck({ mainboard: [boltLine(2), counterLine(1)] });
     expect(pendingAgain.session.sessionId).toBe(first.session.sessionId);
     expect(pendingAgain.staged).toBe(0);
@@ -848,6 +898,52 @@ describe('usercards source imports', () => {
     expect(acquiredAgain.rows.map((row) => row.outcome)).toEqual(['acquired', 'acquired']);
     expect(acquiredAgain.session).toMatchObject({ confirmedEntries: 2, pendingEntries: 0 });
     expect(await countCopies(database, alice.accountId)).toBe(3);
+  });
+
+  it('lets another import of identical source content create its own copies', async () => {
+    const first = await stageDeck({ mainboard: [boltLine(2), counterLine(1)] });
+    await confirmSession(first.session.sessionId, 'operation-1');
+    expect(await countCopies(database, alice.accountId)).toBe(3);
+
+    // The deck imported as a new list is another import: its lines enter review and its own
+    // confirmation creates its own copies instead of replaying the first import's acquisitions
+    // (docs/user-cards.md#import-state-and-identity).
+    const second = await stageDeck(
+      { mainboard: [boltLine(2), counterLine(1)] },
+      alice,
+      'keeper-test-deck-import-2',
+    );
+    expect(second.session.sessionId).toBe('keeper-test-deck-import-2');
+    expect(second.staged).toBe(2);
+    expect(second.rows.map((row) => row.outcome)).toEqual(['staged', 'staged']);
+
+    const confirmed = await confirmSession(second.session.sessionId, 'operation-2');
+    expect(confirmed.copies).toHaveLength(3);
+    expect(await countCopies(database, alice.accountId)).toBe(6);
+  });
+
+  it('refuses to change the source of an import whose identity already names it', async () => {
+    const first = await sourceImports.stageSourceImport(alice, {
+      format: 'pasted-list',
+      sessionId: 'paste-reused',
+      text: '1 Lightning Bolt',
+    });
+    expect(first.staged).toBe(1);
+
+    // The identity already names that import, whose provenance stays what it was: another source
+    // cannot be staged under it, and the refused call changes nothing
+    // (docs/user-cards.md#import-state-and-identity).
+    const reused = await captureUserCardsError(
+      sourceImports.stageSourceImport(alice, {
+        format: 'moxfield',
+        sessionId: 'paste-reused',
+        url: deckUrl,
+      }),
+    );
+    expect(reused.code).toBe('invalid-request');
+    expect(
+      (await userCards.listImportEntries(alice, { sessionId: 'paste-reused' })).entries,
+    ).toHaveLength(1);
   });
 
   it('stages only the unacquired difference when a source line quantity grows', async () => {
@@ -932,7 +1028,7 @@ describe('usercards source imports', () => {
   it('keeps a pasted list with unequal duplicate lines stable when it is reordered or trimmed', async () => {
     const paste = (lines: readonly string[]) => ({
       format: 'pasted-list' as const,
-      sourceId: 'paste-duplicates',
+      sessionId: 'paste-duplicates',
       text: lines.join('\n'),
     });
     const first = await sourceImports.stageSourceImport(
@@ -990,7 +1086,7 @@ describe('usercards source imports', () => {
   it('recognizes an unresolved line after review resolved and confirmed it', async () => {
     const staged = await sourceImports.stageSourceImport(alice, {
       format: 'pasted-list',
-      sourceId: 'paste-1',
+      sessionId: 'paste-1',
       text: '4 Lightning Bolt',
     });
     const entryId = staged.rows[0]?.entryId;
@@ -1023,7 +1119,7 @@ describe('usercards source imports', () => {
 
     const repeated = await sourceImports.stageSourceImport(alice, {
       format: 'pasted-list',
-      sourceId: 'paste-1',
+      sessionId: 'paste-1',
       text: '4 Lightning Bolt',
     });
     expect(repeated.session.sessionId).toBe(staged.session.sessionId);
@@ -1052,7 +1148,7 @@ describe('usercards source imports', () => {
 
     const result = await bounded.stageSourceImport(alice, {
       format: 'pasted-list',
-      sourceId: 'paste-maximum',
+      sessionId: 'paste-maximum',
       text,
     });
     expect(result.staged).toBe(500);
@@ -1061,7 +1157,7 @@ describe('usercards source imports', () => {
     // The maximum source reconciles a second time without staging any line again.
     const repeated = await bounded.stageSourceImport(alice, {
       format: 'pasted-list',
-      sourceId: 'paste-maximum',
+      sessionId: 'paste-maximum',
       text,
     });
     expect(repeated.staged).toBe(0);
@@ -1069,10 +1165,12 @@ describe('usercards source imports', () => {
     expect(await countCopies(database, alice.accountId)).toBe(0);
   });
 
-  it('keeps one account’s source lines out of another account’s reconciliation', async () => {
+  it('keeps one account’s imports out of another account’s reconciliation', async () => {
     const mine = await stageDeck({ mainboard: [boltLine(2)] });
     await confirmSession(mine.session.sessionId, 'operation-1');
 
+    // The same import identity under another account is that account's own list: no pending entry
+    // and no acquisition crosses the account boundary.
     const otherAccount = await stageDeck({ mainboard: [boltLine(2)] }, bob);
     expect(otherAccount.session.sessionId).toBe(mine.session.sessionId);
     expect(otherAccount.staged).toBe(1);

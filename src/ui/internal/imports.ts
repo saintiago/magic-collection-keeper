@@ -17,12 +17,14 @@
  * its receipt names; a lost response is recovered through that recorded outcome instead of being
  * presented as a saved change (docs/user-cards.md#interface).
  *
- * The page owns its form input, its per-entry review drafts and the session it presents, and keeps
- * them with its history entry, so an unfinished source import stays recoverable: importing the same
- * source again replays what the provider recorded instead of staging it twice. The lists own their
- * windows, selection and restoration, and the pending entries and operation receipts themselves
- * stay with UserCards. Leaving the view releases its lists and aborts their work, so a late response
- * cannot change another view or account.
+ * The page owns its form input, the identity of the import it composes, its per-entry review drafts
+ * and the session it presents, and keeps them with its history entry: an unfinished source import
+ * stays recoverable because its retry quotes the identity the import already carries, while the
+ * next list the owner starts gets its own identity and stays a separate import
+ * (docs/user-interface.md#source-imports). The lists own their windows, selection and restoration,
+ * and the pending entries and operation receipts themselves stay with UserCards. Leaving the view
+ * releases its lists and aborts their work, so a late response cannot change another view or
+ * account.
  */
 
 import type { SearchClient } from '../../application/index.js';
@@ -142,11 +144,14 @@ interface UiStagingDraft {
 }
 
 /**
- * Unsaved input of one source import. The page keeps it while a source is being composed and
- * after an unreported outcome, because importing exactly the same source is what replays the rows
- * the provider recorded instead of staging them twice (docs/user-interface.md#source-imports).
+ * Unsaved input of one source import, with the identity of the import it belongs to. The page keeps
+ * it while a source is being composed and after an unreported outcome, because importing exactly the
+ * same source under that identity is what replays the rows the provider recorded instead of staging
+ * them twice (docs/user-interface.md#source-imports).
  */
 interface UiSourceDraft {
+  /** Identity of the import this input composes; the next new import gets its own. */
+  importId: string;
   format: UiSourceFormat;
   text: string;
   url: string;
@@ -340,6 +345,12 @@ function importPage(): UiPageDefinition {
 
       /** Session whose pending entries the review presents; null before one is read. */
       let sessionId: string | null = readSessionId(restored?.sessionId);
+      /**
+       * Identity of the import the source form composes. A retry or a reopening of an unfinished
+       * import keeps it, and the next new import replaces it
+       * (docs/user-interface.md#source-imports).
+       */
+      let sourceImportId = source.importId;
       /** Pending sessions the account reported, oldest page first. */
       let sessions: readonly ImportSession[] = [];
       let sessionsContinuation: string | null = null;
@@ -386,9 +397,12 @@ function importPage(): UiPageDefinition {
         void importSource();
       });
       sourceFormat.addEventListener('change', () => {
-        // The rows of another method's import do not describe this one, so they are cleared.
+        // The rows of another method's import do not describe this one, so they are cleared, and
+        // another source method is another import with its own identity
+        // (docs/user-interface.md#source-imports).
         sourceStatus.textContent = '';
         sourceRows.replaceChildren();
+        sourceImportId = uiImportIdentity();
         paintSourceForm();
       });
       sessionSelect.addEventListener('change', () => {
@@ -451,6 +465,7 @@ function importPage(): UiPageDefinition {
           // (docs/user-interface.md#source-imports).
           source: sourceEnabled
             ? {
+                importId: sourceImportId,
                 format: sourceFormat.value,
                 text: sourceText.value,
                 url: sourceUrl.value,
@@ -735,10 +750,10 @@ function importPage(): UiPageDefinition {
       }
 
       /**
-       * The source method input the form presents, or null after reporting what it still needs. A
-       * pasted list names no identity: the provider derives it from the parsed lines, so the same
-       * list imported again reconciles with its recorded lines
-       * (docs/user-cards.md#source-imports).
+       * The source method input the form presents, or null after reporting what it still needs.
+       * Every method quotes the identity of the import being composed, so the provider reconciles
+       * the rows with that import's own records instead of inferring an import from the entered
+       * contents or the source URL (docs/user-interface.md#source-imports).
        */
       function sourceInput(): StageSourceImportInput | null {
         const format = readSourceFormat(sourceFormat.value);
@@ -751,7 +766,7 @@ function importPage(): UiPageDefinition {
             reportSource('Paste the card lines of the list first.');
             return null;
           }
-          return { format, text: sourceText.value };
+          return { format, sessionId: sourceImportId, text: sourceText.value };
         }
         if (format === 'moxfield') {
           const url = sourceUrl.value.trim();
@@ -759,7 +774,7 @@ function importPage(): UiPageDefinition {
             reportSource('Enter the public Moxfield deck link first.');
             return null;
           }
-          return { format, url };
+          return { format, sessionId: sourceImportId, url };
         }
         const sourceId = sourceIdentity.value.trim();
         if (sourceId.length === 0) {
@@ -778,7 +793,7 @@ function importPage(): UiPageDefinition {
           reportSource('Paste the reviewed decklist lines, one card per row, first.');
           return null;
         }
-        return { format, sourceId, reference, entries };
+        return { format, sessionId: sourceImportId, sourceId, reference, entries };
       }
 
       /**
@@ -821,6 +836,10 @@ function importPage(): UiPageDefinition {
         }
         sourceStatus.textContent = sourceImportMessage(result);
         sourceRows.replaceChildren(...result.rows.map((row) => sourceRow(document, row)));
+        // This import is established: the next list the owner starts is another import with its own
+        // identity, even when it carries the same contents or the same source reference
+        // (docs/user-interface.md#source-imports).
+        sourceImportId = uiImportIdentity();
         await presentSource(result.session.sessionId);
       }
 
@@ -1937,10 +1956,15 @@ function readSourceFormat(value: string): UiSourceFormat | null {
   return (uiSourceFormats as readonly string[]).includes(value) ? (value as UiSourceFormat) : null;
 }
 
-/** The source input one history entry kept, or its defaults. */
+/**
+ * The source input one history entry kept, or its defaults. The import identity the entry kept is
+ * reused, so an unfinished import stays the same list; without one the page composes a new import
+ * with a new identity (docs/user-interface.md#source-imports).
+ */
 function readSourceDraft(value: unknown): UiSourceDraft {
   const record = readPageState(value);
   return {
+    importId: readImportId(record?.importId),
     format: readSourceFormat(readDraftValue(record?.format, 32) ?? '') ?? 'pasted-list',
     text: readDraftValue(record?.text, UI_LIMITS.importSourceText) ?? '',
     url: readDraftValue(record?.url, UI_LIMITS.entryKey) ?? '',
@@ -1948,6 +1972,13 @@ function readSourceDraft(value: unknown): UiSourceDraft {
     reference: readDraftValue(record?.reference, UI_LIMITS.entryKey) ?? '',
     lines: readDraftValue(record?.lines, UI_LIMITS.importSourceText) ?? '',
   };
+}
+
+/** Identity of one source import: the one the entry kept, or a new one. */
+function readImportId(value: unknown): string {
+  return typeof value === 'string' && value.length > 0 && value.length <= UI_LIMITS.routeSegment
+    ? value
+    : uiImportIdentity();
 }
 
 /**
@@ -1975,7 +2006,7 @@ function reviewedWizardsLines(text: string): readonly ReviewedWizardsLine[] {
 
 /**
  * The progress one source import reported, in the words of the decision it supports: what entered
- * review, what the source already held and which rows were unreadable. Parsing is never
+ * review, what this import already held and which rows were unreadable. Parsing is never
  * confirmation, so the message says that the reviewed lines still need an explicit confirmation
  * (docs/user-interface.md#source-imports).
  */
@@ -2001,7 +2032,7 @@ function sourceImportMessage(result: SourceImportResult): string {
   if (counts.acquired > 0) {
     listed.push(
       `${counts.acquired} ${counts.acquired === 1 ? 'line was' : 'lines were'} already acquired ` +
-        'from this source',
+        'by this import',
     );
   }
   if (counts.invalid > 0) {
@@ -2042,7 +2073,7 @@ function sourceOutcomeLabel(outcome: SourceImportOutcome): string {
     case 'pending':
       return 'already in review';
     case 'acquired':
-      return 'already acquired from this source';
+      return 'already acquired by this import';
     case 'invalid':
       return 'not read';
   }

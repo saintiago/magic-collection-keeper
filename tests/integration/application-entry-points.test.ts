@@ -465,7 +465,7 @@ describe('application entry points', () => {
     );
   });
 
-  it('parses a pasted source through the transport and reconciles a repeated import', async () => {
+  it('parses a pasted source through the transport and keeps its import identity', async () => {
     interface SourcePayload {
       readonly session: {
         readonly sessionId: string;
@@ -476,19 +476,23 @@ describe('application entry points', () => {
       readonly staged: number;
     }
 
-    // A pasted list names no identity: the component derives one from the parsed lines, so the
-    // browser sends the text alone and a repeated import reconciles instead of staging twice.
+    // The browser identifies the import it composes, so the same identity stages the same list
+    // again and a new identity stages another one (docs/user-cards.md#import-state-and-identity).
     const text = '2 Lightning Bolt (TLE) 32\nnot a line';
     const first = await call({
       method: 'POST',
       path: '/api/collection/imports/sources',
       accountId: 'cognito-alice',
-      body: { format: 'pasted-list', text },
+      body: { format: 'pasted-list', sessionId: 'wishlist-paste', text },
     });
 
     expect(first.status).toBe(200);
     const staged = first.payload as SourcePayload;
-    expect(staged.session).toMatchObject({ sourceKind: 'pasted-list', pendingEntries: 1 });
+    expect(staged.session).toMatchObject({
+      sessionId: 'wishlist-paste',
+      sourceKind: 'pasted-list',
+      pendingEntries: 1,
+    });
     expect(staged.staged).toBe(1);
     expect(staged.rows.map((row) => row.outcome)).toEqual(['staged', 'invalid']);
     expect(staged.rows[1]?.problem).toBe(
@@ -499,7 +503,7 @@ describe('application entry points', () => {
       method: 'POST',
       path: '/api/collection/imports/sources',
       accountId: 'cognito-alice',
-      body: { format: 'pasted-list', text },
+      body: { format: 'pasted-list', sessionId: 'wishlist-paste', text },
     });
 
     expect(repeated.status).toBe(200);
@@ -508,5 +512,20 @@ describe('application entry points', () => {
     expect(again.session.pendingEntries).toBe(1);
     expect(again.staged).toBe(0);
     expect(again.rows.map((row) => row.outcome)).toEqual(['pending', 'invalid']);
+
+    // Another import of the same text is a list of its own instead of merging with this one.
+    const other = await call({
+      method: 'POST',
+      path: '/api/collection/imports/sources',
+      accountId: 'cognito-alice',
+      body: { format: 'pasted-list', sessionId: 'second-paste', text },
+    });
+
+    expect(other.status).toBe(200);
+    const another = other.payload as SourcePayload;
+    expect(another.session.sessionId).toBe('second-paste');
+    expect(another.session.pendingEntries).toBe(1);
+    expect(another.staged).toBe(1);
+    expect(another.rows.map((row) => row.outcome)).toEqual(['staged', 'invalid']);
   });
 });

@@ -977,12 +977,15 @@ describe('user cards client', () => {
 
     const result = await client.stageSourceImport({
       format: 'pasted-list',
+      sessionId: 'paste-import-1',
       text: '1 Lightning Bolt',
     });
 
     expect(calls[0]?.url).toBe('https://api.test.keeper.example/api/collection/imports/sources');
     expect(calls[0]?.init.method).toBe('POST');
-    expect(calls[0]?.init.body).toBe('{"format":"pasted-list","text":"1 Lightning Bolt"}');
+    expect(calls[0]?.init.body).toBe(
+      '{"format":"pasted-list","sessionId":"paste-import-1","text":"1 Lightning Bolt"}',
+    );
     expect(result.session.sourceId).toBe('pasted-list:1');
     expect(result.rows.map((row) => row.outcome)).toEqual(['staged', 'invalid']);
     expect(result.rows[0]?.line?.name).toBe('Lightning Bolt');
@@ -1025,7 +1028,11 @@ describe('user cards client', () => {
     );
 
     await expect(
-      client.stageSourceImport({ format: 'moxfield', url: 'https://x.test' }),
+      client.stageSourceImport({
+        format: 'moxfield',
+        sessionId: 'deck-import-1',
+        url: 'https://x.test',
+      }),
     ).rejects.toMatchObject({
       code: 'unavailable',
       message: 'The import response could not be read.',

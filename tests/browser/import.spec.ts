@@ -17,7 +17,11 @@ import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 
 import type { CardRecord, PrintingRecord } from '../../src/catalog/index.js';
-import type { ImportEntry, ImportSession } from '../../src/usercards/index.js';
+import type {
+  ImportEntry,
+  ImportSession,
+  StageSourceImportInput,
+} from '../../src/usercards/index.js';
 import type {
   UiImportControl,
   UiImportEntriesRequest,
@@ -78,12 +82,20 @@ async function openImport(
     route.fulfill({ contentType: 'text/html', body: importPageHtml }),
   );
   await page.goto(`http://keeper-import.test/${hash}`);
+  await loadImport(page, options);
+  return errors;
+}
+
+/** Loads a fresh UserInterface into the current document, as a reload of the app does. */
+async function loadImport(
+  page: Page,
+  options: { readonly sourceImports?: boolean } = {},
+): Promise<void> {
   await page.evaluate((capabilities) => {
     (globalThis as unknown as { keeperImportOptions: unknown }).keeperImportOptions = capabilities;
   }, options);
   await page.addScriptTag({ content: await importBundle(), type: 'module' });
   await page.waitForFunction(() => Reflect.has(globalThis, 'keeperImportControl'));
-  return errors;
 }
 
 /** Calls one operation of the installed harness with the supplied arguments. */
@@ -1575,6 +1587,29 @@ const boltSourceLine = {
   problem: 'The source named no printing; choose one during review.',
 };
 
+/** The Counterspell line of the two-line paste the recovery journey presents. */
+const counterspellSourceLine = {
+  name: 'Counterspell',
+  section: null,
+  set: '7ED',
+  collectorNumber: '67',
+  language: null,
+  finish: null,
+  declaredQuantity: 2,
+  problem: 'The source named no printing; choose one during review.',
+};
+
+/**
+ * The import identity one source request quoted: a non-empty identity inside the bound every
+ * UserCards reference accepts. Contents and source URLs describe an import; they never identify it
+ * (docs/user-interface.md#source-imports).
+ */
+function sourceImportIdentity(request: StageSourceImportInput): string {
+  expect(request.sessionId.length).toBeGreaterThan(0);
+  expect(request.sessionId.length).toBeLessThanOrEqual(200);
+  return request.sessionId;
+}
+
 test('parses a pasted source into the same pending review and explains every row', async ({
   page,
 }) => {
@@ -1588,23 +1623,25 @@ test('parses a pasted source into the same pending review and explains every row
       'physical copies.',
   );
 
-  // The paste names no identity: the provider derives it from the parsed lines, so only the text
-  // crosses the contract.
+  // The page identifies the import it composes: that identity crosses the contract with the paste,
+  // instead of the entered contents describing or merging the import
+  // (docs/user-interface.md#source-imports).
   await page.selectOption('#import-source-format', 'pasted-list');
   await expect(page.locator('#import-source-url')).toBeHidden();
   await page.fill('#import-source-text', '4 Lightning Bolt (M11) 149\nnot a line');
   await page.click('#import-source-submit');
 
-  const parsed = await requested<Record<string, unknown>>(page, 'source');
-  expect(parsed.arguments).toEqual({
+  const parsed = await requested<StageSourceImportInput>(page, 'source');
+  expect(parsed.arguments).toMatchObject({
     format: 'pasted-list',
     text: '4 Lightning Bolt (M11) 149\nnot a line',
   });
+  expect(sourceImportIdentity(parsed.arguments)).toBe(parsed.arguments.sessionId);
 
   const parsedSession = session({
-    sessionId: 'pasted-list:1',
+    sessionId: parsed.arguments.sessionId,
     sourceKind: 'pasted-list',
-    sourceId: 'pasted-list:1',
+    sourceId: parsed.arguments.sessionId,
     pendingEntries: 1,
   });
   await settle(page, 'settleSource', parsed.id, {
@@ -1616,7 +1653,7 @@ test('parses a pasted source into the same pending review and explains every row
         outcome: 'staged',
         problem: boltSourceLine.problem,
         entryId: 'source-entry-1',
-        sessionId: 'pasted-list:1',
+        sessionId: parsedSession.sessionId,
       },
       {
         position: 2,
@@ -1651,7 +1688,7 @@ test('parses a pasted source into the same pending review and explains every row
   await settle(page, 'settleSessions', refresh.id, [parsedSession]);
   const read = await requested<UiImportEntriesRequest>(page, 'entries');
   expect(read.arguments).toEqual({
-    sessionId: 'pasted-list:1',
+    sessionId: parsedSession.sessionId,
     pageSize: 50,
     continuation: null,
   });
@@ -1660,7 +1697,7 @@ test('parses a pasted source into the same pending review and explains every row
     entries: [
       entry({
         entryId: 'source-entry-1',
-        sessionId: 'pasted-list:1',
+        sessionId: parsedSession.sessionId,
         printingId: null,
         finish: null,
         quantity: 4,
@@ -1679,21 +1716,24 @@ test('parses a pasted source into the same pending review and explains every row
   expect(errors).toEqual([]);
 });
 
-test('explains a repeated source and stages only its uncovered lines', async ({ page }) => {
+test('starts another import for the same paste instead of merging with the first', async ({
+  page,
+}) => {
   const errors = await openImport(page, '#/import');
   await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
   const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
   await settle(page, 'settleSessions', listing.id, []);
-  const parsedSession = session({
+  const firstSession = session({
     sessionId: 'pasted-list:1',
     sourceKind: 'pasted-list',
     sourceId: 'pasted-list:1',
     pendingEntries: 1,
   });
-  const stored = () =>
+  const stored = (sessionId: string, entryId: string, position = 1) =>
     entry({
-      entryId: 'source-entry-1',
-      sessionId: 'pasted-list:1',
+      entryId,
+      sessionId,
+      position,
       printingId: null,
       finish: null,
       quantity: 4,
@@ -1702,9 +1742,9 @@ test('explains a repeated source and stages only its uncovered lines', async ({ 
 
   await page.fill('#import-source-text', '4 Lightning Bolt (M11) 149');
   await page.click('#import-source-submit');
-  const first = await requested<Record<string, unknown>>(page, 'source');
+  const first = await requested<StageSourceImportInput>(page, 'source');
   await settle(page, 'settleSource', first.id, {
-    session: parsedSession,
+    session: firstSession,
     rows: [
       {
         position: 1,
@@ -1712,51 +1752,175 @@ test('explains a repeated source and stages only its uncovered lines', async ({ 
         outcome: 'staged',
         problem: boltSourceLine.problem,
         entryId: 'source-entry-1',
-        sessionId: 'pasted-list:1',
+        sessionId: firstSession.sessionId,
       },
     ],
     staged: 1,
   });
   const presented = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
-  await settle(page, 'settleSessions', presented.id, [parsedSession]);
+  await settle(page, 'settleSessions', presented.id, [firstSession]);
   const read = await requested<UiImportEntriesRequest>(page, 'entries');
-  await settle(page, 'settleEntries', read.id, { session: parsedSession, entries: [stored()] });
+  await settle(page, 'settleEntries', read.id, {
+    session: firstSession,
+    entries: [stored(firstSession.sessionId, 'source-entry-1')],
+  });
 
-  // The same list imported again is the same source: the covered line is not staged twice and the
-  // page explains what the source already held.
+  // The established import is not reopened by the same paste: the page starts another import with
+  // its own identity, and that list's lines enter review as its own pending entries
+  // (docs/user-interface.md#source-imports).
   await page.click('#import-source-submit');
-  const repeated = await requested<Record<string, unknown>>(page, 'source', 1);
-  expect(repeated.arguments).toEqual(first.arguments);
-  await settle(page, 'settleSource', repeated.id, {
-    session: parsedSession,
+  const second = await requested<StageSourceImportInput>(page, 'source', 1);
+  expect(sourceImportIdentity(second.arguments)).not.toBe(first.arguments.sessionId);
+  const secondSession = session({
+    sessionId: 'pasted-list:2',
+    sourceKind: 'pasted-list',
+    sourceId: 'pasted-list:2',
+    pendingEntries: 1,
+  });
+  await settle(page, 'settleSource', second.id, {
+    session: secondSession,
     rows: [
       {
         position: 1,
         line: boltSourceLine,
-        outcome: 'acquired',
+        outcome: 'staged',
+        problem: boltSourceLine.problem,
+        entryId: 'source-entry-2',
+        sessionId: secondSession.sessionId,
+      },
+    ],
+    staged: 1,
+  });
+  await expect(page.locator('#import-source-status')).toHaveText(
+    '1 line is in review. Confirm the reviewed lines to create their physical copies.',
+  );
+  await expect(page.locator('#import-source-rows li')).toHaveText(
+    'Row 1 · added to review · Lightning Bolt · (M11 149) · The source named ' +
+      'no printing; choose one during review.',
+  );
+
+  // The review presents the import that just staged, beside the first list the account keeps.
+  const listed = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
+  await settle(page, 'settleSessions', listed.id, [secondSession, firstSession]);
+  const listedEntries = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  expect(listedEntries.arguments).toMatchObject({ sessionId: 'pasted-list:2' });
+  await settle(page, 'settleEntries', listedEntries.id, {
+    session: secondSession,
+    entries: [stored(secondSession.sessionId, 'source-entry-2')],
+  });
+  await expect(
+    page.locator('#import-pending [data-ui-entry="pending:source-entry-2"]'),
+  ).toBeVisible();
+  await expect(page.locator('#import-session option')).toHaveCount(2);
+  await expect(page.locator('#import-session')).toHaveValue('pasted-list:2');
+  expect(errors).toEqual([]);
+});
+
+test('recovers a source whose response was lost and explains what the import holds', async ({
+  page,
+}) => {
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, []);
+  const paste = '4 Lightning Bolt (M11) 149\n2 Counterspell (7ED) 67';
+
+  await page.fill('#import-source-text', paste);
+  await page.click('#import-source-submit');
+  const first = await requested<StageSourceImportInput>(page, 'source');
+  expect(first.arguments).toMatchObject({ format: 'pasted-list', text: paste });
+  await control(page, 'fail', first.id, {
+    code: 'unavailable',
+    message: 'The import could not be read within the time limit; no import is proven.',
+  });
+  await expect(page.locator('#import-source-status')).toHaveText(
+    'The staging outcome is unknown. Import the same source again to read its recorded rows.',
+  );
+
+  // The parse had committed: the page reads the import the account holds and presents it, so the
+  // owner reviews the list a lost response would otherwise hide.
+  const recorded = session({
+    sessionId: first.arguments.sessionId,
+    sourceKind: 'pasted-list',
+    sourceId: first.arguments.sessionId,
+    pendingEntries: 1,
+  });
+  const reconcile = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', reconcile.id, [recorded]);
+  const read = await requested<UiImportEntriesRequest>(page, 'entries');
+  await settle(page, 'settleEntries', read.id, {
+    session: recorded,
+    entries: [
+      entry({
+        entryId: 'source-entry-1',
+        sessionId: recorded.sessionId,
+        printingId: null,
+        finish: null,
+        quantity: 4,
+        sourceLine: boltSourceLine,
+      }),
+    ],
+  });
+
+  // The retry keeps that import's identity, so the provider reports what it already holds instead
+  // of staging the list twice.
+  await page.click('#import-source-submit');
+  const retry = await requested<StageSourceImportInput>(page, 'source', 1);
+  expect(retry.arguments).toEqual(first.arguments);
+  await settle(page, 'settleSource', retry.id, {
+    session: recorded,
+    rows: [
+      {
+        position: 1,
+        line: boltSourceLine,
+        outcome: 'pending',
         problem: boltSourceLine.problem,
         entryId: 'source-entry-1',
-        sessionId: 'pasted-list:1',
+        sessionId: recorded.sessionId,
+      },
+      {
+        position: 2,
+        line: counterspellSourceLine,
+        outcome: 'acquired',
+        problem: counterspellSourceLine.problem,
+        entryId: 'source-entry-2',
+        sessionId: recorded.sessionId,
       },
     ],
     staged: 0,
   });
   await expect(page.locator('#import-source-status')).toHaveText(
-    '1 line was already acquired from this source. Nothing new was staged; a reviewed line ' +
-      'becomes a copy only through confirmation.',
+    '1 line was already in review; 1 line was already acquired by this import. Nothing new was ' +
+      'staged; a reviewed line becomes a copy only through confirmation.',
   );
-  await expect(page.locator('#import-source-rows li')).toHaveText(
-    'Row 1 · already acquired from this source · Lightning Bolt · (M11 149) · The source named ' +
-      'no printing; choose one during review.',
+  const rows = page.locator('#import-source-rows li');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toHaveText(
+    'Row 1 · already in review · Lightning Bolt · (M11 149) · The source named no printing; ' +
+      'choose one during review.',
+  );
+  await expect(rows.nth(1)).toHaveText(
+    'Row 2 · already acquired by this import · Counterspell · (7ED 67) · The source named no ' +
+      'printing; choose one during review.',
   );
 
-  // The presented session reloads instead of being composed again, and its review stays usable.
+  // The import is already the presented one: its own review reloads instead of being replaced, so
+  // the owner keeps the entry the response never reported.
   const reload = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
-  await settle(page, 'settleSessions', reload.id, [parsedSession]);
+  await settle(page, 'settleSessions', reload.id, [recorded]);
   const reloaded = await requested<UiImportEntriesRequest>(page, 'entries', 1);
   await settle(page, 'settleEntries', reloaded.id, {
-    session: parsedSession,
-    entries: [stored()],
+    session: recorded,
+    entries: [
+      entry({
+        entryId: 'source-entry-1',
+        sessionId: recorded.sessionId,
+        printingId: null,
+        finish: null,
+        quantity: 4,
+        sourceLine: boltSourceLine,
+      }),
+    ],
   });
   await expect(
     page.locator('#import-pending [data-ui-entry="pending:source-entry-1"]'),
@@ -1777,11 +1941,12 @@ test('keeps a source whose response was lost and recovers it by importing it aga
   await expect(page.locator('#import-source-identity')).toBeHidden();
   await page.fill('#import-source-url', 'https://moxfield.com/decks/deck-identity-0001');
   await page.click('#import-source-submit');
-  const first = await requested<Record<string, unknown>>(page, 'source');
-  expect(first.arguments).toEqual({
+  const first = await requested<StageSourceImportInput>(page, 'source');
+  expect(first.arguments).toMatchObject({
     format: 'moxfield',
     url: 'https://moxfield.com/decks/deck-identity-0001',
   });
+  expect(sourceImportIdentity(first.arguments)).toBe(first.arguments.sessionId);
   await control(page, 'fail', first.id, {
     code: 'unavailable',
     message: 'Moxfield could not be reached within the time limit; no import changed.',
@@ -1793,7 +1958,7 @@ test('keeps a source whose response was lost and recovers it by importing it aga
   const reconcile = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
   await settle(page, 'settleSessions', reconcile.id, []);
 
-  // Leaving the view keeps the unfinished source, so returning presents the same link again.
+  // Leaving the view keeps the unfinished import, so returning composes the same list again.
   await control(page, 'navigate', { page: 'home' });
   await control(page, 'back');
   const restored = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
@@ -1802,8 +1967,10 @@ test('keeps a source whose response was lost and recovers it by importing it aga
     'https://moxfield.com/decks/deck-identity-0001',
   );
 
+  // The link describes the import and never identifies it: the retry keeps the identity the page
+  // already used, so the provider reconciles this list instead of staging another one.
   await page.click('#import-source-submit');
-  const retry = await requested<Record<string, unknown>>(page, 'source', 1);
+  const retry = await requested<StageSourceImportInput>(page, 'source', 1);
   expect(retry.arguments).toEqual(first.arguments);
   const deckSession = session({
     sessionId: 'moxfield:1',
@@ -1872,9 +2039,10 @@ test('imports a reviewed Wizards list with its identity and official reference',
   await page.click('#import-source-submit');
 
   // The reviewed lines cross the contract with the leading count the owner pasted; a blank row is
-  // formatting rather than a line.
-  const parsed = await requested<Record<string, unknown>>(page, 'source');
-  expect(parsed.arguments).toEqual({
+  // formatting rather than a line, and the product identity describes the import instead of
+  // identifying it.
+  const parsed = await requested<StageSourceImportInput>(page, 'source');
+  expect(parsed.arguments).toMatchObject({
     format: 'wizards-precon',
     sourceId: 'wizards:mkm:deadly-disguise:regular:en',
     reference: 'https://magic.wizards.com/en/news/feature/deadly-disguise-decklist',
@@ -1883,9 +2051,10 @@ test('imports a reviewed Wizards list with its identity and official reference',
       { name: 'Forest', quantity: 10 },
     ],
   });
+  expect(sourceImportIdentity(parsed.arguments)).toBe(parsed.arguments.sessionId);
 
   const deckSession = session({
-    sessionId: 'wizards-precon:1',
+    sessionId: parsed.arguments.sessionId,
     sourceKind: 'wizards-precon',
     sourceId: 'wizards:mkm:deadly-disguise:regular:en',
     sourceReference: 'https://magic.wizards.com/en/news/feature/deadly-disguise-decklist',
@@ -1906,7 +2075,7 @@ test('imports a reviewed Wizards list with its identity and official reference',
         outcome: 'staged',
         problem: 'The source named no printing; choose one during review.',
         entryId: 'wizard-entry-1',
-        sessionId: 'wizards-precon:1',
+        sessionId: deckSession.sessionId,
       },
       {
         position: 2,
@@ -1920,7 +2089,7 @@ test('imports a reviewed Wizards list with its identity and official reference',
         outcome: 'staged',
         problem: 'The source named no printing; choose one during review.',
         entryId: 'wizard-entry-2',
-        sessionId: 'wizards-precon:1',
+        sessionId: deckSession.sessionId,
       },
     ],
     staged: 2,
@@ -1937,14 +2106,14 @@ test('imports a reviewed Wizards list with its identity and official reference',
     entries: [
       entry({
         entryId: 'wizard-entry-1',
-        sessionId: 'wizards-precon:1',
+        sessionId: deckSession.sessionId,
         printingId: null,
         finish: null,
         quantity: 1,
       }),
       entry({
         entryId: 'wizard-entry-2',
-        sessionId: 'wizards-precon:1',
+        sessionId: deckSession.sessionId,
         position: 2,
         printingId: null,
         finish: null,
@@ -1965,6 +2134,126 @@ test('imports a reviewed Wizards list with its identity and official reference',
   );
   expect(errors).toEqual([]);
 });
+
+/**
+ * The three source methods, each with the fields a journey fills and the provenance of the import
+ * the provider records for it.
+ */
+const sourceMethods = [
+  {
+    format: 'pasted-list',
+    fill: async (page: Page) => {
+      await page.selectOption('#import-source-format', 'pasted-list');
+      await page.fill('#import-source-text', '4 Lightning Bolt (M11) 149');
+    },
+    recorded: (sessionId: string) =>
+      session({
+        sessionId,
+        sourceKind: 'pasted-list',
+        sourceId: sessionId,
+        pendingEntries: 1,
+      }),
+    provenance: 'Pasted list',
+  },
+  {
+    format: 'moxfield',
+    fill: async (page: Page) => {
+      await page.selectOption('#import-source-format', 'moxfield');
+      await page.fill('#import-source-url', 'https://moxfield.com/decks/deck-reload-0001');
+    },
+    recorded: (sessionId: string) =>
+      session({
+        sessionId,
+        sourceKind: 'moxfield',
+        sourceId: 'deck-reload-0001',
+        sourceReference: 'https://moxfield.com/decks/deck-reload-0001',
+        pendingEntries: 1,
+      }),
+    provenance: 'Moxfield deck · Open the source ↗',
+  },
+  {
+    format: 'wizards-precon',
+    fill: async (page: Page) => {
+      await page.selectOption('#import-source-format', 'wizards-precon');
+      await page.fill('#import-source-identity', 'wizards:mkm:deadly-disguise:regular:en');
+      await page.fill(
+        '#import-source-reference',
+        'https://magic.wizards.com/en/news/feature/deadly-disguise-decklist',
+      );
+      await page.fill('#import-source-lines', '1 Kadena, Slinking Sorcerer');
+    },
+    recorded: (sessionId: string) =>
+      session({
+        sessionId,
+        sourceKind: 'wizards-precon',
+        sourceId: 'wizards:mkm:deadly-disguise:regular:en',
+        sourceReference: 'https://magic.wizards.com/en/news/feature/deadly-disguise-decklist',
+        pendingEntries: 1,
+      }),
+    provenance: 'Wizards preconstructed deck · Official Wizards decklist ↗',
+  },
+] as const;
+
+for (const method of sourceMethods) {
+  test(`reopens a ${method.format} import a lost response recorded, also after a reload`, async ({
+    page,
+  }) => {
+    const errors = await openImport(page, '#/import');
+    await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+    const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+    await settle(page, 'settleSessions', listing.id, []);
+
+    // The parse committed and its response was lost: the page reads the import the account holds
+    // instead of inferring that the source staged nothing
+    // (docs/user-interface.md#source-imports).
+    await method.fill(page);
+    await page.click('#import-source-submit');
+    const parsed = await requested<StageSourceImportInput>(page, 'source');
+    await control(page, 'fail', parsed.id, {
+      code: 'unavailable',
+      message: 'The source could not be read within the time limit; no import is proven.',
+    });
+    await expect(page.locator('#import-source-status')).toHaveText(
+      'The staging outcome is unknown. Import the same source again to read its recorded rows.',
+    );
+
+    const recorded = method.recorded(parsed.arguments.sessionId);
+    const reconcile = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+    await settle(page, 'settleSessions', reconcile.id, [recorded]);
+    const read = await requested<UiImportEntriesRequest>(page, 'entries');
+    const recordedEntry = entry({
+      entryId: `${method.format}-entry`,
+      sessionId: recorded.sessionId,
+      printingId: null,
+      finish: null,
+      quantity: 4,
+      sourceLine: boltSourceLine,
+    });
+    await settle(page, 'settleEntries', read.id, { session: recorded, entries: [recordedEntry] });
+    await expect(page.locator('#import-provenance')).toHaveText(method.provenance);
+    await expect(
+      page.locator(`#import-pending [data-ui-entry="pending:${recordedEntry.entryId}"]`),
+    ).toBeVisible();
+
+    // A reload opens the import the provider holds, with the provenance of its source, so the owner
+    // reviews and confirms the recorded list instead of staging it again.
+    await page.reload();
+    await loadImport(page);
+    await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+    const reopened = await requested<UiImportSessionsRequest>(page, 'sessions');
+    await settle(page, 'settleSessions', reopened.id, [recorded]);
+    const reopenedEntries = await requested<UiImportEntriesRequest>(page, 'entries');
+    await settle(page, 'settleEntries', reopenedEntries.id, {
+      session: recorded,
+      entries: [recordedEntry],
+    });
+    await expect(
+      page.locator(`#import-pending [data-ui-entry="pending:${recordedEntry.entryId}"]`),
+    ).toBeVisible();
+    await expect(page.locator('#import-provenance')).toHaveText(method.provenance);
+    expect(errors).toEqual([]);
+  });
+}
 
 test('presents no source method when the deployment disables source imports', async ({ page }) => {
   const errors = await openImport(page, '#/import', { sourceImports: false });

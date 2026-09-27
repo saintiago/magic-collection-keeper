@@ -1,10 +1,10 @@
 /**
- * A source import reconciles the lines it offers with what its source already recorded inside the
+ * A source import reconciles the lines it offers with what that import already recorded inside the
  * transaction that stages them, behind the session lock (docs/user-cards.md#source-imports,
  * docs/user-cards.md#persistence-and-recovery). A review, a discard or a competing import of the
- * same source that commits first is therefore observed instead of overwritten, and the reported
- * counts are the committed ones. PGlite serves one connection, so these interleavings run against a
- * real PostgreSQL server: one writer holds the session until the other import is waiting for it.
+ * same list that commits first is therefore observed instead of overwritten, and the reported counts
+ * are the committed ones. PGlite serves one connection, so these interleavings run against a real
+ * PostgreSQL server: one writer holds the session until the other import is waiting for it.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -63,9 +63,14 @@ const catalog: Catalog = {
   },
 };
 
-/** One public deck link per interleaving, so their sessions stay independent. */
+/** The public deck link one interleaving imports. */
 function deckUrl(sourceId: string): string {
   return `https://moxfield.com/decks/${sourceId}`;
+}
+
+/** Identity of the import one interleaving stages into; both writers of a case name the same list. */
+function importId(sourceId: string): string {
+  return `import-${sourceId}`;
 }
 
 /** A deck document with one mainboard line of the given quantity. */
@@ -236,7 +241,8 @@ describe('usercards source import races', () => {
       catalog,
       decks: deckSource(deckDocument(1)),
     });
-    const first = await imports.stageSourceImport(alice, { format: 'moxfield', url });
+    const sessionId = importId('keeper_review_deck_1');
+    const first = await imports.stageSourceImport(alice, { format: 'moxfield', sessionId, url });
     const entryId = first.rows[0]?.entryId as string;
     expect(first.staged).toBe(1);
 
@@ -258,7 +264,7 @@ describe('usercards source import races', () => {
       catalog,
       decks: deckSource(deckDocument(4)),
     });
-    const staged = waiting.stageSourceImport(alice, { format: 'moxfield', url });
+    const staged = waiting.stageSourceImport(alice, { format: 'moxfield', sessionId, url });
     await waitFor(claim.reached, 'session lock');
     held.release();
 
@@ -280,7 +286,8 @@ describe('usercards source import races', () => {
       catalog,
       decks: deckSource(deckDocument(2)),
     });
-    const first = await imports.stageSourceImport(alice, { format: 'moxfield', url });
+    const sessionId = importId('keeper_discard_deck_1');
+    const first = await imports.stageSourceImport(alice, { format: 'moxfield', sessionId, url });
     const entryId = first.rows[0]?.entryId as string;
 
     const held = heldWriter(holder, (sql) => createUserCards({ sql, catalog }));
@@ -293,13 +300,13 @@ describe('usercards source import races', () => {
       catalog,
       decks: deckSource(deckDocument(2)),
     });
-    const staged = waiting.stageSourceImport(alice, { format: 'moxfield', url });
+    const staged = waiting.stageSourceImport(alice, { format: 'moxfield', sessionId, url });
     await waitFor(claim.reached, 'session lock');
     held.release();
 
     await discard;
     const outcome = await staged;
-    // The discarded quantity is no longer covered, so the source stages it again for review.
+    // The discarded quantity is no longer covered, so the import stages it again for review.
     expect(outcome.staged).toBe(1);
     expect(outcome.rows.map((row) => row.outcome)).toEqual(['staged']);
     expect(outcome.rows[0]?.entryId).not.toBe(entryId);
@@ -310,10 +317,11 @@ describe('usercards source import races', () => {
   it('reports the committed outcome when two identical imports overlap', async () => {
     const { holder, contender } = requireFixture();
     const url = deckUrl('keeper_overlap_deck_1');
+    const sessionId = importId('keeper_overlap_deck_1');
     const held = heldWriter(holder, (sql: UserCardsSqlTransactor) =>
       createSourceImports({ sql, catalog, decks: deckSource(deckDocument(2)) }),
     );
-    const first = held.operations.stageSourceImport(alice, { format: 'moxfield', url });
+    const first = held.operations.stageSourceImport(alice, { format: 'moxfield', sessionId, url });
     await waitFor(held.claimed, 'session lock');
 
     const claim = sessionClaimWatcher();
@@ -322,14 +330,15 @@ describe('usercards source import races', () => {
       catalog,
       decks: deckSource(deckDocument(2)),
     });
-    const second = overlapping.stageSourceImport(alice, { format: 'moxfield', url });
+    const second = overlapping.stageSourceImport(alice, { format: 'moxfield', sessionId, url });
     await waitFor(claim.reached, 'session lock');
     held.release();
 
     const [firstResult, secondResult] = await Promise.all([first, second]);
     expect(firstResult.staged).toBe(1);
-    // The second import finds the quantity the first one committed and stages nothing, reporting
-    // the committed outcome instead of the lines it computed before it waited for the session.
+    // The second writer of the same import finds the quantity the first one committed and stages
+    // nothing, reporting the committed outcome instead of the lines it computed before it waited
+    // for the session.
     expect(secondResult.staged).toBe(0);
     expect(secondResult.rows.map((row) => row.outcome)).toEqual(['pending']);
     expect(secondResult.rows[0]?.entryId).toBe(firstResult.rows[0]?.entryId);

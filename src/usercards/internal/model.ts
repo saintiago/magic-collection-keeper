@@ -99,7 +99,7 @@ export interface ImportCandidate {
  * deck or a reviewed Wizards preconstructed list published for one pending entry, kept
  * independently of the reviewed values and of the physical copies the line eventually produces. An
  * unresolved name or printing stays reviewable because the entry keeps what its source said, and a
- * repeated import of the same source can recognize the line from this identity.
+ * replay of the same import can recognize the line from this identity.
  */
 export interface ImportSourceLine {
   /** Card name the source published; null when it named none. */
@@ -153,16 +153,21 @@ export interface ImportEntry {
 
 /**
  * One import session: the persisted part of a browser-resident capture session or of a parsed
- * source import (docs/user-cards.md#import-and-capture-state). It keeps the source identity that
- * replay protection is based on, the last accepted capture identity, and its own change revision;
- * its lifecycle state follows the entries it still holds, so a session is pending while entries
- * are reviewable and confirmed or discarded once they are not.
+ * source import (docs/user-cards.md#import-and-capture-state). Each new import has its own stable
+ * identity, even when another import carries identical cards or the same source reference; the
+ * session keeps the import identity that replay protection is based on, the provenance its source
+ * published, the last accepted capture identity, and its own change revision. Its lifecycle state
+ * follows the entries it still holds, so a session is pending while entries are reviewable and
+ * confirmed or discarded once they are not.
  */
 export interface ImportSession {
   readonly sessionId: ImportSessionId;
   /** Source family of the acquisition, for example a capture session or a pasted list. */
   readonly sourceKind: string;
-  /** Stable identity of the acquisition source, preserved independently of the copies it produced. */
+  /**
+   * Published identity of the import's source, preserved independently of the copies it produced;
+   * a source that publishes none, like a pasted list, carries the import's own identity.
+   */
   readonly sourceId: string;
   /**
    * Official reference of the acquisition source, for example the Wizards decklist the owner

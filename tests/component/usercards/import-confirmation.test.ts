@@ -179,13 +179,15 @@ describe('usercards import confirmation', () => {
     });
     expect((await userCards.listImportSessions(alice)).sessions).toEqual([]);
 
-    // Provenance keeps the source identity and the entry each copy came from.
+    // Provenance keeps the source identity of the import and the entry each copy came from.
     const provenance = await database.query(
-      `select provenance.copy_id, provenance.entry_id, acquisition.source_kind,
-              acquisition.source_id
+      `select provenance.copy_id, provenance.entry_id, session.source_kind, session.source_id
          from usercards_private.copy_provenance as provenance
          join usercards_private.import_acquisition as acquisition
            on acquisition.acquisition_id = provenance.acquisition_id
+         join usercards_private.import_session as session
+           on session.account_id = acquisition.account_id
+          and session.session_id = acquisition.session_id
         where provenance.account_id = $1
         order by provenance.copy_id`,
       [alice.accountId],
@@ -337,6 +339,8 @@ describe('usercards import confirmation', () => {
       expect(new Set([...earlier.copies, ...later.copies].map((copy) => copy.copyId)).size).toBe(2);
       expect(await countCopies(database, alice.accountId)).toBe(2);
       if (kind === 'source') {
+        // Another import of the same source content owns its own acquisitions: confirming its
+        // entries creates their own copies instead of replaying the first import's.
         await userCards.stageImportEntries(alice, {
           sessionId: 'repeat',
           source,
@@ -346,25 +350,40 @@ describe('usercards import confirmation', () => {
             quantity: 1,
           })),
         });
-        const repeatedCopies = [];
+        const repeatedByEntry = new Map<string, readonly { readonly copyId: string }[]>();
         for (const entryId of ['repeat-2', 'repeat-1']) {
           const repeated = await userCards.confirmImport(alice, {
             operationId: entryId,
             sessionId: 'repeat',
             entries: [{ entryId, expectedRevision: 1 }],
           });
-          expect(repeated.replayed).toBe(true);
-          repeatedCopies.push(...repeated.copies);
+          expect(repeated.replayed).toBe(false);
+          repeatedByEntry.set(entryId, repeated.copies);
         }
-        expect(new Set(repeatedCopies.map((copy) => copy.copyId))).toEqual(
-          new Set([...earlier.copies, ...later.copies].map((copy) => copy.copyId)),
-        );
-        expect(await countCopies(database, alice.accountId)).toBe(2);
+        const firstRepeat = new Set(repeatedByEntry.get('repeat-1')?.map((copy) => copy.copyId));
+        const secondRepeat = new Set(repeatedByEntry.get('repeat-2')?.map((copy) => copy.copyId));
+        const original = new Set([...earlier.copies, ...later.copies].map((copy) => copy.copyId));
+        expect(firstRepeat.size).toBe(1);
+        expect(secondRepeat.size).toBe(1);
+        // Two identical source entries of one import are their own acquisitions, and none of them
+        // is the acquisition of the other import.
+        expect(firstRepeat).not.toEqual(secondRepeat);
+        expect(firstRepeat).not.toEqual(original);
+
+        // Retrying one of that import's own confirmations returns its recorded outcome.
+        const retried = await userCards.confirmImport(alice, {
+          operationId: 'repeat-1-retry',
+          sessionId: 'repeat',
+          entries: [{ entryId: 'repeat-1', expectedRevision: 1 }],
+        });
+        expect(retried.replayed).toBe(true);
+        expect(retried.copies).toEqual(repeatedByEntry.get('repeat-1'));
+        expect(await countCopies(database, alice.accountId)).toBe(4);
       }
     },
   );
 
-  it('replays the final source after a review separates formerly identical entries', async () => {
+  it('keeps each reviewed content its own acquisition after a review separates entries', async () => {
     const source = { kind: 'text', id: 'review-source' };
     await userCards.stageImportEntries(alice, {
       sessionId: 'original',
@@ -393,6 +412,12 @@ describe('usercards import confirmation', () => {
       sessionId: 'original',
       entries: [{ entryId: 'first', expectedRevision: 2 }],
     });
+    expect(new Set([...first.copies, ...second.copies].map((copy) => copy.copyId)).size).toBe(2);
+    expect(await countCopies(database, alice.accountId)).toBe(2);
+
+    // Another import of the same two reviewed contents owns its own acquisitions: the reviewed
+    // content, not the staged order, decides what that import acquired, and it creates its own
+    // copies instead of replaying the first import's.
     await userCards.stageImportEntries(alice, {
       sessionId: 'repeat',
       source,
@@ -409,11 +434,12 @@ describe('usercards import confirmation', () => {
         expectedRevision: 1,
       })),
     });
-    expect(repeated.replayed).toBe(true);
-    expect(new Set(repeated.copies.map((copy) => copy.copyId))).toEqual(
+    expect(repeated.replayed).toBe(false);
+    expect(new Set(repeated.copies.map((copy) => copy.copyId)).size).toBe(2);
+    expect(new Set(repeated.copies.map((copy) => copy.copyId))).not.toEqual(
       new Set([...first.copies, ...second.copies].map((copy) => copy.copyId)),
     );
-    expect(await countCopies(database, alice.accountId)).toBe(2);
+    expect(await countCopies(database, alice.accountId)).toBe(4);
   });
 
   it('refuses stale revisions, discarded entries and unresolved entries', async () => {
@@ -481,7 +507,7 @@ describe('usercards import confirmation', () => {
     expect(entries.entries.map((entry) => entry.entryId)).toEqual(['line-1']);
   });
 
-  it('adds one acquisition of a source once and replays it for a repeated import', async () => {
+  it('keeps the acquisitions of another import independent of the first', async () => {
     const content = {
       printingId: m11Printing.printingId,
       finish: 'foil' as const,
@@ -501,7 +527,9 @@ describe('usercards import confirmation', () => {
     expect(first.replayed).toBe(false);
     expect(first.copies).toHaveLength(2);
 
-    // A repeated import of the same source with the same content adds nothing.
+    // Another import of the same source content is another list: confirming it creates its own
+    // copies instead of replaying the first import's acquisition
+    // (docs/user-cards.md#import-state-and-identity).
     await userCards.stageImportEntries(alice, {
       sessionId: 'session-2',
       source: { kind: 'moxfield', id: 'deck-1' },
@@ -512,9 +540,10 @@ describe('usercards import confirmation', () => {
       sessionId: 'session-2',
       entries: [{ entryId: 'line-2', expectedRevision: 1 }],
     });
-    expect(repeated.replayed).toBe(true);
-    expect(repeated.copies.map((copy) => copy.copyId).sort()).toEqual(
-      first.copies.map((copy) => copy.copyId).sort(),
+    expect(repeated.replayed).toBe(false);
+    expect(repeated.copies).toHaveLength(2);
+    expect(new Set(repeated.copies.map((copy) => copy.copyId))).not.toEqual(
+      new Set(first.copies.map((copy) => copy.copyId)),
     );
     const repeatedSession = await userCards.listImportEntries(alice, {
       sessionId: 'session-2',
@@ -524,6 +553,18 @@ describe('usercards import confirmation', () => {
       state: 'confirmed',
       confirmedEntries: 1,
     });
+
+    // Retrying that import's own confirmation returns its recorded outcome instead of adding its
+    // copies twice.
+    const retried = await userCards.confirmImport(alice, {
+      operationId: 'operation-2-retry',
+      sessionId: 'session-2',
+      entries: [{ entryId: 'line-2', expectedRevision: 1 }],
+    });
+    expect(retried.replayed).toBe(true);
+    expect(retried.copies.map((copy) => copy.copyId).sort()).toEqual(
+      repeated.copies.map((copy) => copy.copyId).sort(),
+    );
 
     // Different confirmed content is a separate acquisition and creates its own copies.
     await userCards.stageImportEntries(alice, {
@@ -544,7 +585,7 @@ describe('usercards import confirmation', () => {
       [...first.copies, ...changed.copies].map((copy) => copy.copyId),
     );
     expect(allCopies.copies.size).toBe(5);
-    expect(await countCopies(database, alice.accountId)).toBe(5);
+    expect(await countCopies(database, alice.accountId)).toBe(7);
   });
 
   it('confirms every admitted capture of one session, including a repeat after another card', async () => {
@@ -589,7 +630,7 @@ describe('usercards import confirmation', () => {
     });
   });
 
-  it('adds a repeated source once however confirmations are partitioned', async () => {
+  it('adds the acquisitions of each import however confirmations are partitioned', async () => {
     await userCards.stageImportEntries(alice, {
       sessionId: 'session-1',
       source: { kind: 'moxfield', id: 'deck-1' },
@@ -620,7 +661,8 @@ describe('usercards import confirmation', () => {
     });
     expect(together.copies).toHaveLength(2);
 
-    // The identical source imported again and confirmed line by line adds no copy.
+    // The identical source imported as two other lists and confirmed line by line creates one copy
+    // for each of those imports: their acquisitions are independent of the first one.
     const reimported = [
       ['session-2', 'line-3', m11Printing.printingId, 'foil', 'LP'],
       ['session-3', 'line-4', counterspellPrinting.printingId, 'nonfoil', 'NM'],
@@ -638,10 +680,10 @@ describe('usercards import confirmation', () => {
         sessionId,
         entries: [{ entryId, expectedRevision: 1 }],
       });
-      expect(repeated.replayed).toBe(true);
+      expect(repeated.replayed).toBe(false);
       expect(repeated.copies).toHaveLength(1);
     }
-    expect(await countCopies(database, alice.accountId)).toBe(2);
+    expect(await countCopies(database, alice.accountId)).toBe(4);
 
     // The source's second copy of a card is a source entry of its own, and only it adds a copy.
     await userCards.stageImportEntries(alice, {
@@ -678,9 +720,9 @@ describe('usercards import confirmation', () => {
     });
     expect(secondOfTwo.replayed).toBe(false);
     expect(secondOfTwo.copies).toHaveLength(1);
-    expect(await countCopies(database, alice.accountId)).toBe(4);
+    expect(await countCopies(database, alice.accountId)).toBe(6);
 
-    // Reimporting that source with its two identical lines replays both source entries.
+    // Importing that deck as another list with two identical lines owns both of its source entries.
     await userCards.stageImportEntries(alice, {
       sessionId: 'session-5',
       source: { kind: 'moxfield', id: 'deck-2' },
@@ -700,9 +742,12 @@ describe('usercards import confirmation', () => {
         { entryId: 'line-8', expectedRevision: 1 },
       ],
     });
-    expect(repeated.replayed).toBe(true);
+    expect(repeated.replayed).toBe(false);
     expect(repeated.copies).toHaveLength(2);
-    expect(await countCopies(database, alice.accountId)).toBe(4);
+    expect(new Set(repeated.copies.map((copy) => copy.copyId))).not.toEqual(
+      new Set([...firstOfTwo.copies, ...secondOfTwo.copies].map((copy) => copy.copyId)),
+    );
+    expect(await countCopies(database, alice.accountId)).toBe(8);
   });
 
   it('keeps a recorded outcome unchanged when its copies are corrected later', async () => {
@@ -972,7 +1017,7 @@ describe('usercards import confirmation', () => {
       confirmed.copies.map((copy) => copy.copyId).sort(),
     );
 
-    // An identical retry and a repeated import of the same source return the same complete outcome.
+    // An identical retry returns the same complete outcome.
     const retry = await bounded.confirmImport(alice, {
       operationId: 'operation-maximum',
       sessionId: 'session-maximum',
@@ -981,21 +1026,20 @@ describe('usercards import confirmation', () => {
     expect(retry.replayed).toBe(true);
     expect(retry.copies).toHaveLength(5000);
 
+    // The same content imported as another list owns its own acquisition: its confirmation creates
+    // its own copies instead of replaying this import's outcome.
     await bounded.stageImportEntries(alice, {
       sessionId: 'session-maximum-repeat',
       source: { kind: 'text', id: 'list-maximum' },
-      entries: entries.map((entry, index) => ({ ...entry, entryId: `repeat-${index}` })),
+      entries: [{ ...(entries[0] as (typeof entries)[number]), entryId: 'repeat-0' }],
     });
     const repeated = await bounded.confirmImport(alice, {
       operationId: 'operation-maximum-repeat',
       sessionId: 'session-maximum-repeat',
-      entries: entries.map((_, index) => ({
-        entryId: `repeat-${index}`,
-        expectedRevision: 1,
-      })),
+      entries: [{ entryId: 'repeat-0', expectedRevision: 1 }],
     });
-    expect(repeated.replayed).toBe(true);
-    expect(repeated.copies).toHaveLength(5000);
-    expect(await countCopies(database, alice.accountId)).toBe(5000);
+    expect(repeated.replayed).toBe(false);
+    expect(repeated.copies).toHaveLength(100);
+    expect(await countCopies(database, alice.accountId)).toBe(5100);
   }, 180_000);
 });

@@ -13,9 +13,10 @@
  * pending imports have no published relation and are read through the component's own pending
  * reads. Source imports parse a pasted list, a public Moxfield deck or a reviewed Wizards
  * preconstructed list inside this boundary into the same pending entries, preserving what the
- * source published and reconciling a repeated import with what the source already acquired. Other
- * components import UserCards through this module only; its internal modules stay private to the
- * component (docs/architecture.md, .dependency-cruiser.mjs).
+ * source published and reconciling a repeated import of the list the caller identified with what
+ * that import already acquired, while another import owns its own acquisitions. Other components
+ * import UserCards through this module only; its internal modules stay private to the component
+ * (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
 export { UserCardsError, type UserCardsFailureCode } from './internal/errors.js';
