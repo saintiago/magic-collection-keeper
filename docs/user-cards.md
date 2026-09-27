@@ -69,17 +69,23 @@ copy operation that would start another transaction.
 
 ### Import state and identity
 
-A session names an acquisition source and serializes its pending changes. An entry holds reviewed
-printing, finish, condition, quantity, candidate evidence and revision. Pending, confirmed and discarded
-are distinct states governed by the [import lifecycle](#import-and-capture-state). Session identity
-groups entries and tracks source progress; it does not independently determine ownership or visibility.
+A session identifies one import card list and serializes its pending changes. Each new import has
+its own stable identity, even when another import has identical cards, quantities or source reference.
+Retrying, reopening or reconciling an existing import retains that identity. Contents and source URLs
+describe an import; they do not identify it or merge it with another import.
+
+An entry holds reviewed printing, finish, condition, quantity, candidate evidence and revision.
+Pending, confirmed and discarded are distinct states governed by the
+[import lifecycle](#import-and-capture-state). Session identity groups entries and tracks progress;
+it does not independently determine ownership or visibility.
 
 Keep three identities separate:
 
 - Capture or staged-line identity records admission/replay of one input. Consecutive accepted identity
   is session state; unresolved input does not advance it.
-- Acquisition identity records which source content and occurrence produced copies. Equivalent
-  repeated source imports reuse that outcome; two distinct occurrences remain distinct acquisitions.
+- Acquisition identity records which line content and occurrence within an import produced copies.
+  Replay within that import reuses its outcome; another import has independent acquisitions even
+  when its contents are identical.
 - Operation identity records one confirmation request and its immutable result. Changed input under
   the same identity conflicts. Recovery reads this result, even after the copies are later edited.
 
@@ -109,7 +115,7 @@ card/printing associations and do not reserve or relocate copies.
 ## Import and capture state
 
 Own both the active session and persisted pending entries, including candidates, user corrections,
-quantities and source identity. A browser-resident session is part of this component's state;
+quantities, import identity and source provenance. A browser-resident session is part of this component's state;
 presentation controls do not maintain a second authoritative import model. Raw frames are transient input.
 
 Staging persists entries with `system:import-pending` membership. These entries are visible only on
@@ -134,20 +140,20 @@ outcome; changed input under that identity is rejected.
 ## Source imports
 
 Support pasted card lists, Moxfield decks and reviewed Wizards preconstructed deck lists.
-Preserve the source identity and acquisition provenance independently of editable labels and
+Preserve the import identity and source provenance independently of editable labels and
 the resulting physical-copy records. A reviewed Wizards list retains its official source reference;
 accepting a list does not imply automatic discovery or scraping of every preconstructed product.
 
 Parse each supported source into pending entries. Unresolved names or printings remain reviewable;
 unsupported formats and invalid rows produce explicit errors. Keep provider fetching and parsing
 inside this boundary. Source additions or removals alone never change physical ownership.
-Replay protection applies to the same acquisition source, including after migration.
+Replay protection is scoped to the identified import and its acquisitions, including after migration.
 
 ## Persistence and recovery
 
 Use atomic changes and revision checks for coupled records. Conflicting edits remain recoverable
-instead of overwriting newer state. Preserve import source identity so replay cannot add the same
-acquisition twice. A source change alone does not prove that physical ownership changed.
+instead of overwriting newer state. Preserve import identity so replay cannot add the same acquisition
+twice within that import. A source change alone does not prove that physical ownership changed.
 
 Persist pending progress independently of ownership. A successful save does not require returning
 the entire collection. Keep account data isolated in browser persistence as well as backend storage.
