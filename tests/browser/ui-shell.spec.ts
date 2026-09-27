@@ -938,6 +938,8 @@ for (const identity of ['identified', 'anonymous'] as const) {
       await page.evaluate(() => {
         (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl.navigate({
           page: 'collection',
+          query: '',
+          level: 'card',
         });
       });
       await expect(page.locator('#collection-marker')).toBeVisible();

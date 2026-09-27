@@ -11,7 +11,9 @@
  * owned-only and finish controls. The controls are URL vocabulary of the UserInterface whose
  * values are the provider vocabularies Search and Catalog publish, so a reload or a shared link
  * evaluates the same query and the text expression and the controls normalize into the same query
- * model (docs/search.md#scryfall-compatibility).
+ * model (docs/search.md#scryfall-compatibility). A collection view names the text expression and
+ * the card, printing or physical-copy level it presents over the account's owned records
+ * (docs/user-interface.md#browsing-and-organization).
  */
 
 // Type-only imports keep the provider barrels out of a browser bundle: a value import would pull
@@ -39,6 +41,18 @@ export const uiCatalogLevels = ['card', 'printing'] as const satisfies readonly 
 export type UiCatalogLevel = (typeof uiCatalogLevels)[number];
 
 /**
+ * Result levels the collection views present. The collection exposes the card, printing and
+ * physical-copy levels of the account's owned records, so the same Search vocabulary applies and
+ * one physical copy is one entry at the copy level.
+ */
+export const uiCollectionLevels = [
+  'card',
+  'printing',
+  'copy',
+] as const satisfies readonly SearchResultLevel[];
+export type UiCollectionLevel = (typeof uiCollectionLevels)[number];
+
+/**
  * Finishes the catalog page's finish control offers. The values are the Catalog provider's
  * published vocabulary; the list is declared here because the URL is UserInterface vocabulary and
  * a provider change needs a deliberate decision about the routes it serves.
@@ -61,7 +75,12 @@ export type UiView =
       /** Required printing finish, or null when the query does not constrain it. */
       readonly finish: Finish | null;
     }
-  | { readonly page: 'collection' }
+  | {
+      readonly page: 'collection';
+      /** Text expression of the query; empty presents every owned entry of the level. */
+      readonly query: string;
+      readonly level: UiCollectionLevel;
+    }
   | { readonly page: 'tags' }
   | { readonly page: 'tag'; readonly tagId: string }
   | {
@@ -102,8 +121,20 @@ export function uiHref(view: UiView): string {
       const text = query.toString();
       return text === '' ? `${UI_ROUTE_PREFIX}catalog` : `${UI_ROUTE_PREFIX}catalog?${text}`;
     }
-    case 'collection':
-      return `${UI_ROUTE_PREFIX}collection`;
+    case 'collection': {
+      if (view.query.length > UI_LIMITS.catalogQuery) {
+        throw new TypeError('A collection query is bounded by the state the page retains.');
+      }
+      const query = new URLSearchParams();
+      if (view.query.length > 0) {
+        query.set('query', view.query);
+      }
+      if (view.level !== 'card') {
+        query.set('level', view.level);
+      }
+      const text = query.toString();
+      return text === '' ? `${UI_ROUTE_PREFIX}collection` : `${UI_ROUTE_PREFIX}collection?${text}`;
+    }
     case 'tags':
       return `${UI_ROUTE_PREFIX}tags`;
     case 'tag':
@@ -168,7 +199,7 @@ function readView(segments: readonly string[], search: string): UiView | null {
   const [head] = segments;
   if (head === 'catalog' && segments.length === 1) {
     const parameters = new URLSearchParams(search);
-    const query = readCatalogText(parameters.get('query'));
+    const query = readQueryText(parameters.get('query'));
     if (query === null) {
       return null;
     }
@@ -181,7 +212,16 @@ function readView(segments: readonly string[], search: string): UiView | null {
     };
   }
   if (head === 'collection' && segments.length === 1) {
-    return { page: 'collection' };
+    const parameters = new URLSearchParams(search);
+    const query = readQueryText(parameters.get('query'));
+    if (query === null) {
+      return null;
+    }
+    return {
+      page: 'collection',
+      query,
+      level: readUiCollectionLevel(parameters.get('level')),
+    };
   }
   if (head === 'import' && segments.length === 1) {
     return { page: 'import' };
@@ -207,8 +247,8 @@ function readView(segments: readonly string[], search: string): UiView | null {
   return null;
 }
 
-/** Text expression one catalog URL names, or null when it is outside the declared bound. */
-function readCatalogText(value: string | null): string | null {
+/** Text expression one browsing URL names, or null when it is outside the declared bound. */
+function readQueryText(value: string | null): string | null {
   const text = value ?? '';
   return text.length <= UI_LIMITS.catalogQuery ? text : null;
 }
@@ -216,6 +256,11 @@ function readCatalogText(value: string | null): string | null {
 /** Result level one catalog URL or control names; an absent or unknown value presents cards. */
 export function readUiCatalogLevel(value: unknown): UiCatalogLevel {
   return value === 'printing' ? 'printing' : 'card';
+}
+
+/** Result level one collection URL or control names; an absent or unknown value presents cards. */
+export function readUiCollectionLevel(value: unknown): UiCollectionLevel {
+  return value === 'printing' || value === 'copy' ? value : 'card';
 }
 
 /** Finish one catalog URL or control names, or null when it is absent or outside the vocabulary. */

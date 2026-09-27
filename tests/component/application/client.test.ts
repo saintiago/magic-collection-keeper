@@ -15,6 +15,7 @@ import {
   createBrowserApplication,
   createCatalogClient,
   createSearchClient,
+  createUserCardsClient,
   inspectCanvasFrame,
   type PublicApplicationSettings,
   type UserInterfaceCapabilities,
@@ -407,6 +408,107 @@ describe('search client', () => {
   });
 });
 
+describe('user cards client', () => {
+  it('reads explicit copies through the private route and keeps the authorized records', async () => {
+    const payload = {
+      privateRevision: 'private-1',
+      copies: [
+        {
+          copyId: 'copy-1',
+          printingId: 'printing-1',
+          finish: 'foil',
+          condition: null,
+          revision: 2,
+        },
+      ],
+      missing: ['copy-2'],
+    };
+    const { fetch, calls } = jsonFetch(payload);
+    const request = createAuthenticatedRequest({
+      baseUrl: 'https://api.test.keeper.example',
+      token: () => 'id-token-value',
+      fetch,
+    });
+
+    const result = await createUserCardsClient(request).readCopies(['copy-1', 'copy-2']);
+
+    expect(calls[0]?.url).toBe('https://api.test.keeper.example/api/collection/copies/read');
+    expect(calls[0]?.init.method).toBe('POST');
+    expect(calls[0]?.init.body).toBe('{"copyIds":["copy-1","copy-2"]}');
+    expect(result.privateRevision).toBe('private-1');
+    expect(result.missing).toEqual(['copy-2']);
+    expect(result.copies.get('copy-1')).toEqual({
+      copyId: 'copy-1',
+      printingId: 'printing-1',
+      finish: 'foil',
+      condition: null,
+      revision: 2,
+    });
+  });
+
+  it('corrects one copy under the revision it read and keeps the committed record', async () => {
+    const payload = {
+      privateRevision: 'private-2',
+      copies: [
+        {
+          copyId: 'copy-1',
+          printingId: 'printing-2',
+          finish: 'etched',
+          condition: 'LP',
+          revision: 3,
+        },
+      ],
+    };
+    const { fetch, calls } = jsonFetch(payload);
+    const request = createAuthenticatedRequest({
+      baseUrl: 'https://api.test.keeper.example',
+      token: () => 'id-token-value',
+      fetch,
+    });
+
+    const result = await createUserCardsClient(request).correctCopy({
+      copyId: 'copy/1',
+      expectedRevision: 2,
+      printingId: 'printing-2',
+      finish: 'etched',
+      condition: 'LP',
+    });
+
+    expect(calls[0]?.url).toBe(
+      'https://api.test.keeper.example/api/collection/copies/copy%2F1/corrections',
+    );
+    expect(calls[0]?.init.body).toBe(
+      '{"expectedRevision":2,"printingId":"printing-2","finish":"etched","condition":"LP"}',
+    );
+    expect(result).toEqual(payload);
+  });
+
+  it('reports a response outside the declared copy shape as unavailable', async () => {
+    const request = (payload: unknown) =>
+      createUserCardsClient(
+        createAuthenticatedRequest({
+          baseUrl: 'https://api.test.keeper.example',
+          token: () => 'id-token-value',
+          fetch: jsonFetch(payload).fetch,
+        }),
+      );
+
+    for (const payload of [
+      { privateRevision: 'private-1', copies: 'not-an-array', missing: [] },
+      { privateRevision: 'private-1', copies: [], missing: [42] },
+      {
+        privateRevision: 'private-1',
+        copies: [{ copyId: 'copy-1', printingId: 'printing-1', finish: 'foil', condition: null }],
+        missing: [],
+      },
+    ]) {
+      await expect(request(payload).readCopies(['copy-1'])).rejects.toMatchObject({
+        code: 'unavailable',
+      });
+    }
+  });
+});
+
 describe('browser application', () => {
   it('rejects private settings beside the public ones', () => {
     expect(() =>
@@ -443,6 +545,8 @@ describe('browser application', () => {
     expect(capabilities?.request).toBeTypeOf('function');
     expect(capabilities?.catalog.resolve).toBeTypeOf('function');
     expect(capabilities?.search.execute).toBeTypeOf('function');
+    expect(capabilities?.userCards.readCopies).toBeTypeOf('function');
+    expect(capabilities?.userCards.correctCopy).toBeTypeOf('function');
     expect(Object.keys(capabilities?.createRecognition() ?? {}).sort()).toEqual([
       'dispose',
       'prepare',

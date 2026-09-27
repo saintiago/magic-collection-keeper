@@ -7,8 +7,9 @@
  * boundaries around them: identity, the device capability and the component access Application
  * supplies. Every Search request and Catalog resolve the pages issue is recorded and settled from
  * the journey, so the journeys drive the real query building, list presentation and navigation
- * while observing exactly what crossed the component contracts. Card details are a fixture page
- * until their own task builds them; the marker proves which card a journey opened. Identity can
+ * while observing exactly what crossed the component contracts. The browsing journeys present a
+ * marker fixture in place of the card-details page: they assert which card an entry opened, not
+ * what the details present, and the marker proves that. Identity can
  * hold a sign-out until the journey completes or rejects it, so the journeys drive the session and
  * account transitions the private browsing state follows.
  */
@@ -185,6 +186,12 @@ export function installBrowseHarness(
     request,
     catalog,
     search,
+    // The browsing journeys present no private copy, so the contract is only present to satisfy
+    // the capabilities Application supplies.
+    userCards: {
+      readCopies: () => Promise.reject(new Error('The browsing journeys read no copies.')),
+      correctCopy: () => Promise.reject(new Error('The browsing journeys correct no copies.')),
+    },
     createRecognition: () => {
       throw new Error('The browsing journeys do not run recognition.');
     },
@@ -279,7 +286,7 @@ export function installBrowseHarness(
   };
 }
 
-/** Card details, a fixture until their own task builds them: the page names its specificity level. */
+/** The card-details stand-in of the browsing journeys: it names the specificity level it opened. */
 function cardPage(document: Document): UiPageDefinition {
   return {
     page: 'card',
