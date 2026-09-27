@@ -1659,8 +1659,13 @@ function tagViewPage(): UiPageDefinition {
        * without retaining every visited association
        * (docs/user-interface.md#state-ownership-and-restoration).
        */
-      function associationWindow(presentedKeys: ReadonlySet<string>): void {
+      function associationWindow(presentedKeys: ReadonlySet<string>, fromStart: boolean): void {
         restartingAssociations = false;
+        if (fromStart) {
+          // A replacement window adopts current private state. Even unchanged rows and search
+          // candidates can have different counts; supersede reads from before this reload.
+          refreshCounts();
+        }
         for (const key of editors.keys()) {
           if (!presentedKeys.has(key)) {
             editors.delete(key);
@@ -1759,7 +1764,7 @@ function associationSource(options: {
   readonly access: UiTagAccess;
   readonly catalog: Catalog;
   readonly records: Map<string, Association>;
-  readonly onWindow: (presentedKeys: ReadonlySet<string>) => void;
+  readonly onWindow: (presentedKeys: ReadonlySet<string>, fromStart: boolean) => void;
   readonly onStaleContinuation: () => void;
 }): UiListSource<string> {
   /** Keys of the window the list presents, bounded like the list's own working set. */
@@ -1825,7 +1830,7 @@ function associationSource(options: {
           options.records.delete(key);
         }
       }
-      options.onWindow(window);
+      options.onWindow(window, request.continuation === null);
       return { entries, continuation: page.continuation };
     },
   };

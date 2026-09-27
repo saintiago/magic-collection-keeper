@@ -1758,6 +1758,10 @@ for (const outcome of ['committed', 'unknown'] as const) {
       ]);
     }
     if (outcome === 'committed') {
+      await scriptCounts(page, [
+        ['card:card-bolt', { owned: 1, intended: 9, locations: 1 }],
+        ['copy:copy-1', { owned: 1, intended: 9, locations: 1 }],
+      ]);
       await settle(
         page,
         'settleListAssociations',
@@ -1836,3 +1840,133 @@ test('addition and repeated search refresh unchanged candidate counts without lo
   await expect(result.locator('[data-ui-locations]')).toHaveText(' Locations: 2');
   await expect(result.locator('[data-ui-select]')).toBeChecked();
 });
+
+for (const trigger of ['rename', 'expired continuation'] as const) {
+  for (const countState of ['ready', 'pending'] as const) {
+    test(`${trigger} reload reconciles ${countState} counts in both lists while preserving interaction`, async ({
+      page,
+    }) => {
+      await openTags(page, '#/tags/tag-burn');
+      await settle(page, 'settleReadTags', (await requested(page, 'readTags')).id, [tag()]);
+      const intention = association({
+        tagId: 'tag-burn',
+        targetLevel: 'card',
+        targetId: 'card-bolt',
+      });
+      const physical = association({
+        associationId: 'physical',
+        tagId: 'tag-burn',
+        targetLevel: 'copy',
+        targetId: 'copy-1',
+        quantity: null,
+      });
+      await presentAssociations(0, 0, intention);
+      await requested(page, 'counts');
+      await showBoltSearch(page);
+      await requested(page, 'counts', 1);
+      const oldReads = await control<readonly UiTagsRequest<UiTagsCountsRequest>[]>(page, 'counts');
+      const copyRow = page.locator('#tag-associations [data-ui-entry="association:physical"]');
+      const candidate = page.locator('#tag-add-results [data-ui-entry="card:card-bolt"]');
+      if (countState === 'ready') {
+        await completeOldCounts();
+        await expect(copyRow.locator('[data-ui-intended]')).toHaveText(' Intended: 2');
+        await expect(candidate.locator('[data-ui-intended]')).toHaveText(' Intended: 2');
+      }
+      await page.fill('#tag-quantity-association-1', '12');
+      await copyRow.locator('[data-ui-select]').check();
+      await candidate.locator('[data-ui-select]').check();
+      // Another writer changes private state; this page learns it through the association reload.
+      await scriptCounts(page, [
+        ['card:card-bolt', { owned: 1, intended: 9, locations: 1 }],
+        ['copy:copy-1', { owned: 1, intended: 9, locations: 1 }],
+      ]);
+      if (trigger === 'rename') {
+        await page.fill('#tag-label', 'Renamed');
+        await page.click('#tag-rename-submit');
+        await settle(
+          page,
+          'settleRenameTag',
+          (await requested(page, 'renameTag')).id,
+          tag({ label: 'Renamed', revision: 2 }),
+        );
+      } else {
+        await page.locator('#tag-associations [data-ui-more]').click();
+        const more = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 1);
+        expect(more.arguments.continuation).toBe('old-page');
+        await settle(
+          page,
+          'fail',
+          more.id,
+          (await organizationContinuationFailures()).associations,
+        );
+      }
+      const reloadIndex = trigger === 'rename' ? 1 : 2;
+      const reload = await requested<UiTagsAssociationListRequest>(
+        page,
+        'listAssociations',
+        reloadIndex,
+      );
+      expect(reload.arguments.continuation).toBeNull();
+      await presentAssociations(reloadIndex, 1, { ...intention, quantity: 9, revision: 2 });
+      await expect(
+        page.locator('#tag-associations [data-ui-entry="association:association-1"]'),
+      ).toContainText('Intended: 9');
+      await expect(copyRow.locator('[data-ui-intended]')).toHaveText(' Intended: 9');
+      await expect(candidate.locator('[data-ui-intended]')).toHaveText(' Intended: 9');
+      if (countState === 'pending') {
+        await completeOldCounts();
+        expect(
+          (await control<readonly UiTagsRequest<unknown>[]>(page, 'counts'))
+            .slice(0, oldReads.length)
+            .every((read) => read.aborted),
+        ).toBe(true);
+      }
+      await expect(copyRow.locator('[data-ui-intended]')).toHaveText(' Intended: 9');
+      await expect(candidate.locator('[data-ui-intended]')).toHaveText(' Intended: 9');
+      await expect(page.locator('#tag-quantity-association-1')).toHaveValue('12');
+      await expect(copyRow.locator('[data-ui-select]')).toBeChecked();
+      await expect(candidate.locator('[data-ui-select]')).toBeChecked();
+
+      async function presentAssociations(
+        listIndex: number,
+        hydrationIndex: number,
+        saved: Association,
+      ): Promise<void> {
+        await settle(
+          page,
+          'settleListAssociations',
+          (await requested(page, 'listAssociations', listIndex)).id,
+          {
+            associations: [saved, physical],
+            continuation: 'old-page',
+          },
+        );
+        await settle(
+          page,
+          'settleReadCopies',
+          (await requested(page, 'readCopies', hydrationIndex)).id,
+          [
+            {
+              copyId: 'copy-1',
+              printingId: 'printing-1',
+              finish: 'nonfoil',
+              condition: 'NM',
+              revision: 1,
+            },
+          ],
+        );
+        await settleCatalog(page, hydrationIndex * 2, { printings: [boltPrinting] });
+        await settleCatalog(page, hydrationIndex * 2 + 1, { cards: [boltCard] });
+      }
+
+      async function completeOldCounts(): Promise<void> {
+        for (const read of oldReads) {
+          await settle(page, 'settleCounts', read.id, [
+            ['card:card-bolt', { owned: 1, intended: 2, locations: 1 }],
+            ['copy:copy-1', { owned: 1, intended: 2, locations: 1 }],
+          ]);
+        }
+      }
+    });
+  }
+}
