@@ -16,7 +16,6 @@ import {
   readUiView,
   uiHref,
   UI_LIMITS,
-  type UiRestorationState,
   type UserInterfaceOptions,
   type UiView,
   type UiViewSnapshot,
@@ -90,11 +89,8 @@ describe('dedicated page routes', () => {
   });
 });
 
-describe('bounded, account-isolated restoration state', () => {
-  function snapshot(
-    state: UiRestorationState | null,
-    overrides: Partial<UiViewSnapshot> = {},
-  ): UiViewSnapshot {
+describe('opaque, account-isolated restoration state', () => {
+  function snapshot(state: unknown, overrides: Partial<UiViewSnapshot> = {}): UiViewSnapshot {
     return { state, scrollY: 0, focusId: null, ...overrides };
   }
 
@@ -153,47 +149,65 @@ describe('bounded, account-isolated restoration state', () => {
     expect(reloaded.read('account-a', survivingToken)).toBeNull();
   });
 
-  it.each([
-    [
-      'too many keys',
-      Object.fromEntries(
-        Array.from({ length: UI_LIMITS.restorationKeys + 1 }, (_, index) => [
-          `key-${index}`,
-          'value',
-        ]),
-      ),
-    ],
-    ['over-long text', { query: 'x'.repeat(UI_LIMITS.restorationText + 1) }],
-    [
-      'over-long list',
-      {
-        selection: Array.from(
-          { length: UI_LIMITS.restorationList + 1 },
-          (_, index) => `key-${index}`,
-        ),
-      },
-    ],
-    ['a non-finite number', { position: Number.POSITIVE_INFINITY }],
-    ['a nested value', { filter: { color: 'blue' } as never }],
-  ])('drops state outside the bounds: %s', (_name, state) => {
+  it('keeps the state a page supplies as it is, without a storage bound of its own', () => {
     const store = createViewStateStore();
     const token = store.open();
-    store.save('account-a', token, snapshot(state as UiRestorationState));
+    // A selection far beyond a hundred identities, a long draft and a nested representation the
+    // page owns: history storage never becomes a selection limit and never drops the state.
+    const state = {
+      selection: Array.from({ length: 500 }, (_, index) => `copy:${index}`),
+      draft: 'x'.repeat(4000),
+      position: { continuation: 'cursor-1', offset: 12 },
+      nested: { lists: [{ window: 500 }] },
+    };
+    store.save('account-a', token, snapshot(state));
 
-    expect(store.read('account-a', token)?.state).toBeNull();
+    expect(store.read('account-a', token)?.state).toBe(state);
+  });
+
+  it.each([null, undefined])('preserves opaque nullish page state: %s', (state) => {
+    const store = createViewStateStore();
+    const token = store.open();
+    store.save('account-a', token, snapshot(state));
+
+    expect(store.read('account-a', token)).not.toBeNull();
+    expect(store.read('account-a', token)?.state).toBe(state);
+  });
+
+  it('sanitizes only the presentation state the shell owns', () => {
+    const store = createViewStateStore();
+    const token = store.open();
+    store.save('account-a', token, {
+      state: { anything: true },
+      scrollY: Number.POSITIVE_INFINITY,
+      focusId: 42 as never,
+      anchorId: 'result-1',
+      anchorTop: Number.NaN,
+    });
+
+    expect(store.read('account-a', token)).toEqual({
+      state: { anything: true },
+      scrollY: 0,
+      focusId: null,
+      anchorId: 'result-1',
+      anchorTop: 0,
+    });
   });
 
   it('evicts the oldest snapshot beyond the declared bound', () => {
     const store = createViewStateStore(3);
     const tokens = ['first', 'second', 'third', 'fourth'].map((value) => {
       const token = store.open();
-      store.save('account-a', token, snapshot({ query: value }));
+      store.save('account-a', token, snapshot({ query: value, selection: ['copy:1'] }));
       return token;
     });
 
     expect(store.size).toBe(3);
     expect(store.read('account-a', tokens[0] ?? '')).toBeNull();
-    expect(store.read('account-a', tokens[3] ?? '')?.state).toEqual({ query: 'fourth' });
+    expect(store.read('account-a', tokens[3] ?? '')?.state).toEqual({
+      query: 'fourth',
+      selection: ['copy:1'],
+    });
   });
 
   it('keeps the declared bound positive and finite', () => {

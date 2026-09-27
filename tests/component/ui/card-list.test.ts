@@ -188,4 +188,109 @@ describe('CardList construction', () => {
   it('rejects a cancellation signal that is not a signal', () => {
     expect(() => createCardList(options({ signal: {} as AbortSignal }))).toThrow(TypeError);
   });
+
+  it('rejects a retained state it cannot interpret', () => {
+    const position = { continuation: null, offset: 0 };
+    const kept = { context: 'result', selectedTargets: [] };
+    expect(() =>
+      createCardList(
+        options({
+          restored: {
+            ...kept,
+            window: 1,
+            position: null,
+            selection: [],
+            scrollTop: 0,
+            focus: null,
+          },
+        }),
+      ),
+    ).toThrow(TypeError);
+    expect(() =>
+      createCardList(
+        options({
+          restored: {
+            ...kept,
+            window: 0,
+            position,
+            selection: [],
+            scrollTop: 0,
+            focus: null,
+          },
+        }),
+      ),
+    ).toThrow(TypeError);
+    expect(() =>
+      createCardList(
+        options({
+          restored: {
+            ...kept,
+            window: 1,
+            // The offset names an entry inside the requested page, never beyond it.
+            position: { continuation: null, offset: 2 },
+            selection: [],
+            scrollTop: 0,
+            focus: null,
+          },
+        }),
+      ),
+    ).toThrow(TypeError);
+    expect(() =>
+      createCardList(
+        options({
+          restored: {
+            ...kept,
+            window: 1,
+            position,
+            selection: [42],
+            scrollTop: 0,
+            focus: null,
+          } as never,
+        }),
+      ),
+    ).toThrow(TypeError);
+    expect(() =>
+      createCardList(
+        options({
+          restored: {
+            ...kept,
+            window: 1,
+            position,
+            selection: [],
+            scrollTop: -1,
+            focus: null,
+          },
+        }),
+      ),
+    ).toThrow(TypeError);
+    expect(() =>
+      createCardList(
+        options({
+          restored: {
+            ...kept,
+            window: 1,
+            position,
+            selection: [],
+            scrollTop: 0,
+            focus: { control: 'unknown' } as never,
+          },
+        }),
+      ),
+    ).toThrow(TypeError);
+    expect(() =>
+      createCardList(
+        options({
+          restored: {
+            ...kept,
+            window: 1,
+            position,
+            selection: ['card:1'],
+            selectedTargets: [{ key: 'card:1', target: { kind: 'copy' } } as never],
+            scrollTop: 0,
+            focus: null,
+          },
+        }),
+      ),
+    ).toThrow(TypeError);
+  });
 });

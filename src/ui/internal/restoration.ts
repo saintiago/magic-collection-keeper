@@ -1,35 +1,43 @@
 /**
- * Bounded, account-isolated presentation state the UserInterface keeps for history entries
- * (docs/user-interface.md#pages-and-navigation).
+ * Account-isolated state the UserInterface keeps for a bounded number of history entries
+ * (docs/user-interface.md#state-ownership-and-restoration).
  *
  * A history entry carries an opaque token instead of view content: the shell opens the token when
- * it presents the entry and saves the page's own query and selection state beside the scroll offset
- * and the focused element when the user leaves, so returning through history reads that entry's own
- * state back and no view content is serialized into the URL or the history entry. Each snapshot
- * belongs to one account: a snapshot is never restored for another account, and the store is
- * cleared when the presented account changes. A token names the lifetime of the store that opened
- * it, so a history entry that survives a reload never reads another store's snapshot.
+ * it presents the entry and saves the page's own retained state beside the scroll offset, the
+ * focused element and the visible anchor the shell owns, so returning through history reads that
+ * entry's own state back and no view content is serialized into the URL or the history entry.
+ *
+ * The store keeps the state a page captures as it is: navigation owns the lifetime and eviction of
+ * history entries, never the page's representation. It does not interpret or restrict card
+ * identities, selection arrays, list cursors, loading progress or any other page state, so a
+ * history bound never becomes a card-selection limit and whole states are never dropped because one
+ * value is unusual. Each owner bounds the resources it retains itself.
+ *
+ * Each snapshot belongs to one account: a snapshot is never restored for another account, and the
+ * store is cleared when the presented account changes. A token names the lifetime of the store
+ * that opened it, so a history entry that survives a reload never reads another store's snapshot.
  */
 
 import { UI_LIMITS } from './limits.js';
 
-/** One bounded value a page keeps for restoration. */
-export type UiRestorationValue = string | number | boolean | readonly string[] | null;
-
-/** Bounded query and selection state one page keeps for restoration. */
-export type UiRestorationState = Readonly<Record<string, UiRestorationValue>>;
-
 /** What the shell restores when history returns to a view. */
 export interface UiViewSnapshot {
-  /** Page-supplied state, or null when the page keeps none or supplied an unbounded value. */
-  readonly state: UiRestorationState | null;
+  /**
+   * State the page retained for this history entry, or null when it kept none. The shell keeps the
+   * reference and hands it back to the same page without inspecting or restricting it; the page
+   * owns its shape and bounds.
+   */
+  readonly state: unknown;
   /** Document scroll offset at the moment the view was left. */
   readonly scrollY: number;
   /** Id of the element focused when the view was left, or null. */
   readonly focusId: string | null;
+  /** Visible element and its viewport offset, retained across later asynchronous layout. */
+  readonly anchorId?: string | null;
+  readonly anchorTop?: number;
 }
 
-/** The bounded presentation state the shell keeps for the history entries of one account. */
+/** The opaque state the shell keeps for the history entries of one account. */
 export interface UiViewStateStore {
   /** Opens the token one presented history entry carries; the entry keeps no state until saved. */
   open(): string;
@@ -41,7 +49,7 @@ export interface UiViewStateStore {
   read(accountId: string, token: string): UiViewSnapshot | null;
   /** Removes every snapshot; the presented account changed or the session ended. */
   clear(): void;
-  /** Snapshots currently kept. */
+  /** Snapshots currently kept; eviction beyond the bound releases the oldest one. */
   readonly size: number;
 }
 
@@ -64,7 +72,8 @@ function storeLifetime(): string {
 
 /**
  * One store per UserInterface. It keeps at most `limit` snapshots, oldest first, and drops the
- * oldest beyond that bound; a token that is no longer kept simply restores nothing.
+ * oldest beyond that bound; a token that is no longer kept simply restores nothing. Dropping the
+ * entry releases the state the owner retained for it.
  */
 export function createViewStateStore(limit: number = UI_LIMITS.viewStates): UiViewStateStore {
   if (!Number.isSafeInteger(limit) || limit < 1) {
@@ -117,52 +126,25 @@ export function createViewStateStore(limit: number = UI_LIMITS.viewStates): UiVi
   };
 }
 
-/** Reads one snapshot, dropping state outside the declared bounds instead of corrupting it. */
+/**
+ * Reads one snapshot, keeping the page's own state untouched and sanitizing only the presentation
+ * state the shell owns: an unreadable scroll offset, focus or anchor never corrupts restoration.
+ */
 function readSnapshot(snapshot: UiViewSnapshot): UiViewSnapshot {
   return {
-    state: readState(snapshot?.state),
+    state: snapshot?.state,
     scrollY: readScroll(snapshot?.scrollY),
     focusId: readFocusId(snapshot?.focusId),
+    ...(snapshot?.anchorId == null
+      ? {}
+      : {
+          anchorId: readFocusId(snapshot.anchorId),
+          anchorTop:
+            typeof snapshot.anchorTop === 'number' && Number.isFinite(snapshot.anchorTop)
+              ? snapshot.anchorTop
+              : 0,
+        }),
   };
-}
-
-function readState(value: unknown): UiRestorationState | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return null;
-  }
-  const entries = Object.entries(value);
-  if (entries.length > UI_LIMITS.restorationKeys) {
-    return null;
-  }
-  const state: Record<string, UiRestorationValue> = {};
-  for (const [key, entry] of entries) {
-    const bounded = readValue(entry);
-    if (bounded === undefined) {
-      return null;
-    }
-    state[key] = bounded;
-  }
-  return state;
-}
-
-function readValue(value: unknown): UiRestorationValue | undefined {
-  if (value === null || typeof value === 'boolean') {
-    return value;
-  }
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value === 'string') {
-    return value.length <= UI_LIMITS.restorationText ? value : undefined;
-  }
-  if (
-    Array.isArray(value) &&
-    value.length <= UI_LIMITS.restorationList &&
-    value.every((entry) => typeof entry === 'string' && entry.length <= UI_LIMITS.restorationText)
-  ) {
-    return value.map(String);
-  }
-  return undefined;
 }
 
 function readScroll(value: unknown): number {

@@ -1,18 +1,22 @@
 /**
  * Browser-side harness of the CardList journeys (docs/user-interface.md#list-boundary,
- * docs/user-interface.md#cardlist, docs/testing.md#browser-and-recognition-evidence).
+ * docs/user-interface.md#cardlist, docs/user-interface.md#state-ownership-and-restoration,
+ * docs/testing.md#browser-and-recognition-evidence).
  *
  * The harness installs real CardLists over controlled sources, fragment readers and tools. Every
  * page, fragment and tool request is recorded and settled from the journey, so response ordering,
  * independent fragment failure and retry, bounded requests and tool outcomes are driven exactly
  * while the journeys observe the real presentation. A page or fragment request also records
- * whether the list withdrew it before it settled.
+ * whether the list withdrew it before it settled. A journey can hand a previous visit's retained
+ * state back to the list and read both the state the list retains now and the outcome of its
+ * restoration, as the page composing the list does.
  */
 
 import {
   createCardList,
   type UiCardList,
   type UiCardListFragments,
+  type UiCardListState as UiCardListStateShape,
   type UiCardListTool,
   type UiFragmentKind,
   type UiFragmentReader,
@@ -23,10 +27,19 @@ import {
   type UiOperationOutcome,
 } from '../../src/ui/index.js';
 
+/** State one list retains for its page's history entry; the harness lists evaluate text queries. */
+type UiCardListRetainedState = UiCardListStateShape<string | null | undefined>;
+
 /** One list the journey installs. */
 export interface UiCardListInstall {
   /** Entries one request asks for; the CardList's declared bound applies. */
   readonly pageSize?: number;
+  /** Makes the container a bounded scroll box, so list-local scroll is observable. */
+  readonly scrollable?: boolean;
+  /** State a previous visit of this list retained for its page's history entry. */
+  readonly restored?: UiCardListRetainedState | null;
+  /** Renders each entry as a link the page owns, as a browsing page does. */
+  readonly openEntry?: boolean;
   /** Query context the list evaluates. */
   readonly context?: string;
   /** Fragment kinds the list reads; the others are not presented. */
@@ -39,7 +52,7 @@ export interface UiCardListInstall {
 export interface UiCardListPageRequest {
   readonly id: number;
   readonly list: string;
-  readonly context: string;
+  readonly context: string | null | undefined;
   readonly pageSize: number;
   readonly continuation: string | null;
   readonly aborted: boolean;
@@ -75,17 +88,29 @@ export interface UiCardListState {
   readonly error: string | null;
 }
 
+/** Outcome of the restoration one list performs for the state its page handed back. */
+export interface UiCardListRestorationReport {
+  readonly status: 'none' | 'pending' | 'presented' | 'interrupted';
+  readonly message: string | null;
+}
+
 export interface UiCardListControl {
   install(id: string, options?: UiCardListInstall): void;
   /** Presents another query context through the list. */
-  refine(id: string, context: string): void;
+  refine(id: string, context: string | null | undefined): void;
+  invoke(id: string, toolId: string): Promise<UiOperationOutcome | null>;
   refresh(id: string): void;
+  loadMore(id: string): void;
   setSelected(id: string, key: string, selected: boolean): void;
   clearSelection(id: string): void;
   reloadFragment(id: string, key: string, kind: UiFragmentKind): void;
   /** Aborts the page signal the list was installed with, as closing its page does. */
   close(id: string): void;
   state(id: string): UiCardListState;
+  /** State the installed list retains for its page's history entry. */
+  capture(id: string): UiCardListRetainedState;
+  /** Lifecycle of the restoration the installed list performs, as the page reads it. */
+  restoration(id: string): UiCardListRestorationReport;
   pageRequests(): readonly UiCardListPageRequest[];
   settlePage(
     id: number,
@@ -108,7 +133,7 @@ interface Pending<Value> {
 interface PageRecord {
   readonly id: number;
   readonly list: string;
-  readonly context: string;
+  readonly context: string | null | undefined;
   readonly pageSize: number;
   readonly continuation: string | null;
   isAborted(): boolean;
@@ -120,11 +145,13 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     throw new Error('The CardList journey needs its root element.');
   }
   const document = root.ownerDocument;
-  const lists = new Map<string, UiCardList<string>>();
+  const lists = new Map<string, UiCardList<string | null | undefined>>();
+  const containers = new Map<string, HTMLElement>();
   const controllers = new Map<string, AbortController>();
   const pages: PageRecord[] = [];
   const fragments: UiCardListFragmentRequest[] = [];
   const invocations: UiCardListToolRequest[] = [];
+  const restorations = new Map<string, UiCardListRestorationReport>();
   const pendingPages = new Map<number, Pending<UiListPage>>();
   const pendingFragments = new Map<number, Pending<readonly UiFragmentResult<unknown>[]>>();
   const retiredFragments = new Set<number>();
@@ -135,7 +162,12 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     install(id, options = {}) {
       const container = document.createElement('div');
       container.id = `list-${id}`;
+      if (options.scrollable === true) {
+        container.style.height = '60px';
+        container.style.overflowY = 'auto';
+      }
       root.append(container);
+      containers.set(id, container);
       const readers: Record<string, UiFragmentReader<unknown>> = {};
       for (const kind of options.fragments ?? []) {
         readers[kind] = fragmentReader(id, kind);
@@ -147,24 +179,47 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       }));
       const controller = new AbortController();
       controllers.set(id, controller);
-      lists.set(
+      const installed = createCardList<string | null | undefined>({
+        container,
+        source: pageSource(id),
+        context: options.context ?? 'result',
+        pageSize: options.pageSize ?? 2,
+        ...(options.restored === undefined ? {} : { restored: options.restored }),
+        fragments: readers as unknown as UiCardListFragments,
+        tools,
+        ...(options.openEntry === true
+          ? { presentation: { renderEntry: (entry: UiListEntry) => openLink(document, entry) } }
+          : {}),
+        signal: controller.signal,
+      });
+      lists.set(id, installed);
+      const restoration = installed.restoration;
+      restorations.set(
         id,
-        createCardList({
-          container,
-          source: pageSource(id),
-          context: options.context ?? 'result',
-          pageSize: options.pageSize ?? 2,
-          fragments: readers as unknown as UiCardListFragments,
-          tools,
-          signal: controller.signal,
-        }),
+        restoration === null
+          ? { status: 'none', message: null }
+          : { status: 'pending', message: null },
+      );
+      restoration?.presented.then(
+        () => restorations.set(id, { status: 'presented', message: null }),
+        (cause: unknown) =>
+          restorations.set(id, {
+            status: 'interrupted',
+            message: cause instanceof Error ? cause.message : String(cause),
+          }),
       );
     },
     refine(id, context) {
       list(id).refine(context);
     },
+    invoke(id, toolId) {
+      return list(id).invoke(toolId);
+    },
     refresh(id) {
       list(id).refresh();
+    },
+    loadMore(id) {
+      list(id).loadMore();
     },
     setSelected(id, key, selected) {
       list(id).setSelected(key, selected);
@@ -177,6 +232,11 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     },
     close(id) {
       controllers.get(id)?.abort();
+      // A closed page's container leaves with it; the list disposed into it already.
+      containers.get(id)?.remove();
+      lists.delete(id);
+      controllers.delete(id);
+      containers.delete(id);
     },
     state(id) {
       const installed = list(id);
@@ -187,6 +247,16 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
         loading: installed.loading,
         error: installed.error,
       };
+    },
+    capture(id) {
+      return list(id).capture();
+    },
+    restoration(id) {
+      const report = restorations.get(id);
+      if (report === undefined) {
+        throw new Error(`No list ${id} is installed.`);
+      }
+      return report;
     },
     pageRequests() {
       return pages.map((page) => ({
@@ -262,7 +332,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     },
   };
 
-  function list(id: string): UiCardList<string> {
+  function list(id: string): UiCardList<string | null | undefined> {
     const installed = lists.get(id);
     if (installed === undefined) {
       throw new Error(`No list ${id} is installed.`);
@@ -270,12 +340,24 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     return installed;
   }
 
+  /**
+   * The link one browsing page renders for an entry: the page owns its element and gives it a
+   * stable id, so the list can keep the focused entry through its own re-renderings.
+   */
+  function openLink(document: Document, entry: UiListEntry): Node {
+    const link = document.createElement('a');
+    link.id = `open-${entry.key}`;
+    link.href = '#/cards/open';
+    link.textContent = `Open ${describeTarget(entry.target)}`;
+    return link;
+  }
+
   function next(): number {
     sequence += 1;
     return sequence;
   }
 
-  function pageSource(id: string): UiListSource<string> {
+  function pageSource(id: string): UiListSource<string | null | undefined> {
     return {
       load(request) {
         const requestId = next();
@@ -286,7 +368,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
         pages.push({
           id: requestId,
           list: id,
-          context: String(request.context),
+          context: request.context,
           pageSize: request.pageSize,
           continuation: request.continuation,
           isAborted: () => aborted,

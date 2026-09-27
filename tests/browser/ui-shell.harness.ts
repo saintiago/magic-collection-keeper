@@ -10,10 +10,13 @@
 
 import {
   createUserInterface,
+  createCardList,
   uiHref,
   type UiAccount,
   type UiIdentity,
   type UiPageDefinition,
+  type UiView,
+  type UiCardListState,
   type UserInterface,
 } from '../../src/ui/index.js';
 import type { UserInterfaceCapabilities } from '../../src/application/index.js';
@@ -21,6 +24,7 @@ import type { UserInterfaceCapabilities } from '../../src/application/index.js';
 export interface UiShellControl {
   /** Verified account the shell presents, or null while signed out. */
   accountId(): string | null;
+  navigate(view: UiView): void;
   /** Reports a verified sign-in of another account, as the deployment's authentication would. */
   signInAs(accountId: string): void;
   /** Reports a sign-out. */
@@ -33,6 +37,10 @@ export interface UiShellControl {
   completeDeviceRelease(message?: string): void;
   /** Answers the asynchronous page's held result requests, as the source's response arriving would. */
   answerAsyncResults(): void;
+  /** Rejects the asynchronous page's held result requests, as a failing source would. */
+  failAsyncResults(): void;
+  /** Inserts late content above the presented window, as decoded images or fragments would. */
+  shiftAsyncLayout(): void;
   /** Result requests the asynchronous page holds, waiting for the journey to answer them. */
   asyncPending(): number;
   /** Notes the harness recorded, oldest first. */
@@ -49,6 +57,9 @@ export interface UiShellStart {
   readonly deviceRelease?: 'deferred' | 'throw';
   /** Presents the asynchronous Home page instead of the immediate one. */
   readonly asyncResults?: boolean;
+  /** Composes the real CardList with the shell, with or without a container id. */
+  readonly listResults?: 'identified' | 'anonymous';
+  readonly rejectRedirect?: boolean;
   /**
    * Presents the asynchronous page's restored entry by sending the user on to Collection, as a
    * page that redirects while presenting the entry does; `replace` keeps no way back to the entry.
@@ -138,6 +149,8 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       log,
       start.asyncResults === true ? asyncResults : null,
       start.presentedRedirect ?? null,
+      start.rejectRedirect === true,
+      start.listResults,
     ),
   });
 
@@ -149,6 +162,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
   }
 
   return {
+    navigate: (view) => shell.navigate(view),
     accountId: () => account?.accountId ?? null,
     signInAs: (accountId) => {
       report({ accountId, displayName: accountId });
@@ -177,6 +191,12 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     answerAsyncResults: () => {
       asyncResults.answer();
     },
+    failAsyncResults: () => {
+      asyncResults.fail();
+    },
+    shiftAsyncLayout: () => {
+      asyncResults.grow();
+    },
     asyncPending: () => asyncResults.pending(),
     log: () => [...log],
     dispose: () => {
@@ -191,14 +211,19 @@ function fixturePages(
   log: string[],
   asyncResults: AsyncResults | null,
   presentedRedirect: 'navigate' | 'replace' | null,
+  rejectRedirect: boolean,
+  listResults: UiShellStart['listResults'],
 ): readonly UiPageDefinition[] {
   return [
-    asyncResults === null
-      ? homePage(document, log)
-      : asyncHomePage(document, log, asyncResults, presentedRedirect),
+    listResults !== undefined
+      ? listHomePage(document, listResults)
+      : asyncResults === null
+        ? homePage(document, log)
+        : asyncHomePage(document, log, asyncResults, presentedRedirect, rejectRedirect),
     catalogPage(document),
     cardPage(document, log),
     collectionPage(document),
+    statePage(document),
     redirectPage(document, log),
     devicePage(document, log),
   ];
@@ -209,24 +234,42 @@ function fixturePages(
  * so it can interrupt a history restoration before or between the pages it reloads.
  */
 interface AsyncResults {
-  /** Waits until the journey answers this request. */
-  hold(): Promise<void>;
+  /** Waits until the journey answers or fails this request. */
+  hold(): Promise<'answer' | 'fail'>;
   /** Answers every request waiting now, as those source responses arriving would. */
   answer(): void;
+  /** Rejects every request waiting now, as a failing source would. */
+  fail(): void;
   /** Requests waiting for their answer. */
   pending(): number;
+  /** Inserts content above the presented window, as late layout arriving would. */
+  grow(): void;
+  /** Adopts the presented page's own way of growing; the mount presented now is the one that grows. */
+  adoptGrow(apply: () => void): void;
 }
 
 function createAsyncResults(): AsyncResults {
-  const waiting: (() => void)[] = [];
+  const waiting: ((outcome: 'answer' | 'fail') => void)[] = [];
+  let grow = (): void => {};
   return {
-    hold: () => new Promise<void>((resolve) => waiting.push(resolve)),
+    hold: () => new Promise((resolve) => waiting.push(resolve)),
     answer: () => {
       for (const resolve of waiting.splice(0)) {
-        resolve();
+        resolve('answer');
+      }
+    },
+    fail: () => {
+      for (const resolve of waiting.splice(0)) {
+        resolve('fail');
       }
     },
     pending: () => waiting.length,
+    grow: () => {
+      grow();
+    },
+    adoptGrow: (apply) => {
+      grow = apply;
+    },
   };
 }
 
@@ -238,35 +281,60 @@ const asyncResultPageSize = 50;
  * Asynchronous Home of the interrupted-restoration journeys: it serves its results in pages a
  * journey answers one response at a time, keeps the entries it presented as its own restoration
  * state, and a visit that restores them reports the presentation only once the window the history
- * entry kept is back (docs/user-interface.md#pages-and-navigation). A visit that redirects while
- * presenting sends the user to Collection instead.
+ * entry kept is back (docs/user-interface.md#pages-and-navigation). A journey can reject a request,
+ * which reports a failed presentation, and clear the page state through a control. A visit that
+ * redirects while presenting sends the user to Collection instead.
  */
 function asyncHomePage(
   document: Document,
   log: string[],
   results: AsyncResults,
   redirect: 'navigate' | 'replace' | null,
+  rejectRedirect: boolean,
 ): UiPageDefinition {
   return {
     page: 'home',
     mount(container, context) {
       const restored = context.restored?.state ?? null;
       const kept = readLoadedWindow(restored);
+      // The state the entry supplied tells the journey what the shell handed this visit.
+      const restoredLoaded = readRecord(restored)?.loaded;
+      log.push(`async-state:${typeof restoredLoaded === 'number' ? restoredLoaded : 'none'}`);
       const target = kept > 0 ? kept : asyncResultTotal;
       const status = document.createElement('p');
       status.id = 'async-loaded';
       const host = document.createElement('ol');
+      const clear = document.createElement('button');
+      clear.type = 'button';
+      clear.id = 'async-clear';
+      clear.textContent = 'Clear results';
+      clear.addEventListener('click', () => {
+        cleared = true;
+        log.push('async-cleared');
+      });
       const tail = document.createElement('div');
       tail.style.height = '600px';
-      container.append(status, host, tail);
+      // Late content the journey inserts above the presented window, as decoded images would.
+      const late = document.createElement('div');
+      late.style.height = '400px';
+      results.adoptGrow(() => {
+        if (!container.contains(late)) {
+          container.prepend(late);
+        }
+      });
+      container.append(status, clear, host, tail);
       const presented = Promise.withResolvers<void>();
       let loaded = 0;
       let next = 1;
       let done = false;
+      let cleared = false;
       renderLoaded();
       load();
       return {
-        capture: () => ({ loaded }),
+        // The entry keeps the window it is restoring until the source has presented it again, so a
+        // history entry interrupted while loading it keeps that window
+        // (docs/user-interface.md#state-ownership-and-restoration).
+        capture: () => (cleared ? null : { loaded: done || kept === 0 ? loaded : kept }),
         ...(kept > 0 ? { presented: () => presentKeptWindow() } : {}),
       };
 
@@ -281,9 +349,12 @@ function asyncHomePage(
         log.push(`async-presented:${redirect}`);
         if (redirect === 'replace') {
           context.replace({ page: 'collection' });
-          return;
+        } else {
+          context.navigate({ page: 'collection' });
         }
-        context.navigate({ page: 'collection' });
+        if (rejectRedirect) {
+          return Promise.reject(new Error('Departed presentation failure'));
+        }
       }
 
       /** Asks for the next page of the result; the journey answers it as the source would. */
@@ -294,8 +365,16 @@ function asyncHomePage(
         const from = next;
         const to = Math.min(from + asyncResultPageSize - 1, asyncResultTotal);
         next = to + 1;
-        void results.hold().then(() => {
+        void results.hold().then((outcome) => {
           if (context.signal.aborted) {
+            return;
+          }
+          if (outcome === 'fail') {
+            // The source rejected the request: the page cannot present the entry it is restoring.
+            log.push(`async-failed:${loaded}`);
+            if (kept > 0) {
+              presented.reject(new Error('The results could not load.'));
+            }
             return;
           }
           for (let index = from; index <= to; index += 1) {
@@ -333,8 +412,8 @@ function resultRow(document: Document, index: number): HTMLLIElement {
 }
 
 /** Entries the restored history entry had presented, or zero when it kept none. */
-function readLoadedWindow(restored: Readonly<Record<string, unknown>> | null): number {
-  const value = restored?.loaded;
+function readLoadedWindow(state: unknown): number {
+  const value = readRecord(state)?.loaded;
   return typeof value === 'number' &&
     Number.isSafeInteger(value) &&
     value > 0 &&
@@ -343,10 +422,19 @@ function readLoadedWindow(restored: Readonly<Record<string, unknown>> | null): n
     : 0;
 }
 
+/** One page-owned state object, or null when the entry kept none or kept another shape. */
+function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : null;
+}
+
 /** Home keeps a query, two independent selections, an opening link, a dialog and long content. */
 function homePage(document: Document, log: string[]): UiPageDefinition {
   return {
     page: 'home',
+    // Reported for every account the shell leaves, whatever page is presented at that moment.
+    accountEnded: (accountId) => log.push(`account-ended:${accountId}`),
     mount(container, context) {
       const query = document.createElement('input');
       query.id = 'home-query';
@@ -395,7 +483,7 @@ function homePage(document: Document, log: string[]): UiPageDefinition {
       });
       container.append(query, guard, bolt, lead, open, edit, go, answer, tail);
 
-      const restored = context.restored?.state ?? null;
+      const restored = readRecord(context.restored?.state);
       if (restored !== null) {
         query.value = typeof restored.query === 'string' ? restored.query : '';
         guard.checked = restored.guard === true;
@@ -405,6 +493,60 @@ function homePage(document: Document, log: string[]): UiPageDefinition {
       return {
         capture: () => ({ query: query.value, guard: guard.checked, bolt: bolt.checked }),
       };
+    },
+  };
+}
+
+/**
+ * State ownership fixture: the page keeps its own representation — a selection far beyond any
+ * history storage bound beside an unrelated draft — and hands the very same shape back, so a
+ * journey proves that navigation retains the page state without reading or restricting it
+ * (docs/user-interface.md#state-ownership-and-restoration).
+ */
+function statePage(document: Document): UiPageDefinition {
+  return {
+    page: 'tags',
+    mount(container, context) {
+      const draft = document.createElement('input');
+      draft.id = 'state-draft';
+      draft.setAttribute('aria-label', 'State draft');
+      const selectMany = document.createElement('button');
+      selectMany.type = 'button';
+      selectMany.textContent = 'Select many';
+      const count = document.createElement('p');
+      count.id = 'state-count';
+      const open = document.createElement('a');
+      open.id = 'state-open';
+      open.href = uiHref({ page: 'collection' });
+      open.textContent = 'Open collection';
+      container.append(draft, selectMany, count, open);
+
+      const restored = readRecord(context.restored?.state);
+      const kept = Array.isArray(restored?.selection) ? restored.selection : [];
+      const selection = new Set<string>(
+        kept.filter((key): key is string => typeof key === 'string'),
+      );
+      if (typeof restored?.draft === 'string') {
+        draft.value = restored.draft;
+      }
+      selectMany.addEventListener('click', () => {
+        for (let index = 0; index < 150; index += 1) {
+          selection.add(`card:${index}`);
+        }
+        render();
+      });
+      render();
+      return {
+        capture: () => ({
+          selection: [...selection],
+          draft: draft.value,
+          nested: { only: 'the page interprets this' },
+        }),
+      };
+
+      function render(): void {
+        count.textContent = `${selection.size} selected`;
+      }
     },
   };
 }
@@ -560,6 +702,51 @@ function devicePage(document: Document, log: string[]): UiPageDefinition {
           context.device.release();
           log.push('dispose-release-called');
         },
+      };
+    },
+  };
+}
+
+/** The page delegates capture, restoration and presentation to the real list contract. */
+function listHomePage(document: Document, identity: 'identified' | 'anonymous'): UiPageDefinition {
+  return {
+    page: 'home',
+    mount(container, context) {
+      const host = document.createElement('div');
+      if (identity === 'identified') host.id = 'composed-list';
+      container.append(host);
+      const list = createCardList({
+        container: host,
+        context: 'cards',
+        pageSize: 2,
+        restored: context.restored?.state as UiCardListState<string> | undefined,
+        signal: context.signal,
+        source: {
+          load: () =>
+            Promise.resolve({
+              entries: [
+                {
+                  key: 'card:1',
+                  target: { kind: 'card' as const, cardId: '1' },
+                  basic: { card: { cardId: '1', name: 'One', matchedName: null }, printing: null },
+                  quantity: null,
+                },
+              ],
+              continuation: null,
+            }),
+        },
+        fragments: {
+          tags: {
+            read() {
+              throw new Error('Tags unavailable');
+            },
+          },
+        },
+      });
+      return {
+        capture: () => list.capture(),
+        presented: () => list.restoration?.presented,
+        dispose: () => list.dispose(),
       };
     },
   };

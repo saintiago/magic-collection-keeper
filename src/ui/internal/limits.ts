@@ -1,20 +1,17 @@
 /**
  * Bounds the UserInterface enforces (docs/user-interface.md#interface,
- * docs/user-interface.md#pages-and-navigation, docs/user-interface.md#list-boundary). Routes, the
- * interaction state kept for history entries and the working set of one CardList are bounded so a
- * hostile or broken view cannot grow presentation state without limit.
+ * docs/user-interface.md#pages-and-navigation, docs/user-interface.md#list-boundary). Routes and
+ * the history entries the shell keeps are bounded, and each owner bounds the state it retains
+ * itself: the shell never interprets or restricts the page state a history entry holds
+ * (docs/user-interface.md#state-ownership-and-restoration).
  */
 export const UI_LIMITS = {
   /** Characters one route segment may carry before it is rejected. */
   routeSegment: 128,
-  /** History entries whose captured interaction state the shell keeps for restoration. */
+  /** History entries whose opaque retained state the shell keeps for restoration. */
   viewStates: 20,
-  /** Keys one captured restoration state may carry. */
-  restorationKeys: 32,
-  /** Characters one captured text value may carry. */
-  restorationText: 500,
-  /** Values one captured identity list may carry. */
-  restorationList: 100,
+  /** Characters one entry key or target identity may carry before the source answer is rejected. */
+  entryKey: 500,
   /** Entries one CardList request asks a source for at most. */
   listPage: 100,
   /** Entries one CardList renders in its working set; further results slide it forward. */
