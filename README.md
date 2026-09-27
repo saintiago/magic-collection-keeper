@@ -129,7 +129,20 @@ state that serializes no view content; closing a view aborts its work and detach
 a late result cannot replace the new view; and a changed account clears that private presentation
 state, ends the authenticated session so outstanding responses are rejected and releases the device
 resources. A page implementation supplies one page's content and the sources and tools its lists
-use; CardList, the dedicated pages and capture build on that in their own tasks.
+use. The shared CardList turns one supplied source into a bounded, asynchronous working set
+(docs/user-interface.md#list-boundary, docs/user-interface.md#cardlist): a page request carries the
+query context, the page size, the continuation and a cancellation signal, and only the request the
+user still waits for may replace the window, while a refresh keeps the usable entries presented.
+The rendered window and every fragment batch are bounded. Paging keeps selected targets and their
+tool availability separately, so selection cannot hide later results. Other enrichment retires when
+an entry leaves the window, and changed entries retire reads that can no longer answer for them.
+Basic information renders with the entries; images, ownership, tags and tool availability are
+separate fragments that load and fail independently, and a failed fragment stays distinguishable
+from an empty answer.
+Equivalent copies group for convenient selection without losing their individual copies, and the
+card tools invoke the owning component's operation for the explicit selection and report its
+outcome, with a lost response reported as unknown until the recorded outcome is recovered. The
+dedicated pages and capture build on that in their own tasks.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without
