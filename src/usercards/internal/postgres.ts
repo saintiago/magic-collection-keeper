@@ -1,5 +1,4 @@
-import { randomUUID } from 'node:crypto';
-
+import { storeCopies } from './copies.js';
 import { UserCardsError } from './errors.js';
 import type { UserCardsSqlTransactor, UserCardsSqlValue } from './executor.js';
 import { copyFromRow, copyPayloadSql, copiesFromRows } from './rows.js';
@@ -13,13 +12,7 @@ import {
   revisionFromRow,
   revisionStatement,
 } from './sql.js';
-import type {
-  CopiesData,
-  CopyCorrection,
-  CopyCorrectionOutcome,
-  CopyStore,
-  NewCopy,
-} from './store.js';
+import type { CopiesData, CopyCorrection, CopyCorrectionOutcome, CopyStore } from './store.js';
 
 function readCopiesStatement(
   accountId: string,
@@ -43,78 +36,6 @@ from (select copy_id, printing_id, finish, condition, revision
   return {
     statement: `${branches.join('\nunion all\n')}
 order by row_kind, row_position`,
-    parameters,
-  };
-}
-
-function insertCopiesStatement(
-  accountId: string,
-  copies: readonly NewCopy[],
-): { statement: string; parameters: Record<string, UserCardsSqlValue> } {
-  const parameters: Record<string, UserCardsSqlValue> = { account_id: accountId };
-  const values = copies
-    .map((copy, index) => {
-      parameters[`copy_id_${index}`] = copy.copyId;
-      parameters[`printing_id_${index}`] = copy.printingId;
-      parameters[`finish_${index}`] = copy.finish;
-      parameters[`condition_${index}`] = copy.condition;
-      return `(:copy_id_${index}, :account_id, :printing_id_${index}, :finish_${index}, :condition_${index}, 1)`;
-    })
-    .join(',\n       ');
-  return {
-    statement: `insert into usercards_private.copy
-       (copy_id, account_id, printing_id, finish, condition, revision)
-     values ${values}
-     returning ${copyPayloadSql} as payload`,
-    parameters,
-  };
-}
-
-/**
- * The account's system ownership tag, created on first use and reused afterwards
- * (docs/architecture.md#tags-and-associations). A partial unique index keeps one owned tag per
- * account, so the returned identity is the account's only ownership tag.
- */
-function ownedTagStatement(
-  accountId: string,
-  proposedTagId: string,
-): { statement: string; parameters: Record<string, UserCardsSqlValue> } {
-  return {
-    statement: `insert into usercards_private.tag (tag_id, account_id, kind, label, system, revision)
-     values (:tag_id, :account_id, 'owned', 'Owned', true, 1)
-     on conflict (account_id) where kind = 'owned'
-     do update set label = excluded.label
-     returning tag_id`,
-    parameters: { tag_id: proposedTagId, account_id: accountId },
-  };
-}
-
-/**
- * Associates every stored copy with the account's owned tag in the same transaction, so a copy
- * that exists in private storage is owned and its physical membership is explicit
- * (docs/user-cards.md#records-and-associations).
- */
-function ownedAssociationsStatement(
-  accountId: string,
-  ownedTagId: string,
-  copies: readonly NewCopy[],
-): { statement: string; parameters: Record<string, UserCardsSqlValue> } {
-  const parameters: Record<string, UserCardsSqlValue> = {
-    account_id: accountId,
-    tag_id: ownedTagId,
-  };
-  const values = copies
-    .map((copy, index) => {
-      parameters[`association_id_${index}`] = randomUUID();
-      parameters[`copy_id_${index}`] = copy.copyId;
-      return `(:association_id_${index}, :account_id, :tag_id, 'owned', 'copy', :copy_id_${index}, null, 1)`;
-    })
-    .join(',\n       ');
-  return {
-    statement: `insert into usercards_private.association
-       (association_id, account_id, tag_id, tag_kind, target_level, target_id, quantity, revision)
-     values ${values}
-     returning association_id`,
     parameters,
   };
 }
@@ -176,37 +97,7 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
       return inTransaction(
         sql,
         async (statements) => {
-          const owned = ownedTagStatement(accountId, randomUUID());
-          const ownedRows = await readRows(
-            statements,
-            owned.statement,
-            owned.parameters,
-            'The account ownership tag could not be prepared.',
-          );
-          const ownedTagId = ownedRows[0]?.tag_id;
-          if (typeof ownedTagId !== 'string') {
-            throw new UserCardsError(
-              'unavailable',
-              'UserCards did not report the account ownership tag.',
-            );
-          }
-
-          const insert = insertCopiesStatement(accountId, copies);
-          const rows = await readRows(
-            statements,
-            insert.statement,
-            insert.parameters,
-            'The copies could not be stored.',
-          );
-
-          const ownership = ownedAssociationsStatement(accountId, ownedTagId, copies);
-          await readRows(
-            statements,
-            ownership.statement,
-            ownership.parameters,
-            'The copy ownership could not be stored.',
-          );
-
+          const rows = await storeCopies(statements, accountId, copies);
           const publication = revisionStatement(accountId);
           const revisionRow = await readRows(
             statements,

@@ -119,6 +119,19 @@ export function revisionStatement(accountId: string): {
   };
 }
 
+/** Reads the account's private-data revision without changing it. */
+export function revisionReadStatement(accountId: string): {
+  statement: string;
+  parameters: Record<string, UserCardsSqlValue>;
+} {
+  return {
+    statement: `select coalesce((select revision
+                                 from usercards_private.account_state
+                                where account_id = :account_id), 0)::text as revision`,
+    parameters: { account_id: accountId },
+  };
+}
+
 /**
  * Groups the rows of a private read statement by record kind. Anything else violates the read
  * contract, so a storage that returns unexpected rows fails instead of being reported as an empty

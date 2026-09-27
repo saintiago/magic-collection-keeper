@@ -2,16 +2,13 @@ import { randomUUID } from 'node:crypto';
 
 import { z } from 'zod';
 
-import {
-  CatalogError,
-  finishes,
-  type Catalog,
-  type CatalogReference,
-  type CatalogResolution,
-  type Finish,
-} from '../../catalog/index.js';
+import { finishes, type Catalog, type Finish } from '../../catalog/index.js';
+import { resolveCatalog, resolvePhysicalPrinting } from './catalog.js';
+import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';
 import type { UserCardsSqlTransactor } from './executor.js';
+import { createImportOperations, type ImportOperations } from './import-service.js';
+import { createPostgresImportStore } from './imports.js';
 import {
   USERCARDS_LIMITS,
   associationLevelsByTagKind,
@@ -32,7 +29,8 @@ import {
 } from './model.js';
 import { createPostgresOrganizationStore } from './organization.js';
 import { createPostgresCopyStore } from './postgres.js';
-import type { CopyStore, OrganizationStore } from './store.js';
+import { decodeContinuation, encodeContinuation } from './pagination.js';
+import type { CopyStore, ImportStore, OrganizationStore } from './store.js';
 
 /** One copy request: one printing, its finish and condition, repeated `quantity` times. */
 export interface CreateCopiesInput {
@@ -182,7 +180,7 @@ export interface CopyLocationResult {
  * reveals another account's record, and a change either commits completely or reports a distinct
  * failure (docs/user-cards.md#interface).
  */
-export interface UserCards {
+export interface UserCards extends ImportOperations {
   readCopies(context: TrustedUserContext, copyIds: readonly CopyId[]): Promise<CopyReadResult>;
   createCopies(context: TrustedUserContext, input: CreateCopiesInput): Promise<CopyChangeResult>;
   correctCopy(context: TrustedUserContext, input: CorrectCopyInput): Promise<CopyChangeResult>;
@@ -226,10 +224,6 @@ export interface UserCardsDependencies {
 }
 
 const identifierLength = USERCARDS_LIMITS.maxIdentifierLength;
-
-const userContextSchema = z.object({
-  accountId: z.string().min(1).max(identifierLength),
-});
 
 const referenceSchema = z.string().min(1).max(identifierLength);
 const referencesSchema = z.array(referenceSchema).max(USERCARDS_LIMITS.maxReadReferences);
@@ -276,22 +270,6 @@ const tagPageSizeSchema = z
   .min(USERCARDS_LIMITS.minTagPageSize)
   .max(USERCARDS_LIMITS.maxTagPageSize);
 
-const tagContinuationPayloadSchema = z.object({
-  version: z.literal(1),
-  offset: z.number().int().min(0),
-  revision: referenceSchema,
-});
-
-type TagContinuationPayload = z.infer<typeof tagContinuationPayloadSchema>;
-
-/**
- * Longest token `encodeTagContinuation` can emit: the revision is bounded by the identifier bound,
- * JSON escaping can spend six bytes on one string unit (`"\uXXXX"`), base64url expands by 4/3 and
- * the payload keys and an integer offset fit the remaining margin. The decoder accepts every token
- * its encoder can produce.
- */
-const maxTagContinuationLength = 4 * Math.ceil((6 * identifierLength + 64) / 3);
-
 const associationTargetSchema = z.object({
   targetLevel: z.enum(associationTargetLevels),
   targetId: referenceSchema,
@@ -334,8 +312,12 @@ export function createUserCards(dependencies: UserCardsDependencies): UserCards 
   }
   const store: CopyStore = createPostgresCopyStore(sql);
   const organization: OrganizationStore = createPostgresOrganizationStore(sql);
+  const imports: ImportStore = createPostgresImportStore(sql);
+  const importOperations = createImportOperations({ store: imports, catalog });
 
   return {
+    ...importOperations,
+
     async readCopies(
       context: TrustedUserContext,
       copyIds: readonly CopyId[],
@@ -452,7 +434,12 @@ export function createUserCards(dependencies: UserCardsDependencies): UserCards 
         );
       }
       const continuation =
-        options?.continuation === undefined ? null : decodeTagContinuation(options.continuation);
+        options?.continuation === undefined
+          ? null
+          : decodeContinuation(
+              options.continuation,
+              'This continuation is not readable; start the tag list again.',
+            );
       const offset = continuation?.offset ?? 0;
 
       const data = await organization.listTags(accountId, offset, pageSize + 1);
@@ -467,7 +454,7 @@ export function createUserCards(dependencies: UserCardsDependencies): UserCards 
         privateRevision: data.privateRevision,
         tags: hasMore ? data.tags.slice(0, pageSize) : data.tags,
         continuation: hasMore
-          ? encodeTagContinuation({
+          ? encodeContinuation({
               version: 1,
               offset: offset + pageSize,
               revision: data.privateRevision,
@@ -718,18 +705,6 @@ export function createUserCards(dependencies: UserCardsDependencies): UserCards 
   };
 }
 
-/** Missing, invalid or empty trusted context never reaches a private record. */
-function accountIdFrom(context: TrustedUserContext | undefined): string {
-  const parsed = userContextSchema.safeParse(context);
-  if (!parsed.success) {
-    throw new UserCardsError(
-      'invalid-request',
-      'Trusted user context with an account identity is required.',
-    );
-  }
-  return parsed.data.accountId;
-}
-
 /** Reads each requested reference once, in request order. */
 function distinctReferences(references: readonly string[]): string[] {
   const requested: string[] = [];
@@ -872,76 +847,4 @@ async function requireAssociationTarget(
         : 'The printing is not available in the catalog.',
     );
   }
-}
-
-/**
- * Resolves the printing in the published catalog and validates the physical attributes a copy
- * would store: the printing must exist, be available as a physical card and offer that finish.
- */
-async function resolvePhysicalPrinting(
-  catalog: Catalog,
-  printingId: string,
-  finish: Finish,
-): Promise<void> {
-  const resolution = await resolveCatalog(catalog, [{ kind: 'printing', printingId }]);
-  const printing = resolution.printings.get(printingId);
-  if (printing === undefined) {
-    throw new UserCardsError('not-found', 'The printing is not available in the catalog.');
-  }
-  if (!printing.physical) {
-    throw new UserCardsError(
-      'invalid-request',
-      'The printing is not available as a physical card.',
-    );
-  }
-  if (!printing.finishes.includes(finish)) {
-    throw new UserCardsError(
-      'invalid-request',
-      `The printing is not available in the ${finish} finish.`,
-    );
-  }
-}
-
-/** A catalog read failure is a temporary failure, never a missing reference. */
-async function resolveCatalog(
-  catalog: Catalog,
-  references: readonly CatalogReference[],
-): Promise<CatalogResolution> {
-  try {
-    return await catalog.resolve(references);
-  } catch (cause) {
-    if (cause instanceof CatalogError) {
-      throw new UserCardsError(
-        'unavailable',
-        'The catalog could not be read to validate the reference.',
-        { cause },
-      );
-    }
-    throw cause;
-  }
-}
-
-function encodeTagContinuation(payload: TagContinuationPayload): string {
-  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-}
-
-function decodeTagContinuation(token: string): TagContinuationPayload {
-  const unreadable = new UserCardsError(
-    'invalid-request',
-    'This continuation is not readable; start the tag list again.',
-  );
-  if (typeof token !== 'string' || token.length === 0 || token.length > maxTagContinuationLength) {
-    throw unreadable;
-  }
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
-  } catch {
-    throw unreadable;
-  }
-  const parsed = tagContinuationPayloadSchema.safeParse(decoded);
-  if (!parsed.success) {
-    throw unreadable;
-  }
-  return parsed.data;
 }

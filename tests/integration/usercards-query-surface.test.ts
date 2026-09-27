@@ -542,4 +542,68 @@ describe('usercards query surface', () => {
       ),
     ).toEqual([{ revision: '6' }]);
   });
+
+  it('keeps pending imports outside the published ownership relations', async () => {
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-1',
+      source: { kind: 'text', id: 'list-1' },
+      entries: [{ entryId: 'line-1', printingId: m11Printing.printingId, quantity: 2 }],
+    });
+
+    // A pending entry is private progress, not an owned copy, tag or association.
+    expect(await readScoped(database, alice.accountId, 'select * from usercards.copies')).toEqual(
+      [],
+    );
+    expect(
+      await readScoped(database, alice.accountId, 'select * from usercards.associations'),
+    ).toEqual([]);
+    expect(
+      await readScoped(
+        database,
+        alice.accountId,
+        'select revision from usercards.private_revision',
+      ),
+    ).toEqual([{ revision: '1' }]);
+
+    // Publishing the same import as ownership makes the individual copies visible instead.
+    await userCards.confirmImport(alice, {
+      operationId: 'operation-1',
+      sessionId: 'session-1',
+      entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+    });
+    expect(
+      await readScoped(
+        database,
+        alice.accountId,
+        'select printing_id, finish, condition, owned from usercards.copies order by copy_id',
+      ),
+    ).toEqual([
+      { printing_id: m11Printing.printingId, finish: 'nonfoil', condition: null, owned: true },
+      { printing_id: m11Printing.printingId, finish: 'nonfoil', condition: null, owned: true },
+    ]);
+
+    // Consumer roles reach neither the pending records nor the provenance behind the copies.
+    await database.exec('create role keeper_import_reader');
+    await database.exec(usercardsReaderGrants('keeper_import_reader'));
+    await database.exec('set role keeper_import_reader');
+    try {
+      for (const relation of [
+        'import_session',
+        'import_entry',
+        'import_candidate',
+        'import_stage',
+        'import_acquisition',
+        'import_receipt',
+        'import_receipt_acquisition',
+        'import_entry_acquisition',
+        'copy_provenance',
+      ]) {
+        await expect(database.query(`select * from usercards_private.${relation}`)).rejects.toThrow(
+          /permission denied/,
+        );
+      }
+    } finally {
+      await database.exec('reset role');
+    }
+  });
 });
