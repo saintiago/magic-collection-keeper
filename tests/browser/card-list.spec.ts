@@ -1637,6 +1637,184 @@ test('restarts a retained window whose continuation was invalidated', async ({ p
   expect(errors).toEqual([]);
 });
 
+test('leaves no rejected continuation in the state captured during a pending restart', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', {
+    pageSize: 2,
+    restored: {
+      context: 'result',
+      window: 2,
+      position: { continuation: 'stale', offset: 0 },
+      selection: ['card:9'],
+      selectedTargets: [],
+      scrollTop: 0,
+      focus: null,
+    },
+  });
+  const first = await onlyRequest(page, 'a');
+  await invalidatePage(page, first.id);
+
+  // The restart is still loading away from the retained window; the state a leaving page captures
+  // names the replacement sequence's beginning instead of the continuation the source rejected,
+  // while the intended window size and the selection stay.
+  const captured = await capture(page, 'a');
+  expect(captured).toMatchObject({
+    window: 2,
+    position: { continuation: null, offset: 0 },
+    selection: ['card:9'],
+  });
+  await close(page, 'a');
+  await expect.poll(() => restoration(page, 'a')).toMatchObject({ status: 'interrupted' });
+
+  // The next visit restarts the sequence instead of repeating the rejected request.
+  await install(page, 'a', { pageSize: 2, restored: captured });
+  const visited = await lastRequest(page, 'a');
+  expect(visited).toMatchObject({ continuation: null, aborted: false });
+  await settlePage(page, visited.id, [card('1'), card('2')]);
+  expect(await restoration(page, 'a')).toEqual({ status: 'presented', message: null });
+  expect(await state(page, 'a')).toMatchObject({ entries: ['card:1', 'card:2'], error: null });
+  expect(errors).toEqual([]);
+});
+
+test('leaves no rejected continuation in the state captured after a failed restart', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', {
+    pageSize: 2,
+    restored: {
+      context: 'result',
+      window: 2,
+      position: { continuation: 'stale', offset: 0 },
+      selection: ['card:9'],
+      selectedTargets: [],
+      scrollTop: 0,
+      focus: null,
+    },
+  });
+  const first = await onlyRequest(page, 'a');
+  await invalidatePage(page, first.id);
+  const restarted = await lastRequest(page, 'a');
+  await failPage(page, restarted.id, 'Results unavailable');
+
+  // The failed restart stays recoverable: the retry control repeats the beginning of the sequence,
+  // and the captured state never sends the next visit back to the rejected continuation.
+  const captured = await capture(page, 'a');
+  expect(captured).toMatchObject({
+    window: 2,
+    position: { continuation: null, offset: 0 },
+    selection: ['card:9'],
+  });
+  await close(page, 'a');
+  await install(page, 'a', { pageSize: 2, restored: captured });
+  const visited = await lastRequest(page, 'a');
+  expect(visited).toMatchObject({ continuation: null, aborted: false });
+  await settlePage(page, visited.id, [card('3'), card('4')]);
+  expect(await state(page, 'a')).toMatchObject({ entries: ['card:3', 'card:4'], error: null });
+  expect(errors).toEqual([]);
+});
+
+test('leaves no rejected position in the state captured after ordinary pagination', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 100 });
+  for (let index = 0; index < 6; index += 1) {
+    await settlePage(
+      page,
+      (await lastRequest(page, 'a')).id,
+      Array.from({ length: 100 }, (_, offset) => card(String(index * 100 + offset))),
+      `page-${index + 1}`,
+    );
+    if (index < 5) {
+      await page.locator('#list-a [data-ui-more]').click();
+    }
+  }
+
+  // The window bound retired the first page, so the entry it presents first sits on a later page of
+  // its own sequence.
+  const capturedBefore = await capture(page, 'a');
+  expect(capturedBefore).toMatchObject({
+    window: 500,
+    position: { continuation: 'page-1', offset: 0 },
+  });
+
+  await page.locator('#list-a [data-ui-more]').click();
+  const continued = await lastRequest(page, 'a');
+  expect(continued).toMatchObject({ continuation: 'page-6' });
+  await invalidatePage(page, continued.id);
+
+  // The rejected sequence is not capturable, so leaving during the restart cannot ask the next visit
+  // for a position of the sequence the source refused; the usable window stays.
+  const captured = await capture(page, 'a');
+  expect(captured).toMatchObject({
+    window: 500,
+    position: { continuation: null, offset: 0 },
+  });
+  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(500);
+  await close(page, 'a');
+
+  // The next visit reads the sequence from its beginning instead of repeating a page of the
+  // sequence the source invalidated.
+  await install(page, 'a', { pageSize: 100, restored: captured });
+  const visited = await lastRequest(page, 'a');
+  expect(visited).toMatchObject({ continuation: null, aborted: false });
+  await settlePage(
+    page,
+    visited.id,
+    Array.from({ length: 100 }, (_, offset) => card(String(offset))),
+    'fresh-1',
+  );
+  await expect(page.locator('#list-a [data-ui-entry="card:0"]')).toBeVisible();
+  const reread = await lastRequest(page, 'a');
+  expect(reread).toMatchObject({ continuation: 'fresh-1', aborted: false });
+  expect((await state(page, 'a')).error).toBeNull();
+  expect(errors).toEqual([]);
+});
+
+test('reacquires the retained window when its later page is invalidated', async ({ page }) => {
+  const errors = await openLists(page);
+  await install(page, 'a', {
+    pageSize: 2,
+    restored: {
+      context: 'result',
+      window: 4,
+      position: { continuation: null, offset: 0 },
+      selection: [],
+      selectedTargets: [],
+      scrollTop: 0,
+      focus: null,
+    },
+  });
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, [card('1'), card('2')], 'next');
+
+  // The second page of the restoration belongs to a sequence the source refuses.
+  const continued = await lastRequest(page, 'a');
+  expect(continued).toMatchObject({ continuation: 'next' });
+  await invalidatePage(page, continued.id);
+
+  // The replacement sequence starts over with two entries; the retained window is not back yet, so
+  // the list keeps acquiring it instead of reporting a window of half its intended size.
+  const restarted = await lastRequest(page, 'a');
+  expect(restarted).toMatchObject({ continuation: null, aborted: false });
+  await settlePage(page, restarted.id, [card('1'), card('2')], 'restarted-next');
+  expect(await restoration(page, 'a')).toEqual({ status: 'pending', message: null });
+
+  const resumed = await lastRequest(page, 'a');
+  expect(resumed).toMatchObject({ continuation: 'restarted-next', aborted: false });
+  await settlePage(page, resumed.id, [card('3'), card('4')]);
+  expect(await state(page, 'a')).toMatchObject({
+    entries: ['card:1', 'card:2', 'card:3', 'card:4'],
+    loading: false,
+    error: null,
+  });
+  expect(await restoration(page, 'a')).toEqual({ status: 'presented', message: null });
+  expect(errors).toEqual([]);
+});
+
 test('keeps more than a hundred selected identities across visits', async ({ page }) => {
   const errors = await openLists(page);
   await install(page, 'a', { pageSize: 100 });
