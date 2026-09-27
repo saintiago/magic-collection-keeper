@@ -20,16 +20,18 @@ owns the behavior; this file records how the retained baseline is packaged.
   digest of every retained file together with every relocated or harness-adapted file and its
   reason.
 
-The Python regressions live in `python/tests`, the retained browser regressions in
-[tests/recognition](../../tests/recognition). The component's internals stay private; other
-components import `index.ts` only (`.dependency-cruiser.mjs`).
+The Python regressions live in `python/tests`; the public-art manifests their scripts and fixture
+check use (`sources.json` for `prepare.py`, `phone-sources.json` for `replay_public.py`) and the
+retained browser regressions live in [tests/recognition](../../tests/recognition). The component's
+internals stay private; other components import `index.ts` only (`.dependency-cruiser.mjs`).
 
 ## Checks
 
 `npm run test:python` runs the preserved Python suite (27 regressions). The runner installs the
 pinned `python/requirements-tests.txt` (NumPy, Pillow, OpenCV as pinned in the baseline
 `requirements-linux.txt`) into the ignored `.recognition-python/` environment once and reuses it;
-where those wheels are unavailable the affected modules report a skip instead of passing silently.
+when those requirements are missing from `KEEPER_PYTHON` or cannot be provisioned it fails with an
+actionable error, because the complete retained suite must run.
 
 `npm run test:recognition` runs the preserved browser regressions (38 cases). Tests and preserved
 sources are excluded from Prettier because they stay byte-identical to the pinned revision.

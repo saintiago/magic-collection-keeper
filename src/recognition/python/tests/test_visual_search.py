@@ -1,9 +1,5 @@
 import unittest
-
-try:  # Pinned engine requirement, provisioned by scripts/run-python-tests.ts.
-    import numpy as np
-except ModuleNotFoundError as missing:  # pragma: no cover - bare Python baseline
-    raise unittest.SkipTest(f"{missing.name} is unavailable") from missing
+import numpy as np
 from adapters.visual_search import rank_identity, supported
 
 

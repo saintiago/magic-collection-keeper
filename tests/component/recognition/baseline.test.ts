@@ -26,7 +26,7 @@ describe('retained recognition baseline', () => {
   it('keeps every retained engine file identical to the pinned revision', () => {
     expect(manifest.baseline.revision).toBe('128c903ff109868acc854f0ff239c8c0f925d803');
     const entries = Object.entries(manifest.files);
-    expect(entries.length).toBeGreaterThanOrEqual(59);
+    expect(entries.length).toBeGreaterThanOrEqual(65);
     for (const [target, entry] of entries) {
       const digest = createHash('sha256')
         .update(readFileSync(path.join(root, target)))

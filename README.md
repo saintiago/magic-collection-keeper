@@ -45,7 +45,10 @@ Focus a scope with a path filter, for example `npm run test:component -- public-
 tests are organised as tests/component/<component>/ so one component's tests can be selected by path.
 The Python runner provisions the pinned `src/recognition/python/requirements-tests.txt` wheels into
 the ignored `.recognition-python/` environment once so the retained engine regressions run without
-extra setup; where they cannot be installed, the affected modules report a skip.
+extra setup. The check requires the complete 27-regression suite: when the dependencies are missing
+or cannot be installed it fails with an actionable error instead of skipping regressions. Set
+`KEEPER_PYTHON` to an interpreter that already provides NumPy, Pillow and OpenCV to bypass
+provisioning.
 
 `npm run validate` runs every check through Turborepo, which caches only the deterministic checks
 (formatting, linting, type checking and boundaries) and always runs the test suites and build.

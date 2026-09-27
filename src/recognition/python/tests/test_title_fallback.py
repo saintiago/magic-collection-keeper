@@ -4,18 +4,6 @@ from policy import decide
 
 CARD = {"id":"00000000-0000-4000-8000-000000000001", "oracle_id":"00000000-0000-4000-8000-000000000002", "name":"Example Long Title", "set":"tst", "collector_number":"12", "lang":"en"}
 
-
-def provider_adapter_available():
-    """The pinned engine requirements are provisioned by scripts/run-python-tests.ts."""
-    try:
-        from PIL import Image  # noqa: F401
-        import cv2  # noqa: F401
-        import numpy  # noqa: F401
-    except ModuleNotFoundError:
-        return False
-    return True
-
-
 class Visual:
     version = {}
     def inspect(self, image):
@@ -56,7 +44,6 @@ class Tests(unittest.TestCase):
             self.assertEqual(fallback.calls,0)
 
 class AdapterTests(unittest.TestCase):
-    @unittest.skipUnless(provider_adapter_available(), "Pillow, OpenCV and numpy are unavailable")
     def test_crop_and_request_bounds_and_uncertain_schema(self):
         import json
         from PIL import Image

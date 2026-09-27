@@ -4,7 +4,7 @@
     "revision": "128c903ff109868acc854f0ff239c8c0f925d803",
     "reference": "E:/projects/magic-keeper-old (WSL /mnt/e/projects/magic-keeper-old)"
   },
-  "note": "Retained recognition baseline. Entries in files are byte-identical to the pinned revision; adapted entries moved into the rebuilt component structure or gained an optional-dependency guard without changing engine behaviour.",
+  "note": "Retained recognition baseline. Entries in files are byte-identical to the pinned revision; adapted entries moved into the rebuilt component structure without changing engine behaviour.",
   "files": {
     "src/recognition/browser/backend-recognition.js": {
       "source": "public/backend-recognition.js",
@@ -234,13 +234,33 @@
       "source": "recognition/tests/test_contract.py",
       "sha256": "e0e29938e18466ef02813f2137444981691865ff4b73d69a24bd2322b0627790"
     },
+    "src/recognition/python/tests/test_independent_identity.py": {
+      "source": "recognition/tests/test_independent_identity.py",
+      "sha256": "48eb5655ba26d61355bc5239efa8c48584909b453bf9af327b706e6d8a21e939"
+    },
+    "src/recognition/python/tests/test_title_fallback.py": {
+      "source": "recognition/tests/test_title_fallback.py",
+      "sha256": "ae5586c0224542a68592d35d4fae4cd041f62be855f889ff14f5e3c1afbbea77"
+    },
     "src/recognition/python/tests/test_timing.py": {
       "source": "recognition/tests/test_timing.py",
       "sha256": "ec746ee5ca9f6811a8a7b8a6af6267d7d78dc53246b82fe3c9c08d21a2a60b0b"
     },
+    "src/recognition/python/tests/test_transport.py": {
+      "source": "recognition/tests/test_transport.py",
+      "sha256": "78f50a7f8565466bdb6e781ea29c0fd381584b60e4e8338c1cc7fa1c29ada60a"
+    },
+    "src/recognition/python/tests/test_visual_search.py": {
+      "source": "recognition/tests/test_visual_search.py",
+      "sha256": "feaa86dc480c12824501eb13c58f3fd321880d8ab1eab76a765284f1580fa3d1"
+    },
     "src/recognition/python/timing.py": {
       "source": "recognition/timing.py",
       "sha256": "59cd58ca6776629528230ad3e425da4099585759a9fc41ef5080fa99721f245d"
+    },
+    "tests/recognition/phone-sources.json": {
+      "source": "tests/performance/phone-sources.json",
+      "sha256": "b30dd36c0f62a372de89fda62ee52dbc0da1fd81de2cea570f14534409f72e22"
     },
     "tests/recognition/sources.json": {
       "source": "tests/performance/sources.json",
@@ -251,22 +271,6 @@
     "src/recognition/python/tests/test_public_fixtures.py": {
       "source": "recognition/tests/test_public_fixtures.py",
       "reason": "the recognition package, its public-art manifest and the source bundle live at their rebuilt component paths"
-    },
-    "src/recognition/python/tests/test_transport.py": {
-      "source": "recognition/tests/test_transport.py",
-      "reason": "the pinned engine requirements are optional for the bare Python harness"
-    },
-    "src/recognition/python/tests/test_independent_identity.py": {
-      "source": "recognition/tests/test_independent_identity.py",
-      "reason": "the pinned engine requirements are optional for the bare Python harness"
-    },
-    "src/recognition/python/tests/test_visual_search.py": {
-      "source": "recognition/tests/test_visual_search.py",
-      "reason": "the pinned engine requirements are optional for the bare Python harness"
-    },
-    "src/recognition/python/tests/test_title_fallback.py": {
-      "source": "recognition/tests/test_title_fallback.py",
-      "reason": "the pinned engine requirements are optional for the bare Python harness"
     },
     "src/recognition/python/scripts/source_bundle.py": {
       "source": "recognition/scripts/source_bundle.py",
@@ -282,11 +286,11 @@
     },
     "src/recognition/python/scripts/replay_public.py": {
       "source": "recognition/scripts/replay_public.py",
-      "reason": "the owner-supplied private-camera manifest stays outside the repository"
+      "reason": "the public-art regression manifest moved to tests/recognition/phone-sources.json"
     },
     "src/recognition/python/fixtures/README.md": {
       "source": "recognition/fixtures/README.md",
-      "reason": "the public-art manifest link follows tests/recognition/sources.json"
+      "reason": "the public-art manifest links follow tests/recognition/sources.json and tests/recognition/phone-sources.json"
     },
     "tests/recognition/backend-recognition.test.js": {
       "source": "tests/backend-recognition.test.js",

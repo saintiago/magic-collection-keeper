@@ -5,10 +5,10 @@ import { fileURLToPath } from 'node:url';
 /**
  * Runs the retained recognition regressions (src/recognition/python/tests).
  *
- * The preserved engine needs NumPy, Pillow and OpenCV for some of its regressions. The runner
- * provisions those pinned requirements once into the ignored `.recognition-python` environment so
- * that a prepared checkout reproduces the baseline suite. Where they cannot be installed, the
- * affected modules skip themselves and report that dependency instead of failing the run.
+ * The preserved engine needs NumPy, Pillow and OpenCV, and the complete retained suite must run:
+ * docs/testing.md forbids skipping regressions to obtain a passing run. The runner provisions the
+ * pinned requirements once into the ignored `.recognition-python` environment and fails with an
+ * actionable error when those dependencies are missing or cannot be installed.
  */
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,6 +21,9 @@ const managedPython = path.join(environment, windows ? 'Scripts/python.exe' : 'b
 const managedPip = path.join(environment, windows ? 'Scripts/pip.exe' : 'bin/pip');
 
 const requested = process.env.KEEPER_PYTHON ?? 'python3';
+
+/** The retained baseline executes 27 regressions; a smaller run has lost coverage. */
+const expectedRegressions = 27;
 
 function fail(message: string): never {
   console.error(message);
@@ -51,12 +54,24 @@ function engineRequirements(executable: string): boolean {
   return spawnSync(executable, ['-c', 'import numpy, PIL, cv2'], { stdio: 'ignore' }).status === 0;
 }
 
-function provision(): string | null {
+function missingRequirementsHint(): string {
+  return (
+    `The recognition regressions require NumPy, Pillow and OpenCV (${path.relative(root, requirements)}). ` +
+    'Install them into KEEPER_PYTHON, or leave KEEPER_PYTHON unset so the runner can provision ' +
+    'the pinned versions into .recognition-python/.'
+  );
+}
+
+function provision(): string {
   console.log('Installing the pinned recognition test requirements into .recognition-python/.');
   const created = spawnSync(requested, ['-m', 'venv', environment], { stdio: 'inherit' });
   if (created.status !== 0 || created.error) {
-    console.warn('The recognition Python environment could not be created.');
-    return null;
+    fail(
+      `The recognition Python environment could not be created with "${requested}". ` +
+        'Install Python 3.12 or newer with venv support, or set KEEPER_PYTHON to an interpreter ' +
+        'that already has the requirements.\n' +
+        missingRequirementsHint(),
+    );
   }
   const installed = spawnSync(
     managedPip,
@@ -64,42 +79,64 @@ function provision(): string | null {
     { stdio: 'inherit' },
   );
   if (installed.status !== 0 || installed.error) {
-    console.warn('The pinned recognition test requirements could not be installed.');
-    return null;
+    fail(
+      'The pinned recognition test requirements could not be installed into ' +
+        `.recognition-python/.\n${missingRequirementsHint()}`,
+    );
   }
-  return engineRequirements(managedPython) ? managedPython : null;
+  if (!engineRequirements(managedPython)) {
+    fail(
+      `The provisioned .recognition-python environment is still incomplete.\n${missingRequirementsHint()}`,
+    );
+  }
+  return managedPython;
 }
 
 function interpreter(): string {
   requireBaselineVersion(requested);
   if (process.env.KEEPER_PYTHON) {
-    if (!engineRequirements(requested)) warnUnavailable();
+    if (!engineRequirements(requested)) {
+      fail(
+        `KEEPER_PYTHON ("${requested}") cannot import numpy, PIL and cv2.\n${missingRequirementsHint()}`,
+      );
+    }
     return requested;
   }
   if (engineRequirements(managedPython)) return managedPython;
-  if (engineRequirements(requested)) return requested;
-  const provisioned = provision();
-  if (provisioned) return provisioned;
-  warnUnavailable();
-  return requested;
-}
-
-function warnUnavailable(): void {
-  console.warn(
-    'The recognition engine requirements (numpy, Pillow, OpenCV) are unavailable, so the modules ' +
-      `that need them report a skip. Install ${path.relative(root, requirements)} or set ` +
-      'KEEPER_PYTHON to an interpreter that has them to run every regression.',
-  );
+  return provision();
 }
 
 const executable = interpreter();
 const result = spawnSync(executable, ['-m', 'unittest', 'discover', '-s', 'tests'], {
   cwd: recognitionRoot,
-  stdio: 'inherit',
+  encoding: 'utf8',
+  maxBuffer: 16 * 1024 * 1024,
 });
 
 if (result.error) {
   fail(`Recognition tests could not start: ${result.error.message}`);
 }
 
-process.exitCode = result.status ?? 1;
+const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+process.stdout.write(result.stdout ?? '');
+process.stderr.write(result.stderr ?? '');
+
+if (result.status !== 0) {
+  process.exit(result.status ?? 1);
+}
+
+const ran = /Ran (\d+) tests?/.exec(output);
+if (ran === null || Number(ran[1]) < expectedRegressions) {
+  fail(
+    `Only ${ran?.[1] ?? 'no'} of the ${expectedRegressions} retained recognition regressions ran. ` +
+      'Restoring or repairing a preserved module must not remove its regressions.',
+  );
+}
+
+const skipped = /skipped=(\d+)/.exec(output);
+if (skipped !== null && Number(skipped[1]) > 0) {
+  fail(
+    `${skipped[1]} retained recognition regressions were skipped. docs/testing.md requires the ` +
+      'complete retained suite to run.',
+  );
+}

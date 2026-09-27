@@ -1,12 +1,8 @@
 import unittest
-
-try:  # Pinned engine requirement, provisioned by scripts/run-python-tests.ts.
-    from PIL import Image
-except ModuleNotFoundError as missing:  # pragma: no cover - bare Python baseline
-    raise unittest.SkipTest(f"{missing.name} is unavailable") from missing
 from independent_policy import validate_identity
 from independent_service import IndependentRecognitionService
 from adapters.bedrock_identity import BedrockIdentity, PROMPT
+from PIL import Image
 import json
 
 

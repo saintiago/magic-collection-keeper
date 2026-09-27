@@ -25,7 +25,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    # The owner-supplied private-camera manifest stays outside the repository.
+    # Public-art regression manifest (tests/recognition/phone-sources.json); public Scryfall
+    # card images only, each verified against its pinned digest below. Never camera uploads.
     sources = json.loads((repository / "tests/recognition/phone-sources.json").read_text())
     artifacts = root / "artifacts"
     service = RecognitionService(CollectorVision(artifacts), PaddleOnnxText(artifacts), names=load_title_names(artifacts))

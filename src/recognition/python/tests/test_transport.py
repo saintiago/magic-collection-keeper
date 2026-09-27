@@ -1,10 +1,6 @@
 import unittest, json, base64, hashlib, io, sys
 from pathlib import Path
-
-try:  # Pinned engine requirement, provisioned by scripts/run-python-tests.ts.
-    from PIL import Image
-except ModuleNotFoundError as missing:  # pragma: no cover - bare Python baseline
-    raise unittest.SkipTest(f"{missing.name} is unavailable") from missing
+from PIL import Image
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
