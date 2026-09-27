@@ -5,10 +5,10 @@
  * The authenticated request attaches the caller's current identity to every backend call, routes
  * the preserved recognition calls to the compute entry point and everything else to the interactive
  * entry point, and rejects a response that belongs to a session that already ended. The catalog
- * client and the browser application compose the component contracts the UserInterface receives;
- * only public settings cross into the browser. Application's own failure envelope keeps its code
- * and message; the preserved compute runtime reports a plain message beside the HTTP status, so
- * that status decides the failure instead of collapsing into an invalid request.
+ * and search clients and the browser application compose the component contracts the UserInterface
+ * receives; only public settings cross into the browser. Application's own failure envelope keeps
+ * its code and message; the preserved compute runtime reports a plain message beside the HTTP
+ * status, so that status decides the failure instead of collapsing into an invalid request.
  */
 
 // A type-only import of the Catalog public entry keeps the provider barrel out of a browser
@@ -29,6 +29,14 @@ import {
   type Recognition,
   type RecognitionFrameFacts,
 } from '../../recognition/index.js';
+// Search stays a type-only import here for the same reason: the browser reaches its contract
+// through the request it already carries (docs/application.md#interface).
+import type {
+  SearchEntry,
+  SearchEntryTarget,
+  SearchPage,
+  SearchRequestInput,
+} from '../../search/index.js';
 
 import {
   isApplicationFailureCode,
@@ -163,11 +171,44 @@ export function createCatalogClient(request: RequestTransport): Catalog {
   };
 }
 
+/**
+ * The Search contract over the interactive entry point. The caller sends its request; the
+ * transport derives the trusted account from the verified identity, so no account crosses into the
+ * browser and a private query is authorized at the backend boundary. A page keeps the provider's
+ * result unchanged: stable entry keys, typed targets, basic information, quantity context and the
+ * opaque continuation of the query.
+ */
+export interface SearchClient {
+  /** Evaluates one request; an aborted signal withdraws the invocation. */
+  execute(request: SearchRequestInput, signal?: AbortSignal): Promise<SearchPage>;
+}
+
+/** Builds the Search contract the UserInterface queries through the interactive entry point. */
+export function createSearchClient(request: RequestTransport): SearchClient {
+  if (typeof request !== 'function') {
+    throw new TypeError('createSearchClient requires the authenticated request contract.');
+  }
+  return {
+    async execute(input: SearchRequestInput, signal?: AbortSignal): Promise<SearchPage> {
+      const payload = await request(applicationRoutes.search, {
+        method: 'POST',
+        body: JSON.stringify(input),
+        ...(signal === undefined ? {} : { signal }),
+      });
+      return readSearchPage(payload);
+    },
+  };
+}
+
 /** Component access and public configuration the UserInterface receives (docs/user-interface.md#interface). */
 export interface UserInterfaceCapabilities {
   readonly settings: PublicApplicationSettings;
   /** Authenticated transport to the interactive backend entry point. */
   readonly request: AuthenticatedRequest;
+  /** Public Catalog reads: card and printing information of the presented entries. */
+  readonly catalog: Catalog;
+  /** Combined Catalog and UserCards queries with their ordering and continuation. */
+  readonly search: SearchClient;
   /** Builds the Recognition contract over the browser's preserved engines. */
   readonly createRecognition: () => Recognition<HTMLCanvasElement>;
 }
@@ -198,8 +239,8 @@ export interface BrowserApplication {
 }
 
 /**
- * Assembles the browser runtime: the authenticated transports, the Catalog read contract and the
- * Recognition contract over the preserved browser engines, and hands the UserInterface its
+ * Assembles the browser runtime: the authenticated transports, the Catalog and Search contracts
+ * and the Recognition contract over the preserved browser engines, and hands the UserInterface its
  * capabilities and public configuration.
  */
 export function createBrowserApplication(options: BrowserApplicationOptions): BrowserApplication {
@@ -218,6 +259,8 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
           ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
         });
   const request = createEntryPointRequest(api, compute);
+  const catalog = createCatalogClient(request);
+  const search = createSearchClient(request);
   const createRecognitionContract = () =>
     options.createRecognition !== undefined
       ? options.createRecognition({ settings, request })
@@ -227,7 +270,7 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
               request,
               cloudEnabled: settings.recognition.cloudEnabled,
             }),
-          catalog: createCatalogClient(request),
+          catalog,
           inspectFrame: inspectCanvasFrame,
         });
   const userInterface =
@@ -235,6 +278,8 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
       ? options.createUserInterface({
           settings,
           request,
+          catalog,
+          search,
           createRecognition: createRecognitionContract,
         })
       : null;
@@ -425,6 +470,160 @@ function readPrintingsPage(cardId: string, payload: unknown): CardPrintingsPage 
 
 function unreadableCatalog(): ApplicationError {
   return new ApplicationError('unavailable', 'The catalog response could not be read.');
+}
+
+/**
+ * Reads one search page. A response outside the declared shape is an unavailable evaluation
+ * rather than an empty page or a different outcome (docs/search.md#request-and-result).
+ */
+function readSearchPage(payload: unknown): SearchPage {
+  const record = readObject(payload);
+  const entries = record?.entries;
+  if (record === null || !Array.isArray(entries)) {
+    throw unreadableSearch();
+  }
+  const read: SearchEntry[] = [];
+  for (const candidate of entries) {
+    const entry = readSearchEntry(candidate);
+    if (entry === null) {
+      throw unreadableSearch();
+    }
+    read.push(entry);
+  }
+  const totalCount = record.totalCount ?? null;
+  const continuation = record.continuation ?? null;
+  const revisions = readObject(record.revisions);
+  const catalogRevision = revisions?.catalogRevision ?? null;
+  const privateRevision = revisions?.privateRevision ?? null;
+  if (
+    !isSearchCountOrNull(totalCount) ||
+    (continuation !== null && typeof continuation !== 'string') ||
+    !isSearchIdentifier(catalogRevision) ||
+    !isSearchIdentifierOrNull(privateRevision)
+  ) {
+    throw unreadableSearch();
+  }
+  return {
+    entries: read,
+    totalCount,
+    continuation,
+    revisions: { catalogRevision, privateRevision },
+  };
+}
+
+/** One entry of a search page, or null when the response does not carry the declared shape. */
+function readSearchEntry(value: unknown): SearchEntry | null {
+  const entry = readObject(value);
+  const entryKey = entry?.entryKey;
+  const target = readSearchTarget(entry?.target);
+  const card = readObject(entry?.card);
+  const cardId = card?.cardId;
+  const name = card?.name;
+  const matchedName = card?.matchedName ?? null;
+  if (
+    entry === null ||
+    target === null ||
+    !isSearchIdentifier(entryKey) ||
+    card === null ||
+    !isSearchIdentifier(cardId) ||
+    !isSearchIdentifier(name) ||
+    (matchedName !== null && typeof matchedName !== 'string')
+  ) {
+    return null;
+  }
+  const printing = readSearchPrinting(entry.printing);
+  if (printing === null && entry.printing !== null) {
+    return null;
+  }
+  const quantity = readSearchQuantity(entry.quantity);
+  if (quantity === null && entry.quantity !== null) {
+    return null;
+  }
+  return {
+    entryKey,
+    target,
+    card: { cardId, name, matchedName: matchedName === null ? null : String(matchedName) },
+    printing,
+    quantity,
+  };
+}
+
+/** Typed target of one entry, at the level the query requested. */
+function readSearchTarget(value: unknown): SearchEntryTarget | null {
+  const target = readObject(value);
+  const kind = target?.kind;
+  const cardId = target?.cardId;
+  const printingId = target?.printingId;
+  const copyId = target?.copyId;
+  if (kind === 'card' && isSearchIdentifier(cardId)) {
+    return { kind, cardId };
+  }
+  if (kind === 'printing' && isSearchIdentifier(printingId)) {
+    return { kind, printingId };
+  }
+  if (kind === 'copy' && isSearchIdentifier(copyId)) {
+    return { kind, copyId };
+  }
+  return null;
+}
+
+/** Printing information of one entry; null at card level. */
+function readSearchPrinting(value: unknown): SearchEntry['printing'] {
+  if (value === null) {
+    return null;
+  }
+  const printing = readObject(value);
+  const printingId = printing?.printingId;
+  const edition = printing?.edition;
+  const collectorNumber = printing?.collectorNumber;
+  const language = printing?.language;
+  if (
+    printing === null ||
+    !isSearchIdentifier(printingId) ||
+    !isSearchIdentifier(edition) ||
+    !isSearchIdentifier(collectorNumber) ||
+    !isSearchIdentifier(language)
+  ) {
+    return null;
+  }
+  return { printingId, edition, collectorNumber, language };
+}
+
+/** Quantity context of one entry: both counts exact, or null when the query evaluated none. */
+function readSearchQuantity(value: unknown): SearchEntry['quantity'] {
+  if (value === null) {
+    return null;
+  }
+  const quantity = readObject(value);
+  if (quantity === null) {
+    return null;
+  }
+  const copies = quantity.copies;
+  const intended = quantity.intended;
+  if (!isSearchCountOrNull(copies) || !isSearchCountOrNull(intended)) {
+    return null;
+  }
+  return { copies, intended };
+}
+
+function isSearchCountOrNull(value: unknown): value is number | null {
+  return value === null || isSearchCount(value);
+}
+
+function isSearchIdentifierOrNull(value: unknown): value is string | null {
+  return value === null || isSearchIdentifier(value);
+}
+
+function isSearchCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isSearchIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function unreadableSearch(): ApplicationError {
+  return new ApplicationError('unavailable', 'The search response could not be read.');
 }
 
 function readObject(value: unknown): Readonly<Record<string, unknown>> | null {

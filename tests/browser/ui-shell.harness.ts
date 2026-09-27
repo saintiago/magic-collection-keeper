@@ -123,6 +123,15 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       capabilities: { sourceImports: false },
     },
     request,
+    // The shell fixture presents no browsing page, so the component access they read through is
+    // only present to satisfy the capabilities Application supplies.
+    catalog: {
+      resolve: () => Promise.reject(new Error('The shell journey reads no catalog.')),
+      listCardPrintings: () => Promise.reject(new Error('The shell journey reads no catalog.')),
+    },
+    search: {
+      execute: () => Promise.reject(new Error('The shell journey runs no search.')),
+    },
     createRecognition: () => {
       throw new Error('The shell journey does not run recognition.');
     },

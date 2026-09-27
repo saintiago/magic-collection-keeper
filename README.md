@@ -10,7 +10,8 @@ subset, the request and continuation contract and its evaluation over both publi
 surfaces; Recognition provides its session lifecycle, its catalog-validated candidate readings and
 the execution bounds around the preserved engines; Application assembles those components behind
 validated configuration and authenticated transports, and UserInterface provides the shell the
-dedicated pages, CardList and the card tools are built on.
+dedicated pages, CardList and the card tools are built on, with Home's recent card activity and the
+catalog/search browser built over the Search and Catalog contracts Application supplies.
 
 Start with AGENTS.md for the documentation index and engineering principles.
 The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
@@ -118,7 +119,7 @@ exposing storage details or credentials, and reports a deadline as an unknown ou
 replayable operation names the receipt to recover. Catalog synchronization stays a separate job
 entry point and recognition inference a separate compute runtime reached through the authenticated
 client; the browser composition supplies UserInterface with the public settings, the authenticated
-transport and the Recognition contract over the preserved engines
+transport, the Catalog and Search contracts and the Recognition contract over the preserved engines
 (docs/application.md#interface, docs/application.md#configuration-and-lifecycle).
 
 UserInterface presents the collection behind one shell (docs/user-interface.md#interface,
@@ -142,7 +143,16 @@ from an empty answer.
 Equivalent copies group for convenient selection without losing their individual copies, and the
 card tools invoke the owning component's operation for the explicit selection and report its
 outcome, with a lost response reported as unknown until the recorded outcome is recovered. The
-dedicated pages and capture build on that in their own tasks.
+browsing pages build on that (docs/user-interface.md#browsing-and-organization): Home presents the
+account's bounded recent card activity — the cards it opened while browsing, kept only for the
+presented account — and the catalog/search page evaluates the text expression and the result-level,
+owned-only and finish controls its URL carries as one Search query
+(docs/search.md#scryfall-compatibility), so a reload or a shared link presents the same result; the
+entries show their basic information and quantities, printing images load and retry as their own
+fragment, an unsupported expression stays a distinct reported failure, and opening an entry records
+it and presents its card details. Both pages hand the state of their list back through CardList's
+own capture and restoration contract, so the list decides how to re-acquire the window it held. The
+remaining dedicated pages and capture build on that in their own tasks.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without

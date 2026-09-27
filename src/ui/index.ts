@@ -7,14 +7,18 @@
  * dedicated pages, history navigation with bounded account-isolated retention of opaque page state,
  * the identity transitions of the presented account and the brief dialogs for auxiliary actions; a
  * page implementation owns one page's content, its retained state and the sources and tools its
- * lists use, and each CardList owns its own capture, restoration and content loading. Application
- * supplies the public configuration, the authenticated transport and the Recognition contract, and
- * the deployment supplies the verified identity and its device capability. Other components import
- * UserInterface through this module only; its internal modules stay private to the component
- * (docs/architecture.md, .dependency-cruiser.mjs).
+ * lists use, and each CardList owns its own capture, restoration and content loading. The browsing
+ * pages present Home's bounded, account-isolated recent card activity and the catalog/search query
+ * a URL names, both over the supplied Search and Catalog contracts. Application supplies the public
+ * configuration, the authenticated transport and the component access, and the deployment supplies
+ * the verified identity and its device capability. Other components import UserInterface through
+ * this module only; its internal modules stay private to the component (docs/architecture.md,
+ * .dependency-cruiser.mjs).
  */
 
+export { createBrowsePages } from './internal/browse.js';
 export {
+  cardListBasicContent,
   createCardList,
   groupCardListEntries,
   type UiCardList,
@@ -57,20 +61,34 @@ export {
   type UiToolSelection,
 } from './internal/list.js';
 export type { UiPageContext, UiPageDefinition, UiPageHandle } from './internal/pages.js';
+export { createRecentCards, type UiRecentCards } from './internal/recent.js';
 export {
   createViewStateStore,
   type UiViewSnapshot,
   type UiViewStateStore,
 } from './internal/restoration.js';
 export {
+  readUiCatalogFinish,
+  readUiCatalogLevel,
   readUiView,
+  uiCatalogFinishes,
+  uiCatalogLevels,
   uiHref,
   uiPageNames,
   uiViewTitle,
   UI_ROUTE_PREFIX,
+  type UiCatalogLevel,
   type UiPageName,
   type UiView,
 } from './internal/routes.js';
+export {
+  catalogSearchRequest,
+  createCatalogSearchAccess,
+  searchListEntry,
+  uiEntryKey,
+  type UiCatalogQuery,
+  type UiCatalogSearchAccess,
+} from './internal/search-source.js';
 export {
   createUserInterface,
   type UserInterface,
