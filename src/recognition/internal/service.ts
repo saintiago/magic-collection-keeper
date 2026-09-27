@@ -147,6 +147,7 @@ interface ActiveAttempt {
   resolveCompletion: () => void;
   revision: number;
   delivered: boolean;
+  /** Delivery finished: no further reading will be delivered for this attempt. */
   finished: boolean;
 }
 
@@ -218,7 +219,10 @@ export function createRecognition<Frame>(
           timings: readTimings(ready?.timings),
         };
       } catch (error) {
-        throw controller.signal.aborted ? cancelledError(controller.signal) : error;
+        // Every caller of the shared preparation — the initiator and each joining caller — receives
+        // the same classified failure instead of a raw provider error
+        // (docs/recognition.md#interface).
+        throw controller.signal.aborted ? cancelledError(controller.signal) : asFailure(error);
       }
     })();
     // The shared preparation is awaited through the calls below; keep it handled so an aborted
@@ -253,7 +257,7 @@ export function createRecognition<Frame>(
         sessions.delete(sessionId);
         release(pipeline);
       }
-      throw asFailure(error);
+      throw error;
     } finally {
       signal?.removeEventListener('abort', onAbort);
     }
@@ -290,7 +294,15 @@ export function createRecognition<Frame>(
     }
 
     const controller = new AbortController();
-    const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    // The attempt follows the caller, this attempt and the session it belongs to: preparation
+    // cancelled or a session disposed while the capture waits releases the attempt instead of
+    // leaving it pending over a pipeline the session already released
+    // (docs/recognition.md#execution).
+    const combined = AbortSignal.any([
+      controller.signal,
+      session.controller.signal,
+      ...(signal ? [signal] : []),
+    ]);
     let resolveInitial!: (reading: RecognitionReading) => void;
     let rejectInitial!: (error: unknown) => void;
     let resolveCompletion!: () => void;
@@ -317,15 +329,24 @@ export function createRecognition<Frame>(
     };
     session.active = active;
 
-    const finish = (): void => {
+    /** No further reading will be delivered for this attempt. */
+    const finishDelivery = (): void => {
       if (active.finished) {
         return;
       }
       active.finished = true;
+      active.resolveCompletion();
+    };
+
+    /**
+     * The session accepts the next capture only once its pipeline released this attempt, so a
+     * failed, cancelled or superseded delivery cannot start a second inference beside outstanding
+     * local work in the reused engines (docs/recognition.md#execution).
+     */
+    const releaseSession = (): void => {
       if (session.active === active) {
         session.active = null;
       }
-      active.resolveCompletion();
     };
 
     const onAbort = () => {
@@ -335,7 +356,7 @@ export function createRecognition<Frame>(
       if (!active.delivered) {
         active.rejectInitial(cancelledError(combined));
       }
-      finish();
+      finishDelivery();
     };
     combined.addEventListener('abort', onAbort, { once: true });
 
@@ -360,7 +381,11 @@ export function createRecognition<Frame>(
       } catch (error) {
         if (!active.delivered && !active.finished && !combined.aborted) {
           active.rejectInitial(asFailure(error));
-          finish();
+          finishDelivery();
+          // A terminal mapping failure ends this attempt's delivery while the pipeline may still
+          // hold outstanding inference: cancel it, and stay busy until the pipeline releases the
+          // attempt instead of starting a second inference beside it.
+          controller.abort();
         }
         return;
       }
@@ -389,6 +414,12 @@ export function createRecognition<Frame>(
         // A capture may arrive while the session is still preparing; it waits for the shared
         // preparation instead of starting a second one.
         await watch(session.preparation, combined);
+        // A session cancelled while the capture waited must not run inference on the pipeline it
+        // already released, even when the preparation resolves late.
+        combined.throwIfAborted();
+        if (sessions.get(identity.sessionId) !== session) {
+          throw cancelledError(combined);
+        }
         const outcome = await session.pipeline.recognize(frame, {
           captureId: identity.captureId,
           attempt: identity.attempt,
@@ -412,7 +443,8 @@ export function createRecognition<Frame>(
         }
       } finally {
         combined.removeEventListener('abort', onAbort);
-        finish();
+        finishDelivery();
+        releaseSession();
       }
     })();
     void task;

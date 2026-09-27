@@ -9,7 +9,8 @@
  * versions and timings, and never confer ownership or physical condition
  * (docs/recognition.md#execution). Application supplies the preserved engine pipeline, the Catalog
  * read contract and the runtime frame inspector; the component executes in the browser and a
- * separate backend runtime through that same contract. Other components import Recognition through
+ * separate backend runtime through that same contract, and `createBrowserRecognitionPipeline`
+ * composes the preserved browser engines behind it. Other components import Recognition through
  * this module only; its internal modules stay private to the component
  * (docs/architecture.md, .dependency-cruiser.mjs).
  */
@@ -54,3 +55,8 @@ export {
   type RecognitionPrepareRequest,
   type RecognitionRecognizeRequest,
 } from './internal/service.js';
+export {
+  createBrowserRecognitionPipeline,
+  type BrowserRecognitionPipelineOptions,
+  type PreservedRequest,
+} from './internal/preserved-pipeline.js';

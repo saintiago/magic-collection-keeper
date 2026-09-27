@@ -394,6 +394,81 @@ describe('recognition candidate mapping', () => {
     ]);
   });
 
+  it('retains disagreement with a competing identity behind repeated printings', async () => {
+    const printings = Array.from({ length: 5 }, (_unused, index) =>
+      printing(`printing-bolt-${index}`, 'card-bolt', `${index + 1}`),
+    );
+    const reading = await readOutcome(
+      outcome({
+        status: 'possible',
+        candidates: [
+          ...printings.map((record, index) => ({
+            cardId: 'card-bolt',
+            printingId: record.printingId,
+            name: 'Bolt',
+            score: index / 10,
+          })),
+          {
+            cardId: counterspell.cardId,
+            printingId: counterspellM11.printingId,
+            name: 'Counterspell',
+            score: 0.05,
+          },
+        ],
+      }),
+      { fixture: { cards: [bolt, counterspell], printings: [...printings, counterspellM11] } },
+    );
+
+    // The displayed list stays bounded, but the competing playable identity is not erased.
+    expect(reading.candidates).toHaveLength(RECOGNITION_LIMITS.maxCandidates);
+    expect(reading.disagreement).toEqual({
+      cardIds: [bolt.cardId, counterspell.cardId],
+    });
+  });
+
+  it('keeps a corroborated printing the display bound would drop', async () => {
+    const printings = Array.from({ length: 5 }, (_unused, index) =>
+      printing(`printing-bolt-${index}`, 'card-bolt', `${index + 1}`),
+    );
+    const reading = await readOutcome(
+      outcome({
+        status: 'possible',
+        candidates: [
+          ...printings.map((record, index) => ({
+            cardId: 'card-bolt',
+            printingId: record.printingId,
+            name: 'Bolt',
+            score: index / 10,
+          })),
+          {
+            cardId: counterspell.cardId,
+            printingId: counterspellM11.printingId,
+            name: 'Counterspell',
+            score: 0.05,
+          },
+        ],
+        evidence: {
+          printingId: counterspellM11.printingId,
+          titleLanguage: 'en',
+          titleCorroborated: true,
+          cardPresence: 'single',
+        },
+      }),
+      { fixture: { cards: [bolt, counterspell], printings: [...printings, counterspellM11] } },
+    );
+
+    // The engine corroborated a printing outside the leading five; it stays reviewable instead of
+    // being replaced by a representative printing of the leading identity.
+    expect(reading.suggestion).toEqual({
+      candidateIndex: RECOGNITION_LIMITS.maxCandidates - 1,
+      printingId: counterspellM11.printingId,
+      basis: 'corroborated',
+    });
+    expect(
+      reading.candidates.some((candidate) => candidate.printingId === counterspellM11.printingId),
+    ).toBe(true);
+  });
+
   it('reports an unsupported engine outcome as unavailable inference', async () => {
     const harness = harnessFor(callerInput({ ...outcome(), status: 'confirmed' }));
     await harness.recognition.prepare(prepareRequest);

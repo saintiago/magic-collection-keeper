@@ -7,8 +7,10 @@ owns the behavior; this file records how the retained baseline is packaged.
 
 - `index.ts` is the component's provider-owned public entry point (docs/recognition.md#interface,
   docs/recognition.md#execution): the Prepare/Recognize/Dispose session lifecycle, the reading and
-  candidate model, the failure contract and the engine-pipeline port. `internal/` holds the
-  lifecycle service and the mapping boundary that validates candidate identities against Catalog.
+  candidate model, the failure contract, the engine-pipeline port and the factory that composes the
+  preserved engines behind it. `internal/` holds the lifecycle service, the mapping boundary that
+  validates candidate identities against Catalog and the adapter that translates preserved engine
+  readings into the pipeline port's outcome.
 - `python/` is the preserved visual/OCR pipeline (CollectorVision geometry and artwork matching,
   Paddle-based OCR, bounded Nova Lite title fallback and the independent Nova Pro identity path)
   with its policies, preparation scripts, model/catalog manifests, public fixtures, notices and
@@ -17,7 +19,8 @@ owns the behavior; this file records how the retained baseline is packaged.
   lighting variants, catalog search, verified asset loading, camera admission, candidate
   combination, the hybrid/independent paths and the inference worker. It also carries the camera
   capture and overlay mapping modules the preserved admission regressions import; no pages, views
-  or navigation are restored.
+  or navigation are restored. Its `*.d.ts` files only type the modules the adapter imports; the
+  engine modules themselves stay byte-identical to the pinned revision.
 - `baseline.json` pins reference revision `128c903ff109868acc854f0ff239c8c0f925d803` and records the
   digest of every retained file together with every relocated or harness-adapted file and its
   reason.
@@ -49,6 +52,16 @@ supplied pipeline keeps engine behaviour: the preserved browser/Python engines, 
 policies, the hybrid early/later comparison, the independent identity session call limit and at
 most one independent request in flight.
 
+`createBrowserRecognitionPipeline` is the component-owned composition of those preserved engines:
+it builds the browser ONNX port, the remote visual/OCR port, the hybrid early/later comparison and
+the independent identity path exactly as the pinned revision composed them, and translates their
+readings — candidate `id`/`oracle_id`, whole-title and geometry evidence, versions and timings, and
+the early reading beside its later comparison — into the engine outcome the lifecycle maps.
+Application still supplies the authenticated request contract the engines call and chooses whether
+the session runs with the remote comparison and the independent path; transport assembly and
+delivery packaging stay with their own tasks. The compiled pipeline imports those preserved
+modules, so the delivery build places them beside the compiled component (KAN-29).
+
 ## Checks
 
 `npm run test:python` runs the preserved Python suite (27 regressions). The runner installs the
@@ -67,7 +80,10 @@ delivery build copies the runtime there (KAN-29).
 pipeline and Catalog substitute: demand-driven and shared preparation, preparation failure and
 retry, invalid requests and frames before inference, busy inference, initial and later readings,
 completion, cancellation and disposal, candidate validation and ordering, suggestion and evidence,
-geometry, disagreement and the reading shape.
+geometry, disagreement and the reading shape. The preserved-pipeline case runs the retained browser,
+backend, hybrid and independent modules for real behind stubbed browser globals and an authenticated
+request stub, so candidate interpretation, the late hybrid comparison, the independent session call
+limit and the local-only composition are verified through the public lifecycle.
 
 ## Provenance
 
@@ -78,6 +94,5 @@ corresponding-source bundle is assembled by `python/scripts/source_bundle.py`
 `python/catalog-feed.json`. The three public artwork fixtures are test data, not licensed
 application code.
 
-Matching policies, preprocessing, model versions and expected outcomes are unchanged. Transport
-delivery, composing the preserved engines behind the pipeline port and UI integration remain with
-KAN-18, KAN-25 and KAN-29.
+Matching policies, preprocessing, model versions and expected outcomes are unchanged. Authenticated
+transport assembly, UI integration and delivery packaging remain with KAN-18, KAN-25 and KAN-29.

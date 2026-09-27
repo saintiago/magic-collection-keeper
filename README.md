@@ -101,8 +101,10 @@ that set and stays distinguishable from engine-supported printing evidence, prov
 disagreement, engine versions and timings, and never ownership or physical condition. Later readings
 of the hybrid comparison keep the attempt identity; cancellation suppresses later output; no-card,
 multiple-card and ambiguous geometry stay unknown; and invalid input, busy, cancelled and
-unavailable outcomes remain distinct. The preserved browser and Python engines plug in as the
-runtime pipeline Application supplies, so their matching policies stay unchanged.
+unavailable outcomes remain distinct. The component composes the preserved browser ONNX and Python
+visual/OCR engines behind that pipeline — including the hybrid early/later comparison and the
+independent identity session call limit — while Application supplies the authenticated transport,
+so their matching policies stay unchanged.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without

@@ -339,6 +339,22 @@
     "tests/recognition/visual-search.test.js": {
       "source": "tests/visual-search.test.js",
       "reason": "the retained regression imports the component browser modules"
+    },
+    "src/recognition/browser/backend-recognition.d.ts": {
+      "source": "public/backend-recognition.js",
+      "reason": "type declarations only; the rebuilt component composes the retained module through its public pipeline port and the module itself stays unchanged"
+    },
+    "src/recognition/browser/browser-recognition.d.ts": {
+      "source": "public/browser-recognition.js",
+      "reason": "type declarations only; the rebuilt component composes the retained module through its public pipeline port and the module itself stays unchanged"
+    },
+    "src/recognition/browser/hybrid-recognition.d.ts": {
+      "source": "public/hybrid-recognition.js",
+      "reason": "type declarations only; the rebuilt component composes the retained module through its public pipeline port and the module itself stays unchanged"
+    },
+    "src/recognition/browser/independent-recognition.d.ts": {
+      "source": "public/independent-recognition.js",
+      "reason": "type declarations only; the rebuilt component composes the retained module through its public pipeline port and the module itself stays unchanged"
     }
   }
 }

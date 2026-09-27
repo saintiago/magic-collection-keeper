@@ -160,6 +160,40 @@ describe('recognition preparation', () => {
     expect(harness.pipelines).toHaveLength(1);
   });
 
+  it('reports the same classified failure to every caller of a shared preparation', async () => {
+    const gate = deferred<RecognitionEnginePreparation>();
+    const harness = createRecognitionHarness({
+      configurePipeline: (stub) => {
+        stub.state.prepare = () => gate.promise;
+      },
+    });
+    const initiating = harness.recognition.prepare(prepareRequest);
+    const joining = harness.recognition.prepare(prepareRequest);
+    gate.reject(new Error('private provider detail'));
+
+    const failures = await Promise.all(
+      [initiating, joining].map((pending) =>
+        pending.then(
+          () => null,
+          (error: unknown) => error,
+        ),
+      ),
+    );
+    const [fromInitiator, fromJoiner] = failures;
+    expect(fromInitiator).toBeInstanceOf(RecognitionError);
+    expect(fromJoiner).toBeInstanceOf(RecognitionError);
+    expect(fromInitiator).toMatchObject({ code: 'unavailable' });
+    expect(fromJoiner).toMatchObject({
+      code: 'unavailable',
+      message: (fromInitiator as Error).message,
+    });
+    // The provider exception stays behind the boundary in both cases.
+    expect((fromInitiator as Error).message).not.toContain('private provider detail');
+    expect((fromJoiner as Error).message).not.toContain('private provider detail');
+    expect((fromInitiator as Error).cause).toBeInstanceOf(Error);
+    expect((fromJoiner as Error).cause).toBeInstanceOf(Error);
+  });
+
   it('cancelling preparation releases the session and a retry can succeed', async () => {
     const gate = deferred<RecognitionEnginePreparation>();
     const harness = createRecognitionHarness({
@@ -182,6 +216,59 @@ describe('recognition preparation', () => {
       frame: 'frame',
     });
     await expect(discarded.initial).rejects.toMatchObject({ code: 'invalid-request' });
+  });
+
+  it('cancels a capture queued behind preparation when preparation is cancelled', async () => {
+    const gate = deferred<RecognitionEnginePreparation>();
+    const harness = createRecognitionHarness({
+      configurePipeline: (stub) => {
+        stub.state.prepare = () => gate.promise;
+      },
+    });
+    const controller = new AbortController();
+    const preparing = harness.recognition.prepare({
+      ...prepareRequest,
+      signal: controller.signal,
+    });
+    const queued = harness.recognition.recognize({
+      ...prepareRequest,
+      captureId: 'capture-1',
+      attempt: 1,
+      frame: 'frame',
+    });
+
+    controller.abort();
+    await expect(preparing).rejects.toMatchObject({ code: 'cancelled' });
+    await expect(queued.initial).rejects.toMatchObject({ code: 'cancelled' });
+    await queued.completion;
+    expect(harness.current().state.disposals).toBe(1);
+
+    // A preparation that resolves after the cancellation must not infer on the released pipeline.
+    gate.resolve({});
+    await tick();
+    expect(harness.current().state.recognizeCalls).toHaveLength(0);
+  });
+
+  it('settles a capture queued behind a preparation that never settles when the session ends', async () => {
+    const gate = deferred<RecognitionEnginePreparation>();
+    const harness = createRecognitionHarness({
+      configurePipeline: (stub) => {
+        stub.state.prepare = () => gate.promise;
+      },
+    });
+    const preparing = harness.recognition.prepare(prepareRequest);
+    const queued = harness.recognition.recognize({
+      ...prepareRequest,
+      captureId: 'capture-1',
+      attempt: 1,
+      frame: 'frame',
+    });
+
+    harness.recognition.dispose({ sessionId: 'session-1' });
+    await expect(preparing).rejects.toMatchObject({ code: 'cancelled' });
+    await expect(queued.initial).rejects.toMatchObject({ code: 'cancelled' });
+    await queued.completion;
+    expect(harness.current().state.disposals).toBe(1);
   });
 
   it('dispose during preparation releases the pending session immediately', async () => {
@@ -403,6 +490,73 @@ describe('recognition attempts', () => {
     expect(readings[0]?.revision).toBe(2);
     expect(readings[0]?.provisional).toBe(false);
     expect(readings[0]?.versions).toEqual({ visual: '1.2.0' });
+  });
+
+  it('cancels outstanding inference on a mapping failure and stays busy until it releases', async () => {
+    const gate = deferred<RecognitionEngineOutcome>();
+    const stub = createPipelineStub();
+    stub.state.recognize = (_frame, request) => {
+      // A hybrid-style early outcome arrives while the engine call stays outstanding, and the
+      // published Catalog cannot validate it.
+      request.onReading?.(
+        outcome({
+          status: 'possible',
+          candidates: [
+            { cardId: 'card-bolt', printingId: 'printing-bolt', name: 'Bolt', score: 0.9 },
+          ],
+        }),
+      );
+      return gate.promise;
+    };
+    const recognition = createRecognition<string>({
+      createEnginePipeline: () => stub.pipeline,
+      catalog: {
+        resolve: async () => {
+          throw new Error('catalog unavailable');
+        },
+      },
+      inspectFrame: () => frameFacts(),
+    });
+    await recognition.prepare(prepareRequest);
+
+    const failed = recognition.recognize({
+      ...prepareRequest,
+      captureId: 'capture-1',
+      attempt: 1,
+      frame: 'frame',
+    });
+    await expect(failed.initial).rejects.toMatchObject({ code: 'unavailable' });
+    await failed.completion;
+    // The terminal mapping failure cancelled the inference the pipeline still held.
+    expect(stub.state.recognizeCalls).toHaveLength(1);
+    expect(stub.state.recognizeCalls[0]?.signal.aborted).toBe(true);
+
+    // Until that inference is released, the attempt still occupies the session.
+    const retry = recognition.recognize({
+      ...prepareRequest,
+      captureId: 'capture-2',
+      attempt: 2,
+      frame: 'frame',
+    });
+    await expect(retry.initial).rejects.toMatchObject({ code: 'busy' });
+    await retry.completion;
+    expect(stub.state.recognizeCalls).toHaveLength(1);
+
+    gate.resolve(outcome());
+    await tick();
+    stub.state.recognize = async () => outcome({ versions: { visual: 'later' } });
+    const next = recognition.recognize({
+      ...prepareRequest,
+      captureId: 'capture-3',
+      attempt: 3,
+      frame: 'frame',
+    });
+    await expect(next.initial).resolves.toMatchObject({
+      status: 'unknown',
+      versions: { visual: 'later' },
+    });
+    await next.completion;
+    expect(stub.state.recognizeCalls).toHaveLength(2);
   });
 
   it('cancellation suppresses later output and releases the attempt', async () => {

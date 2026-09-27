@@ -67,7 +67,11 @@ export async function mapEngineOutcome(
     status === 'possible' && geometryAdmitsIdentity(evidence)
       ? readCandidates(value.candidates)
       : [];
-  const candidates = await resolveCandidates(reported, request);
+  const resolved = await resolveCandidates(reported, request);
+  // The raw engine result is bounded before validation; only the presented list is limited
+  // afterwards, so disagreement and printing evidence are read from every identity the engines
+  // reported instead of disappearing behind the display bound (docs/recognition.md#execution).
+  const candidates = boundCandidates(resolved, evidence.printingId);
 
   return {
     identity: request.identity,
@@ -77,7 +81,7 @@ export async function mapEngineOutcome(
     suggestion: readSuggestion(candidates, evidence),
     evidence,
     provisional: value.provisional === true,
-    disagreement: readDisagreement(candidates),
+    disagreement: readDisagreement(resolved),
     versions: readVersions(value.versions),
     timings: readTimings(value.timings),
   };
@@ -163,9 +167,6 @@ async function resolveCandidates(
   const resolved: RecognitionCandidate[] = [];
   const seen = new Set<PrintingId>();
   for (const candidate of reported) {
-    if (resolved.length >= RECOGNITION_LIMITS.maxCandidates) {
-      break;
-    }
     const printing = resolution.printings.get(candidate.printingId);
     const card = resolution.cards.get(candidate.cardId);
     if (
@@ -185,6 +186,31 @@ async function resolveCandidates(
     });
   }
   return resolved;
+}
+
+/**
+ * Limits the presented candidate list to `maxCandidates` without dropping a printing the engine
+ * corroborated: when engine order places it outside the presented window, it replaces the last
+ * presented candidate so the suggestion always belongs to the candidate set
+ * (docs/recognition.md#interface).
+ */
+function boundCandidates(
+  resolved: readonly RecognitionCandidate[],
+  corroboratedPrintingId: PrintingId | null,
+): readonly RecognitionCandidate[] {
+  if (resolved.length <= RECOGNITION_LIMITS.maxCandidates) {
+    return resolved;
+  }
+  const presented = resolved.slice(0, RECOGNITION_LIMITS.maxCandidates);
+  const corroborated =
+    corroboratedPrintingId === null
+      ? -1
+      : resolved.findIndex((candidate) => candidate.printingId === corroboratedPrintingId);
+  const kept = resolved[corroborated];
+  if (kept) {
+    presented[RECOGNITION_LIMITS.maxCandidates - 1] = kept;
+  }
+  return presented;
 }
 
 /**
