@@ -7,9 +7,10 @@
  * return the bounded interaction state the shell keeps for restoration. A page whose sources supply
  * entries only after the shell has presented it reports when it presented the content of its history
  * entry, so the shell restores that entry's scroll offset and focused element over the presented
- * content and an interrupted restoration keeps the context the entry had; the shell also reports
- * the account it leaves, so a page that keeps private presentation state ends that account's state
- * with it (docs/user-interface.md#pages-and-navigation).
+ * content; an interrupted restoration keeps the context the entry had, while the page's own
+ * captured state stays live. The shell also reports the account it leaves, so a page that keeps
+ * private presentation state ends that account's state with it
+ * (docs/user-interface.md#pages-and-navigation).
  */
 
 import type { UserInterfaceCapabilities } from '../../application/index.js';
@@ -50,11 +51,15 @@ export interface UiPageHandle {
   /**
    * Resolves once the page has presented the content of the history entry the shell supplied in
    * `restored`. The shell restores that entry's scroll offset and focused element again over the
-   * presented content, and it keeps the entry's saved context instead of capturing the partially
-   * presented view until the page reports the presentation. A page whose own presentation
-   * supersedes the restored context — explicit input taking over, or a failed restore — reports
-   * that through this same result. A page that presents another view from this hook hands the entry
-   * over to that view, which captures and restores its own interaction context
+   * presented content, and it keeps the entry's saved scroll offset, focused element and visible
+   * position instead of capturing the partially presented view until the page reports the
+   * presentation — and, afterwards, until explicit user input takes the applied interaction over.
+   * The page's captured state is read live while the shell keeps that context, so a page that
+   * restores content asynchronously reports the content it presents, the window it is restoring
+   * included, even before its entries arrive. A page whose own presentation supersedes the restored
+   * context — explicit input taking over, or a failed restore — reports that through this same
+   * result. A page that presents another view from this hook hands the entry over to that view,
+   * which captures and restores its own interaction context
    * (docs/user-interface.md#pages-and-navigation). Entries of an asynchronous source exist only
    * after the shell has presented the page, so its entries are presented through this result.
    */

@@ -825,6 +825,88 @@ for (const level of ['card', 'printing'] as const) {
   });
 }
 
+for (const level of ['card', 'printing'] as const) {
+  for (const interrupted of ['first', 'next'] as const) {
+    test(`an interrupted ${level} restoration keeps the edits made while its ${interrupted} page loads`, async ({
+      page,
+    }) => {
+      const errors = await openBrowse(page, `#/catalog?level=${level}`);
+      const resultPage = (offset: number): SearchPage =>
+        searchPage(
+          Array.from({ length: 50 }, (_, index) => {
+            const id = offset + index;
+            return level === 'card'
+              ? cardEntry(`card-${id}`, { name: `Card ${id}` })
+              : printingEntry(`printing-${id}`, `card-${id}`, `Card ${id}`);
+          }),
+          { totalCount: 100, continuation: offset < 50 ? 'cursor-50' : null },
+        );
+      const openResult = (id: number) =>
+        page.locator(`[data-ui-entry="${level}:${level}-${id}"] [data-ui-open]`);
+
+      // A saved entry of one hundred results, left from its last result with one entry selected.
+      await settleSearch(page, (await searchRequest(page, 0)).id, resultPage(0));
+      await page.getByRole('button', { name: 'Load more' }).click();
+      await settleSearch(page, (await searchRequest(page, 1)).id, resultPage(50));
+      const selected = page.getByRole('checkbox', { name: /^Select Card 0(?: \(|$)/ });
+      await selected.check();
+      const last = openResult(99);
+      await last.focus();
+      await last.evaluate((element) =>
+        window.scrollBy(0, element.getBoundingClientRect().top - 120),
+      );
+      const savedTop = await last.evaluate((element) => element.getBoundingClientRect().top);
+      await last.click();
+      await expect(page.locator('#card-level')).toContainText('card-99/');
+
+      // Back presents the entry while its result is still loading, and the user edits the query,
+      // checks the owned-only control and clears the selection before leaving the page.
+      await page.goBack();
+      let index = 2;
+      if (interrupted === 'next') {
+        await settleSearch(page, (await searchRequest(page, index)).id, resultPage(0));
+        index += 1;
+        await expect(page.locator('[data-ui-entry]')).toHaveCount(50);
+      }
+      await page.getByLabel('Search cards').fill('draft');
+      await page.getByLabel('Owned only').check();
+      await page.getByRole('button', { name: 'Clear selection', exact: true }).click();
+      const interruptedRequest = await searchRequest(page, index);
+      await page.getByRole('link', { name: 'Home', exact: true }).click();
+      await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+      expect((await searchRequests(page))[index]?.aborted).toBe(true);
+      // The withdrawn restoration may still answer; its entries never reach the presented page.
+      await settleSearch(page, interruptedRequest.id, resultPage(0));
+      await expect(page.locator('[data-ui-entry]')).toHaveCount(1);
+      index += 1;
+
+      // Returning presents the whole window of the entry again, with the edits the user made beside
+      // it, the cleared selection and the result the entry had in view.
+      await page.goBack();
+      for (const offset of [0, 50]) {
+        const request = await searchRequest(page, index);
+        index += 1;
+        expect(request.request.continuation).toBe(offset === 0 ? undefined : 'cursor-50');
+        await settleSearch(page, request.id, resultPage(offset));
+      }
+      await expect(page.locator('[data-ui-entry]')).toHaveCount(100);
+      await expect(page.getByLabel('Search cards')).toHaveValue('draft');
+      await expect(page.getByLabel('Owned only')).toBeChecked();
+      await expect(selected).not.toBeChecked();
+      await expect(page.locator('[data-ui-selection-count]')).toHaveText('0 of 100 selected');
+      await expect(last).toBeFocused();
+      await expect
+        .poll(async () =>
+          Math.abs(
+            (await last.evaluate((element) => element.getBoundingClientRect().top)) - savedTop,
+          ),
+        )
+        .toBeLessThan(2);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
 for (const total of [550, 525]) {
   test(`Back restores the actual 500-entry window after browsing ${total} results`, async ({
     page,
@@ -1024,6 +1106,89 @@ for (const action of ['restore', 'input', 'account', 'navigate'] as const) {
     expect(errors).toEqual([]);
   });
 }
+
+test('a printing restoration interrupted before its images keeps the viewed result beside them', async ({
+  page,
+}) => {
+  const errors = await openBrowse(page, '#/catalog?level=printing');
+  const imageGate = Promise.withResolvers<void>();
+  let delayedImages = 0;
+  await page.route('https://cards.test/**', async (route) => {
+    if (route.request().url().includes('return')) {
+      delayedImages += 1;
+      await imageGate.promise;
+    }
+    await route.fulfill({
+      contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="223" height="310"><rect width="223" height="310" fill="gray"/></svg>',
+    });
+  });
+  const entries = Array.from({ length: 10 }, (_, index) =>
+    printingEntry(`printing-${index}`, `card-${index}`, `Card ${index}`),
+  );
+  const printings = entries.map((entry, index): PrintingRecord => ({
+    ...printing(entry.card.cardId),
+    printingId: `printing-${index}`,
+    images: {
+      small: null,
+      normal: `https://cards.test/${index}.svg`,
+      large: null,
+      artCrop: null,
+    },
+  }));
+  const returningImages = printings.map((value) => ({
+    ...value,
+    images: { ...value.images, normal: `${value.images.normal}?return` },
+  }));
+  const imagesReady = (): Promise<boolean> =>
+    page
+      .locator('img')
+      .evaluateAll((images) =>
+        images.every(
+          (image) =>
+            image instanceof HTMLImageElement && image.complete && image.naturalHeight === 310,
+        ),
+      );
+  await settleSearch(page, (await searchRequest(page)).id, searchPage(entries));
+  await settleCatalog(page, (await catalogRequest(page)).id, printings);
+  await expect.poll(imagesReady).toBe(true);
+
+  // Leave the view from its last result, so the entry keeps its position and focused result.
+  const last = page.locator('[data-ui-entry="printing:printing-9"] [data-ui-open]');
+  await last.focus();
+  await last.evaluate((element) => window.scrollBy(0, element.getBoundingClientRect().top - 120));
+  const departedTop = await last.evaluate((element) => element.getBoundingClientRect().top);
+  await last.click();
+  await expect(page.locator('#card-level')).toContainText('card-9/');
+
+  // Back presents the entry again: the search settles while the images of its result are still on
+  // their way, and the user leaves for the card they came from before they arrive.
+  await page.goBack();
+  await settleSearch(page, (await searchRequest(page, 1)).id, searchPage(entries));
+  await settleCatalog(page, (await catalogRequest(page, 1)).id, returningImages);
+  await expect.poll(() => delayedImages).toBe(10);
+  await page.goForward();
+  await expect(page.locator('#card-level')).toContainText('card-9/');
+
+  // Returning presents the entry once more; the images arrive late, and the result the entry showed
+  // keeps the viewport offset it had.
+  await page.goBack();
+  await settleSearch(page, (await searchRequest(page, 2)).id, searchPage(entries));
+  await settleCatalog(page, (await catalogRequest(page, 2)).id, returningImages);
+  // The images of the entry are still the ones on their way, and they are still delayed.
+  await expect.poll(() => delayedImages).toBe(10);
+  await expect(last).toBeFocused();
+  imageGate.resolve();
+  await expect.poll(imagesReady).toBe(true);
+  await expect
+    .poll(async () =>
+      Math.abs(
+        (await last.evaluate((element) => element.getBoundingClientRect().top)) - departedTop,
+      ),
+    )
+    .toBeLessThan(2);
+  expect(errors).toEqual([]);
+});
 
 for (const level of ['card', 'printing'] as const) {
   for (const attempted of [100, 101]) {

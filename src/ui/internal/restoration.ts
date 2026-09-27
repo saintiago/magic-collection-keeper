@@ -23,7 +23,7 @@ export type UiRestorationState = Readonly<Record<string, UiRestorationValue>>;
 export interface UiViewSnapshot {
   /** Page-supplied state, or null when the page keeps none or supplied an unbounded value. */
   readonly state: UiRestorationState | null;
-  /** Document scroll offset at the moment the view was left. */
+  /** Document scroll offset the entry keeps for the way back. */
   readonly scrollY: number;
   /** Id of the element focused when the view was left, or null. */
   readonly focusId: string | null;

@@ -59,8 +59,11 @@ Reserve dialogs for brief confirmations and small auxiliary actions.
 Back follows navigation history. Restore relevant query, selection, scroll and focus using bounded,
 account-isolated state. Closing a page cancels its work or prevents late results from changing the
 new view. A page whose restored content arrives asynchronously reports when it presented the entry,
-so the shell restores that entry's scroll and focus over the presented content, and an interrupted
-restoration keeps the context the entry had instead of capturing the partially presented view.
+so the shell restores that entry's scroll and focus over the presented content. An interrupted
+restoration keeps the context the entry had instead of capturing the partially presented view: the
+page's captured state stays live beside the entry's scroll offset, focus and visible position, which
+are kept until the shell restored them over the presented content and explicit user input takes them
+over.
 
 ## CardList
 

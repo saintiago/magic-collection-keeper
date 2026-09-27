@@ -286,7 +286,10 @@ function asyncHomePage(
       renderLoaded();
       load();
       return {
-        capture: () => ({ loaded }),
+        // The entry keeps the window it is restoring until the source has presented it again, so a
+        // history entry interrupted while loading it keeps that window
+        // (docs/user-interface.md#pages-and-navigation).
+        capture: () => ({ loaded: done || kept === 0 ? loaded : kept }),
         ...(kept > 0 ? { presented: () => presentKeptWindow() } : {}),
       };
 

@@ -16,8 +16,10 @@
  * Returning to a browsing view also presents the result window the history entry kept: the page
  * reloads the further pages of the same result and reports its presentation, so the shell restores
  * the entry's scroll offset and focused result over entries the source supplies asynchronously
- * (docs/user-interface.md#pages-and-navigation). The activity of an account ends with that
- * account, whatever page the shell presents when it leaves it
+ * (docs/user-interface.md#pages-and-navigation). Until the source presents that window again, the
+ * page reports the window it is restoring beside the input, controls and selection the user holds
+ * now, so an interruption during loading keeps the window while the edits made beside it stay. The
+ * activity of an account ends with that account, whatever page the shell presents when it leaves it
  * (docs/user-interface.md#capture-and-review).
  */
 
@@ -72,8 +74,15 @@ function homePage(recent: UiRecentCards): UiPageDefinition {
       recent.retain(accountId);
       const restored = context.restored?.state ?? null;
       const pageSize = UI_LIMITS.recentCards;
+      const restoredPosition = readPosition(restored, pageSize);
       const restoredWindow =
-        context.restored === null ? null : restoreResultWindow(readLoadedWindow(restored));
+        context.restored === null
+          ? null
+          : restoreResultWindow({
+              loaded: readLoadedWindow(restored),
+              continuation: restoredPosition.continuation,
+              offset: restoredPosition.offset,
+            });
       const input = searchInput(document, 'home-search');
       const form = searchForm(document, input);
       const heading = document.createElement('h2');
@@ -99,7 +108,7 @@ function homePage(recent: UiRecentCards): UiPageDefinition {
         context: accountId,
         pageSize,
         selectionLimit: UI_LIMITS.restorationList,
-        initialPosition: readPosition(restored, pageSize),
+        initialPosition: restoredPosition,
         presentation: openEntryPresentation(document, 'home-result', (entry) =>
           recent.record(accountId, entry),
         ),
@@ -116,9 +125,7 @@ function homePage(recent: UiRecentCards): UiPageDefinition {
         capture: () => ({
           query: input.value,
           selection: list.selectedIdentities,
-          loaded: list.entries.length,
-          continuation: list.position?.continuation ?? null,
-          offset: list.position?.offset ?? 0,
+          ...captureWindow(list, restoredWindow),
         }),
         ...(restoredWindow === null ? {} : { presented: () => restoredWindow.presented }),
       };
@@ -138,8 +145,15 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
       recent.retain(context.account.accountId);
       const restored = context.restored?.state ?? null;
       const pageSize = UI_LIMITS.catalogPage;
+      const restoredPosition = readPosition(restored, pageSize);
       const restoredWindow =
-        context.restored === null ? null : restoreResultWindow(readLoadedWindow(restored));
+        context.restored === null
+          ? null
+          : restoreResultWindow({
+              loaded: readLoadedWindow(restored),
+              continuation: restoredPosition.continuation,
+              offset: restoredPosition.offset,
+            });
       const document = container.ownerDocument;
       const input = searchInput(document, 'catalog-search');
       input.value = view.query;
@@ -184,7 +198,7 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
         context: query,
         pageSize,
         selectionLimit: UI_LIMITS.restorationList,
-        initialPosition: readPosition(restored, pageSize),
+        initialPosition: restoredPosition,
         ...(view.level === 'printing' ? { fragments: { images: access.images } } : {}),
         presentation: openEntryPresentation(document, 'catalog-result', (entry) =>
           recent.record(context.account.accountId, entry),
@@ -235,11 +249,7 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
           owned: owned.checked,
           finish: finish.value === '' ? null : finish.value,
           selection: list.selectedIdentities,
-          // The entries the presented window held, so the way back presents the same window of the
-          // same result instead of its first page (docs/user-interface.md#pages-and-navigation).
-          loaded: list.entries.length,
-          continuation: list.position?.continuation ?? null,
-          offset: list.position?.offset ?? 0,
+          ...captureWindow(list, restoredWindow),
         }),
         ...(restoredWindow === null ? {} : { presented: () => restoredWindow.presented }),
       };
@@ -306,8 +316,17 @@ function openEntryPresentation(
 interface UiRestoredWindow {
   /** Resolves once the window the history entry kept is presented again. */
   readonly presented: Promise<void>;
+  /** The window this visit restores, or null once the source presented it again. */
+  readonly kept: UiWindowPosition | null;
   /** One settled list window: reload what is missing, then report the presentation. */
   settle(list: UiWindowList): void;
+}
+
+/** The entries one presented window holds and where they start in the result. */
+interface UiWindowPosition {
+  readonly loaded: number;
+  readonly continuation: string | null;
+  readonly offset: number;
 }
 
 /** The list state restoring a result window reads: its entries, its continuation and its status. */
@@ -319,7 +338,7 @@ interface UiWindowList {
 }
 
 /** Reloads one result window page by page, within the pages one bounded window can hold. */
-function restoreResultWindow(loaded: number): UiRestoredWindow {
+function restoreResultWindow(kept: UiWindowPosition): UiRestoredWindow {
   const presented = Promise.withResolvers<void>();
   // A provider may return short pages. Every productive request adds at least one entry; one
   // additional request can make no progress before restoration stops.
@@ -329,12 +348,15 @@ function restoreResultWindow(loaded: number): UiRestoredWindow {
   let done = false;
   return {
     presented: presented.promise,
+    get kept() {
+      return done ? null : kept;
+    },
     settle(list) {
       if (done || list.loading) {
         return;
       }
       if (
-        list.entries.length < loaded &&
+        list.entries.length < kept.loaded &&
         list.entries.length > previousLength &&
         list.hasMore &&
         asked < pageBudget
@@ -347,6 +369,28 @@ function restoreResultWindow(loaded: number): UiRestoredWindow {
       done = true;
       presented.resolve();
     },
+  };
+}
+
+/**
+ * The result window one browsing page captures: the window it is restoring while the source has not
+ * presented it again, and the presented window once it has, so an interruption during loading keeps
+ * the window the entry had (docs/user-interface.md#pages-and-navigation).
+ */
+function captureWindow(
+  list: Pick<UiCardList<unknown>, 'entries' | 'position'>,
+  restored: UiRestoredWindow | null,
+): UiWindowPosition {
+  const kept = restored?.kept ?? null;
+  if (kept !== null) {
+    return kept;
+  }
+  // The entries the presented window held, so the way back presents the same window of the same
+  // result instead of its first page (docs/user-interface.md#pages-and-navigation).
+  return {
+    loaded: list.entries.length,
+    continuation: list.position?.continuation ?? null,
+    offset: list.position?.offset ?? 0,
   };
 }
 
