@@ -16,8 +16,10 @@
  * staged line is never presented as owned before its confirmation reports the copies it created.
  * The same page captures cards hands-free through the supplied device and the Recognition
  * contract: a settled frame the runtime reports as one card stages its candidate in review, a
- * repeated observation stays one entry, unresolved readings receive no success cue, and late
- * alternatives are attached to the entry they belong to without rewriting its reviewed values.
+ * frame whose geometry is not established is never admitted, a repeated observation stays one
+ * entry, unresolved readings receive no success cue, late alternatives are attached to the entry
+ * they belong to without rewriting its reviewed values, and a capture whose staging response was
+ * lost is recovered by replaying its own observation.
  * Application supplies the public configuration, the authenticated transport and the component
  * access, and the deployment supplies the verified identity and its device capability, including
  * the camera the capture view opens. Other

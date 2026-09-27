@@ -5,20 +5,25 @@
  * The view owns camera permission, frame acquisition, capture controls and feedback. It opens the
  * camera the deployment grants, presents its live stream and samples frames continuously: a frame
  * that has held still starts one Recognition attempt, and only a reading the runtime reports as
- * holding one card with a usable identity is staged as a pending entry. Ordinary capture stays
- * hands-free after the initial activation — the next card is read from the next settled frame
- * without another control — and the provider's accepted-identity sequence suppresses a repeated
- * observation, so one card never becomes two entries. A success cue means a candidate was accepted
- * into review, never that the card is owned; an unresolved capture receives no success cue, and an
- * attempt never repeats its error cue. Late readings of the same capture are attached as
- * alternatives, leaving the owner's reviewed values untouched. The session releases the camera and
- * the Recognition session when it stops, and the page disposes it when the view closes, so
- * sign-out leaves no private capture state or outstanding work behind.
+ * holding one card with a usable identity is staged as a pending entry: geometry admits the frame
+ * independently of identity, and a frame whose geometry is not established is never affirmative
+ * evidence. Ordinary capture stays hands-free after the initial activation — the next card is read
+ * from the next settled frame without another control — and the provider's accepted-identity
+ * sequence suppresses a repeated observation, so one card never becomes two entries. A success cue
+ * means a candidate was accepted into review, never that the card is owned; an unresolved capture
+ * receives no success cue, and an attempt never repeats its error cue. Late readings of the same
+ * capture are attached as alternatives, leaving the owner's reviewed values untouched, and a
+ * comparison that finds no usable identity never retracts an accepted capture. An observation
+ * whose staging response was lost stays retained and is recovered by replaying it identically, so
+ * the provider returns its recorded decision instead of the same capture staging changed content.
+ * The session releases the camera and the Recognition session when it stops, and the page disposes
+ * it when the view closes, so sign-out leaves no private capture state or outstanding work behind.
  */
 
 import {
   RECOGNITION_LIMITS,
   type Recognition,
+  type RecognitionCardPresence,
   type RecognitionEngineName,
   type RecognitionReading,
 } from '../../recognition/index.js';
@@ -46,6 +51,14 @@ import {
 
 /** Longest candidate name the capture status presents, so one engine reading stays bounded. */
 const uiCaptureNameLength = 120;
+
+/** Status text of an attempt whose frame reported no usable identity to stage. */
+const captureUnresolved =
+  'The card could not be identified. Hold it still to retry; no card was counted.';
+
+/** Status text of a reading whose frame never established the geometry that admits a capture. */
+const captureGeometryMissing =
+  'The frame was not admitted as one card. Hold one card still to retry; no card was counted.';
 
 /** Evidence labels of one stored alternative; the review presents them beside the printing. */
 const captureEvidenceLabels = {
@@ -104,6 +117,11 @@ interface UiCaptureAttempt {
   staged: boolean;
   /** Entry the observation was admitted as, or null while none is reviewable. */
   entryId: string | null;
+  /**
+   * The observation the attempt submitted, kept while the provider has not reported its decision:
+   * the identical replay of this observation is what recovers a lost staging outcome.
+   */
+  staging: StageCaptureInput | null;
 }
 
 /** The recognition alternatives of one reading as the review stores them. */
@@ -420,6 +438,7 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       id: ((attempts - 1) % (RECOGNITION_LIMITS.maxAttempt - 1)) + 1,
       staged: false,
       entryId: null,
+      staging: null,
     };
     current = record;
     const frame = readFrame();
@@ -475,9 +494,12 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
 
   /**
    * Applies one reading of an attempt. Geometry decides admission independently of identity: only
-   * a frame the runtime reports as holding one card is staged, and a reading without a usable
-   * identity stays unresolved without creating an entry. The first reading that names an identity
-   * stages the observation; later readings of the same capture only add alternatives.
+   * a reading the runtime reports as holding one card is staged, a frame whose geometry is not
+   * established is never affirmative evidence, and a reading without a usable identity stays
+   * unresolved without creating an entry. The first reading that names an identity stages its
+   * observation; later readings of the same capture only add alternatives, so an accepted capture
+   * is never retracted by a comparison that finds no usable identity
+   * (docs/user-interface.md#capture-and-review).
    */
   async function handleReading(
     record: UiCaptureAttempt,
@@ -487,50 +509,74 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       return;
     }
     const presence = reading.evidence.cardPresence;
-    if (presence !== null && presence !== 'single') {
-      settle(
-        record,
-        'guidance',
-        presence === 'none'
-          ? 'Place one card inside the frame.'
-          : 'Wait until only one card is visible.',
-      );
+    if (presence !== 'single') {
+      if (record.entryId !== null) {
+        // The review already holds this capture's entry, so the later comparison explains its own
+        // uncertainty instead of denying the acceptance.
+        say(lateGeometryMessage(presence), null);
+        return;
+      }
+      if (presence === null) {
+        // The frame's geometry was never established, so the reading admits nothing.
+        settle(record, 'unresolved', captureGeometryMissing);
+        return;
+      }
+      settle(record, 'guidance', captureGeometryGuidance(presence));
       return;
     }
     const observation = uiCaptureObservation(record.sessionId, record.captureId, reading);
     if (observation === null) {
-      settle(
-        record,
-        'unresolved',
-        'The card could not be identified. Hold it still to retry; no card was counted.',
-      );
+      if (record.entryId !== null) {
+        say(lateMessage(reading), null);
+        return;
+      }
+      settle(record, 'unresolved', captureUnresolved);
       return;
     }
     if (!record.staged) {
-      const commit = await stageCaptureObservation(access, observation, controller?.signal);
+      // The observation the attempt submits is retained until the provider reports its decision, so
+      // a lost outcome is recovered through an identical replay instead of the same capture
+      // identity staging changed content
+      // (docs/application.md#construction-and-request-boundary).
+      const submitted = record.staging ?? observation;
+      const commit = await stageCaptureObservation(access, submitted, controller?.signal);
       if (closed || !running || current !== record) {
         return;
       }
       if (commit.status !== 'committed' || commit.record === null) {
-        settle(record, 'unavailable', commit.message ?? 'The capture was not added to review.');
         if (commit.status === 'unknown') {
-          // The staging may have committed; the review is refreshed instead of inferring an entry.
+          // The staging may have committed; its observation stays retained so the next reading
+          // recovers the recorded decision, and the review is refreshed instead of inferring an
+          // entry.
+          record.staging = submitted;
           options.reviewChanged({ kind: 'unknown' });
         }
+        settle(record, 'unavailable', commit.message ?? 'The capture was not added to review.');
         return;
       }
+      record.staging = null;
       record.entryId = commit.record.entry?.entryId ?? null;
       // An explicitly unresolved decision is not recorded by the provider, so the same capture may
       // resolve through a later reading instead of being treated as already staged
       // (docs/user-cards.md#import-and-capture-state).
       record.staged = commit.record.outcome !== 'unresolved';
-      settle(record, captureOutcome(commit.record), captureMessage(reading, commit.record));
+      settle(
+        record,
+        captureOutcome(commit.record),
+        submitted === observation
+          ? captureMessage(reading, commit.record)
+          : recoveredMessage(commit.record),
+      );
       options.reviewChanged({
         kind: 'staged',
         session: commit.record.session,
         entryId: record.entryId,
       });
-      return;
+      if (submitted === observation) {
+        return;
+      }
+      // The reading that recovered the decision still carries alternatives beside the observation
+      // the provider admitted, so they are attached instead of being lost with the replay.
     }
     if (record.entryId === null) {
       return;
@@ -586,7 +632,43 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
         'Check printing, finish, condition and quantity before confirming.'
       );
     }
-    return 'The card could not be identified. Hold it still to retry; no card was counted.';
+    return captureUnresolved;
+  }
+
+  /**
+   * Status text of an observation whose recorded decision an identical replay returned: the
+   * provider had already decided it, so the message names that decision instead of the newer
+   * reading that triggered the recovery.
+   */
+  function recoveredMessage(result: CaptureStageResult): string {
+    if (result.outcome === 'suppressed') {
+      return 'The same card is already in review. Show a different card or set its quantity in review.';
+    }
+    if (result.outcome === 'admitted') {
+      return 'The earlier capture was already accepted into review.';
+    }
+    return captureUnresolved;
+  }
+
+  /** Guidance for a reported geometry that does not hold exactly one card. */
+  function captureGeometryGuidance(presence: Exclude<RecognitionCardPresence, 'single'>): string {
+    return presence === 'none'
+      ? 'Place one card inside the frame.'
+      : 'Wait until only one card is visible.';
+  }
+
+  /**
+   * Status text of one later comparison whose frame geometry does not establish one card; it never
+   * retracts the capture the review already holds.
+   */
+  function lateGeometryMessage(presence: RecognitionCardPresence | null): string {
+    const observed =
+      presence === null
+        ? 'A later comparison could not establish one card'
+        : presence === 'none'
+          ? 'A later comparison no longer sees a card'
+          : 'A later comparison no longer sees exactly one card';
+    return `${observed}. Check the accepted card before confirming.`;
   }
 
   /** The cue one staged observation earns: only an admitted candidate is a success. */
@@ -669,17 +751,23 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
     return signature;
   }
 
-  /** Reads the current frame, bounded to the image the Recognition contract accepts. */
+  /**
+   * Reads the current frame, bounded to the image the Recognition contract accepts. The width is
+   * scaled first and the height follows from the provider's limit, so both dimensions stay whole
+   * numbers whose product can never exceed it, whatever the camera's aspect ratio
+   * (docs/recognition.md#interface).
+   */
   function readFrame(): HTMLCanvasElement | null {
     const width = preview.videoWidth;
     const height = preview.videoHeight;
     if (width < 1 || height < 1) {
       return null;
     }
-    const scale = Math.min(1, Math.sqrt(RECOGNITION_LIMITS.maxImagePixels / (width * height)));
+    const bound = RECOGNITION_LIMITS.maxImagePixels;
+    const scale = Math.min(1, Math.sqrt(bound / (width * height)));
     const frame = document.createElement('canvas');
-    frame.width = Math.max(1, Math.round(width * scale));
-    frame.height = Math.max(1, Math.round(height * scale));
+    frame.width = Math.max(1, Math.floor(width * scale));
+    frame.height = Math.max(1, Math.min(height, Math.floor(bound / frame.width)));
     const context = frame.getContext('2d');
     if (context === null) {
       return null;

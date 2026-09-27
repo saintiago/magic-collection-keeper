@@ -209,7 +209,9 @@ export async function stageImportLines(
  * observation is suppressed, an unresolved reading stages nothing and the same capture identity
  * may resolve later, and only an admitted observation adds a pending entry. Staging never changes
  * ownership, so a committed outcome is an entry in review, and a repeated call with the same
- * capture identity replays its recorded decision instead of adding the card twice
+ * capture identity replays its recorded decision instead of adding the card twice. An outcome
+ * whose response was lost stays unknown, so the capture view retains the observation it submitted
+ * and recovers the recorded decision by replaying exactly that observation
  * (docs/user-cards.md#import-and-capture-state).
  */
 export async function stageCaptureObservation(

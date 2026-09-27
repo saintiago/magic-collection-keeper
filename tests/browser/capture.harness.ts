@@ -113,8 +113,13 @@ export interface UiCaptureControl {
   attachments(): readonly UiCaptureRequest<AttachImportCandidatesInput>[];
   /** Sessions the page prepared through the Recognition contract, with their engine names. */
   preparations(): readonly { readonly sessionId: string; readonly engines: readonly string[] }[];
-  /** Attempts the scripted pipeline ran, in order. */
-  recognitions(): readonly { readonly captureId: string; readonly attempt: number }[];
+  /** Attempts the scripted pipeline ran, in order, with the frame each received. */
+  recognitions(): readonly {
+    readonly captureId: string;
+    readonly attempt: number;
+    readonly width: number;
+    readonly height: number;
+  }[];
   /** References every catalog resolve asked about, in order. */
   catalogRequests(): readonly (readonly CatalogReference[])[];
   /** The synthetic camera the device grants and the resources it still holds. */
@@ -126,6 +131,8 @@ export interface UiCaptureControl {
   };
   /** Presents one synthetic scene to the running camera. */
   show(scene: keyof UiCaptureScenes): void;
+  /** Presents the camera at one frame size, so the capture view bounds a large video frame. */
+  cameraSize(width: number, height: number): void;
   /** Refuses every following camera request with the supplied permission failure. */
   denyCamera(message: string): void;
   /** Queues one reading the next recognition attempt reports. */
@@ -185,7 +192,7 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
   const captureRequests: UiCaptureRequest<StageCaptureInput>[] = [];
   const attachmentRequests: UiCaptureRequest<AttachImportCandidatesInput>[] = [];
   const preparations: { sessionId: string; engines: readonly string[] }[] = [];
-  const recognitions: { captureId: string; attempt: number }[] = [];
+  const recognitions: { captureId: string; attempt: number; width: number; height: number }[] = [];
   const catalogRequests: CatalogReference[][] = [];
   const scripts: UiCaptureReading[] = [];
   const laterCompletions: (() => void)[] = [];
@@ -198,6 +205,8 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
   let canvas: HTMLCanvasElement | null = null;
   let stream: MediaStream | null = null;
   let painting: number | null = null;
+  let videoWidth = 320;
+  let videoHeight = 240;
 
   const scenes: UiCaptureScenes = {
     bolt: { background: '#26402a', card: '#f4e7c5' },
@@ -407,6 +416,15 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
       scene = next;
       paint();
     },
+    cameraSize: (width, height) => {
+      videoWidth = width;
+      videoHeight = height;
+      if (canvas !== null) {
+        canvas.width = width;
+        canvas.height = height;
+        paint();
+      }
+    },
     denyCamera: (message) => {
       cameraDenial = message;
     },
@@ -468,7 +486,12 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
         return Promise.resolve({ versions: { engine: 'scripted-1' } });
       },
       recognize(_frame, attempt) {
-        recognitions.push({ captureId: attempt.captureId, attempt: attempt.attempt });
+        recognitions.push({
+          captureId: attempt.captureId,
+          attempt: attempt.attempt,
+          width: _frame.width,
+          height: _frame.height,
+        });
         const script = scripts.shift() ?? { status: 'unknown' as const };
         const early = outcome(script);
         if (script.later === undefined) {
@@ -516,8 +539,8 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
           return Promise.reject(new Error(cameraDenial));
         }
         canvas ??= document.createElement('canvas');
-        canvas.width = 320;
-        canvas.height = 240;
+        canvas.width = videoWidth;
+        canvas.height = videoHeight;
         paint();
         stream = canvas.captureStream(15);
         cameraClosed = false;

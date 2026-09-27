@@ -261,6 +261,39 @@ describe('recognition candidate mapping', () => {
     },
   );
 
+  it('does not turn a possible outcome without established geometry into an identity', async () => {
+    // A pipeline that reports candidates but no card count has not established that the frame
+    // holds exactly one card, so the identity is not affirmative evidence.
+    const harness = harnessFor(
+      outcome({
+        status: 'possible',
+        candidates: [
+          { cardId: bolt.cardId, printingId: boltM11.printingId, name: 'Bolt', score: 0.9 },
+        ],
+        evidence: {
+          printingId: boltM11.printingId,
+          titleLanguage: null,
+          titleCorroborated: false,
+          cardPresence: null,
+        },
+      }),
+    );
+    await harness.recognition.prepare(prepareRequest);
+    const attempt = harness.recognition.recognize({
+      ...prepareRequest,
+      captureId: 'capture-1',
+      attempt: 1,
+      frame: 'frame',
+    });
+    const reading = await attempt.initial;
+
+    expect(reading.status).toBe('unknown');
+    expect(reading.candidates).toEqual([]);
+    expect(reading.suggestion).toBeNull();
+    expect(reading.evidence.cardPresence).toBeNull();
+    expect(harness.catalogCalls).toHaveLength(0);
+  });
+
   it('retains disagreement between candidate identities', async () => {
     const reading = await readOutcome(
       outcome({

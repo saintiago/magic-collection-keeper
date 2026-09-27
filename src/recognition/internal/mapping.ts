@@ -37,9 +37,9 @@ export interface RecognitionMappingRequest {
  * The raw outcome stays behind this boundary: candidate identities are validated and enriched
  * against the published Catalog, printing evidence is retained as the pipeline reported it, and a
  * representative suggestion never becomes evidence of the observed edition. No-card, multiple-card
- * and ambiguous geometry, a possible outcome without a usable candidate and a candidate missing
- * from the published Catalog all yield the same honest `unknown` reading instead of a successful
- * identity (docs/recognition.md#execution).
+ * and ambiguous geometry, a reading without established single-card geometry, a possible outcome
+ * without a usable candidate and a candidate missing from the published Catalog all yield the same
+ * honest `unknown` reading instead of a successful identity (docs/recognition.md#execution).
  */
 export async function mapEngineOutcome(
   outcome: unknown,
@@ -61,7 +61,7 @@ export async function mapEngineOutcome(
   const status = value.status;
   const evidence = readEvidence(value.evidence);
 
-  // No usable identity when the engine is uncertain, when geometry says the frame does not hold
+  // No usable identity when the engine is uncertain, when the frame's geometry does not establish
   // exactly one card, or when no reported candidate survives catalog validation.
   const reported =
     status === 'possible' && geometryAdmitsIdentity(evidence)
@@ -87,8 +87,14 @@ export async function mapEngineOutcome(
   };
 }
 
+/**
+ * Whether the frame's geometry admits a successful identity. Only a frame the pipeline reported as
+ * holding exactly one card may name one: a reading without geometry has not established that the
+ * frame holds a single card, so it is never affirmative evidence
+ * (docs/recognition.md#execution, docs/user-interface.md#capture-and-review).
+ */
 function geometryAdmitsIdentity(evidence: RecognitionEvidence): boolean {
-  return evidence.cardPresence === null || evidence.cardPresence === 'single';
+  return evidence.cardPresence === 'single';
 }
 
 function readEvidence(value: unknown): RecognitionEvidence {

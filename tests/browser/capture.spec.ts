@@ -7,8 +7,11 @@
  * Recognition lifecycle over a scripted engine pipeline, and drive them in Chromium: a granted
  * camera captures hands-free, a refused one reports the failure without starting recognition, an
  * unresolved reading receives no success cue while a later comparison may still resolve it, a
- * repeated card stays one entry, late alternatives are attached to the admitted entry and external
- * names stay text, and leaving or stopping the view releases the camera and its work.
+ * reading without established single-card geometry admits nothing, large landscape and portrait
+ * frames stay inside the Recognition image bound, a repeated card stays one entry, an accepted
+ * capture survives a later unresolved comparison, a lost staging response is recovered by an
+ * identical replay, late alternatives are attached to the admitted entry and external names stay
+ * text, and leaving or stopping the view releases the camera and its work.
  */
 
 import path from 'node:path';
@@ -17,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 
+import { RECOGNITION_LIMITS } from '../../src/recognition/index.js';
 import type { ImportEntry, ImportSession } from '../../src/usercards/index.js';
 import type {
   UiCaptureControl,
@@ -487,6 +491,223 @@ test('signing out ends the capture session and its outstanding readings', async 
   expect(signedOut.released).toBe(2);
   await control(page, 'completeLater');
   expect(await control(page, 'captures')).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('a reading without established single-card geometry admits nothing', async ({ page }) => {
+  const errors = await openCapture(page);
+  await settleSessions(page, 0, []);
+  // The engine named a card but reported no card count, so the frame was never established as
+  // holding one card and its candidate is not affirmative evidence.
+  await control(page, 'scriptReading', {
+    candidates: [hostName('bolt')],
+    printingId: 'printing-bolt',
+    cardPresence: null,
+  });
+  // The next frame the runtime reports as one card is admitted as usual, so a browser runtime
+  // whose engines report no geometry themselves still captures.
+  await control(page, 'scriptReading', {
+    candidates: [hostName('bolt')],
+    printingId: 'printing-bolt',
+    cardPresence: 'single',
+  });
+
+  await page.click('#import-camera-start');
+  await expect(page.locator('#import-camera-status')).toHaveText(
+    'The frame was not admitted as one card. Hold one card still to retry; no card was counted.',
+  );
+  await expect(page.locator('#import-camera-status')).toHaveAttribute(
+    'data-ui-capture-cue',
+    'error',
+  );
+  expect(await control(page, 'captures')).toEqual([]);
+
+  const staged = await requested<Record<string, unknown>>(page, 'captures');
+  expect(staged.arguments).toMatchObject({ printingId: 'printing-bolt' });
+  await control(page, 'settleCapture', staged.id, {
+    outcome: 'admitted',
+    replayed: false,
+    session: captureSession(),
+    entry: captureEntry(),
+  });
+  await expect(page.locator('#import-camera-status')).toHaveAttribute(
+    'data-ui-capture-cue',
+    'accepted',
+  );
+  expect(errors).toEqual([]);
+});
+
+for (const size of [
+  { width: 3840, height: 2160 },
+  { width: 2160, height: 3840 },
+  // A square just above the provider's pixel bound: the bounded frame may only round down.
+  { width: 2001, height: 2001 },
+]) {
+  test(`a ${size.width}×${size.height} camera frame stays inside the Recognition image bound`, async ({
+    page,
+  }) => {
+    const errors = await openCapture(page);
+    await settleSessions(page, 0, []);
+    await control(page, 'cameraSize', size.width, size.height);
+    await control(page, 'scriptReading', {
+      candidates: [hostName('bolt')],
+      printingId: 'printing-bolt',
+    });
+
+    await page.click('#import-camera-start');
+    // The attempt reached the engine, so the bounded frame passed the provider's image validation
+    // instead of being rejected as too large.
+    await expect
+      .poll(async () => (await control<readonly unknown[]>(page, 'recognitions')).length)
+      .toBeGreaterThan(0);
+    const attempt = (
+      await control<readonly { readonly width: number; readonly height: number }[]>(
+        page,
+        'recognitions',
+      )
+    )[0];
+    expect(attempt?.width).toBeGreaterThanOrEqual(1);
+    expect(attempt?.height).toBeGreaterThanOrEqual(1);
+    expect((attempt?.width ?? 0) * (attempt?.height ?? 0)).toBeLessThanOrEqual(
+      RECOGNITION_LIMITS.maxImagePixels,
+    );
+    const staged = await requested<Record<string, unknown>>(page, 'captures');
+    await control(page, 'settleCapture', staged.id, {
+      outcome: 'admitted',
+      replayed: false,
+      session: captureSession(),
+      entry: captureEntry(),
+    });
+    await expect(page.locator('#import-camera-status')).toHaveAttribute(
+      'data-ui-capture-cue',
+      'accepted',
+    );
+    expect(errors).toEqual([]);
+  });
+}
+
+test('an accepted capture survives a later unresolved comparison', async ({ page }) => {
+  const errors = await openCapture(page);
+  await settleSessions(page, 0, []);
+  await control(page, 'scriptReading', {
+    candidates: [hostName('bolt')],
+    printingId: 'printing-bolt',
+    provisional: true,
+    later: { status: 'unknown', cardPresence: 'single' },
+  });
+
+  await page.click('#import-camera-start');
+  const staged = await requested<Record<string, unknown>>(page, 'captures');
+  await control(page, 'settleCapture', staged.id, {
+    outcome: 'admitted',
+    replayed: false,
+    session: captureSession(),
+    entry: captureEntry(),
+  });
+  await expect(page.locator('#import-camera-status')).toHaveAttribute(
+    'data-ui-capture-cue',
+    'accepted',
+  );
+  await settleSessions(page, 1, [captureSession()]);
+  await settleEntries(page, 0, { session: captureSession(), entries: [captureEntry()] });
+  await expect(page.locator('#import-pending [data-ui-entry="pending:capture-1"]')).toHaveCount(1);
+
+  // The comparison of the same capture finds no usable identity: the pending entry stays accepted,
+  // no error cue replaces the success cue, and the status never claims nothing was counted.
+  await control(page, 'completeLater');
+  await expect(page.locator('#import-camera-status')).toHaveText(
+    'A later comparison found no usable identity. Check the accepted card before confirming.',
+  );
+  await expect(page.locator('#import-camera-status')).toHaveAttribute(
+    'data-ui-capture-cue',
+    'accepted',
+  );
+  expect(await control(page, 'attachments')).toEqual([]);
+  await expect(page.locator('#import-pending [data-ui-entry="pending:capture-1"]')).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
+test('a lost staging response is recovered by an identical replay before late alternatives', async ({
+  page,
+}) => {
+  const errors = await openCapture(page);
+  await settleSessions(page, 0, []);
+  await control(page, 'scriptReading', {
+    candidates: [hostName('bolt')],
+    printingId: 'printing-bolt',
+    provisional: true,
+    later: { candidates: [hostName('bolt'), hostName('ring')], printingId: 'printing-bolt' },
+  });
+
+  await page.click('#import-camera-start');
+  const first = await requested<Record<string, unknown>>(page, 'captures', 0);
+  // The staging response is lost: the observation may have been admitted, so its content stays
+  // recoverable through the identity of the capture it belongs to.
+  await control(page, 'fail', first.id, {
+    code: 'unavailable',
+    message: 'The service is unavailable.',
+  });
+  await expect(page.locator('#import-camera-status')).toHaveAttribute(
+    'data-ui-capture-cue',
+    'error',
+  );
+  await settleSessions(page, 1, []);
+
+  // The later comparison arrives: the page replays exactly the observation it submitted and the
+  // provider answers with its recorded decision instead of the same capture staging new content.
+  await control(page, 'completeLater');
+  const replay = await requested<Record<string, unknown>>(page, 'captures', 1);
+  expect(replay.arguments).toEqual(first.arguments);
+  await control(page, 'settleCapture', replay.id, {
+    outcome: 'admitted',
+    replayed: true,
+    session: captureSession(),
+    entry: captureEntry(),
+  });
+
+  // The recovered entry receives the alternatives of the reading that triggered the replay.
+  const attached = await requested<Record<string, unknown>>(page, 'attachments', 0);
+  expect(attached.arguments).toEqual({
+    entryId: 'capture-1',
+    candidates: [
+      { printingId: 'printing-bolt', provider: 'recognition', evidence: 'title-evidence' },
+      { printingId: 'printing-ring', provider: 'recognition', evidence: 'engine-ranking' },
+    ],
+  });
+  await control(page, 'settleAttach', attached.id, {
+    session: captureSession({ revision: 3 }),
+    entry: captureEntry({
+      revision: 4,
+      candidates: [
+        { printingId: 'printing-bolt', provider: 'recognition', evidence: 'title-evidence' },
+        { printingId: 'printing-ring', provider: 'recognition', evidence: 'engine-ranking' },
+      ],
+    }),
+  });
+  await expect(page.locator('#import-camera-status')).toHaveAttribute(
+    'data-ui-capture-cue',
+    'accepted',
+  );
+  await expect(page.locator('#import-camera-status')).toHaveText(
+    /A later comparison added Lightning Bolt, Sol Ring <img src=x onerror=alert\(1\)> as alternatives\./,
+  );
+
+  // The recovered entry is presented in the same pending review as any other capture.
+  await settleSessions(page, 2, [captureSession()]);
+  await settleEntries(page, 0, {
+    session: captureSession({ revision: 3 }),
+    entries: [
+      captureEntry({
+        revision: 4,
+        candidates: [
+          { printingId: 'printing-bolt', provider: 'recognition', evidence: 'title-evidence' },
+          { printingId: 'printing-ring', provider: 'recognition', evidence: 'engine-ranking' },
+        ],
+      }),
+    ],
+  });
+  const row = page.locator('#import-pending [data-ui-entry="pending:capture-1"]');
+  await expect(row.locator('[data-ui-import-printing]')).toHaveText('Printing: TST 149 · en');
   expect(errors).toEqual([]);
 });
 

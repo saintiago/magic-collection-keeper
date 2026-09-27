@@ -17,9 +17,10 @@ owns the behavior; this file records how the retained baseline is packaged.
   regressions.
 - `browser/` is the preserved browser ONNX recognition: dewarping geometry, preprocessing and
   lighting variants, catalog search, verified asset loading, camera admission, candidate
-  combination, the hybrid/independent paths and the inference worker. It also carries the camera
-  capture and overlay mapping modules the preserved admission regressions import; no pages, views
-  or navigation are restored. Its `*.d.ts` files only type the modules the adapter imports; the
+  combination, the hybrid/independent paths, the inference worker and the card geometry check with
+  its worker. It also carries the camera capture and overlay mapping modules the preserved
+  admission regressions import; no pages, views or navigation are restored. Its `*.d.ts` files
+  only type the modules the adapter imports; the
   engine modules themselves stay byte-identical to the pinned revision.
 - `baseline.json` pins reference revision `128c903ff109868acc854f0ff239c8c0f925d803` and records the
   digest of every retained file together with every relocated or harness-adapted file and its
@@ -57,6 +58,11 @@ it builds the browser ONNX port, the remote visual/OCR port, the hybrid early/la
 the independent identity path exactly as the pinned revision composed them, and translates their
 readings — candidate `id`/`oracle_id`, whole-title and geometry evidence, versions and timings, and
 the early reading beside its later comparison — into the engine outcome the lifecycle maps.
+It composes the preserved browser card geometry check beside them, so every attempted frame's
+single-card geometry is established before the engines read it and a runtime whose engines report no
+card count still presents that geometry with its reading. A check that cannot report a card state
+leaves the frame without geometry, which admits no candidate, while an engine that reports the
+frame's geometry itself keeps working.
 Application still supplies the authenticated request contract the engines call and chooses whether
 the session runs with the remote comparison and the independent path; transport assembly and
 delivery packaging stay with their own tasks. The compiled pipeline imports those preserved

@@ -22,6 +22,14 @@
       "source": "public/camera.js",
       "sha256": "8d135e9513623e4bd6dab68875b72f7ba4fa40a1d1aa59e9b377ef77ffb4d34d"
     },
+    "src/recognition/browser/card-presence-worker.js": {
+      "source": "public/card-presence-worker.js",
+      "sha256": "8747caa3759cfbd3b62eeecb7b21ea797134d83afb7a4e034aa66aa3fa454c1c"
+    },
+    "src/recognition/browser/card-presence.js": {
+      "source": "public/card-presence.js",
+      "sha256": "c082b60fca7da7b87bd8967c013de9b408f2ca2567934ae4574701cbb4d8d1a9"
+    },
     "src/recognition/browser/card-regions.js": {
       "source": "public/card-regions.js",
       "sha256": "3901a774a7b128451eef2256c9fbde3bbbf3d2834248a40dd5460718d73fda73"
