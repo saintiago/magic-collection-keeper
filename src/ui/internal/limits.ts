@@ -7,8 +7,14 @@
  * query and recent-activity state (docs/user-interface.md#state-ownership-and-restoration).
  */
 export const UI_LIMITS = {
-  /** Characters one route segment may carry before it is rejected. */
-  routeSegment: 128,
+  /**
+   * Characters one route segment may carry before it is rejected. The bound covers the longest
+   * identity the components a route names publish: Catalog card/printing references, UserCards
+   * copy and tag references and Search references all accept at most 200 characters
+   * (docs/catalog.md#identities-and-information, docs/user-cards.md#interface), so every result a
+   * provider can publish renders and opens instead of being rejected as a link.
+   */
+  routeSegment: 200,
   /** History entries whose opaque retained state the shell keeps for restoration. */
   viewStates: 20,
   /** Characters one entry key or target identity may carry before the source answer is rejected. */

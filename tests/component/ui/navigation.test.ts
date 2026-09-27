@@ -10,6 +10,9 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { CATALOG_LIMITS } from '../../../src/catalog/index.js';
+import { SEARCH_LIMITS } from '../../../src/search/index.js';
+import { USERCARDS_LIMITS } from '../../../src/usercards/index.js';
 import {
   createViewStateStore,
   createUserInterface,
@@ -79,6 +82,35 @@ describe('dedicated page routes', () => {
     });
     expect(() => uiHref({ page: 'tag', tagId: overLong })).toThrow(TypeError);
     expect(() => uiHref({ page: 'tag', tagId: '' })).toThrow(TypeError);
+  });
+
+  it('carries the longest identity the components a route names publish', () => {
+    expect(UI_LIMITS.routeSegment).toBeGreaterThanOrEqual(
+      Math.max(
+        CATALOG_LIMITS.maxIdentifierLength,
+        SEARCH_LIMITS.maxIdentifierLength,
+        USERCARDS_LIMITS.maxIdentifierLength,
+      ),
+    );
+
+    // Every identity a provider can publish is linked and read back, card and printing alike.
+    const longestCardId = 'c'.repeat(CATALOG_LIMITS.maxIdentifierLength);
+    const longestPrintingId = 'p'.repeat(CATALOG_LIMITS.maxIdentifierLength);
+    expect(
+      readUiView(
+        uiHref({
+          page: 'card',
+          cardId: longestCardId,
+          printingId: longestPrintingId,
+          copyId: null,
+        }),
+      ),
+    ).toEqual({
+      page: 'card',
+      cardId: longestCardId,
+      printingId: longestPrintingId,
+      copyId: null,
+    });
   });
 
   it('encodes an identity that contains route characters', () => {

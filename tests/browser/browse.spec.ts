@@ -10,7 +10,8 @@
  * result, printing images load and retry separately, further results carry the continuation of
  * their query, Back restores the query, the controls, the selection and the result window, recent
  * activity belongs to the account that opened the card, and a closed page withdraws its search and
- * presents no late result.
+ * presents no late result. Results whose provider identities cross the previous route bound and
+ * reach the provider maximum render, load and open.
  */
 
 import path from 'node:path';
@@ -322,6 +323,83 @@ test('Home opens the catalog and the catalog presents its entries', async ({ pag
     searchPage([cardEntry('card-bolt', { name: 'Lightning Bolt' })]),
   );
   await expect(page.getByLabel('Select Lightning Bolt')).not.toBeChecked();
+  expect(errors).toEqual([]);
+});
+
+test('card results at the provider identity maximum render, open and return on Home', async ({
+  page,
+}) => {
+  const errors = await openBrowse(page, '#/catalog');
+  // Identities crossing the previous 128-character route bound and reaching the provider maximum.
+  const atOldBound = 'c'.repeat(128);
+  const pastOldBound = 'c'.repeat(129);
+  const longest = 'l'.repeat(200);
+
+  const request = await searchRequest(page);
+  await settleSearch(
+    page,
+    request.id,
+    searchPage([
+      cardEntry(atOldBound, { name: 'At the old bound' }),
+      cardEntry(pastOldBound, { name: 'Past the old bound' }),
+      cardEntry(longest, { name: 'At the provider maximum' }),
+    ]),
+  );
+
+  // Every returned entry renders; none of them hides the others or the page.
+  await expect(page.locator('#catalog-results [data-ui-entry]')).toHaveCount(3);
+  await expect(page.locator(`[data-ui-entry="card:${pastOldBound}"]`)).toContainText(
+    'Past the old bound',
+  );
+  const row = page.locator(`[data-ui-entry="card:${longest}"]`);
+  await expect(row).toContainText('At the provider maximum');
+  await expect(row.locator('[data-ui-open]')).toHaveAttribute('href', `#/cards/${longest}`);
+
+  await row.locator('[data-ui-open]').click();
+  await expect(page.locator('#card-level')).toHaveText(`${longest}/-/-`);
+
+  // Home presents the opened card through the same entry renderer, so its link stays usable.
+  await page.getByRole('link', { name: 'Home', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Recent cards' })).toBeVisible();
+  await expect(page.locator(`[data-ui-entry="card:${longest}"] [data-ui-open]`)).toHaveAttribute(
+    'href',
+    `#/cards/${longest}`,
+  );
+  expect(errors).toEqual([]);
+});
+
+test('printing results at the provider identity maximum render, load and open', async ({
+  page,
+}) => {
+  const errors = await openBrowse(page, '#/catalog?level=printing');
+  const cardId = 'c'.repeat(200);
+  const printingId = 'p'.repeat(200);
+
+  const request = await searchRequest(page);
+  await settleSearch(
+    page,
+    request.id,
+    searchPage([printingEntry(printingId, cardId, 'Lightning Bolt')]),
+  );
+
+  const row = page.locator(`[data-ui-entry="printing:${printingId}"]`);
+  await expect(row).toContainText('Lightning Bolt');
+  await expect(row.locator('[data-ui-open]')).toHaveAttribute(
+    'href',
+    `#/cards/${cardId}/${printingId}`,
+  );
+
+  // The images fragment reads the longest printing identity through Catalog and presents it.
+  const images = await catalogRequest(page);
+  expect(images.references).toEqual([{ kind: 'printing', printingId }]);
+  await settleCatalog(page, images.id, [printing(printingId, cardId)]);
+  await expect(page.locator('[data-ui-fragment="images"] img')).toHaveAttribute(
+    'src',
+    `https://cards.test/${printingId}.svg`,
+  );
+
+  await row.locator('[data-ui-open]').click();
+  await expect(page.locator('#card-level')).toHaveText(`${cardId}/${printingId}/-`);
   expect(errors).toEqual([]);
 });
 
