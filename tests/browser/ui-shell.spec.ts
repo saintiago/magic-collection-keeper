@@ -5,9 +5,10 @@
  * The cases bundle the shell with the page, identity and device substitutes of
  * ui-shell.harness.ts and drive them in Chromium: deep links and reload, nested Back with
  * restored query, selection, focus and scroll, browser-driven traversals that capture the entry
- * they leave, token lifetime across reload, a late result, dialog or device release of a closed
- * page, delayed, rejected and completed sign-out, a redirect that happens while a page mounts, and
- * a brief dialog.
+ * they leave, interruption of a restoration a page still presents asynchronously, token lifetime
+ * across reload, a late result, dialog or device release of a closed page, delayed, rejected and
+ * completed sign-out, a redirect that happens while a page mounts or presents the restored entry,
+ * and a brief dialog.
  */
 
 import path from 'node:path';
@@ -35,6 +36,8 @@ function shellBundle(): Promise<string> {
           '  signedOut: globalThis.keeperUiStartSignedOut === true,',
           '  deferredSignOut: globalThis.keeperUiDeferredSignOut === true,',
           '  deviceRelease: globalThis.keeperUiDeviceRelease,',
+          '  asyncResults: globalThis.keeperUiAsyncResults === true,',
+          '  presentedRedirect: globalThis.keeperUiPresentedRedirect,',
           '});',
         ].join('\n'),
         resolveDir: repoRoot,
@@ -70,6 +73,8 @@ async function openShell(page: Page, hash: string, start: UiShellStart = {}): Pr
     globals.keeperUiStartSignedOut = flags.signedOut === true;
     globals.keeperUiDeferredSignOut = flags.deferredSignOut === true;
     globals.keeperUiDeviceRelease = flags.deviceRelease;
+    globals.keeperUiAsyncResults = flags.asyncResults === true;
+    globals.keeperUiPresentedRedirect = flags.presentedRedirect;
   }, start);
   await loadShell(page);
   return errors;
@@ -92,6 +97,36 @@ async function accountId(page: Page): Promise<string | null> {
       globalThis as unknown as { keeperUiControl: { accountId(): string | null } }
     ).keeperUiControl.accountId(),
   );
+}
+
+/** Result requests the asynchronous page holds, waiting for the journey to answer them. */
+async function asyncPending(page: Page): Promise<number> {
+  return page.evaluate(() =>
+    (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl.asyncPending(),
+  );
+}
+
+/** Answers every held result request, as the asynchronous source's responses arriving would. */
+async function answerAsyncResults(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.answerAsyncResults();
+  });
+}
+
+/** Answers held result requests until the asynchronous page presented `count` results. */
+async function completeAsyncResults(page: Page, count: number): Promise<void> {
+  const entry = page.locator(`#async-result-${count}`);
+  while ((await entry.count()) === 0) {
+    await page.waitForFunction(
+      () =>
+        (
+          globalThis as unknown as { keeperUiControl: UiShellControl }
+        ).keeperUiControl.asyncPending() > 0,
+    );
+    await answerAsyncResults(page);
+  }
+  await expect(entry).toBeVisible();
 }
 
 /** Reports a verified account change inside the installed shell. */
@@ -279,6 +314,137 @@ test('edits between repeated Back and Forward traversals are kept', async ({ pag
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(800);
   expect(await notes(page)).toContain('home-restored');
 });
+
+test('an interrupted restoration keeps the saved window and focused result', async ({ page }) => {
+  const errors = await openShell(page, '#/', { asyncResults: true });
+  await completeAsyncResults(page, 100);
+
+  // Leave the view from its last result, so the entry keeps the whole window, the focused result
+  // link and the scroll offset.
+  await page.locator('#async-result-100').focus();
+  const savedScroll = await page.evaluate(() => window.scrollY);
+  await page.locator('#async-result-100').click();
+  await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+
+  // Back presents the entry while its restored window is still loading; Forward leaves it again
+  // before the first response of the source arrived.
+  await page.goBack();
+  await expect.poll(() => asyncPending(page)).toBeGreaterThan(0);
+  await page.goForward();
+  await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+  await page.goBack();
+
+  // A second interruption before the response arrives must keep the same context.
+  await expect.poll(() => asyncPending(page)).toBeGreaterThan(0);
+  await page.goForward();
+  await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+  await page.goBack();
+
+  // The interrupted entry kept the context it was restoring instead of the empty window and the
+  // heading the shell focused while the page was still empty.
+  await completeAsyncResults(page, 100);
+  await expect(page.locator('#async-result-100')).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(savedScroll);
+  expect(errors).toEqual([]);
+});
+
+test('leaving through a link while the second page loads keeps the whole window', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/', { asyncResults: true });
+  await completeAsyncResults(page, 100);
+  await page.locator('#async-result-100').focus();
+  const savedScroll = await page.evaluate(() => window.scrollY);
+  await page.locator('#async-result-100').click();
+  await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+
+  // Back presents the entry and the source answers its first page; the second page is still
+  // loading when the user opens an entry of the presented page.
+  await page.goBack();
+  await expect.poll(() => asyncPending(page)).toBeGreaterThan(0);
+  await answerAsyncResults(page);
+  await expect(page.locator('#async-result-50')).toBeVisible();
+  await expect.poll(() => asyncPending(page)).toBeGreaterThan(0);
+  await page.locator('#async-result-50').click();
+  await expect(page.locator('#card-level')).toHaveText('card-50/-/-');
+
+  // The interrupted entry kept the window it was restoring, not the fifty entries loaded so far
+  // and the result the user left through.
+  await page.goBack();
+  await completeAsyncResults(page, 100);
+  await expect(page.locator('#async-result-100')).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(savedScroll);
+  expect(errors).toEqual([]);
+});
+
+test('a restored entry captures its live state once the page presented it', async ({ page }) => {
+  await openShell(page, '#/', { asyncResults: true });
+  await completeAsyncResults(page, 100);
+  await page.locator('#async-result-100').click();
+  await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+
+  // Back restores the entry and the page presents its whole window; the entry then captures the
+  // state of the presented view again.
+  await page.goBack();
+  await completeAsyncResults(page, 100);
+  await expect(page.locator('#async-result-100')).toBeFocused();
+  await page.locator('#async-result-50').focus();
+  await page.locator('#async-result-50').click();
+  await expect(page.locator('#card-level')).toHaveText('card-50/-/-');
+
+  await page.goBack();
+  await completeAsyncResults(page, 100);
+  await expect(page.locator('#async-result-50')).toBeFocused();
+});
+
+test('an account change during a pending restoration presents the new account alone', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/', { asyncResults: true });
+  await completeAsyncResults(page, 100);
+  await page.locator('#async-result-100').focus();
+  await page.locator('#async-result-100').click();
+  await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+  await page.goBack();
+  await expect.poll(() => asyncPending(page)).toBeGreaterThan(0);
+
+  await signInAs(page, 'bob');
+
+  // The account change cleared the pending restoration with the entry it belonged to: the new
+  // account presents its own result window and the stale restoration changes nothing.
+  await completeAsyncResults(page, 100);
+  await expect(page.locator('#async-result-100')).not.toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+for (const redirect of ['navigate', 'replace'] as const) {
+  test(`a page that ${redirect}s while presenting leaves the destination restoring`, async ({
+    page,
+  }) => {
+    const errors = await openShell(page, '#/', { asyncResults: true, presentedRedirect: redirect });
+    await completeAsyncResults(page, 100);
+    await page.locator('#async-result-100').click();
+    await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+
+    // Back restores the entry; while presenting the kept window, Home sends the user to Collection.
+    await page.goBack();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+
+    // The destination owns the shell's restoration from here: leaving it captures its focused
+    // link and scroll offset, and Back returns them.
+    await page.locator('#collection-open').focus();
+    await page.evaluate(() => window.scrollTo(0, 459));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(459);
+    await page.locator('#collection-open').click();
+    await expect(page.getByRole('heading', { name: 'Tags' })).toBeVisible();
+
+    await page.goBack();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+    await expect(page.locator('#collection-open')).toBeFocused();
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(459);
+    expect(errors).toEqual([]);
+  });
+}
 
 test('a reload never lets a new capture reach a surviving history entry', async ({ page }) => {
   await openShell(page, '#/');

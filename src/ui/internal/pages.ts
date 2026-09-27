@@ -5,6 +5,11 @@
  * content and supplies the sources and tools its lists use. Pages are mounted with the supplied
  * capabilities, the verified account and a signal that is aborted when the view closes, and they
  * return the bounded interaction state the shell keeps for restoration.
+ *
+ * A page whose content arrives asynchronously reports when it has presented the history entry the
+ * shell supplied it, so the shell restores that entry's scroll offset and focused element over the
+ * presented content and an interrupted restoration keeps the context the entry had
+ * (docs/user-interface.md#pages-and-navigation).
  */
 
 import type { UserInterfaceCapabilities } from '../../application/index.js';
@@ -42,6 +47,17 @@ export interface UiPageContext {
 export interface UiPageHandle {
   /** Bounded query and selection state to keep for this history entry, or null to keep none. */
   capture?(): UiRestorationState | null;
+  /**
+   * Resolves once the page has presented the content of the history entry the shell supplied in
+   * `restored`. The shell restores that entry's scroll offset and focused element again over the
+   * presented content, and it keeps the entry's saved context instead of capturing the partially
+   * presented view until the page reports the presentation. A page whose own presentation
+   * supersedes the restored context — explicit input taking over, or a failed restore — reports
+   * that through this same result. A page that presents another view from this hook hands the entry
+   * over to that view, which captures and restores its own interaction context
+   * (docs/user-interface.md#pages-and-navigation).
+   */
+  presented?(): void | Promise<void>;
   /** Releases the page; the shell has already aborted the context signal. */
   dispose?(): void;
 }

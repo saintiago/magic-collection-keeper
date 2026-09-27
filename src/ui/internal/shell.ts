@@ -6,7 +6,10 @@
  * history navigation and the bounded, account-isolated presentation state. Navigation keeps the
  * state of the view it leaves for the way back, closing a view aborts its work and detaches its
  * container so a late result cannot change the new view, and a changed account clears private
- * presentation state and ends the authenticated session the transport serves.
+ * presentation state and ends the authenticated session the transport serves. A page that presents
+ * a restored history entry asynchronously reports the presentation, so the entry's scroll offset
+ * and focused element are restored over the presented content and an interrupted restoration keeps
+ * the context the entry had.
  */
 
 import type { UserInterfaceCapabilities } from '../../application/index.js';
@@ -63,6 +66,12 @@ const primaryLinks: readonly { readonly view: UiView; readonly label: string }[]
   { view: { page: 'import' }, label: 'Import' },
 ];
 
+/**
+ * Explicit user input that takes the interaction over from a restoration the shell is still
+ * applying: the shell no longer moves the scroll offset or focus the user chose.
+ */
+const uiInteractionEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
+
 export function createUserInterface(options: UserInterfaceOptions): UserInterface {
   const root = readRoot(options?.root);
   const capabilities = readCapabilities(options?.capabilities);
@@ -115,6 +124,12 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   let signOutPending = false;
   let lastHref = '';
   let lastToken: string | null = null;
+  /**
+   * Whether the presented entry's page is still presenting the content of that history entry.
+   * While it is, the entry keeps the snapshot it is restoring instead of capturing the partially
+   * presented view and the heading the shell focused while the page was still empty.
+   */
+  let restoringEntry = false;
 
   signOutButton.addEventListener('click', () => {
     requestSignOut();
@@ -312,6 +327,9 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     main.replaceChildren(heading, container);
     const currentGeneration = generation;
     const restored = token === null ? null : store.read(current.accountId, token);
+    // An entry that restores a snapshot keeps it until its page reports how it presents that
+    // snapshot: even a page that navigates away while mounting leaves that context in place.
+    restoringEntry = restored !== null;
     const controller = new AbortController();
     pageController = controller;
     const context: UiPageContext = {
@@ -346,6 +364,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     }
     pageHandle = handle;
     restoreInteraction(heading, restored);
+    restorePresentedInteraction(handle, heading, restored, currentGeneration, controller.signal);
   }
 
   function renderPanel(heading: HTMLHeadingElement, content: readonly Node[]): void {
@@ -363,6 +382,92 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     const focus = restored.focusId === null ? null : document.getElementById(restored.focusId);
     (focus ?? heading).focus({ preventScroll: true });
     browser.scrollTo(0, restored.scrollY);
+  }
+
+  /**
+   * Restores the interaction of one history entry again once the page reports that it presented the
+   * content of that entry. A page whose content arrives asynchronously presents it only after the
+   * shell has mounted it, so the entry's scroll offset and focused element are restored over the
+   * presented content instead of over the empty page (docs/user-interface.md#pages-and-navigation).
+   *
+   * Until then the entry keeps the snapshot it is restoring: Back, Forward or a link leaves that
+   * context in place instead of capturing the partially presented window and the heading the shell
+   * focused while the page was still empty. Explicit user input takes the interaction over — the
+   * shell then leaves the scroll offset and focus the user chose.
+   */
+  function restorePresentedInteraction(
+    handle: UiPageHandle | null,
+    heading: HTMLHeadingElement,
+    restored: UiViewSnapshot | null,
+    currentGeneration: number,
+    signal: AbortSignal,
+  ): void {
+    if (restored === null || handle?.presented === undefined) {
+      // The page presents its entry synchronously: leaving it captures the presented view again.
+      restoringEntry = false;
+      return;
+    }
+    let presented: void | Promise<void>;
+    try {
+      presented = handle.presented();
+    } catch {
+      // A page that cannot report its presentation keeps the restoration the shell already made.
+      if (ownsPage(handle, currentGeneration)) {
+        restoringEntry = false;
+      }
+      return;
+    }
+    if (!ownsPage(handle, currentGeneration)) {
+      // The page presented another view while starting its presentation: that view owns the shared
+      // restoration now, so the departed page may neither keep nor release it, and no listener of
+      // it may outlive the view. Its result can no longer change the presented view, but its
+      // failure must still not escape it.
+      void Promise.resolve(presented).catch(() => {
+        // The departed page's failure is not the presented view's to report.
+      });
+      return;
+    }
+    restoringEntry = true;
+    const lifetime = new AbortController();
+    const stopApplying = (): void => {
+      lifetime.abort();
+    };
+    signal.addEventListener('abort', stopApplying, { once: true, signal: lifetime.signal });
+    for (const event of uiInteractionEvents) {
+      browser.addEventListener(event, stopApplying, {
+        capture: true,
+        passive: true,
+        signal: lifetime.signal,
+      });
+    }
+    void Promise.resolve(presented).then(
+      () => {
+        if (!ownsPage(handle, currentGeneration)) {
+          return;
+        }
+        restoringEntry = false;
+        if (!lifetime.signal.aborted) {
+          restoreInteraction(heading, restored);
+        }
+        stopApplying();
+      },
+      () => {
+        // A page that could not present its content keeps the restoration the shell already made.
+        if (ownsPage(handle, currentGeneration)) {
+          restoringEntry = false;
+        }
+        stopApplying();
+      },
+    );
+  }
+
+  /**
+   * Whether one page still owns the shell's shared presentation state. A page that navigated or
+   * was closed while running its own code owns neither that state nor its listeners; the view it
+   * presented owns them instead.
+   */
+  function ownsPage(handle: UiPageHandle | null, currentGeneration: number): boolean {
+    return !disposed && generation === currentGeneration && pageHandle === handle;
   }
 
   /** Dialogs of one presented page; a page the shell has left can no longer open one. */
@@ -443,10 +548,15 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
    * that entry carries — with the page's own state when it keeps one and the shell-owned scroll and
    * focus otherwise. A browser-driven traversal reaches the shell only after the destination entry
    * is current, so the departing entry's token, never the destination's, receives the snapshot.
+   * A page that has not presented the entry's restored content yet keeps the entry's saved context
+   * instead of capturing the partial view and the heading the shell focused while it was empty.
    */
   function rememberCurrent(): void {
     const current = account;
     if (current === null || view === null || lastToken === null) {
+      return;
+    }
+    if (restoringEntry) {
       return;
     }
     store.save(current.accountId, lastToken, {
@@ -460,6 +570,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   function closePage(): void {
     teardownGeneration = generation;
     generation += 1;
+    restoringEntry = false;
     const controller = pageController;
     const handle = pageHandle;
     pageController = null;
