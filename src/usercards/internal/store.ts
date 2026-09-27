@@ -447,6 +447,51 @@ export interface SourceLineRecord {
 }
 
 /**
+ * One parsed source line offered for staging. Equivalent lines of one acquisition source share
+ * `sourceLineKey`, so duplicates are reconciled together and their order does not decide which
+ * quantity is already covered (docs/user-cards.md#source-imports).
+ */
+export interface SourceLineStageInput {
+  /** Durable identity of the parsed line inside its acquisition source, without its quantity. */
+  readonly sourceLineKey: string;
+  readonly printingId: string | null;
+  readonly finish: Finish | null;
+  readonly condition: CopyCondition | null;
+  /** Quantity the source published for this row; a covered part of it stages nothing. */
+  readonly declaredQuantity: number;
+  readonly sourceLine: ImportSourceLine;
+  readonly candidates: readonly ImportCandidate[];
+}
+
+/** The parsed lines of one acquisition source, staged together under its session. */
+export interface SourceLineStagePlan {
+  readonly sessionId: string;
+  readonly sourceKind: string;
+  readonly sourceId: string;
+  readonly sourceReference: string | null;
+  /** Offered lines in source order; equivalent lines of one source may repeat. */
+  readonly lines: readonly SourceLineStageInput[];
+}
+
+/** What one offered line became when its staging committed. */
+export interface SourceLineStageEntry {
+  readonly outcome: 'staged' | 'pending' | 'acquired';
+  /** Entry this line is represented by: the entry this call staged, or the record covering it. */
+  readonly entryId: string;
+  readonly sessionId: string;
+}
+
+/** The committed outcome of staging the parsed lines of one acquisition source. */
+export interface SourceLineStageData {
+  readonly privateRevision: string;
+  readonly session: ImportSession;
+  /** One outcome per offered line, in the order the lines were offered. */
+  readonly lines: readonly SourceLineStageEntry[];
+  /** Lines this call staged; the remainder were already covered by the source's records. */
+  readonly staged: number;
+}
+
+/**
  * Private import and capture storage of one account (docs/user-cards.md#import-and-capture-state).
  * Pending entries are stored separately from the account's owned copies and never change ownership;
  * every operation is scoped by the account the caller passes and never returns another account's
@@ -471,15 +516,13 @@ export interface ImportStore {
   /** Reads the entries among `entryIds` that belong to this account, in capture order. */
   readEntries(accountId: string, entryIds: readonly string[]): Promise<readonly ImportEntry[]>;
   /**
-   * Reads one record per given parsed source line the account's source already recorded; a line it
-   * never recorded has no record. Lines of another account or another source are never returned.
+   * Stages the parsed lines of one acquisition source, reconciling every line with the quantity its
+   * own source already staged and acquired. Reconciliation and staging run under the session lock
+   * inside one transaction, so a concurrent review, discard or import cannot overstage the source,
+   * and the returned lines and count report what the committed transaction actually did
+   * (docs/user-cards.md#persistence-and-recovery).
    */
-  readSourceLines(
-    accountId: string,
-    sourceKind: string,
-    sourceId: string,
-    sourceLineKeys: readonly string[],
-  ): Promise<readonly SourceLineRecord[]>;
+  stageSourceLines(accountId: string, plan: SourceLineStagePlan): Promise<SourceLineStageData>;
   /** Stages parsed source lines, each admitted once under its own stable identity. */
   stageEntries(accountId: string, plan: ImportStagePlan): Promise<ImportStageOutcome>;
   /** Stages one capture observation and returns the admission decision it recorded. */

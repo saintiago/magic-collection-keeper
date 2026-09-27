@@ -12,11 +12,15 @@
  * Reconciliation compares each parsed line with what the source recorded: a line whose declared
  * quantity is already covered by its pending and confirmed entries stages nothing, an increased
  * quantity stages only the uncovered difference for review, and a removed or reduced line changes
- * nothing. Source identity, the official reference of a reviewed list and the line's published
+ * nothing. Equivalent rows of one source share one durable identity and their declared quantities
+ * are reconciled together, so reordering, removing or duplicating a row never moves coverage onto
+ * another row. Source identity, the official reference of a reviewed list and the line's published
  * description are stored with the session and entries, never derived from editable labels or from
  * the physical copies a confirmation later creates. One acquisition source owns one import
  * session, so its recorded pending entries, acquisitions and the successive quantities of one line
- * stay addressable together however often the source is imported.
+ * stay addressable together however often the source is imported. Staging and its reconciliation
+ * run in one transaction that holds the session, so a concurrent review or import cannot overstage
+ * a source.
  */
 
 import { createHash } from 'node:crypto';
@@ -28,7 +32,6 @@ import { physicalFinishAvailability, resolveAvailablePrintings } from './catalog
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';
 import type { UserCardsSqlTransactor } from './executor.js';
-import { stagedLineFingerprint } from './fingerprint.js';
 import { createPostgresImportStore } from './imports.js';
 import {
   USERCARDS_LIMITS,
@@ -39,7 +42,7 @@ import {
   type TrustedUserContext,
 } from './model.js';
 import { createMoxfieldDeckSource, type MoxfieldDeckSource } from './moxfield.js';
-import type { ImportStore, NewStagedImportEntry, SourceLineEntry } from './store.js';
+import type { ImportStore, SourceLineStageInput } from './store.js';
 
 /** A pasted card list: text lines of `quantity name (SET) number` (docs/user-cards.md#source-imports). */
 export interface PastedCardListImport {
@@ -239,9 +242,13 @@ function lineContent(line: {
     : ['printing', line.printingId, finish].join('\u0000');
 }
 
-/** Durable identity of one parsed line inside its acquisition source. */
-function sourceLineKey(content: string, occurrence: number): string {
-  return createHash('sha256').update(`${content}\u0000${occurrence}`, 'utf8').digest('hex');
+/**
+ * Durable identity of one parsed line inside its acquisition source. Equivalent rows of one source
+ * share it, so which row currently carries a quantity never decides whether that quantity is
+ * already covered (docs/user-cards.md#source-imports).
+ */
+function sourceLineKey(content: string): string {
+  return createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
 /**
@@ -253,17 +260,6 @@ function sourceLineKey(content: string, occurrence: number): string {
 function sourceImportSession(sourceKind: string, sourceId: string): string {
   return createHash('sha256')
     .update(`source-import\u0000${sourceKind}\u0000${sourceId}`, 'utf8')
-    .digest('hex');
-}
-
-/**
- * Identity of the next pending entry of one source line. `attempt` counts the entries the line
- * already recorded, so a line whose entry was discarded stages a fresh entry instead of replaying
- * the discarded one, while an identical re-import of a pending line stages nothing at all.
- */
-function sourceEntryId(sessionId: string, key: string, attempt: number): string {
-  return createHash('sha256')
-    .update(`${sessionId}\u0000${key}\u0000${attempt}`, 'utf8')
     .digest('hex');
 }
 
@@ -356,7 +352,7 @@ const moxfieldLineSchema = z.object({
 });
 
 const moxfieldBoardSchema = z.object({
-  cards: z.record(z.string(), z.unknown()).optional(),
+  cards: z.record(z.string(), z.unknown()),
 });
 
 const moxfieldDeckSchema = z.object({
@@ -368,46 +364,91 @@ const moxfieldDeckSchema = z.object({
   companions: z.unknown().optional(),
   sideboard: z.unknown().optional(),
   maybeboard: z.unknown().optional(),
+  considering: z.unknown().optional(),
   tokens: z.unknown().optional(),
 });
 
 type MoxfieldDeck = z.infer<typeof moxfieldDeckSchema>;
 
+/** One provider-declared attribute: an empty value means the provider published none. */
+function publishedAttribute(value: string | undefined): string | null {
+  return value === undefined || value === '' ? null : value;
+}
+
+/** The physical finishes a Moxfield line may declare, including the provider's foil flag. */
+const supportedMoxfieldFinishes = new Set<string>(finishes);
+
 /**
- * Boards a deck contributes to ownership. Sideboards, maybeboards, considering and tokens describe
- * cards the owner has not declared as acquired, so the import never stages them.
+ * The finish one Moxfield line carries: a declared supported finish, or nonfoil when the line
+ * declares none. A declared value the provider may use but this system cannot represent is null, so
+ * the row is reported as unreadable instead of being stored as an attribute it never declared
+ * (docs/user-cards.md#source-imports).
  */
-const moxfieldSections = ['mainboard', 'commanders', 'companions'] as const;
+function moxfieldFinish(declared: string | undefined, isFoil: boolean | undefined): Finish | null {
+  if (declared === undefined) {
+    return isFoil === true ? 'foil' : 'nonfoil';
+  }
+  if (!supportedMoxfieldFinishes.has(declared)) {
+    return null;
+  }
+  const finish = declared as Finish;
+  return finish === 'nonfoil' && isFoil === true ? 'foil' : finish;
+}
+
+/**
+ * Board keys a deck document may publish beside its `boards` record. Every board the document
+ * publishes is parsed: staging never establishes ownership, so the owner reviews and discards what
+ * a section lists instead of the import deciding which sections they own.
+ */
 const moxfieldBoardKeys = [
   'mainboard',
   'commanders',
   'companions',
   'sideboard',
   'maybeboard',
+  'considering',
   'tokens',
 ] as const;
 
-/** The lines of every included board, in provider order. */
-function moxfieldBoards(deck: MoxfieldDeck): readonly (readonly [string, readonly unknown[]])[] {
-  const boards = new Map<string, readonly unknown[]>();
+/**
+ * One published board: its lines, or the explicit reason the import cannot read the section.
+ * An absent board contributes nothing, while a board the document published in another shape is
+ * reported instead of silently dropping the cards it may still hold.
+ */
+type MoxfieldBoard =
+  { readonly section: string; readonly cards: readonly unknown[] } | { readonly problem: string };
+
+/** One published board's lines, or null when the section cannot be read. */
+function moxfieldBoardCards(board: unknown): readonly unknown[] | null {
+  const parsed = moxfieldBoardSchema.safeParse(board);
+  return parsed.success ? Object.values(parsed.data.cards) : null;
+}
+
+/** Every board a deck document publishes, in provider order, with its published lines. */
+function moxfieldBoards(deck: MoxfieldDeck): readonly MoxfieldBoard[] {
+  const boards = new Map<string, readonly unknown[] | null>();
   for (const [section, board] of Object.entries(deck.boards ?? {})) {
-    const parsed = moxfieldBoardSchema.safeParse(board);
-    if (parsed.success) {
-      boards.set(section, Object.values(parsed.data.cards ?? {}));
-    }
+    boards.set(section, moxfieldBoardCards(board));
   }
   for (const section of moxfieldBoardKeys) {
-    if (boards.has(section)) {
+    const board = deck[section];
+    if (board === undefined || boards.has(section)) {
       continue;
     }
-    const parsed = moxfieldBoardSchema.safeParse(deck[section]);
-    if (parsed.success) {
-      boards.set(section, Object.values(parsed.data.cards ?? {}));
-    }
+    boards.set(section, moxfieldBoardCards(board));
   }
-  return moxfieldSections.flatMap((section) => {
-    const cards = boards.get(section);
-    return cards === undefined ? [] : [[section, cards] as const];
+  return [...boards].map(([section, cards]) => {
+    if (section === '') {
+      return { problem: 'Moxfield published an unnamed deck section this import cannot read.' };
+    }
+    if (section.length > identifierLength) {
+      return { problem: 'Moxfield published a deck section whose name this import cannot keep.' };
+    }
+    return cards === null
+      ? {
+          problem: `Moxfield published the “${section}” section in a shape this import cannot read.`,
+        }
+      : { section, cards };
   });
 }
 
@@ -421,8 +462,12 @@ function parseMoxfieldDeck(document: unknown): readonly ParsedSourceRow[] {
     throw new UserCardsError('invalid-request', 'Only public Moxfield decks can be imported.');
   }
   const rows: ParsedSourceRow[] = [];
-  for (const [section, cards] of moxfieldBoards(deck.data)) {
-    for (const value of cards) {
+  for (const board of moxfieldBoards(deck.data)) {
+    if ('problem' in board) {
+      rows.push({ kind: 'unreadable', position: rows.length + 1, problem: board.problem });
+      continue;
+    }
+    for (const value of board.cards) {
       const position = rows.length + 1;
       const line = moxfieldLineSchema.safeParse(value);
       if (!line.success) {
@@ -433,22 +478,28 @@ function parseMoxfieldDeck(document: unknown): readonly ParsedSourceRow[] {
         });
         continue;
       }
+      const finish = moxfieldFinish(line.data.finish, line.data.isFoil);
+      if (finish === null) {
+        rows.push({
+          kind: 'unreadable',
+          position,
+          problem:
+            `Moxfield declared the finish “${line.data.finish ?? ''}”, which this import does ` +
+            'not support; review the line before importing it.',
+        });
+        continue;
+      }
       const { card } = line.data;
-      const set = card.set ?? null;
-      const collectorNumber = card.cn ?? card.collector_number ?? null;
-      const language = card.lang ?? null;
+      const set = publishedAttribute(card.set);
+      const collectorNumber =
+        publishedAttribute(card.cn) ?? publishedAttribute(card.collector_number);
+      const language = publishedAttribute(card.lang);
       const printingId = card.scryfall_id ?? null;
-      const finish: Finish =
-        line.data.finish === 'etched'
-          ? 'etched'
-          : line.data.finish === 'foil' || line.data.isFoil === true
-            ? 'foil'
-            : 'nonfoil';
       rows.push({
         kind: 'line',
         position,
         name: card.name,
-        section,
+        section: board.section,
         set,
         collectorNumber,
         language,
@@ -656,6 +707,13 @@ export function createSourceImports(
         try {
           document = await decks.readDeck(deck.sourceId);
         } catch (cause) {
+          // The adapter distinguishes a missing or refused deck from a temporary outage, so a
+          // caller can offer the recovery its own classification implies; only an unclassified
+          // dependency failure becomes temporary unavailability
+          // (docs/user-cards.md#interface).
+          if (cause instanceof UserCardsError) {
+            throw cause;
+          }
           throw new UserCardsError(
             'unavailable',
             'The Moxfield deck could not be read; no import changed.',
@@ -706,25 +764,50 @@ export function createSourceImports(
         ),
       );
 
-      // Durable identity of each parsed line: duplicates of one content get their own occurrence.
-      const keys = new Map<ParsedSourceLine, string>();
-      const occurrences = new Map<string, number>();
+      // Every readable row is offered with the identity of its content and the catalog's answer
+      // for the printing it published; the store reconciles the offered lines with what this
+      // source already staged and acquired.
+      const offered: { readonly line: ImportSourceLine; readonly input: SourceLineStageInput }[] =
+        [];
       for (const row of source.rows) {
         if (row.kind === 'unreadable') {
           continue;
         }
-        const occurrence = (occurrences.get(row.content) ?? 0) + 1;
-        occurrences.set(row.content, occurrence);
-        keys.set(row, sourceLineKey(row.content, occurrence));
+        const resolved = resolveLine(row, printings);
+        const line: ImportSourceLine = {
+          name: row.name,
+          section: row.section,
+          set: row.set,
+          collectorNumber: row.collectorNumber,
+          language: row.language,
+          finish: row.finish,
+          declaredQuantity: row.quantity,
+          problem: resolved.problem,
+        };
+        offered.push({
+          line,
+          input: {
+            sourceLineKey: sourceLineKey(row.content),
+            printingId: resolved.printingId,
+            finish: resolved.finish,
+            condition: null,
+            declaredQuantity: row.quantity,
+            sourceLine: line,
+            candidates: [],
+          },
+        });
       }
 
-      const recorded = await store.readSourceLines(accountId, source.sourceKind, source.sourceId, [
-        ...keys.values(),
-      ]);
-      const recordedByKey = new Map(recorded.map((record) => [record.sourceLineKey, record]));
+      const outcome = await store.stageSourceLines(accountId, {
+        sessionId: source.sessionId,
+        sourceKind: source.sourceKind,
+        sourceId: source.sourceId,
+        sourceReference: source.sourceReference,
+        lines: offered.map((entry) => entry.input),
+      });
 
       const rows: SourceImportRow[] = [];
-      const fresh: NewStagedImportEntry[] = [];
+      let offeredIndex = 0;
       for (const row of source.rows) {
         if (row.kind === 'unreadable') {
           rows.push({
@@ -737,81 +820,30 @@ export function createSourceImports(
           });
           continue;
         }
-        const key = keys.get(row) ?? '';
-        const record = recordedByKey.get(key) ?? null;
-        const resolved = resolveLine(row, printings);
-        const line: ImportSourceLine = {
-          name: row.name,
-          section: row.section,
-          set: row.set,
-          collectorNumber: row.collectorNumber,
-          language: row.language,
-          finish: row.finish,
-          declaredQuantity: row.quantity,
-          problem: resolved.problem,
-        };
-        const held = (record?.pendingQuantity ?? 0) + (record?.confirmedQuantity ?? 0);
-        if (held >= row.quantity) {
-          const entry: SourceLineEntry | null =
-            record?.pendingEntry ?? record?.confirmedEntry ?? null;
-          rows.push({
-            position: row.position,
-            line,
-            outcome: (record?.pendingQuantity ?? 0) > 0 ? 'pending' : 'acquired',
-            problem: resolved.problem,
-            entryId: entry?.entryId ?? null,
-            sessionId: entry?.sessionId ?? null,
-          });
-          continue;
+        const stagedLine = outcome.lines[offeredIndex];
+        const parsed = offered[offeredIndex];
+        offeredIndex += 1;
+        if (stagedLine === undefined || parsed === undefined) {
+          throw new UserCardsError(
+            'unavailable',
+            'UserCards did not report the staged parsed source line.',
+          );
         }
-        // The line's uncovered quantity becomes one pending entry; a line that grew stages only
-        // the difference, and a source whose line was removed or reduced stages nothing at all.
-        const entry: NewStagedImportEntry = {
-          entryId: sourceEntryId(source.sessionId, key, (record?.records ?? 0) + 1),
-          printingId: resolved.printingId,
-          finish: resolved.finish,
-          condition: null,
-          quantity: row.quantity - held,
-          candidates: [],
-          sourceLine: line,
-          sourceLineKey: key,
-          fingerprint: stagedLineFingerprint({
-            printingId: resolved.printingId,
-            finish: resolved.finish,
-            condition: null,
-            quantity: row.quantity - held,
-            candidates: [],
-          }),
-        };
-        fresh.push(entry);
         rows.push({
           position: row.position,
-          line,
-          outcome: 'staged',
-          problem: resolved.problem,
-          entryId: entry.entryId,
-          sessionId: source.sessionId,
+          line: parsed.line,
+          outcome: stagedLine.outcome,
+          problem: parsed.line.problem,
+          entryId: stagedLine.entryId,
+          sessionId: stagedLine.sessionId,
         });
       }
 
-      const outcome = await store.stageEntries(accountId, {
-        sessionId: source.sessionId,
-        sourceKind: source.sourceKind,
-        sourceId: source.sourceId,
-        sourceReference: source.sourceReference,
-        entries: fresh,
-      });
-      if (outcome.outcome === 'line-conflict') {
-        throw new UserCardsError(
-          'conflict',
-          'The source changed while it was being imported; reload it before importing it again.',
-        );
-      }
       return {
         privateRevision: outcome.privateRevision,
         session: outcome.session,
         rows,
-        staged: fresh.length,
+        staged: outcome.staged,
       };
     },
   };

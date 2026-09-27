@@ -335,8 +335,9 @@ create table if not exists ${usercardsPrivateSchema}.import_entry (
 create index if not exists import_entry_session_index
   on ${usercardsPrivateSchema}.import_entry (account_id, session_id, position);
 
--- One parsed source line is stored once per acquisition source and line identity, so a repeated
--- import reconciles its lines without scanning the account's whole pending state.
+-- Entries of one parsed source line are addressed by the line's durable identity inside its
+-- acquisition source, so a repeated import reconciles its lines without scanning the account's
+-- whole pending state.
 create index if not exists import_entry_source_line_index
   on ${usercardsPrivateSchema}.import_entry (account_id, source_line_key)
   where source_line_key is not null;

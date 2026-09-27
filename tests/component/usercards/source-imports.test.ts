@@ -19,6 +19,8 @@ import {
   type SourceImportResult,
   type TrustedUserContext,
   type UserCards,
+  type UserCardsSqlExecutor,
+  type UserCardsSqlTransactor,
 } from '../../../src/usercards/index.js';
 import { publishCatalog } from '../../support/catalog-database.js';
 import {
@@ -30,6 +32,32 @@ import { callerInput } from './harness.js';
 
 const alice: TrustedUserContext = { accountId: 'cognito-alice' };
 const bob: TrustedUserContext = { accountId: 'cognito-bob' };
+
+/** The largest SQL statement the deployed RDS Data API accepts. */
+const dataApiStatementLimit = 65_536;
+
+/**
+ * An executor that refuses a statement the deployed write transport would reject, so a local
+ * PostgreSQL pass cannot hide an oversized batch (docs/tech-stack.md).
+ */
+function boundedStatements(statements: UserCardsSqlExecutor): UserCardsSqlExecutor {
+  return {
+    query(statement, parameters) {
+      if (statement.length > dataApiStatementLimit) {
+        throw new Error(`The transport rejects a ${statement.length}-character statement.`);
+      }
+      return statements.query(statement, parameters);
+    },
+  };
+}
+
+/** The test transactor with the deployed transport's statement bound applied to every statement. */
+function boundedTransport(sql: UserCardsSqlTransactor): UserCardsSqlTransactor {
+  return {
+    query: (statement, parameters) => boundedStatements(sql).query(statement, parameters),
+    transaction: (work) => sql.transaction((statements) => work(boundedStatements(statements))),
+  };
+}
 
 const lightningBolt = {
   cardId: 'oracle-lightning-bolt',
@@ -242,6 +270,46 @@ describe('usercards source imports', () => {
     expect((await captureUserCardsError(unreadable.readDeck('keeper_test_deck_01'))).code).toBe(
       'unavailable',
     );
+
+    // The import operation keeps the classification the source published, so a caller can offer
+    // the recovery each failure implies instead of a single temporary unavailability.
+    const throughImport = (decks: MoxfieldDeckSource) =>
+      createSourceImports({ sql: database.sql, catalog, decks });
+    expect(
+      (
+        await captureUserCardsError(
+          throughImport(missing).stageSourceImport(alice, { format: 'moxfield', url: deckUrl }),
+        )
+      ).code,
+    ).toBe('not-found');
+    expect(
+      (
+        await captureUserCardsError(
+          throughImport(denied).stageSourceImport(alice, { format: 'moxfield', url: deckUrl }),
+        )
+      ).code,
+    ).toBe('invalid-request');
+    expect(
+      (
+        await captureUserCardsError(
+          throughImport(unreadable).stageSourceImport(alice, { format: 'moxfield', url: deckUrl }),
+        )
+      ).code,
+    ).toBe('unavailable');
+    // The source's own response bound is a validation failure, not a temporary outage.
+    const oversized = createMoxfieldDeckSource({
+      fetcher: (async () =>
+        new Response(`[${'x'.repeat(2 * 1024 * 1024 + 1)}]`, {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch,
+    });
+    const oversizedOutcome = await captureUserCardsError(
+      throughImport(oversized).stageSourceImport(alice, { format: 'moxfield', url: deckUrl }),
+    );
+    expect(oversizedOutcome.code).toBe('invalid-request');
+    expect(oversizedOutcome.message).toContain('larger than one import reads');
+    expect(await countCopies(database, alice.accountId)).toBe(0);
   });
 
   /** Reads one deck through the import and returns its result. */
@@ -347,13 +415,14 @@ describe('usercards source imports', () => {
       sourceId: 'keeper_test_deck_01',
       sourceReference: deckUrl,
     });
-    expect(result.staged).toBe(5);
+    expect(result.staged).toBe(6);
     expect(result.rows.map((row) => row.outcome)).toEqual([
       'staged',
       'staged',
       'staged',
       'staged',
       'invalid',
+      'staged',
       'staged',
     ]);
     expect(result.rows[1]).toMatchObject({
@@ -366,6 +435,9 @@ describe('usercards source imports', () => {
       line: { problem: 'The printing is not available as a physical card.' },
     });
     expect(result.rows[5]).toMatchObject({ line: { section: 'commanders', finish: 'foil' } });
+    expect(result.rows[6]).toMatchObject({
+      line: { section: 'sideboard', declaredQuantity: 3 },
+    });
 
     const pending = await userCards.listImportEntries(alice, {
       sessionId: result.session.sessionId,
@@ -376,11 +448,128 @@ describe('usercards source imports', () => {
       null,
       null,
       counterspellPrinting.printingId,
+      m10Printing.printingId,
     ]);
     expect(pending.entries[0]?.finish).toBe('nonfoil');
-    // The sideboard is not a declaration of ownership and was never staged.
-    expect(pending.entries.map((entry) => entry.sourceLine?.section)).not.toContain('sideboard');
+    // Every board the deck publishes stays reviewable; only a confirmation changes ownership, so
+    // the sideboard is not withheld from review.
+    expect(pending.entries.map((entry) => entry.sourceLine?.section)).toEqual([
+      'mainboard',
+      'mainboard',
+      'mainboard',
+      'mainboard',
+      'commanders',
+      'sideboard',
+    ]);
     expect(await countCopies(database, alice.accountId)).toBe(0);
+  });
+
+  it('stages every board a deck publishes, including a sideboard, for review', async () => {
+    const result = await stageDeck({
+      mainboard: [boltLine(1)],
+      sideboard: [counterLine(1)],
+      maybeboard: [boltLine(1, { scryfall_id: m10Printing.printingId })],
+    });
+
+    expect(result.rows.map((row) => row.line?.section)).toEqual([
+      'mainboard',
+      'sideboard',
+      'maybeboard',
+    ]);
+    expect(result.staged).toBe(3);
+    expect(result.session).toMatchObject({ pendingEntries: 3 });
+    // Staging a board is not a declaration of ownership; only a confirmation creates copies.
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+  });
+
+  it('normalizes empty provider attributes instead of failing the readable rows', async () => {
+    const result = await stageDeck({
+      mainboard: [
+        boltLine(1, { set: '' }),
+        { quantity: 2, card: { name: 'Lightning Bolt', set: 'm11', cn: '', lang: '' } },
+        counterLine(1),
+      ],
+    });
+
+    expect(result.rows.map((row) => row.outcome)).toEqual(['staged', 'staged', 'staged']);
+    expect(result.staged).toBe(3);
+    const pending = await userCards.listImportEntries(alice, {
+      sessionId: result.session.sessionId,
+    });
+    expect(pending.entries.map((entry) => entry.sourceLine?.set)).toEqual([null, 'm11', '7ed']);
+    expect(pending.entries[1]?.sourceLine).toMatchObject({
+      collectorNumber: null,
+      language: null,
+    });
+    expect(pending.entries.map((entry) => entry.quantity)).toEqual([1, 2, 1]);
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+  });
+
+  it('reports an unsupported declared finish instead of storing it as nonfoil', async () => {
+    const result = await stageDeck({
+      mainboard: [
+        boltLine(1),
+        { ...boltLine(1), finish: 'glossy' },
+        {
+          quantity: 2,
+          card: { name: 'Counterspell', scryfall_id: counterspellPrinting.printingId },
+        },
+      ],
+    });
+
+    expect(result.rows.map((row) => row.outcome)).toEqual(['staged', 'invalid', 'staged']);
+    expect(result.rows[1]).toMatchObject({
+      line: null,
+      entryId: null,
+      sessionId: null,
+      problem: expect.stringContaining('glossy'),
+    });
+    expect(result.staged).toBe(2);
+    const pending = await userCards.listImportEntries(alice, {
+      sessionId: result.session.sessionId,
+    });
+    // An absent finish still resolves to the printing's default; an unsupported one never does.
+    expect(pending.entries.map((entry) => entry.finish)).toEqual(['nonfoil', 'nonfoil']);
+  });
+
+  it('reports a malformed published board instead of silently dropping its cards', async () => {
+    deckDocumentValue = {
+      name: 'Keeper test deck',
+      isPrivate: false,
+      boards: {
+        mainboard: { count: 3 },
+        commanders: { cards: { 'commander-0': counterLine(1) } },
+      },
+    };
+    const result = await sourceImports.stageSourceImport(alice, {
+      format: 'moxfield',
+      url: deckUrl,
+    });
+
+    expect(result.rows.map((row) => row.outcome)).toEqual(['invalid', 'staged']);
+    expect(result.rows[0]).toMatchObject({
+      line: null,
+      entryId: null,
+      problem: expect.stringContaining('mainboard'),
+    });
+    expect(result.rows[1]).toMatchObject({ line: { section: 'commanders' } });
+    expect(result.staged).toBe(1);
+  });
+
+  it('reads top-level boards and reports an unreadable one', async () => {
+    deckDocumentValue = {
+      name: 'Keeper test deck',
+      mainboard: ['not a board'],
+      commanders: { cards: { 'commander-0': counterLine(1) } },
+    };
+    const result = await sourceImports.stageSourceImport(alice, {
+      format: 'moxfield',
+      url: deckUrl,
+    });
+
+    expect(result.rows.map((row) => row.outcome)).toEqual(['invalid', 'staged']);
+    expect(result.rows[0]?.problem).toContain('mainboard');
+    expect(result.staged).toBe(1);
   });
 
   it('keeps a reviewed Wizards list with its official source reference', async () => {
@@ -523,6 +712,93 @@ describe('usercards source imports', () => {
     expect(await countCopies(database, alice.accountId)).toBe(2);
   });
 
+  it('reconciles equal-content rows together when their order changes or a row is removed', async () => {
+    const first = await stageDeck({ mainboard: [boltLine(1), boltLine(3)] });
+    expect(first.staged).toBe(2);
+    expect(first.rows.map((row) => row.outcome)).toEqual(['staged', 'staged']);
+    expect(
+      (
+        await userCards.listImportEntries(alice, { sessionId: first.session.sessionId })
+      ).entries.map((entry) => entry.quantity),
+    ).toEqual([1, 3]);
+
+    // The same two rows in the other order stage nothing while their quantities are pending.
+    const reorderedPending = await stageDeck({ mainboard: [boltLine(3), boltLine(1)] });
+    expect(reorderedPending.staged).toBe(0);
+    expect(reorderedPending.rows.map((row) => row.outcome)).toEqual(['pending', 'pending']);
+
+    await confirmSession(first.session.sessionId, 'operation-1');
+    expect(await countCopies(database, alice.accountId)).toBe(4);
+
+    // Reordering an unchanged source adds no acquisition, and removing the earlier row does not
+    // hand the quantity it covered to the remaining row.
+    const reordered = await stageDeck({ mainboard: [boltLine(3), boltLine(1)] });
+    expect(reordered.staged).toBe(0);
+    expect(reordered.rows.map((row) => row.outcome)).toEqual(['acquired', 'acquired']);
+    const removed = await stageDeck({ mainboard: [boltLine(3)] });
+    expect(removed.staged).toBe(0);
+    expect(removed.rows.map((row) => row.outcome)).toEqual(['acquired']);
+    expect(await countCopies(database, alice.accountId)).toBe(4);
+  });
+
+  it('keeps a pasted list with unequal duplicate lines stable when it is reordered or trimmed', async () => {
+    const paste = (lines: readonly string[]) => ({
+      format: 'pasted-list' as const,
+      sourceId: 'paste-duplicates',
+      text: lines.join('\n'),
+    });
+    const first = await sourceImports.stageSourceImport(
+      alice,
+      paste(['1 Lightning Bolt', '3 Lightning Bolt']),
+    );
+    expect(first.staged).toBe(2);
+
+    const reordered = await sourceImports.stageSourceImport(
+      alice,
+      paste(['3 Lightning Bolt', '1 Lightning Bolt']),
+    );
+    expect(reordered.staged).toBe(0);
+    expect(reordered.rows.map((row) => row.outcome)).toEqual(['pending', 'pending']);
+
+    // A pasted line names no printing, so it is reviewed before it can become copies.
+    const stagedLines = await userCards.listImportEntries(alice, {
+      sessionId: first.session.sessionId,
+    });
+    for (const entry of stagedLines.entries) {
+      await userCards.reviewImportEntry(alice, {
+        entryId: entry.entryId,
+        expectedRevision: entry.revision,
+        printingId: m11Printing.printingId,
+        finish: 'nonfoil',
+        condition: null,
+        quantity: entry.quantity,
+      });
+    }
+    await confirmSession(first.session.sessionId, 'operation-1');
+    expect(await countCopies(database, alice.accountId)).toBe(4);
+
+    const trimmed = await sourceImports.stageSourceImport(alice, paste(['3 Lightning Bolt']));
+    expect(trimmed.staged).toBe(0);
+    expect(trimmed.rows.map((row) => row.outcome)).toEqual(['acquired']);
+    expect(await countCopies(database, alice.accountId)).toBe(4);
+  });
+
+  it('stages only the uncovered quantity of a duplicate group when one row is discarded', async () => {
+    const first = await stageDeck({ mainboard: [boltLine(1), boltLine(3)] });
+    const discarded = first.rows[1]?.entryId as string;
+    await userCards.discardImportEntry(alice, { entryId: discarded, expectedRevision: 1 });
+
+    const again = await stageDeck({ mainboard: [boltLine(1), boltLine(3)] });
+    expect(again.rows.map((row) => row.outcome)).toEqual(['pending', 'staged']);
+    expect(again.staged).toBe(1);
+    expect(again.rows[1]?.entryId).not.toBe(discarded);
+    expect(
+      (
+        await userCards.listImportEntries(alice, { sessionId: first.session.sessionId })
+      ).entries.map((entry) => entry.quantity),
+    ).toEqual([1, 3]);
+  });
+
   it('recognizes an unresolved line after review resolved and confirmed it', async () => {
     const staged = await sourceImports.stageSourceImport(alice, {
       format: 'pasted-list',
@@ -577,6 +853,32 @@ describe('usercards source imports', () => {
     expect(again.staged).toBe(1);
     expect(again.rows.map((row) => row.outcome)).toEqual(['staged']);
     expect(again.rows[0]?.entryId).not.toBe(entryId);
+  });
+
+  it('stages the largest supported source within the deployed statement bound', async () => {
+    const bounded = createSourceImports({ sql: boundedTransport(database.sql), catalog });
+    const text = Array.from(
+      { length: 500 },
+      (_, index) => `1 Lightning Bolt (M11) ${index + 1}`,
+    ).join('\n');
+
+    const result = await bounded.stageSourceImport(alice, {
+      format: 'pasted-list',
+      sourceId: 'paste-maximum',
+      text,
+    });
+    expect(result.staged).toBe(500);
+    expect(result.session).toMatchObject({ pendingEntries: 500 });
+
+    // The maximum source reconciles a second time without staging any line again.
+    const repeated = await bounded.stageSourceImport(alice, {
+      format: 'pasted-list',
+      sourceId: 'paste-maximum',
+      text,
+    });
+    expect(repeated.staged).toBe(0);
+    expect(repeated.rows.every((row) => row.outcome === 'pending')).toBe(true);
+    expect(await countCopies(database, alice.accountId)).toBe(0);
   });
 
   it('keeps one account’s source lines out of another account’s reconciliation', async () => {
