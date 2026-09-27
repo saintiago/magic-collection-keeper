@@ -1,18 +1,36 @@
 /**
  * Component import boundaries, enforced by `npm run boundaries` and exercised for real by
- * tests/integration/boundaries.test.ts. Each component owns src/<component>/index.ts as its
- * provider-owned public entry point (docs/architecture.md); other components import that module
- * rather than the component's internals.
+ * tests/integration/boundaries.test.ts. Each component owns its provider-owned public entry points
+ * under src/<component> (docs/architecture.md); other components import those modules rather than
+ * the component's internals. Application serves a browser and a backend runtime, so its browser-safe
+ * contract is src/application/index.ts and its backend composition is src/application/backend.ts.
  */
 
 export const components = ['application', 'catalog', 'recognition', 'search', 'ui', 'usercards'];
 
+/** Public entry modules of the components, relative to src/<component>/, without the extension. */
+const componentEntries = {
+  application: ['index', 'backend'],
+  catalog: ['index'],
+  recognition: ['index'],
+  search: ['index'],
+  ui: ['index'],
+  usercards: ['index'],
+};
+
 const publicInterfaceRules = components.map((component) => ({
   name: `no-internals-of-${component}`,
   severity: 'error',
-  comment: `Cross-component imports use the ${component} public entry point (src/${component}/index.ts).`,
+  comment: `Cross-component imports use the ${component} public entry points: ${componentEntries[
+    component
+  ]
+    .map((entry) => `src/${component}/${entry}.ts`)
+    .join(', ')}.`,
   from: { path: '^src/', pathNot: `^src/${component}/` },
-  to: { path: `^src/${component}/`, pathNot: `^src/${component}/index\\.ts$` },
+  to: {
+    path: `^src/${component}/`,
+    pathNot: `^src/${component}/(${componentEntries[component].join('|')})\\.ts$`,
+  },
 }));
 
 /** @type {import('dependency-cruiser').IConfiguration} */

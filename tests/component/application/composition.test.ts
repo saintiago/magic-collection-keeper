@@ -1,0 +1,145 @@
+/**
+ * Component scope: Application construction (docs/application.md#construction-and-request-boundary).
+ * Construction validates the environment's settings and the compatibility of every supplied
+ * implementation before the application serves anything, and the browser composition validates the
+ * public settings before it reaches a transport.
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import {
+  ConfigurationError,
+  createAuthenticatedRequest,
+  createBrowserApplication,
+  createCatalogClient,
+  readPublicSettings,
+  resolveApplicationConfiguration,
+} from '../../../src/application/index.js';
+import { createApplication, type ApplicationResources } from '../../../src/application/backend.js';
+
+import { testConfiguration, testIdentityVerifier } from './harness.js';
+
+function resources(): ApplicationResources {
+  return {
+    sql: {
+      async query() {
+        return [];
+      },
+      async transaction(work) {
+        return work({
+          async query() {
+            return [];
+          },
+        });
+      },
+    },
+    catalogSynchronization: {
+      sql: {
+        async query() {
+          return [];
+        },
+        async transaction(work) {
+          return work({
+            async query() {
+              return [];
+            },
+          });
+        },
+      },
+      snapshots: {
+        async open() {
+          return { sourceName: 'test', sourceVersion: '1', text: (async function* () {})() };
+        },
+      },
+    },
+    deckSource: null,
+  };
+}
+
+describe('application composition', () => {
+  it('rejects an invalid configuration before constructing anything', () => {
+    const configuration = testConfiguration();
+    configuration.environment = 'staging';
+
+    expect(() =>
+      createApplication({
+        configuration,
+        identity: testIdentityVerifier(),
+        resources: resources(),
+      }),
+    ).toThrow(ConfigurationError);
+  });
+
+  it('accepts its own resolved configuration', () => {
+    const configuration = resolveApplicationConfiguration(testConfiguration());
+
+    expect(resolveApplicationConfiguration(configuration)).toEqual(configuration);
+  });
+
+  it('accepts a configuration-only application and exposes only its public settings', () => {
+    const application = createApplication({
+      configuration: testConfiguration(),
+      identity: testIdentityVerifier(),
+      resources: resources(),
+    });
+
+    expect(application.settings).toEqual(
+      readPublicSettings(resolveApplicationConfiguration(testConfiguration())),
+    );
+    expect(JSON.stringify(application.settings)).not.toContain('arn:aws');
+  });
+
+  it('requires an identity verifier and a diagnostics sink', () => {
+    expect(() =>
+      createApplication({
+        configuration: testConfiguration(),
+        identity: {} as never,
+        resources: resources(),
+      }),
+    ).toThrow(TypeError);
+    expect(() =>
+      createApplication({
+        configuration: testConfiguration(),
+        identity: testIdentityVerifier(),
+        resources: resources(),
+        diagnostics: {} as never,
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it('requires the deployment executor and the catalog job implementations', () => {
+    expect(() =>
+      createApplication({
+        configuration: testConfiguration(),
+        identity: testIdentityVerifier(),
+        resources: {} as ApplicationResources,
+      }),
+    ).toThrow(TypeError);
+
+    const incomplete = resources() as unknown as Record<string, unknown>;
+    incomplete['catalogSynchronization'] = undefined;
+    expect(() =>
+      createApplication({
+        configuration: testConfiguration(),
+        identity: testIdentityVerifier(),
+        resources: incomplete as unknown as ApplicationResources,
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it('validates the browser transports at construction', () => {
+    expect(() =>
+      createAuthenticatedRequest({ baseUrl: 'not-a-url', token: () => 'token' }),
+    ).toThrow(TypeError);
+    expect(() =>
+      createAuthenticatedRequest({
+        baseUrl: 'https://api.test.keeper.example',
+        token: undefined as never,
+      }),
+    ).toThrow(TypeError);
+    expect(() => createCatalogClient(undefined as never)).toThrow(TypeError);
+    expect(() => createBrowserApplication({ settings: {}, token: () => 'token' })).toThrow(
+      ConfigurationError,
+    );
+  });
+});

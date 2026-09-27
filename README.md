@@ -8,8 +8,8 @@ UserCards provides physical-copy storage, tags, associations and physical locati
 account-scoped read surface; Search provides its normalized query model, the supported Scryfall
 subset, the request and continuation contract and its evaluation over both published query
 surfaces; Recognition provides its session lifecycle, its catalog-validated candidate readings and
-the execution bounds around the preserved engines, while the remaining components are not
-implemented yet.
+the execution bounds around the preserved engines; Application assembles those components behind
+validated configuration and authenticated transports, while UserInterface is not implemented yet.
 
 Start with AGENTS.md for the documentation index and engineering principles.
 The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
@@ -105,6 +105,20 @@ unavailable outcomes remain distinct. The component composes the preserved brows
 visual/OCR engines behind that pipeline — including the hybrid early/later comparison and the
 independent identity session call limit — while Application supplies the authenticated transport,
 so their matching policies stay unchanged.
+
+Application validates one environment's configuration before serving, constructs Catalog, UserCards,
+Search and the finite catalog job through their public contracts and derives trusted user context
+from verified Cognito claims only: a private operation never runs anonymously, an unverifiable
+identity is rejected instead of downgraded, and a caller-supplied owner field is ignored. The
+interactive transport serves the documented component operations, answers the preserved recognition
+engines' catalog-hydration envelopes from the published Catalog, maps validation, unauthorized,
+missing, conflict, stale-continuation, busy and unavailable outcomes to distinct failures without
+exposing storage details or credentials, and reports a deadline as an unknown outcome whose
+replayable operation names the receipt to recover. Catalog synchronization stays a separate job
+entry point and recognition inference a separate compute runtime reached through the authenticated
+client; the browser composition supplies UserInterface with the public settings, the authenticated
+transport and the Recognition contract over the preserved engines
+(docs/application.md#interface, docs/application.md#configuration-and-lifecycle).
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without
