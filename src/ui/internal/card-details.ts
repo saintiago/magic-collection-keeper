@@ -19,7 +19,13 @@
  * merely because the record that names it has not loaded. Every provider value renders as text.
  */
 
-import type { CardRecord, Catalog, Finish, PrintingRecord } from '../../catalog/index.js';
+import type {
+  CardPrintingsPage,
+  CardRecord,
+  Catalog,
+  Finish,
+  PrintingRecord,
+} from '../../catalog/index.js';
 import type { PhysicalCopy } from '../../usercards/index.js';
 
 import { createCardList, type UiCardList } from './card-list.js';
@@ -29,6 +35,7 @@ import {
   uiCopyConditions,
   type UiCopyCorrection,
 } from './copy-edits.js';
+import { readUiFailureCode } from './failure.js';
 import { UI_LIMITS } from './limits.js';
 import type { UiListEntry, UiListSource } from './list.js';
 import {
@@ -631,7 +638,10 @@ export function createCardDetailsPage(): UiPageDefinition {
          * Loads the next page of the card's published printings into the bounded window the form
          * offers, or reports the failure beside the retry the same control offers. The window keeps
          * the printing the copy records and the intended draft; the rest of the working set is
-         * bounded, so repeated pagination never retains every visited printing.
+         * bounded, so repeated pagination never retains every visited printing. A continuation the
+         * catalog rejects as stale stays unusable, so the offer does not hold it: its paging
+         * position starts again at the first page the published revision lists
+         * (docs/catalog.md#provided-operations, docs/user-interface.md#browsing-and-organization).
          */
         async function loadMorePrintings(): Promise<void> {
           if (window.loading || context.signal.aborted) {
@@ -639,11 +649,30 @@ export function createCardDetailsPage(): UiPageDefinition {
           }
           window.loading = true;
           paint();
+          let continuation = window.continuation;
           try {
-            const page = await catalog.listCardPrintings(cardId, {
-              pageSize: UI_LIMITS.printingPage,
-              ...(window.continuation === null ? {} : { continuation: window.continuation }),
-            });
+            let page: CardPrintingsPage;
+            for (;;) {
+              try {
+                page = await catalog.listCardPrintings(cardId, {
+                  pageSize: UI_LIMITS.printingPage,
+                  ...(continuation === null ? {} : { continuation }),
+                });
+                break;
+              } catch (cause) {
+                if (
+                  continuation === null ||
+                  context.signal.aborted ||
+                  readUiFailureCode(cause) !== 'stale-continuation'
+                ) {
+                  throw cause;
+                }
+                // The catalog changed after the page this continuation names was read, so the
+                // provider keeps refusing it: the offer reads the printing list again from its
+                // first page instead of keeping a cursor that can only fail again.
+                continuation = null;
+              }
+            }
             for (const known of page.printings) {
               window.printings.set(known.printingId, known);
             }
@@ -651,6 +680,9 @@ export function createCardDetailsPage(): UiPageDefinition {
             window.error = null;
             retirePrintings();
           } catch (cause) {
+            // A continuation the catalog rejected as stale is not retained, not even when the
+            // restarted read failed: the retry the control offers starts the printing list again.
+            window.continuation = continuation;
             window.error = readMessage(cause, 'The printings could not be loaded.');
           } finally {
             window.loading = false;
