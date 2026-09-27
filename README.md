@@ -5,7 +5,9 @@ on. The previous application implementation has been removed. Product components
 docs/architecture.md are rebuilt task by task: Catalog already provides its read contract, its
 atomic bulk synchronization and its published query surface with their contract tests, and
 UserCards provides physical-copy storage, tags, associations and physical locations with their
-account-scoped read surface; the remaining components are not implemented yet.
+account-scoped read surface; Search provides its normalized query model, the supported Scryfall
+subset and the request and continuation contract, while its evaluation against the published
+relations and the remaining components are not implemented yet.
 
 Start with AGENTS.md for the documentation index and engineering principles.
 The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
