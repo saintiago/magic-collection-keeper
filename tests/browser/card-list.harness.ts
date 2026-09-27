@@ -16,7 +16,7 @@ import {
   createCardList,
   type UiCardList,
   type UiCardListFragments,
-  type UiCardListState as UiCardListRetainedState,
+  type UiCardListState as UiCardListStateShape,
   type UiCardListTool,
   type UiFragmentKind,
   type UiFragmentReader,
@@ -26,6 +26,9 @@ import {
   type UiListSource,
   type UiOperationOutcome,
 } from '../../src/ui/index.js';
+
+/** State one list retains for its page's history entry; the harness lists evaluate text queries. */
+type UiCardListRetainedState = UiCardListStateShape<string>;
 
 /** One list the journey installs. */
 export interface UiCardListInstall {
@@ -175,7 +178,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       }));
       const controller = new AbortController();
       controllers.set(id, controller);
-      const installed = createCardList({
+      const installed = createCardList<string>({
         container,
         source: pageSource(id),
         context: options.context ?? 'result',

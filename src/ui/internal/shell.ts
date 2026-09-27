@@ -22,6 +22,7 @@ import type { UserInterfaceCapabilities } from '../../application/index.js';
 import { createDialogs, type UiDialogs } from './dialogs.js';
 import type { UiDevice } from './device.js';
 import { readAccount, type UiAccount, type UiIdentity } from './identity.js';
+import { observeUiInput } from './interaction.js';
 import type { UiPageContext, UiPageDefinition, UiPageHandle } from './pages.js';
 import { createViewStateStore, type UiViewSnapshot } from './restoration.js';
 import {
@@ -70,12 +71,6 @@ const primaryLinks: readonly { readonly view: UiView; readonly label: string }[]
   { view: { page: 'tags' }, label: 'Tags' },
   { view: { page: 'import' }, label: 'Import' },
 ];
-
-/**
- * Explicit user input that takes the interaction over from a restoration the shell is still
- * applying: the shell no longer moves the scroll offset or focus the user chose.
- */
-const uiInteractionEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
 
 export function createUserInterface(options: UserInterfaceOptions): UserInterface {
   const root = readRoot(options?.root);
@@ -425,9 +420,10 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
    *
    * Explicit user input takes the interaction over: input while the content is still unavailable
    * cancels the automatic restoration of scroll and focus but does not release the entry's context,
-   * and input after the presentation releases it so the view captures the interaction the user
-   * chose from then on. Late layout of the presented content — further fragments and decoded images
-   * — keeps the visible anchor at its saved viewport offset while the entry still keeps its context.
+   * and input once the presentation settled — applied or failed — releases it so the view captures
+   * the interaction the user chose from then on. Late layout of the presented content — further
+   * fragments and decoded images — keeps the visible anchor at its saved viewport offset while the
+   * entry still keeps its context.
    */
   function restorePresentedInteraction(
     handle: UiPageHandle | null,
@@ -443,29 +439,9 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     }
     // The entry restored one snapshot; the presentation applies that snapshot once it can be read.
     const snapshot: UiViewSnapshot = restored;
-    let presented: void | Promise<void>;
-    try {
-      presented = handle.presented();
-    } catch {
-      // A page that cannot report its presentation keeps the restoration the shell already made.
-      if (ownsPage(handle, currentGeneration)) {
-        releaseRestoration();
-      }
-      return;
-    }
-    if (!ownsPage(handle, currentGeneration)) {
-      // The page presented another view while starting its presentation: that view owns the shared
-      // restoration now, so the departed page may neither keep nor release it, and no listener of
-      // it may outlive the view. Its result can no longer change the presented view, but its
-      // failure must still not escape it.
-      void Promise.resolve(presented).catch(() => {
-        // The departed page's failure is not the presented view's to report.
-      });
-      return;
-    }
     const lifetime = new AbortController();
     let observer: ResizeObserver | null = null;
-    let presentationComplete = false;
+    let presentationSettled = false;
     let interactionTaken = false;
     const disposeRestoration = (): void => {
       observer?.disconnect();
@@ -474,23 +450,35 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     };
     /**
      * Explicit user input: the shell no longer moves the scroll offset and focus of the entry, and
-     * after the presentation the entry captures the interaction the user chooses from here on.
-     * Input during loading cancels automatic restoration but keeps listening for that later input.
+     * once the presentation settled the entry captures the interaction the user chooses from here
+     * on. Input while the content is still unavailable cancels automatic restoration but keeps
+     * listening for that later input.
      */
     const takeOver = (): void => {
       interactionTaken = true;
-      if (presentationComplete) {
+      if (presentationSettled) {
         disposeRestoration();
         releaseRestoration();
       }
     };
     signal.addEventListener('abort', disposeRestoration, { once: true, signal: lifetime.signal });
-    for (const event of uiInteractionEvents) {
-      browser.addEventListener(event, takeOver, {
-        capture: true,
-        passive: true,
-        signal: lifetime.signal,
-      });
+    observeUiInput(browser, takeOver, lifetime.signal);
+    let presented: void | Promise<void>;
+    try {
+      presented = handle.presented();
+    } catch {
+      // A page that cannot report its presentation stops the automatic restoration, but the entry
+      // keeps the context it was restoring instead of capturing the partially presented view;
+      // explicit input releases it from here on.
+      presentationSettled = true;
+      return;
+    }
+    if (!ownsPage(handle, currentGeneration)) {
+      // The page presented another view while starting its presentation: that view owns the shared
+      // restoration now, so the departed page may neither keep nor release it, and no listener of
+      // it may outlive the view.
+      disposeRestoration();
+      return;
     }
     void Promise.resolve(presented).then(
       () => {
@@ -499,7 +487,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
           // page keeps neither the shared restoration nor its listeners.
           return;
         }
-        presentationComplete = true;
+        presentationSettled = true;
         if (interactionTaken) {
           // The user took the interaction over while the content was still unavailable: the entry
           // keeps its context until later input releases it, without moving focus or scroll now.
@@ -509,11 +497,14 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
         keepVisibleAnchor();
       },
       () => {
-        // A page that could not present its content keeps the restoration the shell already made.
-        if (ownsPage(handle, currentGeneration)) {
-          releaseRestoration();
+        // A page that could not present its content stops the automatic restoration, but the entry
+        // keeps the interaction context it was restoring — the saved scroll offset, focused element
+        // and visible anchor — instead of capturing the partially presented view; explicit input
+        // releases it from here on.
+        presentationSettled = true;
+        if (!ownsPage(handle, currentGeneration)) {
+          disposeRestoration();
         }
-        disposeRestoration();
       },
     );
 
@@ -652,7 +643,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     const keeping = restoringEntry ? restoringSnapshot : null;
     if (keeping !== null) {
       store.save(current.accountId, lastToken, {
-        state: pageHandle?.capture?.() ?? keeping.state,
+        state: capturePageState(keeping.state),
         scrollY: keeping.scrollY,
         ...(keeping.anchorId == null
           ? {}
@@ -662,11 +653,24 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
       return;
     }
     store.save(current.accountId, lastToken, {
-      state: pageHandle?.capture?.() ?? null,
+      state: capturePageState(null),
       scrollY: browser.scrollY,
       ...captureAnchor(),
       focusId: document.activeElement?.id ?? null,
     });
+  }
+
+  /**
+   * State the presented page retains now. The page owns the value its `capture` hook returns: an
+   * explicit null keeps no page state, so only a page without the hook falls back to the retained
+   * context the entry is still restoring.
+   */
+  function capturePageState(fallback: unknown): unknown {
+    const handle = pageHandle;
+    if (handle === null || handle.capture === undefined) {
+      return fallback;
+    }
+    return handle.capture();
   }
 
   /** One visible stable element; no result data or unbounded DOM snapshot is retained. */

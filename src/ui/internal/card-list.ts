@@ -24,14 +24,17 @@
  * Each list also owns its capture and restoration (docs/user-interface.md#cardlist): the page hands
  * the state a list returned when the history entry returns, and the list itself decides how to
  * re-acquire the window it held — reusing available data or requesting the retained source position
- * again — and restores its own selection and local scroll and focus. Until the retained window is
- * back the list keeps the intended position and window instead of capturing the partially loaded
- * one, and it reports the outcome of the restoration through its lifecycle contract.
+ * again — and restores its own query, selection, action targets and local scroll and focus. Until
+ * the retained window is back the list keeps the intended state instead of capturing the partially
+ * loaded one, explicit user input supersedes the retained interaction, and the list reports the
+ * outcome of the restoration through its lifecycle contract.
  */
 
+import { observeUiInput } from './interaction.js';
 import { UI_LIMITS } from './limits.js';
 import {
   uiFragmentKinds,
+  type UiEntryTarget,
   type UiFragmentKind,
   type UiFragmentReader,
   type UiFragmentResult,
@@ -113,19 +116,33 @@ export type UiListFocus =
   /** A control the page rendered for one entry, named by the stable element id the page gave it. */
   | { readonly control: 'element'; readonly id: string };
 
+/** One selected entry the retained window no longer presents, with its typed target. */
+export interface UiListSelectedTarget {
+  readonly key: string;
+  readonly target: UiEntryTarget;
+}
+
 /**
  * State one list retains for its page's history entry
- * (docs/user-interface.md#state-ownership-and-restoration): its query position, the window it
- * presented, its selection and its own scroll and focus. The page keeps this representation with
- * the rest of its state and hands it back through `restored`; the list interprets it.
+ * (docs/user-interface.md#state-ownership-and-restoration): the query it evaluates, that query's
+ * position, the window it presented, its selection with the action targets of entries outside that
+ * window, and its own scroll and focus. The page keeps this representation with the rest of its
+ * state and hands it back through `restored`; the list interprets it.
  */
-export interface UiCardListState {
+export interface UiCardListState<Context = unknown> {
+  /**
+   * Query context the retained window belongs to. The list owns its query, so a state captured
+   * while a refinement superseded the presented window names the query the list intends instead.
+   */
+  readonly context: Context;
   /** Source position of the first entry of the retained window, or null when it held none. */
   readonly position: UiListPosition | null;
   /** Entries the retained window held. */
   readonly window: number;
   /** Selected keys in selection order, including entries outside the loaded window. */
   readonly selection: readonly string[];
+  /** Typed targets of the selected entries the retained window does not present, for the tools. */
+  readonly selectedTargets: readonly UiListSelectedTarget[];
   /** Scroll offset of the list's container. */
   readonly scrollTop: number;
   /** Control of the list that held focus, or null. */
@@ -185,7 +202,7 @@ export interface UiCardListOptions<Context = unknown> {
    * its window, selection and local interaction through its own source and reports the outcome
    * through `restoration`; refresh and refinement start a fresh result instead.
    */
-  readonly restored?: UiCardListState | null;
+  readonly restored?: UiCardListState<Context> | null;
   /** Fragment readers; kinds without one are not presented. */
   readonly fragments?: UiCardListFragments;
   /** Tools presented for the explicit selection, in order. */
@@ -215,11 +232,12 @@ export interface UiCardList<Context = unknown> {
   /** Failure of the last window request, or null; the loaded window stays usable either way. */
   readonly error: string | null;
   /**
-   * State this list retains for its page's history entry: the position and size of the presented
-   * window, the full selection and the list's own scroll and focus. While a restoration is still
-   * loading, it is the intended state the list is restoring, never the partial window.
+   * State this list retains for its page's history entry: its query, the position and size of the
+   * presented window, the full selection with the typed targets of entries outside it, and the
+   * list's own scroll and focus. While a restoration is still loading, it is the intended state the
+   * list is restoring, never the partial window.
    */
-  capture(): UiCardListState;
+  capture(): UiCardListState<Context>;
   /**
    * Lifecycle of restoring the state supplied in `restored`, or null when this visit restored none.
    */
@@ -293,7 +311,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   const tools = readTools(options?.tools);
   const presentation = readPresentation(options?.presentation);
   const signal = readSignal(options?.signal);
-  const restored = readRestoredState(options?.restored, pageSize);
+  const restored = readRestoredState<Context>(options?.restored, pageSize, options?.context);
   const document = container.ownerDocument;
 
   const section = document.createElement('section');
@@ -345,8 +363,16 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   for (const key of restored?.selection ?? []) {
     selected.add(key);
   }
-  /** Explicit targets survive paging; only their tool availability remains part of fragment work. */
+  /**
+   * Explicit targets survive paging and restoration; only their tool availability remains part of
+   * fragment work.
+   */
   const retiredSelection = new Map<string, UiListEntry['target']>();
+  for (const selectedTarget of restored?.selectedTargets ?? []) {
+    if (selected.has(selectedTarget.key)) {
+      retiredSelection.set(selectedTarget.key, selectedTarget.target);
+    }
+  }
   /**
    * Source position of every entry of the presented window. Positions leave with their entries, so
    * even very deep pagination retains at most one window.
@@ -356,25 +382,42 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
    * The window one visit restores until the source presented it again, or null once it has; while
    * it is set, the list reports it instead of the partially loaded window.
    */
-  let kept: UiCardListState | null = restored !== null && restored.window > 0 ? restored : null;
+  let kept: UiCardListState<Context> | null =
+    restored !== null && restored.window > 0 ? restored : null;
   const settled = kept === null ? null : Promise.withResolvers<void>();
   // The page reports the outcome through its own lifecycle; a page that never reads it must still
   // not surface the list's interruption as an unhandled rejection.
   settled?.promise.catch(() => {});
   let entries: readonly UiListEntry[] = [];
   let windowKeys: ReadonlySet<string> = new Set();
-  let activeContext = options.context;
+  let activeContext: Context = restored?.context ?? options.context;
   let continuation: string | null = null;
   /** Whether the loaded window carries a continuation that has further results. */
   let continues = false;
   /** The presented window belongs to a query a refinement superseded; it is never paged with it. */
   let staleWindow = false;
+  /**
+   * Whether explicit user input took the interaction over while the retained window was still
+   * loading: the list keeps the interaction the user chose instead of applying the retained focus
+   * and scroll (docs/user-interface.md#state-ownership-and-restoration).
+   */
+  let interactionTaken = false;
+  const interaction = new AbortController();
+  if (kept !== null) {
+    observeUiInput(
+      container.ownerDocument.defaultView,
+      () => {
+        interactionTaken = true;
+      },
+      interaction.signal,
+    );
+  }
   let loading = false;
   let error: string | null = null;
   let outcome: UiOperationOutcome | null = null;
   let pending: AbortController | null = null;
   let invocation: AbortController | null = null;
-  let failed: { readonly continuation: string | null } | null = null;
+  let failed: { readonly continuation: string | null; readonly offset: number } | null = null;
   let generation = 0;
   let fragmentSequence = 0;
   let disposed = false;
@@ -447,13 +490,23 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
         signal: controller.signal,
       });
     } catch (cause) {
-      settleFailure(current, nextContinuation, readMessage(cause, 'The list could not load.'));
+      settleFailure(
+        current,
+        nextContinuation,
+        offset,
+        readMessage(cause, 'The list could not load.'),
+      );
       return;
     }
     Promise.resolve(request).then(
       (page) => settlePage(current, nextContinuation, offset, page),
       (cause) =>
-        settleFailure(current, nextContinuation, readMessage(cause, 'The list could not load.')),
+        settleFailure(
+          current,
+          nextContinuation,
+          offset,
+          readMessage(cause, 'The list could not load.'),
+        ),
     );
   }
 
@@ -468,7 +521,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     }
     const read = readCardListPage(value, pageSize);
     if (!read.ok) {
-      settleFailure(current, requested, read.problem);
+      settleFailure(current, requested, offset, read.problem);
       return;
     }
     pending = null;
@@ -479,9 +532,11 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     const presented = offset === 0 ? supplied : supplied.slice(offset);
     const previousLength = entries.length;
     if (requested === null) {
-      // The fresh first page belongs to the active query, so nothing older stays paged.
+      // The fresh first page belongs to the active query, so nothing older stays paged. A retained
+      // window being re-acquired keeps the action context the state carried, while a result that
+      // replaced another exposes its selected keys as they are found again.
       staleWindow = false;
-      setWindow(presented);
+      setWindow(presented, kept !== null);
     } else {
       appendWindow(presented);
     }
@@ -495,14 +550,21 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     }
   }
 
-  function settleFailure(current: number, requested: string | null, message: string): void {
+  function settleFailure(
+    current: number,
+    requested: string | null,
+    offset: number,
+    message: string,
+  ): void {
     if (disposed || current !== generation) {
       return;
     }
     pending = null;
     loading = false;
     error = message;
-    failed = { continuation: requested };
+    // The failed request is repeated by `retry`: the same position of the same result, including
+    // the offset that resumes inside the retained source page.
+    failed = { continuation: requested, offset };
     renderStatus();
     if (kept !== null) {
       // The retained window could not be presented; the page reports the interruption and the
@@ -534,22 +596,31 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
 
   /**
    * The retained window is back: the list restores its own scroll and focus and reports the
-   * presentation, so the page can hand the entry's shell-owned interaction back to the shell.
+   * presentation, so the page can hand the entry's shell-owned interaction back to the shell. The
+   * retained interaction is applied only while the user has not taken it over, and the presented
+   * window now decides the paging control the list shows.
    */
-  function presentWindow(window: UiCardListState): void {
+  function presentWindow(window: UiCardListState<Context>): void {
     kept = null;
-    restoreEntryFocus(window.focus);
-    if (window.scrollTop > 0) {
-      container.scrollTop = window.scrollTop;
+    interaction.abort();
+    if (!interactionTaken) {
+      restoreEntryFocus(window.focus);
+      if (window.scrollTop > 0) {
+        container.scrollTop = window.scrollTop;
+      }
     }
+    renderStatus();
     settled?.resolve();
   }
 
   /** Replaces the window; entries the new result no longer holds leave it. */
-  function setWindow(next: readonly UiListEntry[]): void {
+  function setWindow(next: readonly UiListEntry[], keepingTargets = false): void {
     // A replacement result exposes selected keys as they are found again, as with other retained
-    // selection keys; only paging carries explicit action context beyond the rendered window.
-    clearRetiredSelection();
+    // selection keys; only paging and a retained window being re-acquired carry explicit action
+    // context beyond the rendered window.
+    if (!keepingTargets) {
+      clearRetiredSelection();
+    }
     applyWindow(next);
   }
 
@@ -571,13 +642,21 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
 
   /**
    * Records where in the source result the entries of one page sit, so the window the list presents
-   * can be requested again from its own position. Only the presented window keeps positions.
+   * can be requested again from its own position. Only the presented window keeps positions, and a
+   * replacement result replaces them: the source owns ordering, so an entry a fresh result moved
+   * sits at its new position instead of the one the previous result recorded.
    */
   function rememberPositions(requested: string | null, supplied: readonly UiListEntry[]): void {
     supplied.forEach((entry, index) => {
-      if (windowKeys.has(entry.key) && !positions.has(entry.key)) {
-        positions.set(entry.key, { continuation: requested, offset: index });
+      if (!windowKeys.has(entry.key)) {
+        return;
       }
+      // A page the window appends keeps the position an entry already had; the first page of a
+      // fresh result replaces it.
+      if (requested !== null && positions.has(entry.key)) {
+        return;
+      }
+      positions.set(entry.key, { continuation: requested, offset: index });
     });
     for (const key of positions.keys()) {
       if (!windowKeys.has(key)) {
@@ -589,19 +668,38 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   /**
    * State this list retains for the page's history entry. While a restoration is still loading it
    * is the state the list is restoring — the intended window, never the partial one — with the
-   * selection and local interaction the user changed in the meantime.
+   * selection and local interaction the user changed in the meantime. A refinement that superseded
+   * the presented window retains the query the list intends, whose first page has not arrived yet,
+   * so the captured position always belongs to the captured query.
    */
-  function capture(): UiCardListState {
+  function capture(): UiCardListState<Context> {
     const window = kept;
+    const retainedInteraction = {
+      selection: [...selected],
+      selectedTargets: [...retiredSelection].map(([key, target]) => ({ key, target })),
+      // While the retained window is still loading, the container holds no applied offset: the
+      // state keeps the retained one unless the user scrolled it or took the interaction over.
+      scrollTop:
+        window !== null && !interactionTaken && container.scrollTop === 0
+          ? window.scrollTop
+          : container.scrollTop,
+      focus: readEntryFocus() ?? (interactionTaken ? null : (window?.focus ?? null)),
+    };
+    if (staleWindow) {
+      return {
+        context: activeContext,
+        position: null,
+        window: 0,
+        ...retainedInteraction,
+      };
+    }
     const first = entries[0];
     return {
+      context: activeContext,
       position:
         window?.position ?? (first === undefined ? null : (positions.get(first.key) ?? null)),
       window: window?.window ?? entries.length,
-      selection: [...selected],
-      scrollTop:
-        window !== null && container.scrollTop === 0 ? window.scrollTop : container.scrollTop,
-      focus: readEntryFocus() ?? window?.focus ?? null,
+      ...retainedInteraction,
     };
   }
 
@@ -671,15 +769,10 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (disposed || failed === null) {
       return;
     }
-    const window = kept;
-    if (window !== null) {
-      // The retained window was reported as interrupted; a retry is this visit's own request
-      // again, so what the source then supplies becomes the loaded window it presents.
-      kept = null;
-      startRequest(window.position?.continuation ?? null, window.position?.offset ?? 0);
-      return;
-    }
-    startRequest(failed.continuation);
+    // A retry repeats the failed request of the same result, so a restoration still under way keeps
+    // acquiring the retained window and the intended state stays retained until it is presented
+    // (docs/user-interface.md#state-ownership-and-restoration).
+    startRequest(failed.continuation, failed.offset);
   }
 
   /**
@@ -691,6 +784,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       return;
     }
     kept = null;
+    interaction.abort();
     settled?.reject(new Error('The retained window was superseded before it was presented.'));
   }
 
@@ -1075,7 +1169,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
         continue;
       }
       const queue = fragmentQueue(kind);
-      for (const key of windowKeys) {
+      for (const key of fragmentRequestKeys(kind)) {
         if (fragmentState(key, kind) === null) {
           setFragmentState(key, kind, { status: 'loading', values: null, message: null });
           queue.pending.add(key);
@@ -1083,6 +1177,17 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       }
       pumpFragments(kind);
     }
+  }
+
+  /**
+   * Entries one kind is read for: the presented window, plus the tool availability of a selected
+   * target the window no longer presents (docs/user-interface.md#list-boundary).
+   */
+  function fragmentRequestKeys(kind: UiFragmentKind): ReadonlySet<string> {
+    if (kind !== 'tools' || retiredSelection.size === 0) {
+      return windowKeys;
+    }
+    return new Set([...windowKeys, ...retiredSelection.keys()]);
   }
 
   function reloadFragment(key: string, kind: UiFragmentKind): void {
@@ -1465,6 +1570,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     pending = null;
     invocation?.abort();
     invocation = null;
+    interaction.abort();
     for (const queue of fragmentQueues.values()) {
       queue.active?.controller.abort();
       queue.active = null;
@@ -1904,9 +2010,15 @@ function readPageSize(value: unknown): number {
 
 /**
  * Reads the state a page handed back to this list. An unreadable state is a page bug, not partial
- * input: the list refuses it instead of re-presenting a window nobody asked for.
+ * input: the list refuses it instead of re-presenting a window nobody asked for. A state that names
+ * no query keeps the context the list was created with; a page that hands back what `capture`
+ * returned always names the query the list owns.
  */
-function readRestoredState(value: unknown, pageSize: number): UiCardListState | null {
+function readRestoredState<Context>(
+  value: unknown,
+  pageSize: number,
+  context: Context,
+): UiCardListState<Context> | null {
   if (value === undefined || value === null) {
     return null;
   }
@@ -1938,17 +2050,48 @@ function readRestoredState(value: unknown, pageSize: number): UiCardListState | 
       keys.push(key);
     }
   }
+  const targets = readSelectedTargets(state.selectedTargets);
+  const restoredContext = state.context === undefined ? context : (state.context as Context);
   const scrollTop = state.scrollTop;
   if (typeof scrollTop !== 'number' || !Number.isFinite(scrollTop) || scrollTop < 0) {
     throw new TypeError('A retained list scroll offset is a finite, non-negative number.');
   }
   return {
+    context: restoredContext,
     position,
     window,
     selection: keys,
+    selectedTargets: targets,
     scrollTop,
     focus: readRestoredFocus(state.focus),
   };
+}
+
+/** Typed targets one retained selection carried for the entries outside its window. */
+function readSelectedTargets(value: unknown): readonly UiListSelectedTarget[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError('A retained list selection carries the typed targets of its entries.');
+  }
+  const targets: UiListSelectedTarget[] = [];
+  for (const candidate of value) {
+    const selectedTarget = readObject(candidate);
+    const key = selectedTarget?.key;
+    const target = readTarget(selectedTarget?.target);
+    if (
+      selectedTarget === null ||
+      typeof key !== 'string' ||
+      key.length === 0 ||
+      key.length > UI_LIMITS.entryKey ||
+      target === null
+    ) {
+      throw new TypeError('A retained list selection carries bounded entry targets.');
+    }
+    targets.push({ key, target });
+  }
+  return targets;
 }
 
 function readRestoredPosition(value: unknown, pageSize: number): UiListPosition | null {

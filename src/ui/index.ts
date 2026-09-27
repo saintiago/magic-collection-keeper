@@ -30,6 +30,7 @@ export {
   type UiEntryTag,
   type UiListFocus,
   type UiListPosition,
+  type UiListSelectedTarget,
 } from './internal/card-list.js';
 export type { UiDevice } from './internal/device.js';
 export type { UiDialogOptions, UiDialogs } from './internal/dialogs.js';

@@ -29,11 +29,14 @@ import type {
 import type {
   UiFragmentKind,
   UiFragmentResult,
-  UiCardListState as UiCardListRetainedState,
+  UiCardListState as UiCardListStateShape,
   UiListEntry,
   UiOperationOutcome,
 } from '../../src/ui/index.js';
 import { UI_LIMITS } from '../../src/ui/index.js';
+
+/** State one list retains for its page's history entry; these journeys evaluate text queries. */
+type UiCardListRetainedState = UiCardListStateShape<string>;
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const harnessPath = path.join(repoRoot, 'tests', 'browser', 'card-list.harness.ts');
@@ -1300,9 +1303,11 @@ test('restores the retained window, selection and local focus from its own sourc
   await install(page, 'a', {
     pageSize: 2,
     restored: {
+      context: 'result',
       window: 2,
       position: { continuation: 'cursor-1', offset: 0 },
       selection: ['card:2'],
+      selectedTargets: [],
       scrollTop: 0,
       focus: { control: 'select', key: 'card:2' },
     },
@@ -1314,9 +1319,11 @@ test('restores the retained window, selection and local focus from its own sourc
   expect(restored).toMatchObject({ continuation: 'cursor-1', aborted: false });
   expect(await restoration(page, 'a')).toEqual({ status: 'pending', message: null });
   expect(await capture(page, 'a')).toEqual({
+    context: 'result',
     window: 2,
     position: { continuation: 'cursor-1', offset: 0 },
     selection: ['card:2'],
+    selectedTargets: [],
     scrollTop: 0,
     focus: { control: 'select', key: 'card:2' },
   });
@@ -1340,9 +1347,11 @@ test('presents a restored window only once its further pages are back', async ({
   await install(page, 'a', {
     pageSize: 3,
     restored: {
+      context: 'result',
       window: 3,
       position: { continuation: null, offset: 1 },
       selection: [],
+      selectedTargets: [],
       scrollTop: 0,
       focus: null,
     },
@@ -1378,9 +1387,11 @@ test('keeps the intended state through repeated interruption, with the edits bes
 }) => {
   const errors = await openLists(page);
   const retained: UiCardListRetainedState = {
+    context: 'result',
     window: 4,
     position: { continuation: 'cursor-2', offset: 1 },
     selection: ['card:0', 'card:1'],
+    selectedTargets: [],
     scrollTop: 0,
     focus: null,
   };
@@ -1426,9 +1437,11 @@ test('reports a failed restoration, retries the retained position and starts fre
   await install(page, 'a', {
     pageSize: 2,
     restored: {
+      context: 'result',
       window: 2,
       position: { continuation: 'stale', offset: 0 },
       selection: ['card:5'],
+      selectedTargets: [],
       scrollTop: 0,
       focus: null,
     },
@@ -1466,9 +1479,11 @@ test('reports a failed restoration, retries the retained position and starts fre
   await install(page, 'a', {
     pageSize: 2,
     restored: {
+      context: 'result',
       window: 2,
       position: { continuation: 'stale', offset: 0 },
       selection: [],
+      selectedTargets: [],
       scrollTop: 0,
       focus: null,
     },
@@ -1572,5 +1587,358 @@ test('keeps a control the page rendered for an entry focused through window upda
   await install(page, 'a', { pageSize: 3, openEntry: true, restored: captured });
   await settlePage(page, (await lastRequest(page, 'a')).id, [card('1'), card('2'), card('3')]);
   await expect(page.locator('#list-a [id="open-card:1"]')).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+/** Card entries one page holds, starting at `from`, as the controlled source supplies them. */
+function cards(from: number, count: number): readonly UiListEntry[] {
+  return Array.from({ length: count }, (_, index) => card(String(from + index)));
+}
+
+/**
+ * Answers every tool-availability read one list recorded and this journey has not answered. The
+ * reads a settlement may queue further batches of, so the journey answers until the list stopped
+ * asking.
+ */
+async function answerToolReads(page: Page, list: string, answered: Set<number>): Promise<void> {
+  for (;;) {
+    const waiting = (await fragmentRequests(page)).filter(
+      (read) => read.list === list && !answered.has(read.id),
+    );
+    if (waiting.length === 0) {
+      return;
+    }
+    for (const read of waiting) {
+      answered.add(read.id);
+      await settleFragment(
+        page,
+        read.id,
+        read.keys.map((key) => ({ key, status: 'ready' as const, values: ['move'] })),
+      );
+    }
+  }
+}
+
+test('restores the typed targets of the selection its retained window retired', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  const tool = { id: 'move', label: 'Move copies' };
+  const answered = new Set<number>();
+  await install(page, 'a', { pageSize: 100, fragments: ['tools'], tools: [tool] });
+
+  // Six pages fill more than the bounded window, so the first hundred entries leave it; the first
+  // entry is selected before paging retires it.
+  for (let number = 0; number < 6; number += 1) {
+    if (number > 0) {
+      await page.locator('#list-a [data-ui-more]').click();
+    }
+    await settlePage(
+      page,
+      (await lastRequest(page, 'a')).id,
+      cards(number * 100, 100),
+      number === 5 ? null : `more-${number}`,
+    );
+    if (number === 0) {
+      await page.evaluate(() => {
+        const control = (globalThis as unknown as GlobalControl).keeperCardListControl;
+        control.setSelected('a', 'card:0', true);
+      });
+    }
+    await answerToolReads(page, 'a', answered);
+  }
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as GlobalControl).keeperCardListControl;
+    control.setSelected('a', 'card:599', true);
+  });
+
+  // The state names the explicit selection and the typed target the window no longer presents.
+  const captured = await capture(page, 'a');
+  expect(captured.selection).toEqual(['card:0', 'card:599']);
+  expect(captured.selectedTargets).toEqual([
+    { key: 'card:0', target: { kind: 'card', cardId: '0' } },
+  ]);
+  await close(page, 'a');
+
+  // The next visit re-acquires the retained window from the position it held.
+  const recorded = (await fragmentRequests(page)).length;
+  await install(page, 'a', {
+    pageSize: 100,
+    fragments: ['tools'],
+    tools: [tool],
+    restored: captured,
+  });
+  expect(await restoration(page, 'a')).toEqual({ status: 'pending', message: null });
+  for (let number = 1; number < 6; number += 1) {
+    await settlePage(
+      page,
+      (await lastRequest(page, 'a')).id,
+      cards(number * 100, 100),
+      number === 5 ? null : `more-${number}`,
+    );
+  }
+  expect(await restoration(page, 'a')).toEqual({ status: 'presented', message: null });
+  expect(await state(page, 'a')).toMatchObject({ selection: ['card:0', 'card:599'] });
+  expect(await capture(page, 'a')).toMatchObject({
+    selection: ['card:0', 'card:599'],
+    selectedTargets: [{ key: 'card:0', target: { kind: 'card', cardId: '0' } }],
+  });
+
+  // Tool availability is read again for the retired target, exactly as for a presented entry.
+  await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeDisabled();
+  await answerToolReads(page, 'a', answered);
+  expect(
+    (await fragmentRequests(page))
+      .slice(recorded)
+      .some((read) => read.kind === 'tools' && read.keys.includes('card:0')),
+  ).toBe(true);
+  await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeEnabled();
+
+  // The invocation acts on the explicit selection across the restored window, targets included.
+  await page.locator('#list-a [data-ui-tool="move"]').click();
+  expect((await toolRequests(page)).at(-1)).toMatchObject({
+    selection: ['card:0', 'card:599'],
+    targets: ['card:0', 'card:599'],
+  });
+  expect(errors).toEqual([]);
+});
+
+test('offers the further results of a restored window once it presented it', async ({ page }) => {
+  const errors = await openLists(page);
+  await install(page, 'a', {
+    pageSize: 2,
+    restored: {
+      context: 'result',
+      window: 2,
+      position: { continuation: null, offset: 0 },
+      selection: [],
+      selectedTargets: [],
+      scrollTop: 0,
+      focus: null,
+    },
+  });
+
+  await settlePage(page, (await onlyRequest(page, 'a')).id, [card('1'), card('2')], 'next');
+
+  // The restored window is back, so the list offers the further results of the same query again.
+  expect(await restoration(page, 'a')).toEqual({ status: 'presented', message: null });
+  expect((await state(page, 'a')).hasMore).toBe(true);
+  await expect(page.locator('#list-a [data-ui-more]')).toBeVisible();
+  await page.locator('#list-a [data-ui-more]').click();
+
+  const following = await lastRequest(page, 'a');
+  expect(following).toMatchObject({ continuation: 'next', aborted: false });
+  await settlePage(page, following.id, [card('3')]);
+  expect((await state(page, 'a')).entries).toEqual(['card:1', 'card:2', 'card:3']);
+  expect(errors).toEqual([]);
+});
+
+test('replaces the source position of the entries a replacement result reorders', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 2 });
+  await settlePage(page, (await onlyRequest(page, 'a')).id, [card('1'), card('2')], 'next');
+
+  // The refreshed result still holds an entry the previous result held elsewhere: the source owns
+  // the ordering, so the retained position follows the entry the window starts with now.
+  await refresh(page, 'a');
+  await settlePage(page, (await lastRequest(page, 'a')).id, [card('2'), card('3')]);
+  const refreshed = await capture(page, 'a');
+  expect(refreshed).toMatchObject({ position: { continuation: null, offset: 0 }, window: 2 });
+
+  await close(page, 'a');
+  await install(page, 'a', { pageSize: 2, restored: refreshed });
+  await settlePage(page, (await lastRequest(page, 'a')).id, [card('2'), card('3')]);
+  expect((await state(page, 'a')).entries).toEqual(['card:2', 'card:3']);
+  expect(await restoration(page, 'a')).toEqual({ status: 'presented', message: null });
+
+  // A refinement replaces the positions the same way, and the state names the refined query.
+  await refine(page, 'a', 'corrected');
+  await settlePage(page, (await lastRequest(page, 'a')).id, [card('3'), card('2')]);
+  const refined = await capture(page, 'a');
+  expect(refined).toMatchObject({
+    context: 'corrected',
+    position: { continuation: null, offset: 0 },
+    window: 2,
+  });
+
+  await close(page, 'a');
+  await install(page, 'a', { pageSize: 2, restored: refined });
+  const resumed = await lastRequest(page, 'a');
+  expect(resumed).toMatchObject({ context: 'corrected', continuation: null });
+  await settlePage(page, resumed.id, [card('3'), card('2')]);
+  expect((await state(page, 'a')).entries).toEqual(['card:3', 'card:2']);
+  expect(errors).toEqual([]);
+});
+
+test('keeps the interaction the user made while a delayed restoration loads', async ({ page }) => {
+  const errors = await openLists(page);
+  const entries = cards(0, 6);
+  await page.evaluate(() => {
+    const draft = document.createElement('input');
+    draft.id = 'draft';
+    draft.setAttribute('aria-label', 'Draft');
+    document.getElementById('root')!.prepend(draft);
+  });
+  const retained: UiCardListRetainedState = {
+    context: 'result',
+    window: 6,
+    position: { continuation: null, offset: 0 },
+    selection: [],
+    selectedTargets: [],
+    scrollTop: 30,
+    focus: { control: 'select', key: 'card:5' },
+  };
+  await install(page, 'a', { pageSize: 6, scrollable: true, restored: retained });
+  await expect.poll(() => restoration(page, 'a')).toMatchObject({ status: 'pending' });
+
+  // The user edits a draft beside the list while its window is still loading: the arriving window
+  // must not move the focus the user chose or scroll the list under it.
+  await page.locator('#draft').focus();
+  await page.keyboard.type('draft');
+  await settlePage(page, (await lastRequest(page, 'a')).id, entries);
+
+  await expect.poll(() => restoration(page, 'a')).toMatchObject({ status: 'presented' });
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe('draft');
+  expect(await page.evaluate(() => document.getElementById('list-a')!.scrollTop)).toBe(0);
+  expect(await capture(page, 'a')).toMatchObject({ focus: null, scrollTop: 0, window: 6 });
+
+  // An interaction inside the list supersedes the retained interaction as well: the user's own
+  // control keeps the focus while the rest of the retained window arrives.
+  await close(page, 'a');
+  await install(page, 'b', {
+    pageSize: 2,
+    scrollable: true,
+    restored: { ...retained, window: 4, focus: { control: 'select', key: 'card:4' } },
+  });
+  await settlePage(page, (await lastRequest(page, 'b')).id, [card('1'), card('2')], 'next');
+  await page.locator('#list-b [data-ui-select="card:1"]').click();
+  await settlePage(page, (await lastRequest(page, 'b')).id, [card('3'), card('4')]);
+
+  await expect.poll(() => restoration(page, 'b')).toMatchObject({ status: 'presented' });
+  await expect(page.locator('#list-b [data-ui-select="card:1"]')).toBeFocused();
+  expect(await page.evaluate(() => document.getElementById('list-b')!.scrollTop)).toBe(0);
+  expect((await state(page, 'b')).entries).toEqual(['card:1', 'card:2', 'card:3', 'card:4']);
+  expect(errors).toEqual([]);
+});
+
+test('keeps the intended window through a retry and finishes acquiring it', async ({ page }) => {
+  const errors = await openLists(page);
+  const retained: UiCardListRetainedState = {
+    context: 'result',
+    window: 4,
+    position: { continuation: 'p3', offset: 1 },
+    selection: ['card:9'],
+    selectedTargets: [],
+    scrollTop: 0,
+    focus: null,
+  };
+  await install(page, 'a', { pageSize: 4, restored: retained });
+
+  // The first request of the retained window fails; the intended window stays retained.
+  const first = await onlyRequest(page, 'a');
+  expect(first).toMatchObject({ continuation: 'p3' });
+  await failPage(page, first.id, 'Results unavailable');
+  expect(await capture(page, 'a')).toMatchObject({
+    window: 4,
+    position: { continuation: 'p3', offset: 1 },
+  });
+
+  // Retry repeats the failed request of the restoration, so the intended window stays retained
+  // while it is pending and the source is asked for the same position again.
+  await page.locator('#list-a [data-ui-retry]').click();
+  const retried = await lastRequest(page, 'a');
+  expect(retried).toMatchObject({ continuation: 'p3', aborted: false });
+  expect(await capture(page, 'a')).toMatchObject({
+    window: 4,
+    position: { continuation: 'p3', offset: 1 },
+  });
+
+  // The recovered page resumes inside its own page, and the list keeps acquiring the retained
+  // window instead of stopping at the partial one.
+  await settlePage(page, retried.id, [card('0'), card('1'), card('2'), card('3')], 'p4');
+  const continued = await lastRequest(page, 'a');
+  expect(continued).toMatchObject({ continuation: 'p4', aborted: false });
+  await settlePage(page, continued.id, [card('4')]);
+  expect((await state(page, 'a')).entries).toEqual(['card:1', 'card:2', 'card:3', 'card:4']);
+  expect(await restoration(page, 'a')).toEqual({
+    status: 'interrupted',
+    message: 'Results unavailable',
+  });
+  expect(await capture(page, 'a')).toMatchObject({
+    window: 4,
+    position: { continuation: 'p3', offset: 1 },
+  });
+
+  // A later page of the restoration fails as well: the retry continues from that page, never from
+  // the beginning of the result, and the partial window is never captured.
+  await close(page, 'a');
+  await install(page, 'a', {
+    pageSize: 4,
+    restored: { ...retained, position: { continuation: 'p3', offset: 0 }, selection: [] },
+  });
+  await settlePage(page, (await lastRequest(page, 'a')).id, [card('1'), card('2')], 'p4');
+  const later = await lastRequest(page, 'a');
+  expect(later).toMatchObject({ continuation: 'p4' });
+  await failPage(page, later.id, 'Results unavailable');
+  expect(await capture(page, 'a')).toMatchObject({
+    window: 4,
+    position: { continuation: 'p3', offset: 0 },
+  });
+
+  await page.locator('#list-a [data-ui-retry]').click();
+  const resumedPage = await lastRequest(page, 'a');
+  expect(resumedPage).toMatchObject({ continuation: 'p4', aborted: false });
+  await settlePage(page, resumedPage.id, [card('3'), card('4')]);
+  expect((await state(page, 'a')).entries).toEqual(['card:1', 'card:2', 'card:3', 'card:4']);
+  expect(await capture(page, 'a')).toMatchObject({
+    window: 4,
+    position: { continuation: 'p3', offset: 0 },
+  });
+  expect(errors).toEqual([]);
+});
+
+test('retains the query a refinement intends while its result is unavailable', async ({ page }) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 2, context: 'old' });
+  await settlePage(page, (await onlyRequest(page, 'a')).id, [card('1'), card('2')], 'old-page-3');
+  expect((await capture(page, 'a')).context).toBe('old');
+
+  // The user refines the query and leaves before the replacement arrives: the state names the
+  // refined query and holds no position of the previous one.
+  await refine(page, 'a', 'new');
+  const pending = await capture(page, 'a');
+  expect(pending).toMatchObject({ context: 'new', position: null, window: 0 });
+
+  await close(page, 'a');
+  await install(page, 'a', { pageSize: 2, context: 'stale', restored: pending });
+  const started = await lastRequest(page, 'a');
+  expect(started).toMatchObject({ context: 'new', continuation: null, aborted: false });
+  await settlePage(page, started.id, [card('7'), card('8')], 'new-page-2');
+  expect((await state(page, 'a')).entries).toEqual(['card:7', 'card:8']);
+
+  // A completed refinement is retained with its own query and position, so the next visit restores
+  // it without the page mirroring the list's query.
+  const refined = await capture(page, 'a');
+  expect(refined).toMatchObject({
+    context: 'new',
+    window: 2,
+    position: { continuation: null, offset: 0 },
+  });
+  await close(page, 'a');
+  await install(page, 'a', { pageSize: 2, context: 'stale', restored: refined });
+  const resumed = await lastRequest(page, 'a');
+  expect(resumed).toMatchObject({ context: 'new', continuation: null });
+  await settlePage(page, resumed.id, [card('7'), card('8')], 'new-page-2');
+  expect((await state(page, 'a')).entries).toEqual(['card:7', 'card:8']);
+  expect(await restoration(page, 'a')).toEqual({ status: 'presented', message: null });
+
+  // A refinement whose replacement never arrived keeps the refined query as well.
+  await refine(page, 'a', 'other');
+  const failed = await lastRequest(page, 'a');
+  expect(failed).toMatchObject({ context: 'other', continuation: null });
+  await failPage(page, failed.id, 'Search unavailable');
+  expect(await capture(page, 'a')).toMatchObject({ context: 'other', position: null, window: 0 });
   expect(errors).toEqual([]);
 });

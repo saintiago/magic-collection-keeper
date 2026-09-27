@@ -33,6 +33,8 @@ export interface UiShellControl {
   completeDeviceRelease(message?: string): void;
   /** Answers the asynchronous page's held result requests, as the source's response arriving would. */
   answerAsyncResults(): void;
+  /** Rejects the asynchronous page's held result requests, as a failing source would. */
+  failAsyncResults(): void;
   /** Inserts late content above the presented window, as decoded images or fragments would. */
   shiftAsyncLayout(): void;
   /** Result requests the asynchronous page holds, waiting for the journey to answer them. */
@@ -179,6 +181,9 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     answerAsyncResults: () => {
       asyncResults.answer();
     },
+    failAsyncResults: () => {
+      asyncResults.fail();
+    },
     shiftAsyncLayout: () => {
       asyncResults.grow();
     },
@@ -215,10 +220,12 @@ function fixturePages(
  * so it can interrupt a history restoration before or between the pages it reloads.
  */
 interface AsyncResults {
-  /** Waits until the journey answers this request. */
-  hold(): Promise<void>;
+  /** Waits until the journey answers or fails this request. */
+  hold(): Promise<'answer' | 'fail'>;
   /** Answers every request waiting now, as those source responses arriving would. */
   answer(): void;
+  /** Rejects every request waiting now, as a failing source would. */
+  fail(): void;
   /** Requests waiting for their answer. */
   pending(): number;
   /** Inserts content above the presented window, as late layout arriving would. */
@@ -228,13 +235,18 @@ interface AsyncResults {
 }
 
 function createAsyncResults(): AsyncResults {
-  const waiting: (() => void)[] = [];
+  const waiting: ((outcome: 'answer' | 'fail') => void)[] = [];
   let grow = (): void => {};
   return {
-    hold: () => new Promise<void>((resolve) => waiting.push(resolve)),
+    hold: () => new Promise((resolve) => waiting.push(resolve)),
     answer: () => {
       for (const resolve of waiting.splice(0)) {
-        resolve();
+        resolve('answer');
+      }
+    },
+    fail: () => {
+      for (const resolve of waiting.splice(0)) {
+        resolve('fail');
       }
     },
     pending: () => waiting.length,
@@ -255,8 +267,9 @@ const asyncResultPageSize = 50;
  * Asynchronous Home of the interrupted-restoration journeys: it serves its results in pages a
  * journey answers one response at a time, keeps the entries it presented as its own restoration
  * state, and a visit that restores them reports the presentation only once the window the history
- * entry kept is back (docs/user-interface.md#pages-and-navigation). A visit that redirects while
- * presenting sends the user to Collection instead.
+ * entry kept is back (docs/user-interface.md#pages-and-navigation). A journey can reject a request,
+ * which reports a failed presentation, and clear the page state through a control. A visit that
+ * redirects while presenting sends the user to Collection instead.
  */
 function asyncHomePage(
   document: Document,
@@ -269,10 +282,21 @@ function asyncHomePage(
     mount(container, context) {
       const restored = context.restored?.state ?? null;
       const kept = readLoadedWindow(restored);
+      // The state the entry supplied tells the journey what the shell handed this visit.
+      const restoredLoaded = readRecord(restored)?.loaded;
+      log.push(`async-state:${typeof restoredLoaded === 'number' ? restoredLoaded : 'none'}`);
       const target = kept > 0 ? kept : asyncResultTotal;
       const status = document.createElement('p');
       status.id = 'async-loaded';
       const host = document.createElement('ol');
+      const clear = document.createElement('button');
+      clear.type = 'button';
+      clear.id = 'async-clear';
+      clear.textContent = 'Clear results';
+      clear.addEventListener('click', () => {
+        cleared = true;
+        log.push('async-cleared');
+      });
       const tail = document.createElement('div');
       tail.style.height = '600px';
       // Late content the journey inserts above the presented window, as decoded images would.
@@ -283,18 +307,19 @@ function asyncHomePage(
           container.prepend(late);
         }
       });
-      container.append(status, host, tail);
+      container.append(status, clear, host, tail);
       const presented = Promise.withResolvers<void>();
       let loaded = 0;
       let next = 1;
       let done = false;
+      let cleared = false;
       renderLoaded();
       load();
       return {
         // The entry keeps the window it is restoring until the source has presented it again, so a
         // history entry interrupted while loading it keeps that window
         // (docs/user-interface.md#state-ownership-and-restoration).
-        capture: () => ({ loaded: done || kept === 0 ? loaded : kept }),
+        capture: () => (cleared ? null : { loaded: done || kept === 0 ? loaded : kept }),
         ...(kept > 0 ? { presented: () => presentKeptWindow() } : {}),
       };
 
@@ -322,8 +347,16 @@ function asyncHomePage(
         const from = next;
         const to = Math.min(from + asyncResultPageSize - 1, asyncResultTotal);
         next = to + 1;
-        void results.hold().then(() => {
+        void results.hold().then((outcome) => {
           if (context.signal.aborted) {
+            return;
+          }
+          if (outcome === 'fail') {
+            // The source rejected the request: the page cannot present the entry it is restoring.
+            log.push(`async-failed:${loaded}`);
+            if (kept > 0) {
+              presented.reject(new Error('The results could not load.'));
+            }
             return;
           }
           for (let index = from; index <= to; index += 1) {

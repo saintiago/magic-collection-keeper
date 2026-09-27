@@ -115,6 +115,14 @@ async function answerAsyncResults(page: Page): Promise<void> {
   });
 }
 
+/** Rejects every held result request, as a failing source would. */
+async function failAsyncResults(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.failAsyncResults();
+  });
+}
+
 /** Answers held result requests until the asynchronous page presented `count` results. */
 async function completeAsyncResults(page: Page, count: number): Promise<void> {
   const entry = page.locator(`#async-result-${count}`);
@@ -726,6 +734,83 @@ test('a disposed shell ignores the delayed work of its last page', async ({ page
 
   await expect.poll(() => notes(page)).toContain('card-dialog:false');
   await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+test('a failed restoration keeps the entry interaction until explicit input', async ({ page }) => {
+  const errors = await openShell(page, '#/', { asyncResults: true });
+  await completeAsyncResults(page, 100);
+
+  // Leave the entry from one of its results, with the focused element and the scroll offset the
+  // entry keeps for the way back.
+  await page.locator('#async-result-70').focus();
+  await page.locator('#async-result-70').evaluate((element) => {
+    window.scrollBy(0, element.getBoundingClientRect().top - 120);
+  });
+  const savedScroll = await page.evaluate(() => window.scrollY);
+  await page.locator('#async-result-70').click();
+  await expect(page.locator('#card-level')).toHaveText('card-70/-/-');
+
+  // Back restores the entry, and the source rejects the request the page presents it through.
+  await page.goBack();
+  await expect.poll(() => asyncPending(page)).toBeGreaterThan(0);
+  await failAsyncResults(page);
+
+  // The failed presentation stops the automatic restoration without discarding the entry's
+  // interaction: leaving and returning supplies the saved focus and scroll offset again, not the
+  // empty view the shell focused while the page was still empty.
+  await page.goForward();
+  await expect(page.locator('#card-level')).toHaveText('card-70/-/-');
+  await page.goBack();
+  await completeAsyncResults(page, 100);
+  await expect(page.locator('#async-result-70')).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(savedScroll);
+  expect(errors).toEqual([]);
+});
+
+test('input after a failed restoration replaces the retained interaction', async ({ page }) => {
+  const errors = await openShell(page, '#/', { asyncResults: true });
+  await completeAsyncResults(page, 100);
+  await page.locator('#async-result-70').focus();
+  await page.locator('#async-result-70').click();
+  await expect(page.locator('#card-level')).toHaveText('card-70/-/-');
+
+  await page.goBack();
+  await expect.poll(() => asyncPending(page)).toBeGreaterThan(0);
+  await failAsyncResults(page);
+
+  // The user acts after the presentation failed: the entry stops keeping the context it could not
+  // apply and captures the interaction the user chose from here on.
+  await page.keyboard.press('Tab');
+  await page.goForward();
+  await expect(page.locator('#card-level')).toHaveText('card-70/-/-');
+  await page.goBack();
+  await completeAsyncResults(page, 100);
+  await expect(page.locator('#async-result-70')).not.toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test('an explicitly cleared page state stays cleared for the way back', async ({ page }) => {
+  const errors = await openShell(page, '#/', { asyncResults: true });
+  await completeAsyncResults(page, 100);
+  await page.locator('#async-result-100').click();
+  await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+
+  // Back presents the entry while its window is still loading; the page clears the state it
+  // retains before the user leaves it again.
+  await page.goBack();
+  await expect.poll(() => asyncPending(page)).toBeGreaterThan(0);
+  await page.getByRole('button', { name: 'Clear results' }).click();
+  await page.goForward();
+  await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+
+  // The entry kept what the page captured — no page state at all — instead of the state it was
+  // still restoring.
+  const mounts = (await notes(page)).filter((note) => note.startsWith('async-state:')).length;
+  await page.goBack();
+  await completeAsyncResults(page, 100);
+  const supplied = (await notes(page)).filter((note) => note.startsWith('async-state:'));
+  expect(supplied.slice(mounts)).toEqual(['async-state:none']);
+  expect(errors).toEqual([]);
 });
 
 for (const transition of ['navigate', 'replace', 'back', 'hash', 'account', 'dispose'] as const) {
