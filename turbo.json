@@ -29,6 +29,9 @@
       "cache": false,
       "env": ["KEEPER_PYTHON"]
     },
+    "test:recognition": {
+      "cache": false
+    },
     "test:browser": {
       "cache": false
     }

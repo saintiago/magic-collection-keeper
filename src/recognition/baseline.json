@@ -1,0 +1,340 @@
+{
+  "baseline": {
+    "repository": "https://github.com/saintiago/magic-collection-keeper.git",
+    "revision": "128c903ff109868acc854f0ff239c8c0f925d803",
+    "reference": "E:/projects/magic-keeper-old (WSL /mnt/e/projects/magic-keeper-old)"
+  },
+  "note": "Retained recognition baseline. Entries in files are byte-identical to the pinned revision; adapted entries moved into the rebuilt component structure or gained an optional-dependency guard without changing engine behaviour.",
+  "files": {
+    "src/recognition/browser/backend-recognition.js": {
+      "source": "public/backend-recognition.js",
+      "sha256": "789f773931de8cb76f089c94162991c720fa9c047de0a7f4a51061eed7dfa598"
+    },
+    "src/recognition/browser/browser-recognition.js": {
+      "source": "public/browser-recognition.js",
+      "sha256": "37efb7e30c8ec609047f75660bca5208a3eb2e88440f1adac5544c3c01b0ab39"
+    },
+    "src/recognition/browser/camera-quality.js": {
+      "source": "public/camera-quality.js",
+      "sha256": "722811d35394487c8d7e62f9caeb9e925b5d635755cd00717c0a1e7d9fe4ba60"
+    },
+    "src/recognition/browser/camera.js": {
+      "source": "public/camera.js",
+      "sha256": "8d135e9513623e4bd6dab68875b72f7ba4fa40a1d1aa59e9b377ef77ffb4d34d"
+    },
+    "src/recognition/browser/card-regions.js": {
+      "source": "public/card-regions.js",
+      "sha256": "3901a774a7b128451eef2256c9fbde3bbbf3d2834248a40dd5460718d73fda73"
+    },
+    "src/recognition/browser/collectorvision-math.js": {
+      "source": "public/collectorvision-math.js",
+      "sha256": "48b06ae6fc793bcc03e34c8ef7a5793898ed88af432a77b56639695fd56cf577"
+    },
+    "src/recognition/browser/hybrid-recognition.js": {
+      "source": "public/hybrid-recognition.js",
+      "sha256": "00638b266e02929a04fbc29b570450e4640957ac1fbeb2a409b55ffe24b41bbe"
+    },
+    "src/recognition/browser/independent-recognition.js": {
+      "source": "public/independent-recognition.js",
+      "sha256": "384b0262d9a8cbfdc07c2835b38b0c81e2ca872dbc319cd33d37980067ce596b"
+    },
+    "src/recognition/browser/recognition-candidates.js": {
+      "source": "public/recognition-candidates.js",
+      "sha256": "a52dad015f639784f4e5c75bfab919a20b3b0138201bbb2ac9831515b91085de"
+    },
+    "src/recognition/browser/recognition-race.js": {
+      "source": "public/recognition-race.js",
+      "sha256": "ac0b75f502cd4c6b8a00efb17147355f523b2a1b13087ea441167aacb99b2f92"
+    },
+    "src/recognition/browser/scan-admission.js": {
+      "source": "public/scan-admission.js",
+      "sha256": "de44fcdb0abf421204945ad628eb64c4f5bb12532f660a09a4c75d6524113542"
+    },
+    "src/recognition/browser/scan-overlay.js": {
+      "source": "public/scan-overlay.js",
+      "sha256": "6cf0dece3681eb3caac7f3bedded07ba8d9542e48d776d836f0d46a8ba564e98"
+    },
+    "src/recognition/browser/scan-sequence.js": {
+      "source": "public/scan-sequence.js",
+      "sha256": "8f0191348e54a2448ba4a71848ee50cc4e8c0575037b7862cb94e7848f3078b4"
+    },
+    "src/recognition/browser/scan-transition.js": {
+      "source": "public/scan-transition.js",
+      "sha256": "70d679c520b0b2ea4017040d6b7907007bb9742bd34da7e9b500333915fac849"
+    },
+    "src/recognition/browser/visual-assets.js": {
+      "source": "public/visual-assets.js",
+      "sha256": "38a5d82c7a58979bccc5b614788fbfafab76626fd33b000ed3842aef4ce90863"
+    },
+    "src/recognition/browser/visual-lighting.js": {
+      "source": "public/visual-lighting.js",
+      "sha256": "19e3871c732b65cbd40f280b10acc3b2ab7d7531c8cf90f129f279c296149f8a"
+    },
+    "src/recognition/browser/visual-pixels.js": {
+      "source": "public/visual-pixels.js",
+      "sha256": "4548c92c37f1fe99a9fa58ca27076c743dbaf83454aef176b39edd5e04ceaec8"
+    },
+    "src/recognition/browser/visual-search.js": {
+      "source": "public/visual-search.js",
+      "sha256": "aaa7453a7029ca7c88ed5268f73fa0167954a41aeed97d9c80b32722a988bbf7"
+    },
+    "src/recognition/browser/visual-worker.js": {
+      "source": "public/visual-worker.js",
+      "sha256": "49d2a624cb5b48e43360429b289bf80122bb5bab9b2d10d608bcfca4f201c4c1"
+    },
+    "src/recognition/python/LICENSE": {
+      "source": "recognition/LICENSE",
+      "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+    },
+    "src/recognition/python/adapters/bedrock_identity.py": {
+      "source": "recognition/adapters/bedrock_identity.py",
+      "sha256": "043b34ae1d5b61f8a6b8e57f0b54f8a1110c4ee69b66a393c17f543a1ad81d0d"
+    },
+    "src/recognition/python/adapters/bedrock_title.py": {
+      "source": "recognition/adapters/bedrock_title.py",
+      "sha256": "d2d1c7676b280b59d65716497c3c66636aaadca198548cd308e10fbfaebcb1dd"
+    },
+    "src/recognition/python/adapters/card_regions.py": {
+      "source": "recognition/adapters/card_regions.py",
+      "sha256": "123b2afd018ff1ea94dded4520ebc512c6d6fdb4d83b36b699efb2988336b61c"
+    },
+    "src/recognition/python/adapters/collectorvision.py": {
+      "source": "recognition/adapters/collectorvision.py",
+      "sha256": "2d56751339b46f46a102722eac46e1291504aa7b6574e97ee351c1fcbfae0bc1"
+    },
+    "src/recognition/python/adapters/paddle.py": {
+      "source": "recognition/adapters/paddle.py",
+      "sha256": "16d875a87d6316d3a101c7fed8fd5ff89dfdac0342d73466e75e0a265fcd0da8"
+    },
+    "src/recognition/python/adapters/paddle_onnx.py": {
+      "source": "recognition/adapters/paddle_onnx.py",
+      "sha256": "e7b84e66479052cb18077ba777439c6adae890374d33a3661ed5dd3b89c01e34"
+    },
+    "src/recognition/python/adapters/title_names.py": {
+      "source": "recognition/adapters/title_names.py",
+      "sha256": "91fe072c5659881ced973cefc404abe32ec5f8886e9090be0e036ca93b887cb4"
+    },
+    "src/recognition/python/adapters/visual_lighting.py": {
+      "source": "recognition/adapters/visual_lighting.py",
+      "sha256": "57f881acc4f0db2441f40b48759f70e0328ec397f5bdf4936b15397fe27efe9a"
+    },
+    "src/recognition/python/adapters/visual_search.py": {
+      "source": "recognition/adapters/visual_search.py",
+      "sha256": "4906cca51cd7a9b460ce23fd6abe057d4a4a731af98625356924d5250c9454db"
+    },
+    "src/recognition/python/artifact-manifest.json": {
+      "source": "recognition/artifact-manifest.json",
+      "sha256": "e1c5506ccce3e7af188e76d5c3b77c24145311562aa99934e3397e928f0c0a39"
+    },
+    "src/recognition/python/catalog-feed.json": {
+      "source": "recognition/catalog-feed.json",
+      "sha256": "15e5d3d3489949f6e36fa78cd606a7a30ed2d8e4261e2b50bea01b559463a5f4"
+    },
+    "src/recognition/python/composition.py": {
+      "source": "recognition/composition.py",
+      "sha256": "2c5378af34f6503ee0979c396e1ac3853b6bab486b926b97fdffe5241c37299c"
+    },
+    "src/recognition/python/fixtures/adaptive.jpg": {
+      "source": "recognition/fixtures/adaptive.jpg",
+      "sha256": "03a53910a88381e2e1e3320d8039b7cc25527c9b4caa1a9f16743b44421c04c4"
+    },
+    "src/recognition/python/fixtures/bolt.jpg": {
+      "source": "recognition/fixtures/bolt.jpg",
+      "sha256": "addec86a68a7556fe92faee1189394447c1c597529402d6612e9fbf116438f1a"
+    },
+    "src/recognition/python/fixtures/ring.jpg": {
+      "source": "recognition/fixtures/ring.jpg",
+      "sha256": "f336ded9d57cb5d0501990185af16c9c08cbca5ffe66ae5eca3ec5a5f0ffee20"
+    },
+    "src/recognition/python/handler.py": {
+      "source": "recognition/handler.py",
+      "sha256": "431ca53efae2b85d2cad7fc8848116fc4dcecb8fae0ee82328185c34eda03c6b"
+    },
+    "src/recognition/python/independent_policy.py": {
+      "source": "recognition/independent_policy.py",
+      "sha256": "3146dcd146f8bad59523b368946ddfe535b08b49c7fef0f3edaed2a5a3363afc"
+    },
+    "src/recognition/python/independent_service.py": {
+      "source": "recognition/independent_service.py",
+      "sha256": "01d9f54212854d9b3698aa59dd4da57c99dc1adafb9327258919e20998ffe6bd"
+    },
+    "src/recognition/python/lambda_entry.py": {
+      "source": "recognition/lambda_entry.py",
+      "sha256": "8a41b65720726ba20342a55b3699dc7c75268a543613c8b3bfc3e88e64221d73"
+    },
+    "src/recognition/python/name-catalog.json": {
+      "source": "recognition/name-catalog.json",
+      "sha256": "6d94cb587a11d04fe3e817bfcabe57ed96339bab060eb72a5a2b52beda2e5b75"
+    },
+    "src/recognition/python/notices/CollectorVision-AGPL-3.0.txt": {
+      "source": "recognition/notices/CollectorVision-AGPL-3.0.txt",
+      "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+    },
+    "src/recognition/python/notices/CollectorVisionCatalog-MIT.txt": {
+      "source": "recognition/notices/CollectorVisionCatalog-MIT.txt",
+      "sha256": "cd39258adaa0188e454d226b4f998e2b317cd8c39f4be1ea83114645c1d55a7d"
+    },
+    "src/recognition/python/notices/Paddle2ONNX-Apache-2.0.txt": {
+      "source": "recognition/notices/Paddle2ONNX-Apache-2.0.txt",
+      "sha256": "ba77dd623b6441638120d06f0426db80f9032c457dac18f4ad8f1f06fd97e2db"
+    },
+    "src/recognition/python/notices/PaddleOCR-Apache-2.0.txt": {
+      "source": "recognition/notices/PaddleOCR-Apache-2.0.txt",
+      "sha256": "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e"
+    },
+    "src/recognition/python/notices/README.txt": {
+      "source": "recognition/notices/README.txt",
+      "sha256": "a398586710ff341a5a2d173c6a94b5ac379a5d0b1ba2820af35505b12b0e3b7e"
+    },
+    "src/recognition/python/notices/RapidOCR-Apache-2.0.txt": {
+      "source": "recognition/notices/RapidOCR-Apache-2.0.txt",
+      "sha256": "3e0af25fdd06aa9586ae97adb00ea927ebe5a3805ac77d2d3a81ce5f55693333"
+    },
+    "src/recognition/python/ocr-models.json": {
+      "source": "recognition/ocr-models.json",
+      "sha256": "6e362b1e9f5f3cdd8b361317eb71c6fc982b94d61378dc4d3aa0414db38ccf41"
+    },
+    "src/recognition/python/policy.py": {
+      "source": "recognition/policy.py",
+      "sha256": "a7dff70b477e5d002b0cdc734dde5b06b356bae99e664a913fddd73dd115c606"
+    },
+    "src/recognition/python/ports.py": {
+      "source": "recognition/ports.py",
+      "sha256": "a84412ad62a76715aa0cc87e15c62b13e81a076300b24a58df61b76270c7df5c"
+    },
+    "src/recognition/python/requirements-converter.txt": {
+      "source": "recognition/requirements-converter.txt",
+      "sha256": "fd2c791c5d8b1592e90e18f584202490e10a90d90857734449ae32ffe7d893f3"
+    },
+    "src/recognition/python/requirements-linux.txt": {
+      "source": "recognition/requirements-linux.txt",
+      "sha256": "5d283f6d5d234ed2c7851413f80f7f563e86e02db13c92e47a199be149d57067"
+    },
+    "src/recognition/python/requirements-visual.txt": {
+      "source": "recognition/requirements-visual.txt",
+      "sha256": "b617925f216d5563f077e4a56530b1690610f90a435e68421b0f4b0075b37d1b"
+    },
+    "src/recognition/python/requirements.in": {
+      "source": "recognition/requirements.in",
+      "sha256": "4d8679eb35d0d59c1ff9a33e33db435a11ee8f0b53cbe556b4efddaa83e44da7"
+    },
+    "src/recognition/python/scripts/convert_ocr.py": {
+      "source": "recognition/scripts/convert_ocr.py",
+      "sha256": "f13d34396da5b27c897d1b77ce1ef91b9215eb241ecd5e2f2fd4efa21f2b790e"
+    },
+    "src/recognition/python/scripts/smoke.py": {
+      "source": "recognition/scripts/smoke.py",
+      "sha256": "274d21d219499c82cdcbfa675e97513da99cb1577cdf3e3201150a56b686e34e"
+    },
+    "src/recognition/python/service.py": {
+      "source": "recognition/service.py",
+      "sha256": "8c328cee661e326730d72241a20e0c630c36972317af9d4ec29f24b0b3def81e"
+    },
+    "src/recognition/python/tests/test_contract.py": {
+      "source": "recognition/tests/test_contract.py",
+      "sha256": "e0e29938e18466ef02813f2137444981691865ff4b73d69a24bd2322b0627790"
+    },
+    "src/recognition/python/tests/test_timing.py": {
+      "source": "recognition/tests/test_timing.py",
+      "sha256": "ec746ee5ca9f6811a8a7b8a6af6267d7d78dc53246b82fe3c9c08d21a2a60b0b"
+    },
+    "src/recognition/python/timing.py": {
+      "source": "recognition/timing.py",
+      "sha256": "59cd58ca6776629528230ad3e425da4099585759a9fc41ef5080fa99721f245d"
+    },
+    "tests/recognition/sources.json": {
+      "source": "tests/performance/sources.json",
+      "sha256": "1bef8d912bcdfdc7e2e7ec312bd3e6ee426b32f98fb21d90d4682be9e8d6c295"
+    }
+  },
+  "adapted": {
+    "src/recognition/python/tests/test_public_fixtures.py": {
+      "source": "recognition/tests/test_public_fixtures.py",
+      "reason": "the recognition package, its public-art manifest and the source bundle live at their rebuilt component paths"
+    },
+    "src/recognition/python/tests/test_transport.py": {
+      "source": "recognition/tests/test_transport.py",
+      "reason": "the pinned engine requirements are optional for the bare Python harness"
+    },
+    "src/recognition/python/tests/test_independent_identity.py": {
+      "source": "recognition/tests/test_independent_identity.py",
+      "reason": "the pinned engine requirements are optional for the bare Python harness"
+    },
+    "src/recognition/python/tests/test_visual_search.py": {
+      "source": "recognition/tests/test_visual_search.py",
+      "reason": "the pinned engine requirements are optional for the bare Python harness"
+    },
+    "src/recognition/python/tests/test_title_fallback.py": {
+      "source": "recognition/tests/test_title_fallback.py",
+      "reason": "the pinned engine requirements are optional for the bare Python harness"
+    },
+    "src/recognition/python/scripts/source_bundle.py": {
+      "source": "recognition/scripts/source_bundle.py",
+      "reason": "the recognition package and its repository root moved into the component"
+    },
+    "src/recognition/python/scripts/prepare.py": {
+      "source": "recognition/scripts/prepare.py",
+      "reason": "the public-art manifest moved to tests/recognition/sources.json"
+    },
+    "src/recognition/python/scripts/browser_assets.py": {
+      "source": "recognition/scripts/browser_assets.py",
+      "reason": "the browser asset output follows the component browser modules"
+    },
+    "src/recognition/python/scripts/replay_public.py": {
+      "source": "recognition/scripts/replay_public.py",
+      "reason": "the owner-supplied private-camera manifest stays outside the repository"
+    },
+    "src/recognition/python/fixtures/README.md": {
+      "source": "recognition/fixtures/README.md",
+      "reason": "the public-art manifest link follows tests/recognition/sources.json"
+    },
+    "tests/recognition/backend-recognition.test.js": {
+      "source": "tests/backend-recognition.test.js",
+      "reason": "the retained regression imports the component browser modules"
+    },
+    "tests/recognition/browser-recognition.test.js": {
+      "source": "tests/browser-recognition.test.js",
+      "reason": "the retained regression imports the component browser modules"
+    },
+    "tests/recognition/camera-quality.test.js": {
+      "source": "tests/camera-quality.test.js",
+      "reason": "the retained regression imports the component browser modules"
+    },
+    "tests/recognition/card-presence.test.js": {
+      "source": "tests/card-presence.test.js",
+      "reason": "the retained regression imports the component browser modules"
+    },
+    "tests/recognition/hybrid-recognition.test.js": {
+      "source": "tests/hybrid-recognition.test.js",
+      "reason": "the retained regression imports the component browser modules"
+    },
+    "tests/recognition/independent-recognition.test.js": {
+      "source": "tests/independent-recognition.test.js",
+      "reason": "the retained regression imports the component browser modules"
+    },
+    "tests/recognition/printing-suggestion.test.js": {
+      "source": "tests/printing-suggestion.test.js",
+      "reason": "the retained regression imports the component browser modules"
+    },
+    "tests/recognition/recognition-race.test.js": {
+      "source": "tests/recognition-race.test.js",
+      "reason": "the retained regression imports the component browser modules"
+    },
+    "tests/recognition/scan-admission.test.js": {
+      "source": "tests/scan-admission.test.js",
+      "reason": "the retained regression imports the component browser modules"
+    },
+    "tests/recognition/visual-assets.test.js": {
+      "source": "tests/visual-assets.test.js",
+      "reason": "the retained regression imports the component browser modules"
+    },
+    "tests/recognition/visual-pixels.test.js": {
+      "source": "tests/visual-pixels.test.js",
+      "reason": "the retained regression imports the component browser modules"
+    },
+    "tests/recognition/visual-search.test.js": {
+      "source": "tests/visual-search.test.js",
+      "reason": "the retained regression imports the component browser modules"
+    }
+  }
+}

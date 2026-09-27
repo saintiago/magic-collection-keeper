@@ -22,8 +22,14 @@ const config = {
       name: 'no-unresolvable',
       severity: 'error',
       comment: 'Unresolved imports hide missing modules and boundary violations.',
+      // The retained browser worker dynamically loads its packaged ONNX runtime bundle
+      // (src/recognition/browser/vendor/ort), which is a delivery asset rather than a source
+      // module (docs/operations.md#recognition-packaging).
       from: {},
-      to: { couldNotResolve: true },
+      to: {
+        couldNotResolve: true,
+        pathNot: '^\\./vendor/ort/ort\\.wasm\\.min\\.mjs$',
+      },
     },
     ...publicInterfaceRules,
   ],

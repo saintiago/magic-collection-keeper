@@ -1,0 +1,5 @@
+# Engine dependencies the retained regressions import, pinned as in requirements-linux.txt.
+# scripts/run-python-tests.ts installs this file into the ignored .recognition-python environment.
+numpy==2.3.5
+opencv-python-headless==4.14.0.94
+pillow==12.3.0

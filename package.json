@@ -21,8 +21,9 @@
     "test:integration": "vitest run --project integration",
     "test:browser": "playwright test",
     "test:python": "node scripts/run-python-tests.ts",
+    "test:recognition": "node --test tests/recognition/*.test.js",
     "install:browsers": "playwright install chromium",
-    "validate": "turbo run format:check lint typecheck boundaries build test test:python test:browser"
+    "validate": "turbo run format:check lint typecheck boundaries build test test:python test:recognition test:browser"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
