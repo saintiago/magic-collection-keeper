@@ -64,7 +64,6 @@ describe('dedicated page routes', () => {
     '#/cards',
     '#/cards/card-1/printing-1/copy-1/extra',
     '#/cards/card-1//copy-1',
-    '#/cards/%20',
     '#/tags/',
     '#//cards',
     '#notes',
@@ -72,6 +71,23 @@ describe('dedicated page routes', () => {
   ])('presents nothing for %s', (href) => {
     expect(readUiView(href)).toBeNull();
   });
+
+  it.each([' ', '\t\n\u00a0', 'a b', ' padded '])(
+    'preserves the opaque identity %j in every route position',
+    (identity) => {
+      const identityViews: readonly UiView[] = [
+        { page: 'tag', tagId: identity },
+        { page: 'card', cardId: identity, printingId: null, copyId: null },
+        { page: 'card', cardId: 'card', printingId: identity, copyId: null },
+        { page: 'card', cardId: 'card', printingId: 'printing', copyId: identity },
+      ];
+      for (const view of identityViews) {
+        const href = uiHref(view);
+        expect(readUiView(href)).toEqual(view);
+        expect(readUiView(new URL(`https://keeper.test/${href}`))).toEqual(view);
+      }
+    },
+  );
 
   it('rejects a route segment outside the declared bounds', () => {
     const overLong = 'x'.repeat(UI_LIMITS.routeSegment + 1);

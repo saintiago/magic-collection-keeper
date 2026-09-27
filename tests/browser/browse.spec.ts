@@ -379,6 +379,10 @@ for (const level of ['card', 'printing'] as const) {
     ['maximum accented and reserved', 'é/ ?%'.repeat(40)],
     ['maximum encoding expansion', '界'.repeat(SEARCH_LIMITS.maxIdentifierLength)],
     ['maximum supplementary Unicode', '🃏'.repeat(SEARCH_LIMITS.maxIdentifierLength / 2)],
+    ['whitespace only', ' '],
+    ['mixed whitespace only', '\t\n\u00a0'],
+    ['ordinary spaces', 'a b'],
+    ['padded identity', ' padded '],
   ] as const) {
     test(`encoded ${level} identities ${label} restore in Catalog and Home`, async ({ page }) => {
       const errors = await openBrowse(page, `#/catalog?level=${level}`);
@@ -422,7 +426,8 @@ for (const level of ['card', 'printing'] as const) {
       await selected.check();
       await page.getByLabel('Search cards').fill('retained draft');
       await link.click();
-      await expect(page.locator('#card-level')).toHaveText(
+      await expect(page.locator('#card-level')).toHaveJSProperty(
+        'textContent',
         `${identity}/${level === 'printing' ? identity : '-'}/-`,
       );
 
@@ -439,7 +444,10 @@ for (const level of ['card', 'printing'] as const) {
       await expect(recent).toHaveAttribute('href', href);
       await selected.check();
       await recent.click();
-      await expect(page.locator('#card-level')).toBeVisible();
+      await expect(page.locator('#card-level')).toHaveJSProperty(
+        'textContent',
+        `${identity}/${level === 'printing' ? identity : '-'}/-`,
+      );
       await page.goBack();
       await expect(recent).toBeFocused();
       await expect(selected).toBeChecked();
@@ -448,6 +456,13 @@ for (const level of ['card', 'printing'] as const) {
       await page.goBack();
       await expect(recent).toBeFocused();
       await expect(selected).toBeChecked();
+
+      // Direct entry starts a new shell with no retained state to supply the detail identity.
+      await openBrowse(page, href);
+      await expect(page.locator('#card-level')).toHaveJSProperty(
+        'textContent',
+        `${identity}/${level === 'printing' ? identity : '-'}/-`,
+      );
       expect(errors).toEqual([]);
     });
   }

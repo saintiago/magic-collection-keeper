@@ -253,7 +253,8 @@ function readSegments(values: readonly string[]): readonly string[] | null {
     } catch {
       return null;
     }
-    if (decoded.trim().length === 0 || decoded.length > UI_LIMITS.routeSegment) {
+    // Provider identities are opaque: whitespace is significant, just as it is in routeSegment.
+    if (decoded.length === 0 || decoded.length > UI_LIMITS.routeSegment) {
       return null;
     }
     segments.push(decoded);
