@@ -36,9 +36,12 @@ Home, catalog/search, collection, tags, tag views, card details and import are d
 Card details can open at any of the three specificity levels. URLs identify the view sufficiently
 for reload and direct entry.
 
+Prefer a separate page over a modal window whenever the interaction can be presented as a page.
+Reserve dialogs for brief confirmations and small auxiliary actions.
+
 Back follows navigation history. Restore relevant query, selection, scroll and focus using bounded,
-account-isolated state. Use brief dialogs for small auxiliary actions. Closing a page cancels its
-work or prevents late results from changing the new view.
+account-isolated state. Closing a page cancels its work or prevents late results from changing the
+new view.
 
 ## CardList
 

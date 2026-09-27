@@ -71,7 +71,6 @@ All documents in `docs/` are relevant to the rebuild.
 - [Testing architecture](docs/testing.md)
 - [Build and release operations](docs/operations.md)
 - [Rebuild requirements](docs/requirements.md)
-- [Collection migration](docs/migration.md)
 - [Recognition baseline](docs/recognition-preservation.md)
 - [Implementation task inventory](docs/tasks/inventory.md)
 
