@@ -488,11 +488,21 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       settle(record, 'unavailable', 'Recognition is unavailable. Retrying to read the card.');
       return;
     }
-    // Readings of one attempt are handled in delivery order, so a late comparison cannot attach
-    // alternatives before the observation it belongs to was staged.
+    // Retain each reading on delivery, before any network wait. The single save drains retained
+    // alternatives in order, even if the camera stops while an earlier write is in flight.
     let handled: Promise<void> = Promise.resolve();
     const handle = (reading: RecognitionReading): Promise<void> => {
-      handled = handled.then(() => handleReading(record, reading));
+      if (closed || !running || current !== record) {
+        return handled;
+      }
+      const retained =
+        (record.staging !== null || record.entryId !== null) &&
+        reading.evidence.cardPresence === 'single' &&
+        uiCaptureObservation(record.sessionId, record.captureId, reading) !== null;
+      if (retained) {
+        record.alternatives.push({ reading, uncertain: false });
+      }
+      handled = handled.then(() => handleReading(record, reading, retained));
       return handled;
     };
     const started = scanner.recognize({
@@ -537,8 +547,18 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
   async function handleReading(
     record: UiCaptureAttempt,
     reading: RecognitionReading,
+    retained: boolean,
   ): Promise<void> {
     if (closed || !running || current !== record) {
+      return;
+    }
+    // An earlier save may already have drained this delivered comparison while this handler
+    // waited. Do not attach it twice or replay an attachment that was definitely rejected.
+    if (
+      retained &&
+      record.staged &&
+      !record.alternatives.some((alternative) => alternative.reading === reading)
+    ) {
       return;
     }
     const presence = reading.evidence.cardPresence;
@@ -549,7 +569,7 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
     if (record.staging !== null) {
       // Keep every usable comparison before replaying: that response may be lost too. Even an
       // unusable comparison must recover the prior write before it can report any admission.
-      if (observation !== null) {
+      if (observation !== null && !retained) {
         record.alternatives.push({ reading, uncertain: false });
       }
       await saveCapture(record);
@@ -585,10 +605,17 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       return;
     }
     if (!record.staged) {
+      // If the first submission was rejected or unresolved, this reading can stage the capture
+      // itself. It no longer needs a separate attachment alongside that same observation.
+      record.alternatives = record.alternatives.filter(
+        (alternative) => alternative.reading !== reading,
+      );
       record.staging = observation;
       await saveCapture(record, reading);
     } else if (record.entryId !== null) {
-      record.alternatives.push({ reading, uncertain: false });
+      if (!retained) {
+        record.alternatives.push({ reading, uncertain: false });
+      }
       await saveCapture(record);
     }
   }

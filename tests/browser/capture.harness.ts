@@ -378,12 +378,31 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
     catalog,
     search,
     userCards,
-    createRecognition: () =>
-      createRecognition<HTMLCanvasElement>({
+    createRecognition: () => {
+      const recognition = createRecognition<HTMLCanvasElement>({
         createEnginePipeline: () => scriptedPipeline(),
         catalog,
         inspectFrame: inspectCanvasFrame,
-      }),
+      });
+      return {
+        ...recognition,
+        recognize(request) {
+          const attempt = recognition.recognize({
+            ...request,
+            onReading(reading) {
+              request.onReading?.(reading);
+              log.push('recognition-reading-delivered');
+            },
+          });
+          return {
+            ...attempt,
+            completion: attempt.completion.then(() => {
+              log.push('recognition-completed');
+            }),
+          };
+        },
+      };
+    },
   };
 
   const shell: UserInterface = createUserInterface({

@@ -1116,3 +1116,225 @@ test('all comparisons accumulated during unknown staging attach in order after r
   expect(await control<readonly unknown[]>(page, 'captures')).toHaveLength(4);
   expect(errors).toEqual([]);
 });
+
+for (const inFlight of ['staging', 'attachment'] as const) {
+  for (const response of ['received', 'lost'] as const) {
+    test(`a comparison delivered during ${inFlight} survives camera stop when its response is ${response}`, async ({
+      page,
+    }) => {
+      const errors = await openCapture(page);
+      await settleSessions(page, 0, []);
+      await control(page, 'scriptReading', {
+        candidates: [hostName('bolt')],
+        printingId: 'printing-bolt',
+        provisional: true,
+        later: [
+          ...(inFlight === 'attachment'
+            ? [{ candidates: [hostName('ring')], printingId: 'printing-ring', provisional: true }]
+            : []),
+          { candidates: [hostName('bolt'), hostName('ring')], printingId: 'printing-bolt' },
+        ],
+      });
+      await page.click('#import-camera-start');
+      const staged = await requested<StageCaptureInput>(page, 'captures');
+      const admission = {
+        outcome: 'admitted',
+        replayed: false,
+        session: captureSession(),
+        entry: captureEntry(),
+      };
+      const attachment = { session: captureSession(), entry: captureEntry() };
+      let outstanding: UiCaptureRequest<StageCaptureInput | AttachImportCandidatesInput> = staged;
+      if (inFlight === 'attachment') {
+        await control(page, 'settleCapture', staged.id, admission);
+        await control(page, 'completeLater');
+        outstanding = await requested<AttachImportCandidatesInput>(page, 'attachments');
+      }
+
+      // Establish delivery and Recognition completion while the earlier write still waits.
+      await control(page, 'completeLater');
+      await expect.poll(() => control(page, 'log')).toContain('recognition-completed');
+      const log = await control<string[]>(page, 'log');
+      expect(log.filter((event) => event === 'recognition-reading-delivered')).toHaveLength(
+        inFlight === 'attachment' ? 2 : 1,
+      );
+      expect(await control<unknown[]>(page, 'captures')).toHaveLength(1);
+      expect(await control<unknown[]>(page, 'attachments')).toHaveLength(
+        inFlight === 'attachment' ? 1 : 0,
+      );
+      await page.click('#import-camera-stop');
+      expect((await control<{ liveTracks: number }>(page, 'camera')).liveTracks).toBe(0);
+      const recover = page.getByRole('button', { name: 'Recover capture' });
+      await expect(recover).toBeDisabled();
+
+      if (response === 'lost') {
+        await control(page, 'fail', outstanding.id, {
+          code: 'unavailable',
+          message: 'Response lost.',
+        });
+        await expect(recover).toBeEnabled();
+        await recover.click();
+        const replay = await requested<StageCaptureInput | AttachImportCandidatesInput>(
+          page,
+          inFlight === 'staging' ? 'captures' : 'attachments',
+          1,
+        );
+        expect(replay.arguments).toEqual(outstanding.arguments);
+        outstanding = replay;
+      }
+      await control(
+        page,
+        inFlight === 'staging' ? 'settleCapture' : 'settleAttach',
+        outstanding.id,
+        inFlight === 'staging' ? { ...admission, replayed: response === 'lost' } : attachment,
+      );
+      const final = await requested<AttachImportCandidatesInput>(
+        page,
+        'attachments',
+        inFlight === 'staging' ? 0 : response === 'lost' ? 2 : 1,
+      );
+      expect(final.arguments).toEqual({
+        entryId: 'capture-1',
+        candidates: [
+          { printingId: 'printing-bolt', provider: 'recognition', evidence: 'title-evidence' },
+          { printingId: 'printing-ring', provider: 'recognition', evidence: 'engine-ranking' },
+        ],
+      });
+      await control(page, 'settleAttach', final.id, attachment);
+      await expect(recover).toBeHidden();
+      await expect(page.locator('#import-camera-start')).toBeEnabled();
+      await expect(page.locator('#import-camera-status')).toContainText('A later comparison added');
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+for (const inFlight of ['staging', 'attachment'] as const) {
+  for (const exit of ['navigation', 'account change'] as const) {
+    test(`a delivered comparison behind ${inFlight} cannot continue saving after ${exit}`, async ({
+      page,
+    }) => {
+      const errors = await openCapture(page);
+      await settleSessions(page, 0, []);
+      await control(page, 'scriptReading', {
+        candidates: [hostName('bolt')],
+        printingId: 'printing-bolt',
+        provisional: true,
+        later: [
+          ...(inFlight === 'attachment'
+            ? [{ candidates: [hostName('ring')], printingId: 'printing-ring', provisional: true }]
+            : []),
+          { candidates: [hostName('bolt'), hostName('ring')], printingId: 'printing-bolt' },
+        ],
+      });
+      await page.click('#import-camera-start');
+      let outstanding = await requested(page, 'captures');
+      const result = {
+        outcome: 'admitted',
+        replayed: false,
+        session: captureSession(),
+        entry: captureEntry(),
+      };
+      if (inFlight === 'attachment') {
+        await control(page, 'settleCapture', outstanding.id, result);
+        await control(page, 'completeLater');
+        outstanding = await requested(page, 'attachments');
+      }
+      await control(page, 'completeLater');
+      await expect.poll(() => control(page, 'log')).toContain('recognition-completed');
+      expect(await control(page, 'log')).toContain('recognition-reading-delivered');
+
+      if (exit === 'navigation') {
+        await control(page, 'navigate', { page: 'home' });
+      } else {
+        await control(page, 'signOut');
+        await page.getByRole('button', { name: 'Sign in' }).click();
+        await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+      }
+      const requests = await control<UiCaptureRequest[]>(
+        page,
+        inFlight === 'staging' ? 'captures' : 'attachments',
+      );
+      expect(requests[0]?.aborted).toBe(true);
+      const sessions = await control<unknown[]>(page, 'sessions');
+      await control(
+        page,
+        inFlight === 'staging' ? 'settleCapture' : 'settleAttach',
+        outstanding.id,
+        result,
+      );
+      expect(await control<unknown[]>(page, 'attachments')).toHaveLength(
+        inFlight === 'staging' ? 0 : 1,
+      );
+      expect(await control<unknown[]>(page, 'sessions')).toHaveLength(sessions.length);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+test('a delivered comparison can stage after the earlier submission is definitely rejected', async ({
+  page,
+}) => {
+  const errors = await openCapture(page);
+  await settleSessions(page, 0, []);
+  await control(page, 'scriptReading', {
+    candidates: [hostName('bolt')],
+    printingId: 'printing-bolt',
+    provisional: true,
+    later: { candidates: [hostName('ring')], printingId: 'printing-ring' },
+  });
+  await page.click('#import-camera-start');
+  const first = await requested<StageCaptureInput>(page, 'captures');
+  await control(page, 'completeLater');
+  await expect.poll(() => control(page, 'log')).toContain('recognition-completed');
+  await control(page, 'fail', first.id, {
+    code: 'invalid-request',
+    message: 'Printing unavailable.',
+  });
+  const next = await requested<StageCaptureInput>(page, 'captures', 1);
+  expect(next.arguments.captureId).toBe(first.arguments.captureId);
+  expect(next.arguments.printingId).toBe('printing-ring');
+  await control(page, 'settleCapture', next.id, {
+    outcome: 'admitted',
+    replayed: false,
+    session: captureSession(),
+    entry: captureEntry({ printingId: 'printing-ring' }),
+  });
+  await expect(page.locator('#import-camera-status')).toContainText('Accepted Sol Ring');
+  await expect(page.getByRole('button', { name: 'Recover capture' })).toBeHidden();
+  expect(await control(page, 'attachments')).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('a comparison delivered after camera stop is excluded from pending capture recovery', async ({
+  page,
+}) => {
+  const errors = await openCapture(page);
+  await settleSessions(page, 0, []);
+  await control(page, 'scriptReading', {
+    candidates: [hostName('bolt')],
+    printingId: 'printing-bolt',
+    provisional: true,
+    later: { candidates: [hostName('ring')], printingId: 'printing-ring' },
+  });
+  await page.click('#import-camera-start');
+  const first = await requested<StageCaptureInput>(page, 'captures');
+  await page.click('#import-camera-stop');
+  await control(page, 'completeLater');
+  await expect.poll(() => control(page, 'log')).toContain('recognition-completed');
+  expect(await control(page, 'log')).not.toContain('recognition-reading-delivered');
+  await control(page, 'fail', first.id, { code: 'unavailable', message: 'Response lost.' });
+  const recover = page.getByRole('button', { name: 'Recover capture' });
+  await recover.click();
+  const replay = await requested<StageCaptureInput>(page, 'captures', 1);
+  expect(replay.arguments).toEqual(first.arguments);
+  await control(page, 'settleCapture', replay.id, {
+    outcome: 'admitted',
+    replayed: true,
+    session: captureSession(),
+    entry: captureEntry(),
+  });
+  await expect(recover).toBeHidden();
+  expect(await control(page, 'attachments')).toEqual([]);
+  expect(errors).toEqual([]);
+});
