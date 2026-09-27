@@ -113,6 +113,49 @@ export function groupCardListEntries(entries: readonly UiListEntry[]): readonly 
   return groups.map(({ key, entries: grouped }) => ({ key, entries: grouped }));
 }
 
+/**
+ * Basic information of one entry as the list presents it by default: the card name, the translated
+ * or face name that matched, the printing of a printing or copy entry and the copy and intended
+ * counts the source evaluated. A page that presents an entry as a link keeps this content as the
+ * link's own content instead of rebuilding it (docs/user-interface.md#cardlist).
+ */
+export function cardListBasicContent(document: Document, entry: UiListEntry): HTMLSpanElement {
+  const basic = document.createElement('span');
+  basic.dataset.uiBasic = '';
+  const name = document.createElement('span');
+  name.dataset.uiName = '';
+  name.textContent = entry.basic === null ? 'Unresolved entry' : entry.basic.card.name;
+  basic.append(name);
+  const matched = entry.basic?.card.matchedName ?? null;
+  if (matched !== null) {
+    const matchedName = document.createElement('span');
+    matchedName.dataset.uiMatchedName = '';
+    matchedName.textContent = ` (${matched})`;
+    basic.append(matchedName);
+  }
+  const printing = entry.basic?.printing ?? null;
+  if (printing !== null) {
+    const line = document.createElement('span');
+    line.dataset.uiPrinting = '';
+    line.textContent = ` ${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
+    basic.append(line);
+  }
+  const quantity = entry.quantity;
+  if (quantity?.copies != null) {
+    const copies = document.createElement('span');
+    copies.dataset.uiCopies = '';
+    copies.textContent = ` Copies: ${quantity.copies}`;
+    basic.append(copies);
+  }
+  if (quantity?.intended != null) {
+    const intended = document.createElement('span');
+    intended.dataset.uiIntended = '';
+    intended.textContent = ` Intended: ${quantity.intended}`;
+    basic.append(intended);
+  }
+  return basic;
+}
+
 /** Printing that makes one copy entry equivalent to another; null when the entry is not a copy. */
 function equivalentPrintingId(entry: UiListEntry): string | null {
   const printing = entry.basic?.printing;
@@ -801,40 +844,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   }
 
   function renderBasic(entry: UiListEntry): Node {
-    const basic = document.createElement('span');
-    basic.dataset.uiBasic = '';
-    const name = document.createElement('span');
-    name.dataset.uiName = '';
-    name.textContent = entry.basic === null ? 'Unresolved entry' : entry.basic.card.name;
-    basic.append(name);
-    const matched = entry.basic?.card.matchedName ?? null;
-    if (matched !== null) {
-      const matchedName = document.createElement('span');
-      matchedName.dataset.uiMatchedName = '';
-      matchedName.textContent = ` (${matched})`;
-      basic.append(matchedName);
-    }
-    const printing = entry.basic?.printing ?? null;
-    if (printing !== null) {
-      const line = document.createElement('span');
-      line.dataset.uiPrinting = '';
-      line.textContent = ` ${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
-      basic.append(line);
-    }
-    const quantity = entry.quantity;
-    if (quantity?.copies != null) {
-      const copies = document.createElement('span');
-      copies.dataset.uiCopies = '';
-      copies.textContent = ` Copies: ${quantity.copies}`;
-      basic.append(copies);
-    }
-    if (quantity?.intended != null) {
-      const intended = document.createElement('span');
-      intended.dataset.uiIntended = '';
-      intended.textContent = ` Intended: ${quantity.intended}`;
-      basic.append(intended);
-    }
-    return basic;
+    return cardListBasicContent(document, entry);
   }
 
   /** Text one entry is announced by; it names the entry without its optional fragments. */

@@ -16,7 +16,8 @@ import {
   type UiPageDefinition,
   type UserInterface,
 } from '../../src/ui/index.js';
-import type { UserInterfaceCapabilities } from '../../src/application/index.js';
+import type { SearchClient, UserInterfaceCapabilities } from '../../src/application/index.js';
+import type { Catalog } from '../../src/catalog/index.js';
 
 export interface UiShellControl {
   /** Verified account the shell presents, or null while signed out. */
@@ -91,6 +92,23 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       },
     },
   );
+  // The fixture pages present no catalog or search query, so the shell journeys hand the pages the
+  // component access of a deployment without ever reading a provider record through it.
+  const revision = {
+    revisionId: 'shell-fixture',
+    sourceName: 'fixture',
+    sourceVersion: '1',
+    publishedAt: '2026-09-01T00:00:00.000Z',
+  };
+  const catalog: Catalog = {
+    resolve: () =>
+      Promise.resolve({ revision, cards: new Map(), printings: new Map(), missing: [] }),
+    listCardPrintings: (cardId) =>
+      Promise.resolve({ cardId, cardExists: false, revision, printings: [], continuation: null }),
+  };
+  const search: SearchClient = {
+    execute: () => Promise.reject(new Error('The shell journeys run no search.')),
+  };
   const capabilities: UserInterfaceCapabilities = {
     settings: {
       environment: 'test',
@@ -100,6 +118,8 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       capabilities: { sourceImports: false },
     },
     request,
+    catalog,
+    search,
     createRecognition: () => {
       throw new Error('The shell journey does not run recognition.');
     },

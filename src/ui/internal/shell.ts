@@ -57,7 +57,10 @@ export interface UserInterface {
 /** Dedicated pages the primary navigation reaches; tag and card views are reached from them. */
 const primaryLinks: readonly { readonly view: UiView; readonly label: string }[] = [
   { view: { page: 'home' }, label: 'Home' },
-  { view: { page: 'catalog', query: '' }, label: 'Catalog' },
+  {
+    view: { page: 'catalog', query: '', level: 'card', owned: false, finish: null },
+    label: 'Catalog',
+  },
   { view: { page: 'collection' }, label: 'Collection' },
   { view: { page: 'tags' }, label: 'Tags' },
   { view: { page: 'import' }, label: 'Import' },
@@ -541,6 +544,8 @@ function readCapabilities(value: unknown): UserInterfaceCapabilities {
     record === null ||
     typeof record.createRecognition !== 'function' ||
     readObject(record.settings) === null ||
+    typeof readObject(record.catalog)?.resolve !== 'function' ||
+    typeof readObject(record.search)?.execute !== 'function' ||
     typeof request !== 'function' ||
     typeof (request as { endSession?: unknown }).endSession !== 'function'
   ) {

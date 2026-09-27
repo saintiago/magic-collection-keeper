@@ -24,8 +24,15 @@ import {
 
 const views: readonly UiView[] = [
   { page: 'home' },
-  { page: 'catalog', query: '' },
-  { page: 'catalog', query: 'set:blb cn:1 "lightning bolt"' },
+  { page: 'catalog', query: '', level: 'card', owned: false, finish: null },
+  {
+    page: 'catalog',
+    query: 'set:blb cn:1 "lightning bolt"',
+    level: 'card',
+    owned: false,
+    finish: null,
+  },
+  { page: 'catalog', query: 'is:foil', level: 'printing', owned: true, finish: 'foil' },
   { page: 'collection' },
   { page: 'tags' },
   { page: 'tag', tagId: 'tag-1' },

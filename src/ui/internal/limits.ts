@@ -23,4 +23,10 @@ export const UI_LIMITS = {
   fragmentBatch: 100,
   /** Items one entry's fragment result may present, so a broken source cannot grow one row. */
   fragmentItems: 20,
+  /** Entries one catalog page asks the Search contract for. */
+  catalogPage: 50,
+  /** Recent card entries Home presents for one account. */
+  recentCards: 24,
+  /** Accounts whose recent card activity the UI keeps before the least recent one leaves. */
+  recentAccounts: 8,
 } as const;

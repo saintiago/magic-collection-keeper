@@ -14,6 +14,7 @@ import {
   createAuthenticatedRequest,
   createBrowserApplication,
   createCatalogClient,
+  createSearchClient,
   inspectCanvasFrame,
   type PublicApplicationSettings,
   type UserInterfaceCapabilities,
@@ -331,6 +332,81 @@ describe('catalog client', () => {
   });
 });
 
+describe('search client', () => {
+  it('sends one query to the search route and keeps the page it read', async () => {
+    const payload = {
+      entries: [
+        {
+          entryKey: 'printing:printing-1',
+          target: { kind: 'printing', printingId: 'printing-1' },
+          card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: 'Blitzschlag' },
+          printing: {
+            printingId: 'printing-1',
+            edition: 'M11',
+            collectorNumber: '149',
+            language: 'en',
+          },
+          quantity: { copies: 2, intended: null },
+        },
+      ],
+      totalCount: 1,
+      continuation: 'cursor-1',
+      revisions: { catalogRevision: 'revision-1', privateRevision: null },
+    };
+    const { fetch, calls } = jsonFetch(payload);
+    const request = createAuthenticatedRequest({
+      baseUrl: 'https://api.test.keeper.example',
+      token: () => 'id-token-value',
+      fetch,
+    });
+
+    const page = await createSearchClient(request).execute({
+      resultLevel: 'printing',
+      query: 'bolt',
+      pageSize: 25,
+    });
+
+    expect(calls[0]?.url).toBe('https://api.test.keeper.example/api/search');
+    expect(calls[0]?.init.method).toBe('POST');
+    expect(calls[0]?.init.body).toBe('{"resultLevel":"printing","query":"bolt","pageSize":25}');
+    expect(page).toEqual(payload);
+  });
+
+  it('reports a response outside the declared page as unavailable', async () => {
+    const request = (payload: unknown) =>
+      createSearchClient(
+        createAuthenticatedRequest({
+          baseUrl: 'https://api.test.keeper.example',
+          token: () => 'id-token-value',
+          fetch: jsonFetch(payload).fetch,
+        }),
+      );
+
+    for (const payload of [
+      { entries: 'not-an-array' },
+      { entries: [], totalCount: 0, continuation: null, revisions: null },
+      {
+        entries: [
+          {
+            entryKey: 'card:card-1',
+            target: { kind: 'card', cardId: 'card-1' },
+            card: { cardId: 'card-1', name: 'Lightning Bolt', matchedName: null },
+            printing: null,
+            quantity: { copies: 'two', intended: null },
+          },
+        ],
+        totalCount: 1,
+        continuation: null,
+        revisions: { catalogRevision: 'revision-1', privateRevision: null },
+      },
+    ]) {
+      await expect(request(payload).execute({ resultLevel: 'card' })).rejects.toMatchObject({
+        code: 'unavailable',
+      });
+    }
+  });
+});
+
 describe('browser application', () => {
   it('rejects private settings beside the public ones', () => {
     expect(() =>
@@ -365,12 +441,40 @@ describe('browser application', () => {
     const capabilities = received[0];
     expect(capabilities?.settings).toEqual(settings);
     expect(capabilities?.request).toBeTypeOf('function');
+    expect(capabilities?.catalog.resolve).toBeTypeOf('function');
+    expect(capabilities?.search.execute).toBeTypeOf('function');
     expect(Object.keys(capabilities?.createRecognition() ?? {}).sort()).toEqual([
       'dispose',
       'prepare',
       'recognize',
     ]);
     expect(application.userInterface).toEqual({ constructed: true });
+  });
+
+  it('reads Search and Catalog through the entry point UserInterface received', async () => {
+    const settings = publicSettings();
+    const { fetch, calls } = jsonFetch({
+      entries: [],
+      totalCount: 0,
+      continuation: null,
+      revisions: { catalogRevision: 'revision-1', privateRevision: null },
+    });
+    const received: UserInterfaceCapabilities[] = [];
+    createBrowserApplication({
+      settings,
+      token: () => 'id-token-value',
+      fetch,
+      createUserInterface: (capabilities) => {
+        received.push(capabilities);
+        return null;
+      },
+    });
+
+    const page = await received[0]?.search.execute({ resultLevel: 'card', pageSize: 25 });
+
+    expect(page?.totalCount).toBe(0);
+    expect(calls[0]?.url).toBe('https://api.test.keeper.example/api/search');
+    expect(calls[0]?.init.body).toBe('{"resultLevel":"card","pageSize":25}');
   });
 
   it('routes inference to the compute entry point and catalog reads to the API', async () => {
