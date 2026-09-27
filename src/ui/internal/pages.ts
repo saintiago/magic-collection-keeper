@@ -53,7 +53,8 @@ export interface UiPageHandle {
    * `restored`. The shell restores that entry's scroll offset and focused element again over the
    * presented content, and it keeps the entry's saved scroll offset, focused element and visible
    * position instead of capturing the partially presented view until the page reports the
-   * presentation — and, afterwards, until explicit user input takes the applied interaction over.
+   * presentation — and, afterwards, until explicit user input takes the interaction over, even if
+   * earlier input cancelled automatic scroll and focus restoration during loading.
    * The page's captured state is read live while the shell keeps that context, so a page that
    * restores content asynchronously reports the content it presents, the window it is restoring
    * included, even before its entries arrive. A page whose own presentation supersedes the restored

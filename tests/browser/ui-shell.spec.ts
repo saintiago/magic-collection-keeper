@@ -82,6 +82,7 @@ async function openShell(page: Page, hash: string, start: UiShellStart = {}): Pr
 
 async function loadShell(page: Page): Promise<void> {
   await page.addScriptTag({ content: await shellBundle(), type: 'module' });
+  await page.waitForFunction(() => Reflect.has(globalThis, 'keeperUiControl'));
 }
 
 /** Notes the harness recorded, oldest first. */
@@ -408,6 +409,33 @@ test('a restored entry captures its live state once the page presented it', asyn
   await page.goBack();
   await completeAsyncResults(page, 100);
   await expect(page.locator('#async-result-50')).toBeFocused();
+});
+
+test('early input still allows later interaction to replace the restored focus and scroll', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/', { asyncResults: true });
+  await completeAsyncResults(page, 100);
+  await page.locator('#async-result-100').click();
+  await expect(page.locator('#card-level')).toHaveText('card-100/-/-');
+
+  await page.goBack();
+  await expect.poll(() => asyncPending(page)).toBeGreaterThan(0);
+  await page.keyboard.press('Tab');
+  await completeAsyncResults(page, 100);
+  await expect(page.locator('#async-result-100')).not.toBeFocused();
+  const first = page.locator('#async-result-1');
+  await first.focus();
+  const savedScroll = await page.evaluate(() => window.scrollY);
+  // Keyboard activation must release the retained context, just as a pointer activation does.
+  await first.press('Enter');
+  await expect(page.locator('#card-level')).toHaveText('card-1/-/-');
+
+  await page.goBack();
+  await completeAsyncResults(page, 100);
+  await expect(first).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(savedScroll);
+  expect(errors).toEqual([]);
 });
 
 test('an account change during a pending restoration presents the new account alone', async ({

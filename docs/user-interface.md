@@ -62,8 +62,10 @@ new view. A page whose restored content arrives asynchronously reports when it p
 so the shell restores that entry's scroll and focus over the presented content. An interrupted
 restoration keeps the context the entry had instead of capturing the partially presented view: the
 page's captured state stays live beside the entry's scroll offset, focus and visible position, which
-are kept until the shell restored them over the presented content and explicit user input takes them
-over.
+are kept until the page presents its content and subsequent explicit user input takes them over.
+Input during loading cancels automatic scroll and focus restoration while preserving the saved
+context if loading is interrupted. It must not prevent later input from replacing that context once
+the content is presented.
 
 ## CardList
 

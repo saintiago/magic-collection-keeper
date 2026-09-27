@@ -77,6 +77,7 @@ async function openLists(page: Page): Promise<string[]> {
   );
   await page.goto('http://keeper-list.test/');
   await page.addScriptTag({ content: await listBundle(), type: 'module' });
+  await page.waitForFunction(() => Reflect.has(globalThis, 'keeperCardListControl'));
   return errors;
 }
 

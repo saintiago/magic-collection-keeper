@@ -82,6 +82,7 @@ async function openBrowse(page: Page, hash: string, start: UiBrowseStart = {}): 
     (globalThis as unknown as Record<string, unknown>).keeperBrowseStart = flags;
   }, start);
   await page.addScriptTag({ content: await browseBundle(), type: 'module' });
+  await page.waitForFunction(() => Reflect.has(globalThis, 'keeperBrowseControl'));
   return errors;
 }
 
@@ -899,6 +900,77 @@ for (const level of ['card', 'printing'] as const) {
         .poll(async () =>
           Math.abs(
             (await last.evaluate((element) => element.getBoundingClientRect().top)) - savedTop,
+          ),
+        )
+        .toBeLessThan(2);
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+for (const level of ['card', 'printing'] as const) {
+  for (const pending of ['first', 'next'] as const) {
+    test(`input during the ${pending} ${level} page allows later result focus and position to be saved`, async ({
+      page,
+    }) => {
+      const errors = await openBrowse(page, `#/catalog?level=${level}`);
+      const resultPage = (offset: number): SearchPage =>
+        searchPage(
+          Array.from({ length: 50 }, (_, index) => {
+            const id = offset + index;
+            return level === 'card'
+              ? cardEntry(`card-${id}`, { name: `Card ${id}` })
+              : printingEntry(`printing-${id}`, `card-${id}`, `Card ${id}`);
+          }),
+          { totalCount: 100, continuation: offset < 50 ? 'cursor-50' : null },
+        );
+      const openResult = (id: number) =>
+        page.locator(`[data-ui-entry="${level}:${level}-${id}"] [data-ui-open]`);
+
+      await settleSearch(page, (await searchRequest(page, 0)).id, resultPage(0));
+      await page.getByRole('button', { name: 'Load more' }).click();
+      await settleSearch(page, (await searchRequest(page, 1)).id, resultPage(50));
+      await openResult(99).click();
+      await expect(page.locator('#card-level')).toContainText('card-99/');
+
+      await page.goBack();
+      let index = 2;
+      if (pending === 'next') {
+        await settleSearch(page, (await searchRequest(page, index++)).id, resultPage(0));
+        await expect(page.locator('[data-ui-entry]')).toHaveCount(50);
+      }
+      await searchRequest(page, index);
+      const query = page.getByLabel('Search cards');
+      await query.click();
+      await query.fill('draft');
+      for (const offset of pending === 'first' ? [0, 50] : [50]) {
+        await settleSearch(page, (await searchRequest(page, index++)).id, resultPage(offset));
+      }
+      await expect(page.locator('[data-ui-entry]')).toHaveCount(100);
+      // Early input cancels automatic focus restoration without preventing later interaction
+      // from becoming the history entry's saved context once all results are presented.
+      await expect(query).toBeFocused();
+      const first = openResult(0);
+      await first.focus();
+      await first.evaluate((element) =>
+        window.scrollBy(0, element.getBoundingClientRect().top - 120),
+      );
+      const savedTop = await first.evaluate((element) => element.getBoundingClientRect().top);
+      await first.click();
+      await expect(page.locator('#card-level')).toContainText('card-0/');
+
+      await page.goBack();
+      for (const offset of [0, 50]) {
+        await settleSearch(page, (await searchRequest(page, index++)).id, resultPage(offset));
+      }
+      await expect(page.locator('[data-ui-entry]')).toHaveCount(100);
+      await expect(query).toHaveValue('draft');
+      await expect(first).toBeFocused();
+      await expect(first).toBeInViewport();
+      await expect
+        .poll(async () =>
+          Math.abs(
+            (await first.evaluate((element) => element.getBoundingClientRect().top)) - savedTop,
           ),
         )
         .toBeLessThan(2);

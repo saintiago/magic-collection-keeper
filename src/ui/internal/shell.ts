@@ -427,8 +427,8 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
    * Content that settles only after the presentation — further fragments and decoded images — would
    * otherwise move the restored result, so the element the entry showed keeps its saved viewport
    * offset while the entry still keeps that context. Explicit user input ends the shell's
-   * application of the restored interaction, and once it was applied the entry captures the
-   * interaction the user chose instead.
+   * application of the restored interaction. Input after the page presents its content releases
+   * the saved context, even if earlier input cancelled that application while loading.
    */
   function restorePresentedInteraction(
     handle: UiPageHandle | null,
@@ -466,26 +466,26 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     }
     const lifetime = new AbortController();
     let observer: ResizeObserver | null = null;
-    /** Whether the shell applied the restored interaction over the content the page presented. */
-    let applied = false;
-    const stopApplying = (): void => {
+    let presentationComplete = false;
+    let interactionTaken = false;
+    const disposeRestoration = (): void => {
       observer?.disconnect();
       observer = null;
       lifetime.abort();
     };
     /**
      * Explicit user input: the shell no longer moves the scroll offset and focus of the entry, and
-     * once it applied the restored interaction the entry captures the interaction the user chooses
-     * from here on.
+     * after presentation the entry captures the interaction the user chooses from here on. Input
+     * during loading cancels automatic restoration but keeps listening for that later interaction.
      */
     const takeOver = (): void => {
-      const taken = applied;
-      stopApplying();
-      if (taken) {
+      interactionTaken = true;
+      if (presentationComplete) {
+        disposeRestoration();
         releaseRestoration();
       }
     };
-    signal.addEventListener('abort', stopApplying, { once: true, signal: lifetime.signal });
+    signal.addEventListener('abort', disposeRestoration, { once: true, signal: lifetime.signal });
     for (const event of uiInteractionEvents) {
       browser.addEventListener(event, takeOver, {
         capture: true,
@@ -500,12 +500,12 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
           // page keeps neither the shared restoration nor its listeners.
           return;
         }
-        if (lifetime.signal.aborted) {
+        presentationComplete = true;
+        if (interactionTaken) {
           // The user took the interaction over while the content was still being presented: the
-          // entry keeps the context it restores.
+          // entry keeps its context until later input releases it, without moving focus or scroll.
           return;
         }
-        applied = true;
         restoreInteraction(heading, snapshot);
         keepVisibleAnchor();
       },
@@ -514,7 +514,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
         if (ownsPage(handle, currentGeneration)) {
           releaseRestoration();
         }
-        stopApplying();
+        disposeRestoration();
       },
     );
 
