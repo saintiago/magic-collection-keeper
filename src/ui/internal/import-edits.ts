@@ -1,17 +1,19 @@
 /**
  * Import staging, review and confirmation of the Import page
- * (docs/user-interface.md#capture-and-review, docs/user-cards.md#import-and-capture-state).
+ * (docs/user-interface.md#capture-and-review, docs/user-interface.md#source-imports,
+ * docs/user-cards.md#import-and-capture-state).
  *
- * The page stages manual lines as pending entries, reviews a pending entry's printing, finish,
- * condition and quantity under the revision it read, stages capture observations with the
- * provider's admission decision, attaches late recognition alternatives, discards entries and
- * confirms the reviewed entries under one operation identity. Staging, review and discard quote an
- * entry identity, so a rejected change either conflicts or stays unknown exactly like every other
- * private edit, and a confirmation that lost its response is recovered through the recorded
+ * The page stages manual lines and parsed sources as pending entries, reviews a pending entry's
+ * printing, finish, condition and quantity under the revision it read, stages capture observations
+ * with the provider's admission decision, attaches late recognition alternatives, discards entries
+ * and confirms the reviewed entries under one operation identity. Staging, review and discard quote
+ * an entry identity, so a rejected change either conflicts or stays unknown exactly like every
+ * other private edit, and a confirmation that lost its response is recovered through the recorded
  * outcome of its operation identity instead of inferring commitment
- * (docs/application.md#construction-and-request-boundary). Nothing here reports ownership: a
- * staged line or capture is a candidate in review, and only a confirmation creates the physical
- * copies.
+ * (docs/application.md#construction-and-request-boundary). A source whose parsing response was lost
+ * is replayed by importing the same source again, which returns the recorded rows. Nothing here
+ * reports ownership: a staged line, source row or capture is a candidate in review, and only a
+ * confirmation creates the physical copies.
  */
 
 import type { UserCardsClient } from '../../application/index.js';
@@ -37,8 +39,10 @@ import type {
   ListImportEntriesOptions,
   ListImportSessionsOptions,
   ReviewImportEntryInput,
+  SourceImportResult,
   StageCaptureInput,
   StageImportEntriesInput,
+  StageSourceImportInput,
 } from '../../usercards/index.js';
 
 import {
@@ -59,6 +63,7 @@ export type UiImportClient = Pick<
   | 'listImportSessions'
   | 'listImportEntries'
   | 'stageImportEntries'
+  | 'stageSourceImport'
   | 'stageCaptureObservation'
   | 'reviewImportEntry'
   | 'attachImportCandidates'
@@ -78,6 +83,8 @@ export interface UiImportAccess {
   /** One bounded page of one session's pending entries, in capture order. */
   entries(input: ListImportEntriesOptions, signal?: AbortSignal): Promise<ImportEntryListResult>;
   stage(input: StageImportEntriesInput, signal?: AbortSignal): Promise<ImportStageResult>;
+  /** One parsed source: what each of its rows became, owned by the provider's session. */
+  source(input: StageSourceImportInput, signal?: AbortSignal): Promise<SourceImportResult>;
   /** One capture observation, admitted, suppressed or explicitly unresolved. */
   capture(input: StageCaptureInput, signal?: AbortSignal): Promise<CaptureStageResult>;
   review(input: ReviewImportEntryInput, signal?: AbortSignal): Promise<ImportEntryChangeResult>;
@@ -108,6 +115,7 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     'listImportSessions',
     'listImportEntries',
     'stageImportEntries',
+    'stageSourceImport',
     'stageCaptureObservation',
     'reviewImportEntry',
     'attachImportCandidates',
@@ -124,6 +132,7 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     sessions: (options, signal) => userCards.listImportSessions(options, signal),
     entries: (input, signal) => userCards.listImportEntries(input, signal),
     stage: (input, signal) => userCards.stageImportEntries(input, signal),
+    source: (input, signal) => userCards.stageSourceImport(input, signal),
     capture: (input, signal) => userCards.stageCaptureObservation(input, signal),
     review: (input, signal) => userCards.reviewImportEntry(input, signal),
     attach: (input, signal) => userCards.attachImportCandidates(input, signal),
@@ -224,6 +233,26 @@ export async function stageCaptureObservation(
     async () => null,
     'The capture was not added to review.',
     'The staging outcome is unknown. The capture may be in review; reload the import before retrying.',
+  );
+}
+
+/**
+ * Stages one supported source into review. The provider parses inside its own boundary and
+ * reconciles every parsed line with what the source already staged or acquired, so a source whose
+ * response was lost is recovered by importing the same source again: the recorded rows tell which
+ * lines staged nothing, which stayed in review and which the source already acquired
+ * (docs/user-interface.md#source-imports, docs/user-cards.md#source-imports).
+ */
+export async function stageSourceImport(
+  access: UiImportAccess,
+  input: StageSourceImportInput,
+  signal?: AbortSignal,
+): Promise<UiChangeCommit<SourceImportResult>> {
+  return commitUiChange(
+    () => access.source(input, signal),
+    async () => null,
+    'The source lines were not added to review.',
+    'The staging outcome is unknown. Import the same source again to read its recorded rows.',
   );
 }
 

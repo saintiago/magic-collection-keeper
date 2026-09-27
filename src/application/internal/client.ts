@@ -83,8 +83,12 @@ import type {
   RenameTagInput,
   ReviewImportEntryInput,
   SetCopyLocationInput,
+  SourceImportOutcome,
+  SourceImportResult,
+  SourceImportRow,
   StageCaptureInput,
   StageImportEntriesInput,
+  StageSourceImportInput,
   Tag,
   TagChangeResult,
   TagListOptions,
@@ -339,6 +343,15 @@ export interface UserCardsClient {
     signal?: AbortSignal,
   ): Promise<ImportStageResult>;
   /**
+   * Parses one supported source into the account's pending entries and reports what each parsed
+   * row became, including the rows that staged nothing
+   * (docs/user-cards.md#source-imports).
+   */
+  stageSourceImport(
+    input: StageSourceImportInput,
+    signal?: AbortSignal,
+  ): Promise<SourceImportResult>;
+  /**
    * Stages one capture observation as a pending entry of its capture session, or reports the
    * admission decision the session's accepted identity produced
    * (docs/user-cards.md#import-and-capture-state).
@@ -580,6 +593,18 @@ export function createUserCardsClient(request: RequestTransport): UserCardsClien
         },
       );
       return readImportStageResult(payload);
+    },
+
+    async stageSourceImport(
+      input: StageSourceImportInput,
+      signal?: AbortSignal,
+    ): Promise<SourceImportResult> {
+      const payload = await request(applicationRoutes.importSources, {
+        method: 'POST',
+        body: JSON.stringify(input),
+        ...(signal === undefined ? {} : { signal }),
+      });
+      return readSourceImportResult(payload);
     },
 
     async stageCaptureObservation(
@@ -1699,6 +1724,73 @@ function readImportStageResult(payload: unknown): ImportStageResult {
     throw unreadableImports();
   }
   return { privateRevision, session, entries, staged, replayed };
+}
+
+/** One parsed source row and the reconciliation outcome of its line. */
+function readSourceImportRow(value: unknown): SourceImportRow | null {
+  const row = readObject(value);
+  const position = row?.position;
+  const line = row?.line ?? null;
+  const outcome = row?.outcome;
+  const problem = row?.problem ?? null;
+  const entryId = row?.entryId ?? null;
+  const sessionId = row?.sessionId ?? null;
+  const parsedLine = line === null ? null : readImportSourceLine(line);
+  if (
+    row === null ||
+    !isSearchCount(position) ||
+    position < 1 ||
+    (line !== null && parsedLine === null) ||
+    !isSourceImportOutcome(outcome) ||
+    !isTextOrNull(problem) ||
+    (entryId !== null && !isIdentifier(entryId)) ||
+    (sessionId !== null && !isIdentifier(sessionId)) ||
+    // A row the provider could not read carries no parsed line, and every other row carries one.
+    (outcome === 'invalid') !== (parsedLine === null)
+  ) {
+    return null;
+  }
+  return { position, line: parsedLine, outcome, problem, entryId, sessionId };
+}
+
+/** What one parsed source row became. */
+function isSourceImportOutcome(value: unknown): value is SourceImportOutcome {
+  return value === 'staged' || value === 'pending' || value === 'acquired' || value === 'invalid';
+}
+
+/** The reconciliation of one staged source: its session, every row and what this call staged. */
+function readSourceImportResult(payload: unknown): SourceImportResult {
+  const record = readObject(payload);
+  const privateRevision = record?.privateRevision;
+  const session = readImportSession(record?.session);
+  const rows = readSourceImportRows(record?.rows);
+  const staged = record?.staged;
+  if (
+    record === null ||
+    !isIdentifier(privateRevision) ||
+    session === null ||
+    rows === null ||
+    !isSearchCount(staged)
+  ) {
+    throw unreadableImports();
+  }
+  return { privateRevision, session, rows, staged };
+}
+
+/** The rows one source import reported, in source order. */
+function readSourceImportRows(value: unknown): SourceImportRow[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const rows: SourceImportRow[] = [];
+  for (const candidate of value) {
+    const row = readSourceImportRow(candidate);
+    if (row === null) {
+      return null;
+    }
+    rows.push(row);
+  }
+  return rows;
 }
 
 /** The admission decision of one capture observation. */

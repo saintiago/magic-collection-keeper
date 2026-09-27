@@ -18,9 +18,10 @@
  * description are stored with the session and entries, never derived from editable labels or from
  * the physical copies a confirmation later creates. One acquisition source owns one import
  * session, so its recorded pending entries, acquisitions and the successive quantities of one line
- * stay addressable together however often the source is imported. Staging and its reconciliation
- * run in one transaction that holds the session, so a concurrent review or import cannot overstage
- * a source.
+ * stay addressable together however often the source is imported. A pasted list the caller does not
+ * name is identified by the content of its parsed lines, while a Moxfield link and a reviewed
+ * Wizards list carry their own published identity. Staging and its reconciliation run in one
+ * transaction that holds the session, so a concurrent review or import cannot overstage a source.
  */
 
 import { createHash } from 'node:crypto';
@@ -52,8 +53,12 @@ import type { ImportStore, SourceLineStageInput } from './store.js';
 /** A pasted card list: text lines of `quantity name (SET) number` (docs/user-cards.md#source-imports). */
 export interface PastedCardListImport {
   readonly format: 'pasted-list';
-  /** Identity of the pasted list inside the account; a repeated import of it reuses the identity. */
-  readonly sourceId: string;
+  /**
+   * Identity of the pasted list inside the account. A caller that names none gets the identity of
+   * the list's parsed lines, so importing the same list again reuses that identity and reconciles
+   * with what it already staged or acquired; a named identity is kept as the caller supplied it.
+   */
+  readonly sourceId?: string;
   readonly text: string;
 }
 
@@ -159,7 +164,7 @@ const identifierSchema = z.string().min(1).max(identifierLength);
 const stageSourceImportRequestSchema = z.discriminatedUnion('format', [
   z.object({
     format: z.literal('pasted-list'),
-    sourceId: identifierSchema,
+    sourceId: identifierSchema.optional(),
     text: z.string().min(1).max(USERCARDS_LIMITS.maxSourceTextLength),
   }),
   z.object({
@@ -268,6 +273,19 @@ function sourceImportSession(sourceKind: string, sourceId: string): string {
   return createHash('sha256')
     .update(`source-import\u0000${sourceKind}\u0000${sourceId}`, 'utf8')
     .digest('hex');
+}
+
+/**
+ * Identity of one pasted list a caller did not name: the content of its parsed lines, independent
+ * of their order, comments and declared quantities. The same list pasted again is the same
+ * acquisition source and reconciles with its recorded lines, while a changed quantity stays a
+ * change of that source's line and stages only its uncovered difference
+ * (docs/user-cards.md#source-imports).
+ */
+function pastedListSourceId(rows: readonly ParsedSourceRow[]): string {
+  const contents = rows.flatMap((row) => (row.kind === 'line' ? [row.content] : [])).sort();
+  const digest = createHash('sha256').update(contents.join('\u0000'), 'utf8').digest('hex');
+  return `pasted-list:${digest}`;
 }
 
 const pastedLineProblem = 'Use “quantity card name”, optionally followed by “(SET) number”.';
@@ -717,10 +735,11 @@ export function createSourceImports(
       case 'pasted-list': {
         const rows = parsePastedList(request.text);
         requireParsedSource(rows);
+        const sourceId = request.sourceId ?? pastedListSourceId(rows);
         return {
-          sessionId: sourceImportSession('pasted-list', request.sourceId),
+          sessionId: sourceImportSession('pasted-list', sourceId),
           sourceKind: 'pasted-list',
-          sourceId: request.sourceId,
+          sourceId,
           sourceReference: null,
           rows,
         };

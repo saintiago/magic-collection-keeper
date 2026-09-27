@@ -26,6 +26,7 @@ export const unusedUserCards: UserCardsClient = {
   listImportSessions: unused,
   listImportEntries: unused,
   stageImportEntries: unused,
+  stageSourceImport: unused,
   stageCaptureObservation: unused,
   reviewImportEntry: unused,
   attachImportCandidates: unused,

@@ -464,4 +464,49 @@ describe('application entry points', () => {
       'stale-continuation',
     );
   });
+
+  it('parses a pasted source through the transport and reconciles a repeated import', async () => {
+    interface SourcePayload {
+      readonly session: {
+        readonly sessionId: string;
+        readonly sourceKind: string;
+        readonly pendingEntries: number;
+      };
+      readonly rows: readonly { readonly outcome: string; readonly problem: string | null }[];
+      readonly staged: number;
+    }
+
+    // A pasted list names no identity: the component derives one from the parsed lines, so the
+    // browser sends the text alone and a repeated import reconciles instead of staging twice.
+    const text = '2 Lightning Bolt (TLE) 32\nnot a line';
+    const first = await call({
+      method: 'POST',
+      path: '/api/collection/imports/sources',
+      accountId: 'cognito-alice',
+      body: { format: 'pasted-list', text },
+    });
+
+    expect(first.status).toBe(200);
+    const staged = first.payload as SourcePayload;
+    expect(staged.session).toMatchObject({ sourceKind: 'pasted-list', pendingEntries: 1 });
+    expect(staged.staged).toBe(1);
+    expect(staged.rows.map((row) => row.outcome)).toEqual(['staged', 'invalid']);
+    expect(staged.rows[1]?.problem).toBe(
+      'Use “quantity card name”, optionally followed by “(SET) number”.',
+    );
+
+    const repeated = await call({
+      method: 'POST',
+      path: '/api/collection/imports/sources',
+      accountId: 'cognito-alice',
+      body: { format: 'pasted-list', text },
+    });
+
+    expect(repeated.status).toBe(200);
+    const again = repeated.payload as SourcePayload;
+    expect(again.session.sessionId).toBe(staged.session.sessionId);
+    expect(again.session.pendingEntries).toBe(1);
+    expect(again.staged).toBe(0);
+    expect(again.rows.map((row) => row.outcome)).toEqual(['pending', 'invalid']);
+  });
 });

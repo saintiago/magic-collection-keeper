@@ -25,6 +25,7 @@ import {
   recoverConfirmation,
   reviewImportEntry,
   stageImportLines,
+  stageSourceImport,
   uiImportCandidates,
   uiImportIdentity,
   uiImportSourceLabel,
@@ -85,6 +86,7 @@ function access(overrides: Partial<UiImportAccess> = {}): UiImportAccess {
     sessions: unused,
     entries: unused,
     stage: unused,
+    source: unused,
     capture: unused,
     review: unused,
     attach: unused,
@@ -103,6 +105,7 @@ function client(overrides: Partial<UiImportClient> = {}): UiImportClient {
     listImportSessions: unused,
     listImportEntries: unused,
     stageImportEntries: unused,
+    stageSourceImport: unused,
     stageCaptureObservation: unused,
     reviewImportEntry: unused,
     attachImportCandidates: unused,
@@ -222,6 +225,65 @@ describe('import staging', () => {
     );
 
     expect(outcome).toMatchObject({ status: 'conflict', message: 'Reload the import.' });
+  });
+
+  it('stages a parsed source and reports what every row became', async () => {
+    const outcome = await stageSourceImport(
+      access({
+        source: async () => ({
+          privateRevision: 'r2',
+          session: session({
+            sessionId: 'pasted-list',
+            sourceKind: 'pasted-list',
+            sourceId: 'pasted-list',
+          }),
+          rows: [
+            {
+              position: 1,
+              line: null,
+              outcome: 'invalid',
+              problem: 'Use “quantity card name”, optionally followed by “(SET) number”.',
+              entryId: null,
+              sessionId: null,
+            },
+          ],
+          staged: 0,
+        }),
+      }),
+      { format: 'pasted-list', text: 'not a line' },
+    );
+
+    expect(outcome).toMatchObject({
+      status: 'committed',
+      record: { staged: 0, rows: [{ outcome: 'invalid' }] },
+    });
+  });
+
+  it('keeps an unreported source recoverable by importing it again', async () => {
+    const outcome = await stageSourceImport(
+      access({ source: () => Promise.reject(new ApplicationError('busy', 'Try again.')) }),
+      { format: 'moxfield', url: 'https://moxfield.com/decks/deck-1' },
+    );
+
+    expect(outcome.status).toBe('unknown');
+    expect(outcome.record).toBeNull();
+    expect(outcome.message).toContain('Import the same source again');
+  });
+
+  it('reports a source the provider refused as a definite failure', async () => {
+    const outcome = await stageSourceImport(
+      access({
+        source: () =>
+          Promise.reject(new ApplicationError('invalid-request', 'Enter a public deck link.')),
+      }),
+      { format: 'moxfield', url: 'https://example.test/deck' },
+    );
+
+    expect(outcome).toMatchObject({
+      status: 'failed',
+      message: 'Enter a public deck link.',
+      record: null,
+    });
   });
 });
 

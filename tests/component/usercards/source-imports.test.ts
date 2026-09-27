@@ -394,6 +394,44 @@ describe('usercards source imports', () => {
     expect(pending.entries.every((entry) => entry.printingId === null)).toBe(true);
   });
 
+  it('derives the identity of an unnamed pasted list from its lines and replays it', async () => {
+    const first = await sourceImports.stageSourceImport(alice, {
+      format: 'pasted-list',
+      text: ['# my deck', '4 Lightning Bolt (M11) 149', '2 Counterspell'].join('\n'),
+    });
+    expect(first.staged).toBe(2);
+    expect(first.session.sourceKind).toBe('pasted-list');
+    expect(first.session.sourceId.length).toBeLessThanOrEqual(200);
+    expect(first.session.pendingEntries).toBe(2);
+
+    // The same list, reformatted and with a changed quantity, is the same source: the covered
+    // quantity is reused and only the uncovered difference enters review.
+    const repeated = await sourceImports.stageSourceImport(alice, {
+      format: 'pasted-list',
+      text: ['Deck', '5 Lightning Bolt (M11) 149', '2x Counterspell'].join('\n'),
+    });
+    expect(repeated.session.sessionId).toBe(first.session.sessionId);
+    expect(repeated.staged).toBe(1);
+    expect(repeated.rows.map((row) => row.outcome)).toEqual(['staged', 'pending']);
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+
+    // A line that names another printing belongs to another source, so the two stay distinct.
+    const other = await sourceImports.stageSourceImport(alice, {
+      format: 'pasted-list',
+      text: '4 Lightning Bolt (STA) 117',
+    });
+    expect(other.session.sessionId).not.toBe(first.session.sessionId);
+    expect(other.staged).toBe(1);
+
+    // A caller that names the source keeps that identity instead of the derived one.
+    const named = await sourceImports.stageSourceImport(alice, {
+      format: 'pasted-list',
+      sourceId: 'named-paste',
+      text: '1 Lightning Bolt',
+    });
+    expect(named.session).toMatchObject({ sourceId: 'named-paste', pendingEntries: 1 });
+  });
+
   it('resolves published Moxfield printings and keeps the rest reviewable', async () => {
     const result = await stageDeck({
       mainboard: [
