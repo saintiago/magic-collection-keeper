@@ -21,6 +21,7 @@ import type {
   UiCardListFragmentRequest,
   UiCardListInstall,
   UiCardListPageRequest,
+  UiCardListSettlement,
   UiCardListState,
   UiCardListToolRequest,
 } from './card-list.harness.js';
@@ -121,6 +122,12 @@ async function state(page: Page, id: string): Promise<UiCardListState> {
   return page.evaluate((listId) => {
     return (globalThis as unknown as GlobalControl).keeperCardListControl.state(listId);
   }, id);
+}
+
+async function settlements(page: Page): Promise<readonly UiCardListSettlement[]> {
+  return page.evaluate(() =>
+    (globalThis as unknown as GlobalControl).keeperCardListControl.settlements(),
+  );
 }
 
 async function pageRequests(page: Page): Promise<readonly UiCardListPageRequest[]> {
@@ -349,6 +356,7 @@ test('loads bounded pages and presents basic information with the entries', asyn
   );
   expect(await state(page, 'a')).toEqual({
     entries: ['copy:1', 'copy:2'],
+    selectedIdentities: [],
     selection: [],
     hasMore: true,
     loading: false,
@@ -364,6 +372,35 @@ test('loads bounded pages and presents basic information with the entries', asyn
   await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(3);
   await expect(page.locator('#list-a [data-ui-more]')).toBeHidden();
   await expect(page.locator('#list-a [data-ui-status]')).toHaveText('');
+  expect(errors).toEqual([]);
+});
+
+test('announces every settled window after it presented the entries', async ({ page }) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 1 });
+
+  // The empty list announces nothing before its first window request settles.
+  expect(await settlements(page)).toEqual([]);
+
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, [card('card-1')], 'cursor-1');
+  await expect
+    .poll(() => settlements(page))
+    .toEqual([{ list: 'a', entries: ['card:card-1'], hasMore: true, error: null }]);
+
+  await page.locator('#list-a [data-ui-more]').click();
+  const requests = await pageRequests(page);
+  expect(requests).toHaveLength(2);
+  await failPage(page, requests[1]!.id, 'Search unavailable');
+
+  // A failed window settles too: the entries stay usable and the failure stays visible.
+  await expect
+    .poll(() => settlements(page))
+    .toEqual([
+      { list: 'a', entries: ['card:card-1'], hasMore: true, error: null },
+      { list: 'a', entries: ['card:card-1'], hasMore: false, error: 'Search unavailable' },
+    ]);
+  await expect(page.locator('#list-a [data-ui-status]')).toHaveText('Search unavailable');
   expect(errors).toEqual([]);
 });
 
@@ -698,6 +735,7 @@ test('keeps two lists independent in query, window, selection and failure state'
 
   expect(await state(page, 'b')).toEqual({
     entries: ['copy:2', 'copy:3'],
+    selectedIdentities: [],
     selection: [],
     hasMore: false,
     loading: false,
@@ -1266,4 +1304,123 @@ test('retires selected tool reads when a replacement result arrives', async ({ p
     selection: ['copy:1'],
     targets: ['copy:1'],
   });
+});
+
+test('selection limits apply to individual, grouped and programmatic selection without partial groups', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 3, selectionLimit: 2 });
+  const request = await onlyRequest(page, 'a');
+  await settlePage(page, request.id, [
+    copy('1', 'printing-1'),
+    copy('2', 'printing-1'),
+    copy('3', 'printing-2'),
+  ]);
+  const group = page.locator('#list-a [data-ui-group-select]');
+  const single = page.locator('#list-a [data-ui-select="copy:3"]');
+  await single.check();
+  await expect(group).toBeDisabled();
+  await single.uncheck();
+  await group.check();
+  await expect(single).toBeDisabled();
+  await expect(group).toBeEnabled();
+  await page.evaluate(() => {
+    (globalThis as unknown as GlobalControl).keeperCardListControl.setSelected('a', 'copy:3', true);
+  });
+  expect((await state(page, 'a')).selection).toEqual(['copy:1', 'copy:2']);
+  await group.uncheck();
+  await expect(single).toBeEnabled();
+  await single.check();
+  await page.getByRole('button', { name: 'Clear selection' }).click();
+  expect((await state(page, 'a')).selection).toEqual([]);
+  await expect(group).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
+test('selection limits count unloaded and retired keys and allow clearing them', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 100, selectionLimit: 1 });
+  // Restoration selects a key before its asynchronous entry arrives.
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as GlobalControl).keeperCardListControl;
+    control.setSelected('a', 'card:0', true);
+    control.setSelected('a', 'card:1', true);
+  });
+  for (let index = 0; index < 6; index += 1) {
+    if (index > 0) await page.getByRole('button', { name: 'Load more' }).click();
+    const request = (await pageRequests(page))[index];
+    if (request === undefined) throw new Error('Missing page request');
+    await settlePage(
+      page,
+      request.id,
+      Array.from({ length: 100 }, (_, offset) => card(String(index * 100 + offset))),
+      index < 5 ? `next-${index}` : null,
+    );
+  }
+  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(500);
+  await expect(page.locator('#list-a [data-ui-select="card:0"]')).toHaveCount(0);
+  expect((await state(page, 'a')).selection).toEqual(['card:0']);
+  const next = page.locator('#list-a [data-ui-select]').first();
+  await expect(next).toBeDisabled();
+  await page.getByRole('button', { name: 'Clear selection' }).click();
+  await next.check();
+  expect((await state(page, 'a')).selection).toEqual(['card:100']);
+  await refresh(page, 'a');
+  const refreshed = (await pageRequests(page))[6];
+  if (refreshed === undefined) throw new Error('Missing refresh request');
+  await settlePage(page, refreshed.id, [card('100'), card('101')]);
+  await expect(page.locator('#list-a [data-ui-select="card:100"]')).toBeChecked();
+  await expect(page.locator('#list-a [data-ui-select="card:101"]')).toBeDisabled();
+  expect(errors).toEqual([]);
+});
+
+test('retained selection identities survive loading and refresh without inventing tool targets', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', {
+    pageSize: 2,
+    selectionLimit: 2,
+    tools: [{ id: 'save', label: 'Save' }],
+  });
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as GlobalControl).keeperCardListControl;
+    control.setSelected('a', 'card:1', true);
+    control.setSelected('a', 'card:2', true);
+    control.setSelected('a', 'card:3', true);
+  });
+  expect(await state(page, 'a')).toMatchObject({
+    selectedIdentities: ['card:1', 'card:2'],
+    selection: [],
+  });
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await settlePage(page, (await pageRequests(page))[0]!.id, [card('1')]);
+  expect(await state(page, 'a')).toMatchObject({
+    selectedIdentities: ['card:1', 'card:2'],
+    selection: ['card:1'],
+  });
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  const invocation = (await toolRequests(page))[0]!;
+  expect(invocation).toMatchObject({ targets: ['card:1'], selection: ['card:1'] });
+  await settleTool(page, invocation.id, { status: 'committed', message: null });
+  await refresh(page, 'a');
+  await settlePage(page, (await pageRequests(page))[1]!.id, [card('2')]);
+  expect(await state(page, 'a')).toMatchObject({
+    selectedIdentities: ['card:1', 'card:2'],
+    selection: ['card:2'],
+  });
+  await page.evaluate(() => {
+    (globalThis as unknown as GlobalControl).keeperCardListControl.setSelected(
+      'a',
+      'card:1',
+      false,
+    );
+  });
+  expect((await state(page, 'a')).selectedIdentities).toEqual(['card:2']);
+  await page.getByRole('button', { name: 'Clear selection', exact: true }).click();
+  expect(await state(page, 'a')).toMatchObject({ selectedIdentities: [], selection: [] });
+  expect(errors).toEqual([]);
 });

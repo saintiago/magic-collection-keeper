@@ -19,7 +19,9 @@
  * convenient selection without losing their individual identities, and the tools invoke the owning
  * component's operation for the explicit selection and report its outcome; an invocation without a
  * receipt is unknown, never a definite failure. Each list owns its query, loaded window, selection
- * and presentation state, so one page can present several independent lists.
+ * and presentation state, so one page can present several independent lists. A list announces
+ * every settled window, so a page can present interaction that waits for entries a source supplies
+ * asynchronously (docs/user-interface.md#pages-and-navigation).
  */
 
 import { UI_LIMITS } from './limits.js';
@@ -113,14 +115,66 @@ export function groupCardListEntries(entries: readonly UiListEntry[]): readonly 
   return groups.map(({ key, entries: grouped }) => ({ key, entries: grouped }));
 }
 
+/**
+ * Basic information of one entry as the list presents it by default: the card name, the translated
+ * or face name that matched, the printing of a printing or copy entry and the copy and intended
+ * counts the source evaluated. A page that presents an entry as a link keeps this content as the
+ * link's own content instead of rebuilding it (docs/user-interface.md#cardlist).
+ */
+export function cardListBasicContent(document: Document, entry: UiListEntry): HTMLSpanElement {
+  const basic = document.createElement('span');
+  basic.dataset.uiBasic = '';
+  const name = document.createElement('span');
+  name.dataset.uiName = '';
+  name.textContent = entry.basic === null ? 'Unresolved entry' : entry.basic.card.name;
+  basic.append(name);
+  const matched = entry.basic?.card.matchedName ?? null;
+  if (matched !== null) {
+    const matchedName = document.createElement('span');
+    matchedName.dataset.uiMatchedName = '';
+    matchedName.textContent = ` (${matched})`;
+    basic.append(matchedName);
+  }
+  const printing = entry.basic?.printing ?? null;
+  if (printing !== null) {
+    const line = document.createElement('span');
+    line.dataset.uiPrinting = '';
+    line.textContent = ` ${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
+    basic.append(line);
+  }
+  const quantity = entry.quantity;
+  if (quantity?.copies != null) {
+    const copies = document.createElement('span');
+    copies.dataset.uiCopies = '';
+    copies.textContent = ` Copies: ${quantity.copies}`;
+    basic.append(copies);
+  }
+  if (quantity?.intended != null) {
+    const intended = document.createElement('span');
+    intended.dataset.uiIntended = '';
+    intended.textContent = ` Intended: ${quantity.intended}`;
+    basic.append(intended);
+  }
+  return basic;
+}
+
 /** Printing that makes one copy entry equivalent to another; null when the entry is not a copy. */
 function equivalentPrintingId(entry: UiListEntry): string | null {
   const printing = entry.basic?.printing;
   return entry.target.kind === 'copy' && printing != null ? printing.printingId : null;
 }
 
+/** Source position of the first retained entry, including partial-page eviction. */
+export interface UiListPosition {
+  readonly continuation: string | null;
+  readonly offset: number;
+}
+
 export interface UiCardListOptions<Context = unknown> {
-  /** Element the list renders into; the list replaces its content and leaves with the page. */
+  /**
+   * Element the list renders into; the list replaces its content and leaves with the page.
+   * A stable container id scopes the row and selection ids used by history restoration.
+   */
   readonly container: HTMLElement;
   /** Source of the entries, their continuation and the query context. */
   readonly source: UiListSource<Context>;
@@ -128,12 +182,29 @@ export interface UiCardListOptions<Context = unknown> {
   readonly context: Context;
   /** Entries one page asks for; from 1 to UI_LIMITS.listPage. */
   readonly pageSize: number;
+  /**
+   * Optional positive bound on selected keys, including unloaded and retired entries. Additional
+   * selection is disabled at the bound; a group must fit in full. Deselecting and clearing remain
+   * available, including when paging has retired the selected rows.
+   */
+  readonly selectionLimit?: number;
+  /**
+   * Resumes a retained window for the same context and page size using the source's opaque
+   * continuation. Refresh starts at the beginning; a stale continuation remains a source failure.
+   */
+  readonly initialPosition?: UiListPosition;
   /** Fragment readers; kinds without one are not presented. */
   readonly fragments?: UiCardListFragments;
   /** Tools presented for the explicit selection, in order. */
   readonly tools?: readonly UiCardListTool[];
   /** Presentation adjustments over the default rendering. */
   readonly presentation?: UiCardListPresentation;
+  /**
+   * Notified after every window request settles, with the list whose window, continuation and
+   * status are current then; a page restoring interaction over asynchronously supplied entries
+   * uses it.
+   */
+  readonly onWindowSettled?: (list: UiCardList<Context>) => void;
   /** Aborted when the page closes; the list stops loading and drops late results. */
   readonly signal?: AbortSignal;
 }
@@ -144,7 +215,17 @@ export interface UiCardList<Context = unknown> {
    * Entries of the loaded window, in source order; at most UI_LIMITS.listWindow are rendered.
    */
   readonly entries: readonly UiListEntry[];
-  /** Selected keys in result order, including entries retired by paging beyond the window. */
+  /** Source position of the first retained entry; null for an empty window. */
+  readonly position: UiListPosition | null;
+  /**
+   * All selected identities in selection order, including keys awaiting loading or outside the
+   * window. Use these for history capture; selectionLimit bounds them when configured.
+   */
+  readonly selectedIdentities: readonly string[];
+  /**
+   * Selected keys with known targets in result order, including targets retired by paging.
+   * Tools use this actionable subset; unloaded identities remain in selectedIdentities.
+   */
   readonly selection: readonly string[];
   /**
    * Whether the active result continues past the loaded window and may be paged now. False while
@@ -216,6 +297,7 @@ interface FragmentQueue {
 
 /** One entry control that holds focus, identified so a re-rendering retains it. */
 type EntryFocus =
+  | { readonly control: 'id'; readonly id: string }
   | { readonly control: 'select'; readonly key: string }
   | { readonly control: 'group'; readonly keys: readonly string[] }
   | { readonly control: 'fragment'; readonly key: string; readonly kind: UiFragmentKind };
@@ -227,8 +309,28 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   const readers = readFragments(options?.fragments);
   const tools = readTools(options?.tools);
   const presentation = readPresentation(options?.presentation);
+  const onWindowSettled = readWindowListener(options?.onWindowSettled);
   const signal = readSignal(options?.signal);
+  const selectionLimit = options.selectionLimit;
+  if (
+    selectionLimit !== undefined &&
+    (!Number.isSafeInteger(selectionLimit) || selectionLimit < 1)
+  ) {
+    throw new TypeError('A selection limit must be a positive, finite integer.');
+  }
   const document = container.ownerDocument;
+  let initialPosition = options.initialPosition ?? null;
+  if (
+    initialPosition !== null &&
+    ((initialPosition.continuation !== null && typeof initialPosition.continuation !== 'string') ||
+      !Number.isSafeInteger(initialPosition.offset) ||
+      initialPosition.offset < 0 ||
+      initialPosition.offset >= pageSize)
+  ) {
+    throw new TypeError(
+      'A retained list position needs a continuation and an offset within its page.',
+    );
+  }
 
   const section = document.createElement('section');
   section.dataset.uiCardList = '';
@@ -238,6 +340,11 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   selectionCount.dataset.uiSelectionCount = '';
   selectionCount.setAttribute('aria-live', 'polite');
   toolbar.append(selectionCount);
+  const clearSelectionButton = document.createElement('button');
+  clearSelectionButton.type = 'button';
+  clearSelectionButton.textContent = 'Clear selection';
+  clearSelectionButton.addEventListener('click', clearSelection);
+  if (selectionLimit !== undefined) toolbar.append(clearSelectionButton);
   const toolButtons = new Map<string, HTMLButtonElement>();
   for (const [id, definition] of tools) {
     const button = document.createElement('button');
@@ -278,6 +385,8 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   const selected = new Set<string>();
   /** Explicit targets survive paging; only their tool availability remains part of fragment work. */
   const retiredSelection = new Map<string, UiListEntry['target']>();
+  // Positions leave with their entries, so even very deep pagination retains at most one window.
+  const positions = new Map<string, UiListPosition>();
   let entries: readonly UiListEntry[] = [];
   let windowKeys: ReadonlySet<string> = new Set();
   let activeContext = options.context;
@@ -296,22 +405,20 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   let fragmentSequence = 0;
   let disposed = false;
 
-  renderStatus();
-  renderSelection();
-  renderOutcome();
-  if (signal !== undefined && signal.aborted) {
-    dispose();
-  } else {
-    signal?.addEventListener('abort', () => dispose());
-    startRequest(null);
-  }
-
-  return {
+  const list: UiCardList<Context> = {
     get entries() {
       return [...entries];
     },
+    get position() {
+      const first = entries[0];
+      const position = first === undefined ? null : (positions.get(first.key) ?? null);
+      return position === null ? null : { ...position };
+    },
     get selection() {
       return selectedKeys();
+    },
+    get selectedIdentities() {
+      return [...selected];
     },
     get hasMore() {
       return pagingAvailable();
@@ -332,6 +439,18 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     invoke,
     dispose,
   };
+
+  renderStatus();
+  renderSelection();
+  renderOutcome();
+  if (signal !== undefined && signal.aborted) {
+    dispose();
+  } else {
+    signal?.addEventListener('abort', () => dispose());
+    startRequest(initialPosition?.continuation ?? null);
+  }
+
+  return list;
 
   /**
    * Requests one page of the active result. A request the user still waits for is the active one:
@@ -383,17 +502,33 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     loading = false;
     error = null;
     failed = null;
-    if (requested === null) {
+    const offset = initialPosition?.offset ?? 0;
+    const replacing = requested === null || initialPosition !== null;
+    initialPosition = null;
+    if (replacing) {
+      positions.clear();
+    }
+    const next = read.page.entries.slice(offset);
+    read.page.entries.forEach((entry, index) => {
+      if (index >= offset && !positions.has(entry.key)) {
+        positions.set(entry.key, { continuation: requested, offset: index });
+      }
+    });
+    if (replacing) {
       // The fresh first page belongs to the active query, so nothing older stays paged.
       staleWindow = false;
-      setWindow(read.page.entries);
+      setWindow(next);
     } else {
-      appendWindow(read.page.entries);
+      appendWindow(next);
+    }
+    for (const key of positions.keys()) {
+      if (!windowKeys.has(key)) positions.delete(key);
     }
     continuation = read.page.continuation;
     continues = continuation !== null;
     renderStatus();
     requestFragments();
+    announceWindow();
   }
 
   function settleFailure(current: number, requested: string | null, message: string): void {
@@ -405,6 +540,14 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     error = message;
     failed = { continuation: requested };
     renderStatus();
+    announceWindow();
+  }
+
+  /** Announces one settled window, after the list presented it; a closed list announces nothing. */
+  function announceWindow(): void {
+    if (!disposed) {
+      onWindowSettled?.(list);
+    }
   }
 
   /** Replaces the window; entries the new result no longer holds leave it. */
@@ -473,6 +616,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   }
 
   function refresh(): void {
+    initialPosition = null;
     startRequest(null);
   }
 
@@ -480,6 +624,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (disposed) {
       return;
     }
+    initialPosition = null;
     activeContext = next;
     // The presented window belongs to the previous query until the fresh page arrives: it is kept
     // as usable content, but paging it with the new context would mix two result sequences.
@@ -500,9 +645,9 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (disposed || typeof key !== 'string' || key.length === 0) {
       return;
     }
-    if (selectedNow) {
+    if (selectedNow && canSelect([key])) {
       selected.add(key);
-    } else {
+    } else if (!selectedNow) {
       selected.delete(key);
       if (retiredSelection.delete(key)) {
         invalidateFragment(key, 'tools');
@@ -534,6 +679,10 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (header === undefined) {
       return;
     }
+    if (selectedNow && !canSelect(header.keys)) {
+      renderSelection();
+      return;
+    }
     for (const key of header.keys) {
       if (selectedNow) {
         selected.add(key);
@@ -542,6 +691,14 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       }
     }
     renderSelection();
+  }
+
+  /** Count retained keys too, so paging, refresh and restoration cannot bypass the bound. */
+  function canSelect(keys: readonly string[]): boolean {
+    return (
+      selectionLimit === undefined ||
+      selected.size + keys.filter((key) => !selected.has(key)).length <= selectionLimit
+    );
   }
 
   /** Selected result keys, including explicit targets retained when paging retires their rows. */
@@ -650,7 +807,11 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       if (kind !== null && isFragmentKind(kind)) {
         return { control: 'fragment', key, kind };
       }
-      return active.hasAttribute('data-ui-select') ? { control: 'select', key } : null;
+      return active.hasAttribute('data-ui-select')
+        ? { control: 'select', key }
+        : active.id
+          ? { control: 'id', id: active.id }
+          : null;
     }
     const group = active.closest('[data-ui-group]');
     if (group !== null && active.hasAttribute('data-ui-group-select')) {
@@ -663,6 +824,11 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   /** Focuses the same control of the same entry again, when the update still presents it. */
   function restoreEntryFocus(focus: EntryFocus | null): void {
     if (focus === null) {
+      return;
+    }
+    if (focus.control === 'id') {
+      const control = document.getElementById(focus.id);
+      if (control !== null && entriesHost.contains(control)) control.focus({ preventScroll: true });
       return;
     }
     if (focus.control === 'group') {
@@ -720,11 +886,13 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   function renderRow(entry: UiListEntry): HTMLLIElement {
     const row = document.createElement('li');
     row.dataset.uiEntry = entry.key;
+    if (container.id) row.id = `${container.id}-entry-${encodeURIComponent(entry.key)}`;
     row.dataset.uiLevel = entry.target.kind;
     const label = document.createElement('label');
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.dataset.uiSelect = entry.key;
+    if (container.id) checkbox.id = `${container.id}-select-${encodeURIComponent(entry.key)}`;
     checkbox.setAttribute('aria-label', `Select ${describeEntry(entry)}`);
     const basic = presentation.renderEntry?.(entry) ?? renderBasic(entry);
     label.append(checkbox, basic);
@@ -757,13 +925,19 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   function renderSelection(): void {
     const keys = selectedKeys();
     selectionCount.textContent = `${keys.length} selected`;
+    if (selectionLimit !== undefined) {
+      selectionCount.textContent = `${selected.size} of ${selectionLimit} selected`;
+    }
+    clearSelectionButton.hidden = selected.size === 0;
     for (const [key, row] of rows) {
       row.checkbox.checked = selected.has(key);
+      row.checkbox.disabled = !canSelect([key]);
     }
     for (const header of groupHeaders.values()) {
       const chosen = header.keys.filter((key) => selected.has(key)).length;
       header.checkbox.checked = chosen === header.keys.length;
       header.checkbox.indeterminate = chosen > 0 && chosen < header.keys.length;
+      header.checkbox.disabled = !canSelect(header.keys);
     }
     renderTools();
   }
@@ -801,40 +975,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   }
 
   function renderBasic(entry: UiListEntry): Node {
-    const basic = document.createElement('span');
-    basic.dataset.uiBasic = '';
-    const name = document.createElement('span');
-    name.dataset.uiName = '';
-    name.textContent = entry.basic === null ? 'Unresolved entry' : entry.basic.card.name;
-    basic.append(name);
-    const matched = entry.basic?.card.matchedName ?? null;
-    if (matched !== null) {
-      const matchedName = document.createElement('span');
-      matchedName.dataset.uiMatchedName = '';
-      matchedName.textContent = ` (${matched})`;
-      basic.append(matchedName);
-    }
-    const printing = entry.basic?.printing ?? null;
-    if (printing !== null) {
-      const line = document.createElement('span');
-      line.dataset.uiPrinting = '';
-      line.textContent = ` ${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
-      basic.append(line);
-    }
-    const quantity = entry.quantity;
-    if (quantity?.copies != null) {
-      const copies = document.createElement('span');
-      copies.dataset.uiCopies = '';
-      copies.textContent = ` Copies: ${quantity.copies}`;
-      basic.append(copies);
-    }
-    if (quantity?.intended != null) {
-      const intended = document.createElement('span');
-      intended.dataset.uiIntended = '';
-      intended.textContent = ` Intended: ${quantity.intended}`;
-      basic.append(intended);
-    }
-    return basic;
+    return cardListBasicContent(document, entry);
   }
 
   /** Text one entry is announced by; it names the entry without its optional fragments. */
@@ -1250,6 +1391,8 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     }
     entries = [];
     windowKeys = new Set();
+    positions.clear();
+    initialPosition = null;
     rows.clear();
     groupHeaders.clear();
     fragmentStates.clear();
@@ -1747,6 +1890,18 @@ function readPresentation(value: unknown): UiCardListPresentation {
     throw new TypeError('CardList presentation overrides rendering through functions.');
   }
   return value as UiCardListPresentation;
+}
+
+function readWindowListener<Context>(
+  value: unknown,
+): ((list: UiCardList<Context>) => void) | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'function') {
+    throw new TypeError('CardList announces its settled windows through one supplied function.');
+  }
+  return value as (list: UiCardList<Context>) => void;
 }
 
 function readSignal(value: unknown): AbortSignal | undefined {

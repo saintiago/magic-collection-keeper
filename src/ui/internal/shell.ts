@@ -9,7 +9,9 @@
  * presentation state and ends the authenticated session the transport serves. A page that presents
  * a restored history entry asynchronously reports the presentation, so the entry's scroll offset
  * and focused element are restored over the presented content and an interrupted restoration keeps
- * the context the entry had.
+ * the context the entry had. The shell also reports every account it leaves to the page
+ * implementations, so private state a page keeps outside the shell's store ends with the account
+ * that presented it.
  */
 
 import type { UserInterfaceCapabilities } from '../../application/index.js';
@@ -60,7 +62,10 @@ export interface UserInterface {
 /** Dedicated pages the primary navigation reaches; tag and card views are reached from them. */
 const primaryLinks: readonly { readonly view: UiView; readonly label: string }[] = [
   { view: { page: 'home' }, label: 'Home' },
-  { view: { page: 'catalog', query: '' }, label: 'Catalog' },
+  {
+    view: { page: 'catalog', query: '', level: 'card', owned: false, finish: null },
+    label: 'Catalog',
+  },
   { view: { page: 'collection' }, label: 'Collection' },
   { view: { page: 'tags' }, label: 'Tags' },
   { view: { page: 'import' }, label: 'Import' },
@@ -192,6 +197,11 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     browser.removeEventListener('hashchange', onBrowserNavigation);
     root.removeEventListener('click', onClick);
     unsubscribe();
+    const current = account;
+    if (current !== null) {
+      // Disposal ends the presented account's session state with the UI that presented it.
+      endAccount(current.accountId);
+    }
     store.clear();
     releaseDevice();
     history.scrollRestoration = previousScrollRestoration;
@@ -217,10 +227,22 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     closePage();
     store.clear();
     if (previous !== null) {
+      endAccount(previous.accountId);
       capabilities.request.endSession();
       releaseDevice();
     }
     render();
+  }
+
+  /**
+   * Reports one account the shell leaves to every page implementation. A browsing page records
+   * private activity while its views are open, so the activity must end with the account even when
+   * another page is the one presented at that moment (docs/user-interface.md#capture-and-review).
+   */
+  function endAccount(accountId: string): void {
+    for (const definition of pages.values()) {
+      definition.accountEnded?.(accountId);
+    }
   }
 
   /**
@@ -386,14 +408,18 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
 
   /**
    * Restores the interaction of one history entry again once the page reports that it presented the
-   * content of that entry. A page whose content arrives asynchronously presents it only after the
-   * shell has mounted it, so the entry's scroll offset and focused element are restored over the
-   * presented content instead of over the empty page (docs/user-interface.md#pages-and-navigation).
+   * content of that entry. A page whose sources supply entries only after the shell has mounted it
+   * presents them asynchronously, so the entry's scroll offset and focused element are restored over
+   * the presented content instead of over the empty page
+   * (docs/user-interface.md#pages-and-navigation).
    *
    * Until then the entry keeps the snapshot it is restoring: Back, Forward or a link leaves that
    * context in place instead of capturing the partially presented window and the heading the shell
    * focused while the page was still empty. Explicit user input takes the interaction over — the
-   * shell then leaves the scroll offset and focus the user chose.
+   * shell then leaves the scroll offset and focus the user chose. Content that settles only after
+   * the presentation — further fragments and decoded images — would otherwise move the restored
+   * result, so the element the entry showed keeps its saved viewport offset until the user or the
+   * page's teardown takes the interaction over.
    */
   function restorePresentedInteraction(
     handle: UiPageHandle | null,
@@ -407,6 +433,8 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
       restoringEntry = false;
       return;
     }
+    // The entry restored one snapshot; the presentation applies that snapshot once it can be read.
+    const snapshot: UiViewSnapshot = restored;
     let presented: void | Promise<void>;
     try {
       presented = handle.presented();
@@ -429,7 +457,9 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     }
     restoringEntry = true;
     const lifetime = new AbortController();
+    let observer: ResizeObserver | null = null;
     const stopApplying = (): void => {
+      observer?.disconnect();
       lifetime.abort();
     };
     signal.addEventListener('abort', stopApplying, { once: true, signal: lifetime.signal });
@@ -443,13 +473,17 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     void Promise.resolve(presented).then(
       () => {
         if (!ownsPage(handle, currentGeneration)) {
+          // The presented page reported after it handed the entry to another view: the departed
+          // page keeps neither the shared restoration nor its listeners.
           return;
         }
         restoringEntry = false;
-        if (!lifetime.signal.aborted) {
-          restoreInteraction(heading, restored);
+        if (lifetime.signal.aborted) {
+          // The user took the interaction over while the content was still being presented.
+          return;
         }
-        stopApplying();
+        restoreInteraction(heading, snapshot);
+        keepVisibleAnchor();
       },
       () => {
         // A page that could not present its content keeps the restoration the shell already made.
@@ -459,6 +493,30 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
         stopApplying();
       },
     );
+
+    /**
+     * Keeps the element the entry's window showed at the viewport offset it showed it at. Entries
+     * of an asynchronous source exist only once presented, so fragments and decoded images can
+     * still change the layout after that presentation; the offset holds until user input or the
+     * page's own teardown takes the interaction over.
+     */
+    function keepVisibleAnchor(): void {
+      const anchorId = snapshot.anchorId;
+      const anchor = anchorId == null ? null : document.getElementById(anchorId);
+      if (anchor === null || !main.contains(anchor)) {
+        stopApplying();
+        return;
+      }
+      const align = (): void => {
+        if (lifetime.signal.aborted || !anchor.isConnected) {
+          return;
+        }
+        browser.scrollBy(0, anchor.getBoundingClientRect().top - (snapshot.anchorTop ?? 0));
+      };
+      observer = new ResizeObserver(align);
+      observer.observe(main);
+      align();
+    }
   }
 
   /**
@@ -562,8 +620,28 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     store.save(current.accountId, lastToken, {
       state: pageHandle?.capture?.() ?? null,
       scrollY: browser.scrollY,
+      ...captureAnchor(),
       focusId: document.activeElement?.id ?? null,
     });
+  }
+
+  /** One visible stable element; no result data or unbounded DOM snapshot is retained. */
+  function captureAnchor(): Pick<UiViewSnapshot, 'anchorId' | 'anchorTop'> {
+    let closest: HTMLElement | null = null;
+    let top = Number.POSITIVE_INFINITY;
+    for (const element of main.querySelectorAll<HTMLElement>('[id]')) {
+      const rect = element.getBoundingClientRect();
+      if (
+        rect.height > 0 &&
+        rect.bottom > 0 &&
+        rect.top < browser.innerHeight &&
+        Math.abs(rect.top) < Math.abs(top)
+      ) {
+        closest = element;
+        top = rect.top;
+      }
+    }
+    return closest === null ? {} : { anchorId: closest.id, anchorTop: top };
   }
 
   /** Closes the presented page: its work is cancelled and its container is left behind. */
@@ -652,6 +730,8 @@ function readCapabilities(value: unknown): UserInterfaceCapabilities {
     record === null ||
     typeof record.createRecognition !== 'function' ||
     readObject(record.settings) === null ||
+    typeof readObject(record.catalog)?.resolve !== 'function' ||
+    typeof readObject(record.search)?.execute !== 'function' ||
     typeof request !== 'function' ||
     typeof (request as { endSession?: unknown }).endSession !== 'function'
   ) {

@@ -11,8 +11,10 @@ export const UI_LIMITS = {
   viewStates: 20,
   /** Keys one captured restoration state may carry. */
   restorationKeys: 32,
-  /** Characters one captured text value may carry. */
+  /** Characters one text input or retained entry identity may carry. */
   restorationText: 500,
+  /** Characters one stored page value may carry, including opaque source continuations. */
+  restorationValueText: 4096,
   /** Values one captured identity list may carry. */
   restorationList: 100,
   /** Entries one CardList request asks a source for at most. */
@@ -23,4 +25,10 @@ export const UI_LIMITS = {
   fragmentBatch: 100,
   /** Items one entry's fragment result may present, so a broken source cannot grow one row. */
   fragmentItems: 20,
+  /** Entries one catalog page asks the Search contract for. */
+  catalogPage: 50,
+  /** Recent card entries Home presents for one account. */
+  recentCards: 24,
+  /** Accounts whose recent card activity the UI keeps before the least recent one leaves. */
+  recentAccounts: 8,
 } as const;

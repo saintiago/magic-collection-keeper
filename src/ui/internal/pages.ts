@@ -4,12 +4,12 @@
  * The shell owns routes, navigation and the frame; a page implementation owns one dedicated page's
  * content and supplies the sources and tools its lists use. Pages are mounted with the supplied
  * capabilities, the verified account and a signal that is aborted when the view closes, and they
- * return the bounded interaction state the shell keeps for restoration.
- *
- * A page whose content arrives asynchronously reports when it has presented the history entry the
- * shell supplied it, so the shell restores that entry's scroll offset and focused element over the
- * presented content and an interrupted restoration keeps the context the entry had
- * (docs/user-interface.md#pages-and-navigation).
+ * return the bounded interaction state the shell keeps for restoration. A page whose sources supply
+ * entries only after the shell has presented it reports when it presented the content of its history
+ * entry, so the shell restores that entry's scroll offset and focused element over the presented
+ * content and an interrupted restoration keeps the context the entry had; the shell also reports
+ * the account it leaves, so a page that keeps private presentation state ends that account's state
+ * with it (docs/user-interface.md#pages-and-navigation).
  */
 
 import type { UserInterfaceCapabilities } from '../../application/index.js';
@@ -55,7 +55,8 @@ export interface UiPageHandle {
    * supersedes the restored context — explicit input taking over, or a failed restore — reports
    * that through this same result. A page that presents another view from this hook hands the entry
    * over to that view, which captures and restores its own interaction context
-   * (docs/user-interface.md#pages-and-navigation).
+   * (docs/user-interface.md#pages-and-navigation). Entries of an asynchronous source exist only
+   * after the shell has presented the page, so its entries are presented through this result.
    */
   presented?(): void | Promise<void>;
   /** Releases the page; the shell has already aborted the context signal. */
@@ -66,4 +67,10 @@ export interface UiPageHandle {
 export interface UiPageDefinition {
   readonly page: UiPageName;
   mount(container: HTMLElement, context: UiPageContext): UiPageHandle | void;
+  /**
+   * The shell leaves one presented account: it presents another account, the visitor signs out or
+   * the shell is disposed. A page that keeps private presentation state outside the shell's own
+   * bounded state releases that account's state here.
+   */
+  accountEnded?(accountId: string): void;
 }
