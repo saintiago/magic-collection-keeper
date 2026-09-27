@@ -207,7 +207,7 @@ function boundCandidates(
       ? -1
       : resolved.findIndex((candidate) => candidate.printingId === corroboratedPrintingId);
   const kept = resolved[corroborated];
-  if (kept) {
+  if (kept && corroborated >= RECOGNITION_LIMITS.maxCandidates) {
     presented[RECOGNITION_LIMITS.maxCandidates - 1] = kept;
   }
   return presented;

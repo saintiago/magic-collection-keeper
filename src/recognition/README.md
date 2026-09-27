@@ -62,6 +62,14 @@ the session runs with the remote comparison and the independent path; transport 
 delivery packaging stay with their own tasks. The compiled pipeline imports those preserved
 modules, so the delivery build places them beside the compiled component (KAN-29).
 
+The factory fixes the enabled engine set. With the default `cloudEnabled: true`, Prepare accepts
+`browser-onnx`, `python-ocr` and `independent-identity`; with `cloudEnabled: false`, it accepts only
+`browser-onnx`. A mismatched set fails as `invalid-request` before engine preparation or inference.
+The adapter follows the retained completion promise for provisional state, including pending
+comparisons after an independent unknown result. Only `exactPrintingId` becomes printing evidence;
+`printingReferenceId` remains a translation lookup aid, so hydrated suggestions without an exact
+identity remain editable representatives even when the requested translation is found.
+
 ## Checks
 
 `npm run test:python` runs the preserved Python suite (27 regressions). The runner installs the

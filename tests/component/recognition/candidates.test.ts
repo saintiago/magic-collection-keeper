@@ -469,6 +469,46 @@ describe('recognition candidate mapping', () => {
     ).toBe(true);
   });
 
+  it.each([
+    { corroborated: 0, expected: [0, 1, 2, 3, 4] },
+    { corroborated: 2, expected: [0, 1, 2, 3, 4] },
+    { corroborated: 4, expected: [0, 1, 2, 3, 4] },
+    { corroborated: 5, expected: [0, 1, 2, 3, 5] },
+  ])(
+    'preserves unique ordered choices when printing $corroborated is corroborated',
+    async ({ corroborated, expected }) => {
+      const printings = Array.from({ length: 6 }, (_, index) =>
+        printing(`p${index}`, bolt.cardId, `${index}`),
+      );
+      const reading = await readOutcome(
+        outcome({
+          status: 'possible',
+          candidates: printings.map((record) => ({
+            cardId: bolt.cardId,
+            printingId: record.printingId,
+            name: bolt.name,
+            score: null,
+          })),
+          evidence: {
+            printingId: `p${corroborated}`,
+            titleLanguage: 'en',
+            titleCorroborated: true,
+            cardPresence: 'single',
+          },
+        }),
+        { fixture: { cards: [bolt], printings } },
+      );
+      expect(reading.candidates.map((candidate) => candidate.printingId)).toEqual(
+        expected.map((index) => `p${index}`),
+      );
+      expect(reading.suggestion).toEqual({
+        printingId: `p${corroborated}`,
+        candidateIndex: expected.indexOf(corroborated),
+        basis: 'corroborated',
+      });
+    },
+  );
+
   it('reports an unsupported engine outcome as unavailable inference', async () => {
     const harness = harnessFor(callerInput({ ...outcome(), status: 'confirmed' }));
     await harness.recognition.prepare(prepareRequest);

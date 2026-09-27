@@ -6,6 +6,7 @@ import {
   type RecognitionEngineOutcome,
 } from './model.js';
 import type { RecognitionEnginePipeline, RecognitionEngineRecognizeRequest } from './service.js';
+import { RecognitionError } from './errors.js';
 
 import { createBackendRecognition } from '../browser/backend-recognition.js';
 import { createBrowserRecognition } from '../browser/browser-recognition.js';
@@ -79,6 +80,8 @@ export interface BrowserRecognitionPipelineOptions {
   /**
    * Keeps the hybrid's remote comparison and the independent identity path. `false` runs the
    * local ONNX engine alone, as the pinned revision did when the remote path was disabled.
+   * Prepare must request `browser-onnx`, `python-ocr` and `independent-identity` when enabled,
+   * or only `browser-onnx` when disabled. Other engine sets are rejected before preparation.
    */
   readonly cloudEnabled?: boolean;
 }
@@ -99,6 +102,9 @@ export function createBrowserRecognitionPipeline(
     );
   }
   const cloudEnabled = options?.cloudEnabled !== false;
+  const enabledEngines = cloudEnabled
+    ? ['browser-onnx', 'python-ocr', 'independent-identity']
+    : ['browser-onnx'];
   const primary = createHybridRecognition({
     local: createBrowserRecognition({ request }),
     cloud: cloudEnabled ? createBackendRecognition({ request }) : null,
@@ -115,7 +121,16 @@ export function createBrowserRecognitionPipeline(
     : primary;
 
   return {
-    async prepare() {
+    async prepare({ engines }) {
+      if (
+        engines.length !== enabledEngines.length ||
+        !enabledEngines.every((engine) => engines.includes(engine))
+      ) {
+        throw new RecognitionError(
+          'invalid-request',
+          `This pipeline requires the enabled engines: ${enabledEngines.join(', ')}.`,
+        );
+      }
       const ready = readRecord(await engine.prepare());
       return {
         versions: flattenReport(ready?.versions, readVersionEntry),
@@ -149,38 +164,44 @@ async function recognizeWithPreservedEngine<Frame>(
     attempt: request.attempt,
     onUpdate: (later) => {
       if (held) {
-        request.onReading?.(toEngineOutcome(held));
+        request.onReading?.(toEngineOutcome(held, true));
       }
       held = later;
     },
   });
   const completion = readCompletion(result);
-  if (result.provisional !== true || completion === null) {
+  if (completion === null) {
     // Nothing follows this reading: it is the outcome the component maps and delivers.
-    return toEngineOutcome(result);
+    return toEngineOutcome(result, false);
   }
-  request.onReading?.(toEngineOutcome(result));
+  // The independent wrapper can clear its provisional flag while the nested hybrid comparison
+  // is still pending. Only its completion establishes that no more updates can follow.
+  request.onReading?.(toEngineOutcome(result, true));
   await completion;
-  // A provisional reading always gets a comparison; when the engines report none, the early
-  // reading is the last one this attempt delivered.
-  return toEngineOutcome(held ?? result);
+  // Even an unknown/failed comparison must settle the early reading's provisional state.
+  return toEngineOutcome(held ?? result, false);
 }
 
 /** Translates one preserved reading into this component's engine outcome. */
-function toEngineOutcome(reading: PreservedEngineReading): RecognitionEngineOutcome {
+function toEngineOutcome(
+  reading: PreservedEngineReading,
+  provisional: boolean,
+): RecognitionEngineOutcome {
   const measurement = readRecord(reading.measurement);
   const evidence = readRecord(measurement?.evidence) ?? readRecord(reading.evidence);
   return {
     status: reading.status === 'possible' ? 'possible' : 'unknown',
     candidates: readPreservedCandidates(reading.candidates),
     evidence: {
-      printingId: readText(evidence?.exactPrintingId) ?? readText(evidence?.printingReferenceId),
+      // A translation reference is a lookup aid, not an exact identity. Hydration can choose
+      // another language or fall back to the reference; neither establishes an exact printing ID.
+      printingId: readText(evidence?.exactPrintingId),
       titleLanguage: readText(evidence?.titleLanguage),
       titleCorroborated:
         evidence?.identityTitleCorroborated === true || evidence?.titleAgrees === true,
       cardPresence: readCardPresence(evidence),
     },
-    provisional: reading.provisional === true,
+    provisional,
     versions: flattenReport(measurement?.versions ?? reading.versions, readVersionEntry),
     timings: flattenReport(measurement?.processing ?? reading.timings, readTimingEntry),
   };

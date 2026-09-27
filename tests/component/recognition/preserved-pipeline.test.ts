@@ -7,6 +7,8 @@
  * through the public lifecycle (docs/testing.md).
  */
 
+import { execFileSync } from 'node:child_process';
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -48,13 +50,19 @@ const counterspell: PreservedPrinting = {
   lang: 'en',
   finishes: ['nonfoil', 'foil'],
 };
-const preservedPrintings = [bolt, counterspell];
+const spanishBolt: PreservedPrinting = {
+  ...bolt,
+  id: '00000000-0000-4000-8000-000000000103',
+  lang: 'es',
+};
+const preservedPrintings = [bolt, counterspell, spanishBolt];
 
 /** The same identities as the published Catalog the component validates readings against. */
 const catalogFixture: CatalogFixture = {
   cards: [card(bolt.oracle_id, bolt.name), card(counterspell.oracle_id, counterspell.name)],
   printings: [
     printing(bolt.id, bolt.oracle_id, bolt.collector_number, bolt.set),
+    printing(spanishBolt.id, bolt.oracle_id, bolt.collector_number, bolt.set),
     printing(
       counterspell.id,
       counterspell.oracle_id,
@@ -64,7 +72,11 @@ const catalogFixture: CatalogFixture = {
   ],
 };
 
-const prepareRequest = { sessionId: 'session-1', engines: ['browser-onnx'] } as const;
+const prepareRequest = {
+  sessionId: 'session-1',
+  engines: ['browser-onnx', 'python-ocr', 'independent-identity'],
+} as const;
+const localPrepareRequest = { ...prepareRequest, engines: ['browser-onnx'] } as const;
 
 /** One preserved service/worker response with the contract the retained resolution approves. */
 function serviceReading(
@@ -146,21 +158,26 @@ function createCanvas(): HTMLCanvasElement {
 }
 
 interface TransportScript {
+  readonly translated?: readonly PreservedPrinting[];
   readonly cloud?: (attempt: number) => unknown | Promise<unknown>;
   readonly independent?: (attempt: number) => unknown | Promise<unknown>;
 }
 
 interface Transport {
   readonly request: PreservedRequest;
+  readonly paths: readonly string[];
   readonly recognizeAttempts: readonly number[];
   readonly independentAttempts: readonly number[];
 }
 
 /** One authenticated transport stub serving the preserved endpoints and Catalog hydration. */
 function createTransport(script: TransportScript): Transport {
+  const paths: string[] = [];
   const recognizeAttempts: number[] = [];
   const independentAttempts: number[] = [];
   const request: PreservedRequest = async (path, init) => {
+    paths.push(path);
+    if (path.startsWith('/api/search?')) return { cards: script.translated ?? [] };
     const posted = init?.body ? (JSON.parse(init.body) as { readonly attempt?: unknown }) : {};
     const attempt = typeof posted.attempt === 'number' ? posted.attempt : 0;
     if (path === '/api/recognize' && script.cloud) {
@@ -178,7 +195,7 @@ function createTransport(script: TransportScript): Transport {
     }
     throw new Error(`The transport stub received an unexpected request: ${path}`);
   };
-  return { request, recognizeAttempts, independentAttempts };
+  return { request, paths, recognizeAttempts, independentAttempts };
 }
 
 function createPreservedRecognition(
@@ -276,7 +293,7 @@ describe('preserved recognition pipeline', () => {
         ),
     });
     const recognition = createPreservedRecognition(transport);
-    await recognition.prepare(prepareRequest);
+    await expect(recognition.prepare(prepareRequest)).resolves.toMatchObject(prepareRequest);
 
     const readings: RecognitionReading[] = [];
     const attempt = recognition.recognize({
@@ -337,6 +354,153 @@ describe('preserved recognition pipeline', () => {
     recognition.dispose({ sessionId: 'session-1' });
   });
 
+  it('awaits a pending hybrid comparison after the independent engine returned unknown', async () => {
+    const local = deferred<undefined>();
+    const cloud = deferred<undefined>();
+    const cloudStarted = deferred<undefined>();
+    WorkerStub.hold = local.promise;
+    WorkerStub.result = (attempt) => serviceReading(attempt, { candidates: [bolt] });
+    const transport = createTransport({
+      independent: (attempt) => serviceReading(attempt),
+      cloud: async (attempt) => {
+        if (attempt === 100000) return serviceReading(attempt);
+        cloudStarted.resolve(undefined);
+        await cloud.promise;
+        return serviceReading(attempt, { candidates: [counterspell] });
+      },
+    });
+    const recognition = createPreservedRecognition(transport);
+    try {
+      await expect(recognition.prepare(prepareRequest)).resolves.toMatchObject(prepareRequest);
+      const readings: RecognitionReading[] = [];
+      const attempt = recognition.recognize({
+        sessionId: 'session-1',
+        captureId: 'capture-1',
+        attempt: 1,
+        frame: createCanvas(),
+        onReading: (reading) => readings.push(reading),
+      });
+      let completed = false;
+      void attempt.completion.then(() => {
+        completed = true;
+      });
+      await cloudStarted.promise;
+      local.resolve(undefined);
+      const initial = await attempt.initial;
+      expect(initial).toMatchObject({ provisional: true, candidates: [{ printingId: bolt.id }] });
+      await expect(
+        recognition.recognize({
+          sessionId: 'session-1',
+          captureId: 'capture-2',
+          attempt: 2,
+          frame: createCanvas(),
+        }).initial,
+      ).rejects.toMatchObject({ code: 'busy' });
+      expect(completed).toBe(false);
+      cloud.resolve(undefined);
+      await attempt.completion;
+      expect(readings.at(-1)).toMatchObject({
+        provisional: false,
+        disagreement: { cardIds: [bolt.oracle_id, counterspell.oracle_id] },
+      });
+      expect([initial, ...readings].map((reading) => reading.identity)).toEqual([
+        { sessionId: 'session-1', captureId: 'capture-1', attempt: 1 },
+        { sessionId: 'session-1', captureId: 'capture-1', attempt: 1 },
+      ]);
+    } finally {
+      recognition.dispose({ sessionId: 'session-1' });
+      local.resolve(undefined);
+      cloud.resolve(undefined);
+    }
+  });
+
+  it.each([
+    { language: 'es', translated: [spanishBolt], expected: spanishBolt, basis: 'representative' },
+    { language: 'es', translated: [], expected: bolt, basis: 'representative' },
+    { language: 'en', translated: [], expected: bolt, basis: 'corroborated' },
+  ])(
+    'preserves $language printing uncertainty with hydration to $expected.lang ($basis)',
+    async ({ language, translated, expected, basis }) => {
+      // Run the retained producer: a Spanish footer corroborates the English record only as a
+      // translation reference; the English title/footer case instead has an exact printing ID.
+      const policy = JSON.parse(
+        execFileSync(
+          process.env['KEEPER_PYTHON'] ?? 'python3',
+          [
+            '-c',
+            `
+import json, sys
+from src.recognition.python.policy import decide
+printing, language = json.load(sys.stdin)
+visual = {"candidates": [printing], "identity_supported": True}
+text = {"title": ["Relampago" if language == "es" else "Lightning Bolt"],
+        "footer": ["149 M11 " + ("SP" if language == "es" else "EN")]}
+print(json.dumps(decide(visual, text, aliases=[("Relampago", "es")])))
+`,
+          ],
+          { input: JSON.stringify([bolt, language]), encoding: 'utf8' },
+        ),
+      ) as Record<string, unknown>;
+      expect(policy['evidence']).toMatchObject({
+        titleLanguage: language,
+        printingReferenceId: bolt.id,
+        exactPrintingCorroborated: language === 'en',
+      });
+      const transport = createTransport({ translated });
+      WorkerStub.result = (attempt) => ({ ...policy, attempt });
+      const recognition = createPreservedRecognition(transport, { cloudEnabled: false });
+      try {
+        await recognition.prepare(localPrepareRequest);
+        const attempt = recognition.recognize({
+          sessionId: 'session-1',
+          captureId: 'capture-1',
+          attempt: 1,
+          frame: createCanvas(),
+        });
+        const reading = await attempt.initial;
+        await attempt.completion;
+        expect(reading.candidates.map((candidate) => candidate.printingId)).toEqual([expected.id]);
+        expect(reading.suggestion).toMatchObject({ printingId: expected.id, basis });
+        expect(reading.evidence.printingId).toBe(language === 'en' ? bolt.id : null);
+        expect(reading.evidence.titleLanguage).toBe(language);
+        if (language === 'es')
+          expect(transport.paths.some((path) => path.startsWith('/api/search?'))).toBe(true);
+      } finally {
+        recognition.dispose({ sessionId: 'session-1' });
+      }
+    },
+  );
+
+  it.each([
+    { cloudEnabled: true, engines: ['browser-onnx'] },
+    { cloudEnabled: false, engines: prepareRequest.engines },
+    { cloudEnabled: true, engines: ['browser-onnx', 'python-ocr'] },
+    { cloudEnabled: false, engines: ['unsupported'] },
+  ])(
+    'rejects a mismatched engine selection before preparation: $engines / cloud=$cloudEnabled',
+    async ({ cloudEnabled, engines }) => {
+      const transport = createTransport({});
+      const recognition = createPreservedRecognition(transport, { cloudEnabled });
+      try {
+        await expect(
+          recognition.prepare({ sessionId: 'session-1', engines }),
+        ).rejects.toMatchObject({ code: 'invalid-request' });
+        expect(WorkerStub.instances).toHaveLength(0);
+        expect(transport.paths).toEqual([]);
+        await expect(
+          recognition.recognize({
+            sessionId: 'session-1',
+            captureId: 'capture-1',
+            attempt: 1,
+            frame: createCanvas(),
+          }).initial,
+        ).rejects.toMatchObject({ code: 'invalid-request' });
+      } finally {
+        recognition.dispose({ sessionId: 'session-1' });
+      }
+    },
+  );
+
   it('keeps the preserved independent session call limit', async () => {
     const transport = createTransport({
       cloud: (attempt) =>
@@ -348,7 +512,7 @@ describe('preserved recognition pipeline', () => {
         }),
     });
     const recognition = createPreservedRecognition(transport);
-    await recognition.prepare(prepareRequest);
+    await expect(recognition.prepare(prepareRequest)).resolves.toMatchObject(prepareRequest);
 
     // The retained session budget is fifty independent requests; each capture spends one.
     for (let attempt = 1; attempt <= 50; attempt += 1) {
@@ -384,7 +548,9 @@ describe('preserved recognition pipeline', () => {
       });
     const transport = createTransport({});
     const recognition = createPreservedRecognition(transport, { cloudEnabled: false });
-    await recognition.prepare(prepareRequest);
+    await expect(recognition.prepare(localPrepareRequest)).resolves.toMatchObject(
+      localPrepareRequest,
+    );
 
     const attempt = recognition.recognize({
       ...prepareRequest,
