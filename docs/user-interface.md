@@ -150,6 +150,10 @@ Expose the supported source methods on the Import page. Show progress, row-level
 unresolved entries; successful parsing is not ownership confirmation. Imported rows use the same
 pending review and explicit confirmation interaction as manual entry and scanning.
 
+Starting a new import creates a distinct card list; reopening or retrying uses the existing list,
+following [import identity](user-cards.md#import-state-and-identity). Keep that identity through
+pending requests and recovery rather than inferring it from the entered contents or source URL.
+
 Show relevant provenance and explain replay/reconciliation outcomes where the user makes a decision.
 Keep progress recoverable, protect user corrections during asynchronous updates, and recover a lost
 confirmation response through the recorded operation outcome. Avoid exposing credentials or
