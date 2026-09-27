@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createApplication, type Application } from '../../src/application/backend.js';
+import { createPostgresApplication, type Application } from '../../src/application/backend.js';
 import { catalogSchemaSql } from '../../src/catalog/index.js';
 import { usercardsSchemaSql } from '../../src/usercards/index.js';
 import { claimsFor, testConfiguration, testIdentityVerifier } from '../support/application.js';
@@ -82,11 +82,12 @@ describe('application entry points', () => {
 
   beforeEach(async () => {
     database = await createTestDatabase(`${catalogSchemaSql}\n\n${usercardsSchemaSql}`);
-    application = createApplication({
+    application = createPostgresApplication({
       configuration: testConfiguration(),
       identity: testIdentityVerifier(),
       resources: {
-        sql: database.sql,
+        readSql: database.sql,
+        writeSql: database.sql,
         catalogSynchronization: {
           sql: database.sql,
           snapshots: createSnapshotSource({

@@ -27,7 +27,12 @@ import { createHash } from 'node:crypto';
 
 import { z } from 'zod';
 
-import { finishes, type Catalog, type Finish, type PrintingRecord } from '../../catalog/index.js';
+import {
+  finishes,
+  type CatalogResolver,
+  type Finish,
+  type PrintingRecord,
+} from '../../catalog/index.js';
 import { physicalFinishAvailability, resolveAvailablePrintings } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';
@@ -139,8 +144,8 @@ export interface SourceImportDependencies {
    * and read or write the component's own storage.
    */
   readonly sql: UserCardsSqlTransactor;
-  /** Catalog contract used to validate the printings a source publishes. */
-  readonly catalog: Catalog;
+  /** CatalogResolver contract used to validate the printings a source publishes. */
+  readonly catalog: CatalogResolver;
   /**
    * Moxfield deck source; defaults to the component's own public-API access. A deployment can
    * replace it with configured limits or an approved access path.
@@ -693,9 +698,11 @@ export function createSourceImports(
   if (typeof sql?.query !== 'function' || typeof sql?.transaction !== 'function') {
     throw new TypeError('createSourceImports requires a transaction-capable SQL executor.');
   }
-  const catalog: Catalog | undefined = dependencies?.catalog;
+  const catalog: CatalogResolver | undefined = dependencies?.catalog;
   if (typeof catalog?.resolve !== 'function') {
-    throw new TypeError('createSourceImports requires the Catalog contract to resolve printings.');
+    throw new TypeError(
+      'createSourceImports requires the CatalogResolver contract to resolve printings.',
+    );
   }
   const deckSource: MoxfieldDeckSource | undefined = dependencies?.decks;
   if (deckSource !== undefined && typeof deckSource.readDeck !== 'function') {

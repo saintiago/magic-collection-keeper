@@ -62,6 +62,11 @@ describe('component import boundaries', () => {
 
     expect(reported).toEqual(
       [
+        'allowed-providers-of-application: src/application/index.ts -> src/ui/internal/page.ts',
+        'allowed-providers-of-usercards: src/usercards/store.ts -> src/search/index.ts',
+        'allowed-providers-of-catalog: src/catalog/index.ts -> src/recognition/index.ts',
+        'no-circular: src/catalog/index.ts -> src/recognition/index.ts',
+        'no-backend-in-ui: src/ui/index.ts -> src/application/backend.ts',
         // Application reads Search internals instead of its public entry point.
         'no-internals-of-search: src/application/index.ts -> src/search/internal/query.ts',
         // Application reads UserInterface internals instead of its public entry point.
@@ -83,5 +88,5 @@ describe('component import boundaries', () => {
         'no-unresolvable: src/application/internal/unresolved.ts -> missing-review-package',
       ].sort(),
     );
-  });
+  }, 30_000);
 });

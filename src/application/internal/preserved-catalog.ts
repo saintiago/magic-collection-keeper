@@ -13,6 +13,7 @@
 
 import {
   CATALOG_LIMITS,
+  findCatalogPrinting,
   type CardRecord,
   type Catalog,
   type PrintingRecord,
@@ -47,9 +48,6 @@ export interface PreservedPrintingRecord {
 }
 
 const preservedSearchKeys = ['oracleid', 'set', 'cn', 'lang'] as const;
-
-/** Pages a preserved lookup scans before it reports no matching printing. */
-const maxPreservedLookupPages = 50;
 
 /** Reads the `GET /api/card` query; a printing identity is required. */
 export function readPreservedCardQuery(
@@ -132,44 +130,13 @@ export async function findPreservedPrinting(
   catalog: Catalog,
   lookup: PreservedSearchQuery,
 ): Promise<PreservedPrintingRecord | null> {
-  let continuation: string | null = null;
-  for (let page = 0; page < maxPreservedLookupPages; page += 1) {
-    const listed = await catalog.listCardPrintings(lookup.cardId, {
-      pageSize: CATALOG_LIMITS.maxPrintingPageSize,
-      ...(continuation === null ? {} : { continuation }),
-    });
-    const printing = listed.printings.find((candidate) => matchesLookup(candidate, lookup));
-    if (printing !== undefined) {
-      const resolution = await catalog.resolve([{ kind: 'card', cardId: lookup.cardId }]);
-      const card = resolution.cards.get(lookup.cardId);
-      return card === undefined ? null : preservedPrinting(card, printing);
-    }
-    if (listed.continuation === null || listed.continuation === continuation) {
-      return null;
-    }
-    continuation = listed.continuation;
-  }
-  return null;
+  const match = await findCatalogPrinting(catalog, lookup);
+  return match === null ? null : preservedPrinting(match.card, match.printing);
 }
 
 async function resolveCard(catalog: Catalog, cardId: string): Promise<CardRecord | null> {
   const resolution = await catalog.resolve([{ kind: 'card', cardId }]);
   return resolution.cards.get(cardId) ?? null;
-}
-
-function matchesLookup(printing: PrintingRecord, lookup: PreservedSearchQuery): boolean {
-  if (lookup.edition !== null && printing.edition.toLowerCase() !== lookup.edition.toLowerCase()) {
-    return false;
-  }
-  if (
-    lookup.collectorNumber !== null &&
-    printing.collectorNumber.toLowerCase() !== lookup.collectorNumber.toLowerCase()
-  ) {
-    return false;
-  }
-  return (
-    lookup.language === null || printing.language.toLowerCase() === lookup.language.toLowerCase()
-  );
 }
 
 function preservedPrinting(card: CardRecord, printing: PrintingRecord): PreservedPrintingRecord {

@@ -5,7 +5,7 @@
  * public settings before it reaches a transport.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   ConfigurationError,
@@ -15,13 +15,28 @@ import {
   readPublicSettings,
   resolveApplicationConfiguration,
 } from '../../../src/application/index.js';
-import { createApplication, type ApplicationResources } from '../../../src/application/backend.js';
+import {
+  createPostgresApplication,
+  type ApplicationResources,
+} from '../../../src/application/backend.js';
 
 import { testConfiguration, testIdentityVerifier } from './harness.js';
 
 function resources(): ApplicationResources {
   return {
-    sql: {
+    readSql: {
+      async query() {
+        return [];
+      },
+      async transaction(work) {
+        return work({
+          async query() {
+            return [];
+          },
+        });
+      },
+    },
+    writeSql: {
       async query() {
         return [];
       },
@@ -62,7 +77,7 @@ describe('application composition', () => {
     configuration.environment = 'staging';
 
     expect(() =>
-      createApplication({
+      createPostgresApplication({
         configuration,
         identity: testIdentityVerifier(),
         resources: resources(),
@@ -77,7 +92,7 @@ describe('application composition', () => {
   });
 
   it('accepts a configuration-only application and exposes only its public settings', () => {
-    const application = createApplication({
+    const application = createPostgresApplication({
       configuration: testConfiguration(),
       identity: testIdentityVerifier(),
       resources: resources(),
@@ -91,14 +106,14 @@ describe('application composition', () => {
 
   it('requires an identity verifier and a diagnostics sink', () => {
     expect(() =>
-      createApplication({
+      createPostgresApplication({
         configuration: testConfiguration(),
         identity: {} as never,
         resources: resources(),
       }),
     ).toThrow(TypeError);
     expect(() =>
-      createApplication({
+      createPostgresApplication({
         configuration: testConfiguration(),
         identity: testIdentityVerifier(),
         resources: resources(),
@@ -109,7 +124,7 @@ describe('application composition', () => {
 
   it('requires the deployment executor and the catalog job implementations', () => {
     expect(() =>
-      createApplication({
+      createPostgresApplication({
         configuration: testConfiguration(),
         identity: testIdentityVerifier(),
         resources: {} as ApplicationResources,
@@ -119,12 +134,32 @@ describe('application composition', () => {
     const incomplete = resources() as unknown as Record<string, unknown>;
     incomplete['catalogSynchronization'] = undefined;
     expect(() =>
-      createApplication({
+      createPostgresApplication({
         configuration: testConfiguration(),
         identity: testIdentityVerifier(),
         resources: incomplete as unknown as ApplicationResources,
       }),
     ).toThrow(TypeError);
+  });
+
+  it('uses the reader for public queries without exposing the private writer', async () => {
+    const supplied = resources();
+    const read = vi.spyOn(supplied.readSql, 'query');
+    const write = vi.spyOn(supplied.writeSql, 'query');
+    const application = createPostgresApplication({
+      configuration: testConfiguration(),
+      identity: testIdentityVerifier(),
+      resources: supplied,
+    });
+    const response = await application.handle({
+      method: 'POST',
+      path: '/api/catalog/resolve',
+      body: JSON.stringify({ references: [] }),
+    });
+    // The empty reader has no published revision; the request must fail, without trying the writer.
+    expect(response.status).toBe(503);
+    expect(read).toHaveBeenCalledOnce();
+    expect(write).not.toHaveBeenCalled();
   });
 
   it('validates the browser transports at construction', () => {

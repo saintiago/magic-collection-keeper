@@ -48,6 +48,39 @@ implementation includes maintaining its query surface. The other components rema
 Backend entry points validate user identity for authenticated access. Private queries and changes
 are authorized against trusted user context, including requests made through Search.
 
+## Composition and replacement
+
+The composition root selects implementations and supplies their public contracts. Request handling,
+page logic and business operations do not construct their dependencies. Default PostgreSQL and browser
+wiring are separate from the behavior they assemble; an alternative replaces that wiring entry only.
+A constructor accepting a SQL client is a storage seam, not proof that the component can be replaced.
+
+Allowed source dependencies are:
+
+| Consumer      | Provider contracts                                                    |
+| ------------- | --------------------------------------------------------------------- |
+| Application   | Catalog, UserCards, Search, Recognition                               |
+| UserInterface | Application's browser access; Catalog, UserCards, Search, Recognition |
+| Recognition   | Catalog resolution                                                    |
+| UserCards     | Catalog resolution                                                    |
+| Search        | Catalog and UserCards query surfaces                                  |
+| Catalog       | None of the other components                                          |
+
+Application receives the UI factory from the browser entry point. UI code cannot import backend
+composition. Cross-component imports use public entry points, including types; dependency cycles are
+rejected. Consumers use the narrow capability they need rather than recreating a provider's contract.
+
+Replacement is checked at two boundaries: supplying a different implementation to a consumer, and
+running the provider's behavioral contract tests against that implementation. Public PostgreSQL
+relations are also contracts: replacing Catalog or UserCards while retaining this Search implementation
+requires the same views, semantics, revision behavior and account isolation. Changing those contracts
+is a coordinated architecture change, not a compatible replacement.
+
+Internal units remain within their component and share its lifecycle. Their decomposition identifies
+policy, state ownership and atomic changes; it does not introduce new services or network calls.
+Each component document defines those units. System flows and deployment choices remain here and in
+the operations and technology documents.
+
 ## Card model
 
 | Level         | Meaning                                                                                                               | Owner     |

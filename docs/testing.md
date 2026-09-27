@@ -145,7 +145,20 @@ Use representative synthetic legacy records for duplicates, missing printings, u
 overallocated/multiple locations, pending entries and replay receipts. Verify ownership conservation
 by account and printing attributes, tag/association meaning, provenance and account continuity.
 Check stable reruns, dry-run non-mutation, conflict reporting and restoration from an isolated
-backup. The migration document defines reconciliation and cutover acceptance.
+backup. Collection migration and cutover occur after the rebuild; their detailed plan is deferred.
+
+## Component replacement checks
+
+Exercise consumer entry points with implementations of provider-owned contracts, without constructing
+the default provider or mocking its SQL. Cover result/error translation, trusted context and lifecycle.
+Test the PostgreSQL composition separately with real storage. Supply a replacement browser recognition
+factory and verify that UI access and disposal still use its contract.
+
+Run the same provider behavior assertions against a proposed replacement. A substitute that merely
+returns canned values proves a consumer seam, not provider equivalence. Verify published database
+views, permissions, revision consistency and account scoping separately when those are part of the
+contract. Boundary fixtures must reject private imports, forbidden dependency directions, cycles and
+backend imports from browser presentation code, including type-only dependencies.
 
 ## Integrated acceptance
 

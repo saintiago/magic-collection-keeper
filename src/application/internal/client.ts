@@ -177,6 +177,11 @@ export interface BrowserApplicationOptions {
   readonly settings: unknown;
   readonly token: () => string | null | Promise<string | null>;
   readonly fetch?: typeof globalThis.fetch;
+  /** Selects a replacement Recognition implementation; defaults to the preserved engines. */
+  readonly createRecognition?: (capabilities: {
+    readonly settings: PublicApplicationSettings;
+    readonly request: AuthenticatedRequest;
+  }) => Recognition<HTMLCanvasElement>;
   /** Builds the UserInterface from the capabilities Application supplies. */
   readonly createUserInterface?: (capabilities: UserInterfaceCapabilities) => unknown;
 }
@@ -214,15 +219,17 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
         });
   const request = createEntryPointRequest(api, compute);
   const createRecognitionContract = () =>
-    createRecognition<HTMLCanvasElement>({
-      createEnginePipeline: () =>
-        createBrowserRecognitionPipeline({
-          request,
-          cloudEnabled: settings.recognition.cloudEnabled,
-        }),
-      catalog: createCatalogClient(request),
-      inspectFrame: inspectCanvasFrame,
-    });
+    options.createRecognition !== undefined
+      ? options.createRecognition({ settings, request })
+      : createRecognition<HTMLCanvasElement>({
+          createEnginePipeline: () =>
+            createBrowserRecognitionPipeline({
+              request,
+              cloudEnabled: settings.recognition.cloudEnabled,
+            }),
+          catalog: createCatalogClient(request),
+          inspectFrame: inspectCanvasFrame,
+        });
   const userInterface =
     typeof options.createUserInterface === 'function'
       ? options.createUserInterface({

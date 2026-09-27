@@ -1,7 +1,7 @@
 import {
   CATALOG_LIMITS,
   CatalogError,
-  type Catalog,
+  type CatalogResolver,
   type CatalogReference,
   type CatalogResolution,
   type Finish,
@@ -11,7 +11,7 @@ import { UserCardsError } from './errors.js';
 
 /** A catalog read failure is a temporary failure, never a missing reference. */
 export async function resolveCatalog(
-  catalog: Catalog,
+  catalog: CatalogResolver,
   references: readonly CatalogReference[],
 ): Promise<CatalogResolution> {
   try {
@@ -36,7 +36,7 @@ export async function resolveCatalog(
  * reviewable (docs/user-cards.md#source-imports).
  */
 export async function resolveAvailablePrintings(
-  catalog: Catalog,
+  catalog: CatalogResolver,
   printingIds: readonly string[],
 ): Promise<ReadonlyMap<string, PrintingRecord>> {
   const distinct = [...new Set(printingIds)];
@@ -66,7 +66,7 @@ export async function resolveAvailablePrintings(
  * (docs/user-cards.md#records-and-associations).
  */
 export async function resolvePrintings(
-  catalog: Catalog,
+  catalog: CatalogResolver,
   printingIds: readonly string[],
 ): Promise<ReadonlyMap<string, PrintingRecord>> {
   const distinct = [...new Set(printingIds)];
@@ -133,7 +133,7 @@ export function physicalFinish(
 
 /** Resolves one printing and the finish a physical copy of it carries. */
 export async function resolvePhysicalPrinting(
-  catalog: Catalog,
+  catalog: CatalogResolver,
   printingId: string,
   requested: Finish | null,
 ): Promise<{ readonly printing: PrintingRecord; readonly finish: Finish }> {

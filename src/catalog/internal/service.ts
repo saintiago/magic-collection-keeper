@@ -41,8 +41,11 @@ export interface CardPrintingsPage {
   readonly continuation: string | null;
 }
 
-export interface Catalog {
+export interface CatalogResolver {
   resolve(references: readonly CatalogReference[]): Promise<CatalogResolution>;
+}
+
+export interface Catalog extends CatalogResolver {
   listCardPrintings(cardId: CardId, options?: ListCardPrintingsOptions): Promise<CardPrintingsPage>;
 }
 

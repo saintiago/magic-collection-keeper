@@ -1,10 +1,4 @@
-import type {
-  CardId,
-  CatalogReference,
-  CatalogResolution,
-  LanguageCode,
-  PrintingId,
-} from '../../catalog/index.js';
+import type { CardId, CatalogResolver, LanguageCode, PrintingId } from '../../catalog/index.js';
 
 import { RecognitionError } from './errors.js';
 
@@ -214,9 +208,7 @@ export interface RecognitionEngineOutcome {
 }
 
 /** Catalog reads Recognition uses to validate candidates and resolve canonical printings. */
-export interface RecognitionCatalogPort {
-  resolve(references: readonly CatalogReference[]): Promise<CatalogResolution>;
-}
+export type RecognitionCatalogPort = CatalogResolver;
 
 /** Longest whitespace-free opaque identifier read from an untyped request. */
 export function readIdentifier(value: unknown, label: string): string {
