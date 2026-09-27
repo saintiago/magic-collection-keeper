@@ -473,7 +473,36 @@ describe('adding selected entries to a tag', () => {
     expect(outcome.status).toBe('unknown');
     expect(outcome.committed).toBe(1);
     expect(outcome.unknown).toBe(1);
-    expect(outcome.message).toContain('1 of 2 entries were added; 1 were not.');
+    expect(outcome.message).toContain('1 of 2 entries were added; 0 were not.');
+    expect(outcome.message).toContain('1 of 2 entries have an unknown outcome.');
+  });
+
+  it('keeps definite rejection details beside committed and uncertain bulk additions', async () => {
+    let calls = 0;
+    const tool = addToTagTool({
+      id: 'add-to-tag',
+      label: 'Add',
+      access: access({
+        createAssociation: async () => {
+          calls += 1;
+          if (calls === 1) return { privateRevision: 'r1', association: association() };
+          if (calls === 2) throw new ApplicationError('conflict', 'Already associated.');
+          throw new ApplicationError('unavailable', 'Lost response.');
+        },
+      }),
+      tag: () => tag({ kind: 'deck' }),
+      quantity: () => 2,
+      guidance: 'Choose quantity.',
+    });
+    const outcome = await tool.tool.invoke({
+      targets: ['one', 'two', 'three'].map((cardId) => ({ kind: 'card' as const, cardId })),
+      selection: { keys: [], targets: [] },
+      signal: new AbortController().signal,
+    });
+    expect(outcome.status).toBe('unknown');
+    expect(outcome.message).toContain('1 of 3 entries were added; 1 were not.');
+    expect(outcome.message).toContain('1 of 3 entries have an unknown outcome.');
+    expect(outcome.message).toContain('Already associated.');
   });
 
   it('moves a selected copy into a location and associates it with a deck', async () => {

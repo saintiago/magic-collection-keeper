@@ -18,6 +18,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 
 import type { CardRecord, PrintingRecord } from '../../src/catalog/index.js';
+import { organizationContinuationFailures } from '../support/organization-pagination.js';
 import type { SearchCount } from '../../src/search/index.js';
 import type { Association, PhysicalCopy, Tag } from '../../src/usercards/index.js';
 import type {
@@ -467,7 +468,17 @@ test('never replaces a committed tag with a late list response', async ({ page }
   // never replaces the window the committed change published.
   await settle(page, 'settleListTags', listing.id, { tags: [], continuation: null });
   await expect(page.locator('#tags-list [data-ui-tag="tag-wish"] a')).toHaveText('To buy');
-  await expect(page.locator('#tags-status')).toHaveText('');
+  const replacement = await requested<UiTagsListRequest>(page, 'listTags', 1);
+  expect(replacement.arguments.continuation).toBeNull();
+  await settle(page, 'settleListTags', replacement.id, {
+    tags: [tag(), tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'To buy' })],
+    continuation: 'next',
+  });
+  await expect(page.locator('#tags-list [data-ui-tag="tag-burn"] a')).toHaveText('Burn');
+  await page.click('#tags-more');
+  expect((await requested<UiTagsListRequest>(page, 'listTags', 2)).arguments.continuation).toBe(
+    'next',
+  );
   expect(errors).toEqual([]);
 });
 
@@ -877,10 +888,7 @@ test('restarts the association list when its continuation went stale', async ({ 
   await page.click('#tag-associations [data-ui-more]');
   const stale = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 1);
   expect(stale.arguments.continuation).toBe('association-page-2');
-  await settle(page, 'fail', stale.id, {
-    code: 'stale-continuation',
-    message: 'The private records changed after this page was read; start the list again.',
-  });
+  await settle(page, 'fail', stale.id, (await organizationContinuationFailures()).associations);
 
   // The page reads the sequence again from its first page instead of repeating the unusable cursor.
   const restart = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 2);
@@ -1197,3 +1205,446 @@ test('searches the catalog and adds a card to the wishlist with its intended qua
   ).toHaveText(' Intended: 4');
   expect(errors).toEqual([]);
 });
+
+/** A resolved card association, with its optional counts deliberately still pending. */
+async function openCardAssociation(page: Page, continuation: string | null = null): Promise<void> {
+  await openTags(page, '#/tags/tag-wish');
+  const read = await requested(page, 'readTags');
+  await settle(page, 'settleReadTags', read.id, [tag({ tagId: 'tag-wish', kind: 'wishlist' })]);
+  const listing = await requested(page, 'listAssociations');
+  await settle(page, 'settleListAssociations', listing.id, {
+    associations: [association({ targetLevel: 'card', targetId: 'card-bolt' })],
+    continuation,
+  });
+  await settleCatalog(page, 0, { cards: [boltCard] });
+  await expect(page.locator('#tag-quantity-association-1')).toHaveValue('2');
+}
+
+async function printingPage(
+  page: Page,
+  index: number,
+  printings: readonly PrintingRecord[],
+  continuation: string | null = null,
+): Promise<void> {
+  const read = await requested(page, 'printingsRequests', index);
+  await settle(page, 'settlePrintings', read.id, {
+    cardId: 'card-bolt',
+    cardExists: true,
+    revision: catalogRevision,
+    printings,
+    continuation,
+  });
+}
+
+test('refining preserves a separately drafted quantity and a later edit during save', async ({
+  page,
+}) => {
+  await openCardAssociation(page);
+  await page.fill('#tag-quantity-association-1', '9');
+  await page.click('#tag-refine-choose-association-1');
+  await printingPage(page, 0, [boltPrinting]);
+  await page.click('#tag-refine-save-association-1');
+  const change = await requested(page, 'changeAssociation');
+  await settle(page, 'settleChangeAssociation', change.id, association({ revision: 2 }));
+  const refresh = await requested(page, 'listAssociations', 1);
+  await settle(page, 'settleListAssociations', refresh.id, {
+    associations: [association({ revision: 2 })],
+  });
+  await settleCatalog(page, 1, { printings: [boltPrinting] });
+  await settleCatalog(page, 2, { cards: [boltCard] });
+  await expect(page.locator('#tag-quantity-association-1')).toHaveValue('9');
+  await page.click('#tag-quantity-save-association-1');
+  const quantity = await requested<Record<string, unknown>>(page, 'changeAssociation', 1);
+  expect(quantity.arguments.quantity).toBe(9);
+  await page.fill('#tag-quantity-association-1', '12');
+  await settle(
+    page,
+    'settleChangeAssociation',
+    quantity.id,
+    association({ revision: 3, quantity: 9 }),
+  );
+  const refreshed = await requested(page, 'listAssociations', 2);
+  await settle(page, 'settleListAssociations', refreshed.id, {
+    associations: [association({ revision: 3, quantity: 9 })],
+  });
+  await settleCatalog(page, 3, { printings: [boltPrinting] });
+  await settleCatalog(page, 4, { cards: [boltCard] });
+  await expect(page.locator('#tag-quantity-association-1')).toHaveValue('12');
+});
+
+test('printing reads retry after initial failure and complete into the current editor after paging', async ({
+  page,
+}) => {
+  await openCardAssociation(page, 'next');
+  await page.click('#tag-refine-choose-association-1');
+  await settle(page, 'fail', (await requested(page, 'printingsRequests')).id, {
+    code: 'unavailable',
+    message: 'Offline',
+  });
+  await expect(page.locator('#tag-refine-more-association-1')).toHaveText('Retry printings');
+  await page.click('#tag-refine-more-association-1');
+  await requested(page, 'printingsRequests', 1);
+  await page.locator('#tag-associations [data-ui-more]').click();
+  const more = await requested(page, 'listAssociations', 1);
+  await settle(page, 'settleListAssociations', more.id, {
+    associations: [
+      association({ associationId: 'second', targetLevel: 'card', targetId: 'card-counter' }),
+    ],
+  });
+  await settleCatalog(page, 1, { cards: [counterspellCard] });
+  await expect(page.locator('#tag-quantity-second')).toBeVisible();
+  await printingPage(page, 1, [boltPrinting]);
+  await expect(page.locator('#tag-refine-association-1')).toBeEnabled();
+  await expect(page.locator('#tag-refine-save-association-1')).toBeEnabled();
+  await expect(page.locator('#tag-refine-status-association-1')).toHaveCount(0);
+});
+
+test('retains an unloaded printing choice through Back and expired Catalog pagination', async ({
+  page,
+}) => {
+  await openCardAssociation(page);
+  await page.click('#tag-refine-choose-association-1');
+  await printingPage(page, 0, [boltPrinting], 'next');
+  await page.click('#tag-refine-more-association-1');
+  await printingPage(page, 1, [staBolt]);
+  await page.selectOption('#tag-refine-association-1', staBolt.printingId);
+  await control(page, 'navigate', { page: 'tags' });
+  await page.goBack();
+  await settle(page, 'settleReadTags', (await requested(page, 'readTags', 1)).id, [
+    tag({ tagId: 'tag-wish', kind: 'wishlist' }),
+  ]);
+  await settle(page, 'settleListAssociations', (await requested(page, 'listAssociations', 1)).id, {
+    associations: [association({ targetLevel: 'card', targetId: 'card-bolt' })],
+  });
+  await settleCatalog(page, 1, { cards: [boltCard] });
+  await page.click('#tag-refine-choose-association-1');
+  await printingPage(page, 2, [boltPrinting], 'expired');
+  await expect(page.locator('#tag-refine-association-1')).toHaveValue('printing-2');
+  await expect(page.locator('#tag-refine-save-association-1')).toBeDisabled();
+  await page.click('#tag-refine-more-association-1');
+  const expired = await requested(page, 'printingsRequests', 3);
+  await settle(page, 'fail', expired.id, (await organizationContinuationFailures()).printings);
+  const restarted = await requested<{ options: { continuation?: string } }>(
+    page,
+    'printingsRequests',
+    4,
+  );
+  expect(restarted.arguments.options.continuation).toBeUndefined();
+  await printingPage(page, 4, [staBolt]);
+  await expect(page.locator('#tag-refine-association-1')).toHaveValue('printing-2');
+  await page.click('#tag-refine-save-association-1');
+  expect(
+    (await requested<Record<string, unknown>>(page, 'changeAssociation')).arguments.targetId,
+  ).toBe('printing-2');
+});
+
+for (const recovery of ['conflict', 'unavailable'] as const) {
+  test(`${recovery} recovery displays the recovered card and edition before broadening`, async ({
+    page,
+  }) => {
+    await openCardAssociation(page);
+    await page.fill('#tag-quantity-association-1', '9');
+    await page.click('#tag-quantity-save-association-1');
+    await settle(page, 'fail', (await requested(page, 'changeAssociation')).id, {
+      code: recovery,
+      message: 'Changed',
+    });
+    const current = association({ targetId: 'printing-counter', quantity: 3, revision: 7 });
+    await settle(page, 'settleReadAssociations', (await requested(page, 'readAssociations')).id, [
+      current,
+    ]);
+    await expect(page.locator('#tag-quantity-save-association-1')).toBeDisabled();
+    const refresh = await requested(page, 'listAssociations', 1);
+    await settle(page, 'settleListAssociations', refresh.id, { associations: [current] });
+    await settleCatalog(page, 1, {
+      printings: [
+        { ...boltPrinting, printingId: 'printing-counter', cardId: 'card-counter', edition: 'ICE' },
+      ],
+    });
+    await settleCatalog(page, 2, { cards: [counterspellCard] });
+    const row = page.locator('#tag-associations [data-ui-entry="association:association-1"]');
+    await expect(row).toContainText('Counterspell');
+    await expect(row).toContainText('ICE 149');
+    await expect(row).not.toContainText('Lightning Bolt');
+    await expect(page.locator('#tag-quantity-association-1')).toHaveValue('9');
+    await page.click('#tag-broaden-association-1');
+    expect(
+      (await requested<Record<string, unknown>>(page, 'changeAssociation', 1)).arguments,
+    ).toMatchObject({ targetId: 'card-counter', expectedRevision: 7 });
+  });
+}
+
+test('late tag recovery cannot regress a later committed label or revision', async ({ page }) => {
+  await openTags(page, '#/tags');
+  await settle(page, 'settleListTags', (await requested(page, 'listTags')).id, { tags: [tag()] });
+  await page.fill('#tag-label-tag-burn', 'First');
+  await page.click('#tag-rename-tag-burn');
+  await settle(page, 'fail', (await requested(page, 'renameTag')).id, {
+    code: 'conflict',
+    message: 'Changed',
+  });
+  const recovery = await requested(page, 'readTags');
+  await page.fill('#tag-label-tag-burn', 'Latest');
+  await page.click('#tag-rename-tag-burn');
+  await settle(
+    page,
+    'settleRenameTag',
+    (await requested(page, 'renameTag', 1)).id,
+    tag({ label: 'Latest', revision: 3 }),
+  );
+  await settle(page, 'settleReadTags', recovery.id, [tag({ label: 'Older', revision: 2 })]);
+  await expect(page.locator('#tag-link-tag-burn')).toHaveText('Latest');
+  await page.fill('#tag-label-tag-burn', 'Next');
+  await page.click('#tag-rename-tag-burn');
+  expect(
+    (await requested<Record<string, unknown>>(page, 'renameTag', 2)).arguments.expectedRevision,
+  ).toBe(3);
+});
+
+test('obsolete association hydration cannot overwrite a committed quantity during further paging', async ({
+  page,
+}) => {
+  await openCardAssociation(page, 'next');
+  await page.locator('#tag-associations [data-ui-more]').click();
+  const old = await requested(page, 'listAssociations', 1);
+  await settle(page, 'settleListAssociations', old.id, {
+    associations: [association({ targetLevel: 'card', targetId: 'card-bolt' })],
+    continuation: 'old-next',
+  });
+  await requested(page, 'catalogRequests', 1);
+  await page.fill('#tag-quantity-association-1', '9');
+  await page.click('#tag-quantity-save-association-1');
+  const current = association({
+    targetLevel: 'card',
+    targetId: 'card-bolt',
+    revision: 2,
+    quantity: 9,
+  });
+  await settle(
+    page,
+    'settleChangeAssociation',
+    (await requested(page, 'changeAssociation')).id,
+    current,
+  );
+  await settle(page, 'settleListAssociations', (await requested(page, 'listAssociations', 2)).id, {
+    associations: [current],
+    continuation: 'fresh-next',
+  });
+  await settleCatalog(page, 2, { cards: [boltCard] });
+  await expect(page.locator('#tag-quantity-association-1')).toHaveValue('9');
+  await settleCatalog(page, 1, { cards: [boltCard] });
+  await page.locator('#tag-associations [data-ui-more]').click();
+  const further = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 3);
+  expect(further.arguments.continuation).toBe('fresh-next');
+  await settle(page, 'settleListAssociations', further.id, {
+    associations: [
+      association({ associationId: 'second', targetLevel: 'card', targetId: 'card-counter' }),
+    ],
+  });
+  await settleCatalog(page, 3, { cards: [counterspellCard] });
+  await expect(page.locator('#tag-quantity-second')).toBeVisible();
+  await expect(page.locator('#tag-quantity-association-1')).toHaveValue('9');
+  await page.click('#tag-quantity-save-association-1');
+  expect(
+    (await requested<Record<string, unknown>>(page, 'changeAssociation', 1)).arguments
+      .expectedRevision,
+  ).toBe(2);
+});
+
+for (const source of ['associations', 'search'] as const) {
+  test(`${source} basics are usable while counts are pending and all quantities recover on retry`, async ({
+    page,
+  }) => {
+    await openCardAssociation(page);
+    let index = 0;
+    let row = page.locator('#tag-associations [data-ui-entry="association:association-1"]');
+    if (source === 'search') {
+      await page.click('#tag-add-submit');
+      const search = await requested(page, 'searches');
+      await settle(page, 'settleSearch', search.id, {
+        resultLevel: 'card',
+        entries: [
+          {
+            entryKey: 'card:card-bolt',
+            target: { kind: 'card', cardId: 'card-bolt' },
+            card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
+            printing: null,
+            quantity: null,
+          },
+        ],
+        continuation: null,
+      });
+      index = 1;
+      row = page.locator('#tag-add-results [data-ui-entry="card:card-bolt"]');
+    }
+    await expect(row).toContainText('Lightning Bolt');
+    const counts = await requested<UiTagsCountsRequest>(page, 'counts', index);
+    expect(counts.arguments.tagId).toBe('tag-wish');
+    await expect(row).toContainText('Loading ownership');
+    await settle(page, 'fail', counts.id, { code: 'unavailable', message: 'Counts offline' });
+    await expect(row).toContainText('Counts offline');
+    await row.getByRole('button', { name: 'Retry ownership' }).click();
+    const retry = await requested(page, 'counts', index + 1);
+    await settle(page, 'settleCounts', retry.id, [
+      ['card:card-bolt', { owned: 4, intended: 2, locations: 1 }],
+    ]);
+    await expect(row.locator('[data-ui-copies]')).toHaveText(' Copies: 4');
+    await expect(row.locator('[data-ui-intended]')).toHaveText(' Intended: 2');
+    await expect(row.locator('[data-ui-locations]')).toHaveText(' Locations: 1');
+  });
+}
+
+async function resolveLocationVisit(page: Page, visit: number): Promise<void> {
+  const read = await requested(page, 'readTags', visit);
+  await settle(page, 'settleReadTags', read.id, [
+    tag({ tagId: 'tag-binder', kind: 'location', label: 'Binder' }),
+  ]);
+  await settle(
+    page,
+    'settleListAssociations',
+    (await requested(page, 'listAssociations', visit)).id,
+    {
+      associations: [association({ targetLevel: 'copy', targetId: 'copy-1', quantity: null })],
+    },
+  );
+  await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', visit)).id, [
+    { copyId: 'copy-1', printingId: 'printing-1', finish: 'nonfoil', condition: 'NM', revision: 5 },
+  ]);
+  await settleCatalog(page, visit * 2, { printings: [boltPrinting] });
+  await settleCatalog(page, visit * 2 + 1, { cards: [boltCard] });
+}
+
+test('location choices retry, restart expired pages, and preserve an unloaded destination after Back', async ({
+  page,
+}) => {
+  await openTags(page, '#/tags/tag-binder');
+  await resolveLocationVisit(page, 0);
+  const initial = await requested(page, 'listTags');
+  await settle(page, 'fail', initial.id, { code: 'unavailable', message: 'Locations offline' });
+  await expect(page.locator('#tag-locations-more')).toHaveText('Retry locations');
+  await page.click('#tag-locations-more');
+  await settle(page, 'settleListTags', (await requested(page, 'listTags', 1)).id, {
+    tags: [],
+    continuation: 'next',
+  });
+  await page.click('#tag-locations-more');
+  const box = tag({ tagId: 'tag-box', kind: 'location', label: 'Box' });
+  await settle(page, 'settleListTags', (await requested(page, 'listTags', 2)).id, { tags: [box] });
+  await page.selectOption('#tag-move-association-1', 'tag-box');
+  await control(page, 'navigate', { page: 'tags' });
+  await requested(page, 'listTags', 3);
+  await page.goBack();
+  await resolveLocationVisit(page, 1);
+  await settle(page, 'settleListTags', (await requested(page, 'listTags', 4)).id, {
+    tags: [],
+    continuation: 'expired',
+  });
+  await expect(page.locator('#tag-move-association-1')).toHaveValue('tag-box');
+  await expect(page.locator('#tag-move-save-association-1')).toBeDisabled();
+  expect(await control(page, 'setCopyLocation')).toEqual([]);
+  await page.click('#tag-locations-more');
+  await settle(
+    page,
+    'fail',
+    (await requested(page, 'listTags', 5)).id,
+    (await organizationContinuationFailures()).tags,
+  );
+  const restart = await requested<UiTagsListRequest>(page, 'listTags', 6);
+  expect(restart.arguments.continuation).toBeNull();
+  await settle(page, 'settleListTags', restart.id, { tags: [box] });
+  await expect(page.locator('#tag-move-association-1')).toHaveValue('tag-box');
+  await page.click('#tag-move-save-association-1');
+  await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', 2)).id, [
+    { copyId: 'copy-1', printingId: 'printing-1', finish: 'nonfoil', condition: 'NM', revision: 5 },
+  ]);
+  expect(
+    (await requested<Record<string, unknown>>(page, 'setCopyLocation')).arguments.locationTagId,
+  ).toBe('tag-box');
+});
+
+test('tag pagination restarts actual private conflicts without losing rename drafts', async ({
+  page,
+}) => {
+  await openTags(page, '#/tags');
+  await settle(page, 'settleListTags', (await requested(page, 'listTags')).id, {
+    tags: [tag()],
+    continuation: 'expired',
+  });
+  await page.fill('#tag-label-tag-burn', 'Draft');
+  await page.click('#tags-more');
+  await settle(
+    page,
+    'fail',
+    (await requested(page, 'listTags', 1)).id,
+    (await organizationContinuationFailures()).tags,
+  );
+  const restart = await requested<UiTagsListRequest>(page, 'listTags', 2);
+  expect(restart.arguments.continuation).toBeNull();
+  await settle(page, 'settleListTags', restart.id, { tags: [tag()], continuation: 'fresh' });
+  await expect(page.locator('#tag-label-tag-burn')).toHaveValue('Draft');
+  await page.click('#tags-more');
+  expect((await requested<UiTagsListRequest>(page, 'listTags', 3)).arguments.continuation).toBe(
+    'fresh',
+  );
+});
+
+test('rename draft retention is bounded independently of the tag window and history', async ({
+  page,
+}) => {
+  await openTags(page, '#/tags');
+  for (let index = 0; index < 11; index += 1) {
+    if (index > 0) await page.click('#tags-more');
+    await settle(page, 'settleListTags', (await requested(page, 'listTags', index)).id, {
+      tags: tagPage(index * 50, 50),
+      continuation: `page-${index + 1}`,
+    });
+    await page.locator(`[data-ui-tag="tag-${String(index * 50).padStart(4, '0')}"]`).waitFor();
+    // Edit the newly loaded labels through DOM input events; every page retains a separate draft.
+    await page.evaluate((start) => {
+      for (let id = start; id < start + 50; id += 1) {
+        const input = document.getElementById(
+          `tag-label-tag-${String(id).padStart(4, '0')}`,
+        ) as HTMLInputElement;
+        input.value = `Draft ${id}`;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }, index * 50);
+  }
+  await page.click('#tag-link-tag-0549');
+  await page.goBack();
+  const retained = await requested<UiTagsListRequest>(page, 'listTags', 11);
+  expect(retained.arguments.continuation).toBe('page-1');
+  await settle(page, 'fail', retained.id, (await organizationContinuationFailures()).tags);
+  const restart = await requested<UiTagsListRequest>(page, 'listTags', 12);
+  expect(restart.arguments.continuation).toBeNull();
+  await settle(page, 'settleListTags', restart.id, {
+    tags: [...tagPage(0, 1), ...tagPage(549, 1)],
+  });
+  await expect(page.locator('#tag-label-tag-0000')).toHaveValue('Tag 0');
+  await expect(page.locator('#tag-label-tag-0549')).toHaveValue('Draft 549');
+});
+
+for (const view of ['tags', 'tag'] as const) {
+  test(`${view} rename completion preserves text typed after submission`, async ({ page }) => {
+    await openTags(page, view === 'tags' ? '#/tags' : '#/tags/tag-burn');
+    if (view === 'tags') {
+      await settle(page, 'settleListTags', (await requested(page, 'listTags')).id, {
+        tags: [tag()],
+      });
+    } else {
+      await settle(page, 'settleReadTags', (await requested(page, 'readTags')).id, [tag()]);
+    }
+    const input = view === 'tags' ? '#tag-label-tag-burn' : '#tag-label';
+    const save = view === 'tags' ? '#tag-rename-tag-burn' : '#tag-rename-submit';
+    await page.fill(input, 'Submitted');
+    await page.click(save);
+    const submitted = await requested(page, 'renameTag');
+    await page.fill(input, 'Next draft');
+    await settle(page, 'settleRenameTag', submitted.id, tag({ label: 'Submitted', revision: 2 }));
+    await expect(page.locator(input)).toHaveValue('Next draft');
+    await page.click(save);
+    expect(
+      (await requested<Record<string, unknown>>(page, 'renameTag', 1)).arguments,
+    ).toMatchObject({ label: 'Next draft', expectedRevision: 2 });
+  });
+}

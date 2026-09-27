@@ -201,6 +201,7 @@ function readCount(count: SearchCount): UiEntryCounts {
 export function createEntryOwnershipReader(
   counts: UiCountsAccess,
   referenceOfKey: (key: string) => UiEntryTarget | null = uiEntryTargetOfKey,
+  tagId: () => string | null = () => null,
 ): UiFragmentReader<UiEntryOwnership> {
   return {
     async read(request) {
@@ -211,7 +212,7 @@ export function createEntryOwnershipReader(
           references.set(key, target);
         }
       }
-      const read = await counts.ofBatch([...references.values()], null, request.signal);
+      const read = await counts.ofBatch([...references.values()], tagId(), request.signal);
       return request.keys.map((key) => {
         const target = references.get(key) ?? null;
         const count = target === null ? undefined : read.get(uiEntryKey(target));
@@ -220,7 +221,11 @@ export function createEntryOwnershipReader(
           : {
               key,
               status: 'ready' as const,
-              values: { owned: count.owned, locations: count.locations } satisfies UiEntryOwnership,
+              values: {
+                owned: count.owned,
+                locations: count.locations,
+                intended: count.intended,
+              } satisfies UiEntryOwnership,
             };
       });
     },

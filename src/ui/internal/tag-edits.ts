@@ -518,15 +518,11 @@ function addOutcome(
 ): UiAddOutcome {
   const notAdded = counts.conflict + counts.failed;
   const detail = [...new Set(failures)].join(' ');
-  const partial =
-    counts.committed === 0
-      ? `${notAdded + counts.unknown} of ${total} entries were not added.`
-      : `${counts.committed} of ${total} entries were added; ` +
-        `${notAdded + counts.unknown} were not.`;
+  const partial = `${counts.committed} of ${total} entries were added; ${notAdded} were not.`;
   if (counts.unknown > 0) {
     return {
       status: 'unknown',
-      message: `${partial} ${counts.unknown} of ${total} entries have an unknown outcome. Review them before retrying.`,
+      message: `${partial} ${counts.unknown} of ${total} entries have an unknown outcome. ${detail} Review them before retrying.`,
       committed: counts.committed,
       unknown: counts.unknown,
     };

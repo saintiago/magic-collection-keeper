@@ -16,7 +16,7 @@
 
 import type { SearchClient } from '../../application/index.js';
 import type { CardRecord, Catalog, PrintingRecord } from '../../catalog/index.js';
-import type { SearchEntry, SearchRequestInput } from '../../search/index.js';
+import type { SearchRequestInput } from '../../search/index.js';
 import type {
   Association,
   AssociationListResult,
@@ -33,13 +33,7 @@ import {
 } from './card-list.js';
 import { readUiFailureCode } from './failure.js';
 import { UI_LIMITS } from './limits.js';
-import type {
-  UiEntryQuantity,
-  UiEntryTarget,
-  UiFragmentReader,
-  UiListEntry,
-  UiListSource,
-} from './list.js';
+import type { UiEntryTarget, UiFragmentReader, UiListEntry, UiListSource } from './list.js';
 import { controlLabel, readListState, readPageState } from './page-support.js';
 import type { UiPageDefinition } from './pages.js';
 import { readUiCollectionLevel, uiHref } from './routes.js';
@@ -48,8 +42,6 @@ import {
   createSearchCounts,
   searchListEntry,
   uiEntryKey,
-  type UiCountsAccess,
-  type UiEntryCounts,
 } from './search-source.js';
 import {
   addToTagTool,
@@ -230,7 +222,7 @@ function tagsPage(): UiPageDefinition {
         }
         if (outcome.record !== null) {
           publish(outcome.record);
-          if (outcome.status === 'committed') {
+          if (outcome.status === 'committed' && row.input.value.trim() === wanted) {
             // Only a committed rename replaces the unsaved label the row kept; a state a lost
             // response recovered stays beside the user's own input for review
             // (docs/user-interface.md#browsing-and-organization).
@@ -242,9 +234,9 @@ function tagsPage(): UiPageDefinition {
         if (outcome.status === 'conflict') {
           // The tag changed meanwhile: its saved state is offered for review while the unsaved
           // label stays in the row for the retry.
-          const current = await readTag(access, tag.tagId, context.signal);
+          const current = await readTag(access, tag.tagId, context.signal).catch(() => null);
           if (!closed && current !== null) {
-            keep(current);
+            publish(current);
           }
         }
         paint();
@@ -256,12 +248,13 @@ function tagsPage(): UiPageDefinition {
        * failure keeps the retained tags and reports the retry; a response a newer read or change
        * superseded never replaces the active window.
        */
-      async function readWindow(cover: number): Promise<void> {
+      async function readWindow(cover: number, preserved: readonly Tag[] = []): Promise<void> {
         if (closed) {
           return;
         }
         const current = beginRead();
         const read: Tag[] = [];
+        const readPositions = new Map<string, UiTagPosition>();
         let next: string | null = start?.continuation ?? null;
         let offset = start?.offset ?? 0;
         try {
@@ -280,8 +273,9 @@ function tagsPage(): UiPageDefinition {
               if (index < offset || candidate.system) {
                 return;
               }
-              read.push(candidate);
-              positions.set(candidate.tagId, { continuation: next, offset: index });
+              const known = find(candidate.tagId);
+              read.push(known !== null && known.revision > candidate.revision ? known : candidate);
+              readPositions.set(candidate.tagId, { continuation: next, offset: index });
             });
             next = page.continuation;
             offset = 0;
@@ -293,11 +287,11 @@ function tagsPage(): UiPageDefinition {
           if (closed || current !== version) {
             return;
           }
-          if (start !== null && readUiFailureCode(cause) === 'stale-continuation') {
+          if (next !== null && isPrivateContinuationFailure(cause)) {
             // The private records changed since this page was read: the window is read again from
             // the account's list instead of repeating a continuation the change invalidated.
             start = null;
-            void readWindow(cover);
+            void readWindow(cover, preserved);
             return;
           }
           error = readMessage(cause, 'The tags could not be loaded.');
@@ -308,7 +302,17 @@ function tagsPage(): UiPageDefinition {
         if (closed || current !== version) {
           return;
         }
-        tags = read.slice(0, UI_LIMITS.listWindow);
+        const acquired = new Map(read.map((candidate) => [candidate.tagId, candidate]));
+        for (const candidate of preserved) {
+          if ((acquired.get(candidate.tagId)?.revision ?? 0) < candidate.revision) {
+            acquired.set(candidate.tagId, candidate);
+          }
+        }
+        tags = [...acquired.values()]
+          .sort((left, right) => (left.tagId < right.tagId ? -1 : left.tagId > right.tagId ? 1 : 0))
+          .slice(-UI_LIMITS.listWindow);
+        positions.clear();
+        for (const [tagId, position] of readPositions) positions.set(tagId, position);
         continuation = next;
         complete = next === null;
         retirePositions();
@@ -351,9 +355,10 @@ function tagsPage(): UiPageDefinition {
           if (closed || current !== version) {
             return;
           }
-          if (readUiFailureCode(cause) === 'stale-continuation') {
+          if (isPrivateContinuationFailure(cause)) {
             // The further page belongs to a superseded revision: the retained window is read from
             // its own position again instead of repeating the unusable cursor.
+            start = null;
             void readWindow(tags.length);
             return;
           }
@@ -377,14 +382,22 @@ function tagsPage(): UiPageDefinition {
        * that started before the change, so no late answer replaces the committed state.
        */
       function publish(tag: Tag): void {
+        if ((find(tag.tagId)?.revision ?? 0) > tag.revision) return;
+        const interrupted = loading;
         version += 1;
         loading = false;
         error = null;
         keep(tag);
+        if (interrupted) {
+          void readWindow(tags.length, tags);
+        }
       }
 
       /** Keeps one provider-published tag in the window, ordered by stable identity. */
       function keep(tag: Tag): void {
+        if ((find(tag.tagId)?.revision ?? 0) > tag.revision) {
+          return;
+        }
         const kept = tags.filter((candidate) => candidate.tagId !== tag.tagId);
         const at = kept.findIndex((candidate) => candidate.tagId > tag.tagId);
         tags = (at === -1 ? [...kept, tag] : [...kept.slice(0, at), tag, ...kept.slice(at)]).slice(
@@ -490,8 +503,11 @@ function tagRow(
   kind.dataset.uiTagKind = '';
   const form = document.createElement('form');
   const input = textInput(document, `tag-label-${encodeURIComponent(tag.tagId)}`, label);
+  input.maxLength = UI_LIMITS.entryKey;
   input.addEventListener('input', () => {
+    drafts.delete(tag.tagId);
     drafts.set(tag.tagId, input.value);
+    boundDrafts(drafts);
   });
   const save = submitButton(document, `tag-rename-${encodeURIComponent(tag.tagId)}`, 'Save label');
   form.append(controlLabel(document, 'Label', input), save);
@@ -714,8 +730,6 @@ function tagViewPage(): UiPageDefinition {
           source: associationSource({
             access,
             catalog: context.capabilities.catalog,
-            counts,
-            tagId: () => tag?.tagId ?? tagId,
             records,
             onWindow: associationWindow,
             onStaleContinuation: restartAssociations,
@@ -724,7 +738,7 @@ function tagViewPage(): UiPageDefinition {
           pageSize: UI_LIMITS.associationPage,
           restored: readListState<string>(retainedAssociations),
           fragments: {
-            ownership: createEntryOwnershipReader(counts, associationReferenceOf),
+            ownership: createEntryOwnershipReader(counts, associationReferenceOf, () => tagId),
             tags: associationReader(),
           },
           presentation: {
@@ -733,7 +747,9 @@ function tagViewPage(): UiPageDefinition {
               if (kind === 'tags') {
                 return associationEditor(entry);
               }
-              return kind === 'ownership' ? ownershipContent(values as UiEntryOwnership) : null;
+              return kind === 'ownership'
+                ? ownershipContent(values as UiEntryOwnership, records.get(entry.key)?.quantity)
+                : null;
             },
           },
           signal: context.signal,
@@ -800,7 +816,7 @@ function tagViewPage(): UiPageDefinition {
         }
         if (outcome.record !== null) {
           presentTag(outcome.record);
-          if (outcome.status === 'committed') {
+          if (outcome.status === 'committed' && labelInput.value.trim() === wanted) {
             labelInput.value = outcome.record.label;
           }
         }
@@ -811,7 +827,7 @@ function tagViewPage(): UiPageDefinition {
           associations?.refresh();
         }
         if (outcome.status === 'conflict') {
-          const reread = await readTag(access, current.tagId, context.signal);
+          const reread = await readTag(access, current.tagId, context.signal).catch(() => null);
           if (!closed && reread !== null) {
             presentTag(reread);
           }
@@ -852,12 +868,14 @@ function tagViewPage(): UiPageDefinition {
           if (closed || current !== locationVersion) {
             return;
           }
-          const known = new Set(locations.tags.map((candidate) => candidate.tagId));
+          const known = new Set(
+            (continuation === null ? [] : locations.tags).map((candidate) => candidate.tagId),
+          );
           locations = {
             // The offered destinations slide forward under the retained window's bound, so a long
             // location list never grows the page without limit.
             tags: [
-              ...locations.tags,
+              ...(continuation === null ? [] : locations.tags),
               ...locationTagsOf(page.tags).filter((candidate) => !known.has(candidate.tagId)),
             ].slice(-UI_LIMITS.listWindow),
             continuation: page.continuation,
@@ -866,6 +884,11 @@ function tagViewPage(): UiPageDefinition {
           };
         } catch (cause) {
           if (closed || current !== locationVersion) {
+            return;
+          }
+          if (continuation !== null && isPrivateContinuationFailure(cause)) {
+            locations = { ...locations, loading: false, continuation: null };
+            void readLocations(null);
             return;
           }
           locations = {
@@ -879,7 +902,8 @@ function tagViewPage(): UiPageDefinition {
 
       /** Presents the location choice set's progress and its next page's control. */
       function paintLocations(): void {
-        locationsMore.hidden = locations.continuation === null;
+        locationsMore.hidden = locations.continuation === null && locations.error === null;
+        locationsMore.textContent = locations.error === null ? 'More locations' : 'Retry locations';
         locationsMore.disabled = locations.loading;
         locationsStatus.textContent =
           locations.error ?? (locations.loading ? 'Loading locations…' : '');
@@ -910,12 +934,12 @@ function tagViewPage(): UiPageDefinition {
         }
         addList = createCardList<UiTagAddQuery>({
           container: addHost,
-          source: addSource(context.capabilities.search, counts, () => tag?.tagId ?? null),
+          source: addSource(context.capabilities.search),
           context: next,
           pageSize: UI_LIMITS.catalogPage,
           restored: readListState<UiTagAddQuery>(retainedResults),
           fragments: {
-            ownership: createEntryOwnershipReader(counts),
+            ownership: createEntryOwnershipReader(counts, undefined, () => tagId),
             tools: addToolsReader(),
           },
           presentation: {
@@ -970,15 +994,28 @@ function tagViewPage(): UiPageDefinition {
       }
 
       /**
-       * Presents the ownership fragment of one entry: the owned count the same read evaluated is
-       * the copies the row presents, so the fragment adds the distinct physical locations holding
-       * them. Owned, intended and physical-location counts stay distinct
+       * Presents all private comparisons in one independently recoverable fragment. An association's
+       * own saved intention takes precedence over a count read that may have begun before an edit.
+       * Owned, intended and physical-location counts stay distinct
        * (docs/user-interface.md#browsing-and-organization).
        */
-      function ownershipContent(ownership: UiEntryOwnership): Node {
+      function ownershipContent(ownership: UiEntryOwnership, quantity?: number | null): Node {
         const content = document.createElement('span');
-        content.dataset.uiLocations = '';
-        content.textContent = ` Locations: ${ownership.locations}`;
+        const intended = quantity ?? ownership.intended;
+        const copies = document.createElement('span');
+        copies.dataset.uiCopies = '';
+        copies.textContent = ` Copies: ${ownership.owned}`;
+        content.append(copies);
+        if (intended != null) {
+          const intent = document.createElement('span');
+          intent.dataset.uiIntended = '';
+          intent.textContent = ` Intended: ${intended}`;
+          content.append(intent);
+        }
+        const locations = document.createElement('span');
+        locations.dataset.uiLocations = '';
+        locations.textContent = ` Locations: ${ownership.locations}`;
+        content.append(locations);
         return content;
       }
 
@@ -988,14 +1025,7 @@ function tagViewPage(): UiPageDefinition {
         if (association === undefined) {
           return null;
         }
-        switch (association.targetLevel) {
-          case 'card':
-            return { kind: 'card', cardId: association.targetId };
-          case 'printing':
-            return { kind: 'printing', printingId: association.targetId };
-          case 'copy':
-            return { kind: 'copy', copyId: association.targetId };
-        }
+        return referenceOfAssociation(association);
       }
 
       /** The fragment reader that carries one row's association to its own editor. */
@@ -1060,6 +1090,10 @@ function tagViewPage(): UiPageDefinition {
         if (association === undefined || current === null) {
           return;
         }
+        if (uiEntryKey(editor.entry.target) !== uiEntryKey(referenceOfAssociation(association))) {
+          editor.controls.replaceChildren(editor.status);
+          return;
+        }
         const draft = drafts.get(association.associationId) ?? null;
         const kind = kindOf(current.kind);
         const controls: (Node | string)[] = [];
@@ -1094,7 +1128,7 @@ function tagViewPage(): UiPageDefinition {
             );
             choose.addEventListener('click', () => {
               choose.disabled = true;
-              void loadPrintings(association.targetId, editor, null);
+              void loadPrintings(association.targetId, null);
             });
             controls.push(choose, ' ');
           } else {
@@ -1109,6 +1143,14 @@ function tagViewPage(): UiPageDefinition {
               `tag-refine-save-${encodeURIComponent(association.associationId)}`,
               'Refine to printing',
             );
+            refine.disabled = !offer.printings.some(
+              (printing) => printing.printingId === chosen.value,
+            );
+            chosen.addEventListener('change', () => {
+              refine.disabled = !offer.printings.some(
+                (printing) => printing.printingId === chosen.value,
+              );
+            });
             refine.addEventListener('click', () => {
               if (chosen.value.length === 0) {
                 editor.status.textContent = 'Choose the printing to refine the association to.';
@@ -1128,10 +1170,11 @@ function tagViewPage(): UiPageDefinition {
               `tag-refine-more-${encodeURIComponent(association.associationId)}`,
               'More printings',
             );
-            more.hidden = offer.continuation === null;
+            more.hidden = offer.continuation === null && offer.error === null;
+            more.textContent = offer.error === null ? 'More printings' : 'Retry printings';
             more.disabled = offer.loading;
             more.addEventListener('click', () => {
-              void loadPrintings(association.targetId, editor, offer.continuation);
+              void loadPrintings(association.targetId, offer.continuation);
             });
             controls.push(controlLabel(document, 'Printing', chosen), refine, ' ', more, ' ');
             const printingStatus = document.createElement('span');
@@ -1192,12 +1235,7 @@ function tagViewPage(): UiPageDefinition {
             chosen.append(option);
           }
           const wantedLocation = draft?.locationId ?? current.tagId;
-          if (
-            chosen.value !== wantedLocation &&
-            [...chosen.options].some((option) => option.value === wantedLocation)
-          ) {
-            chosen.value = wantedLocation;
-          }
+          retainChoice(chosen, wantedLocation, 'Selected location (not loaded)');
           chosen.addEventListener('change', () => {
             draftFor(association.associationId).locationId = chosen.value;
           });
@@ -1206,6 +1244,10 @@ function tagViewPage(): UiPageDefinition {
             `tag-move-save-${encodeURIComponent(association.associationId)}`,
             'Move',
           );
+          move.disabled = chosen.selectedOptions[0]?.disabled === true;
+          chosen.addEventListener('change', () => {
+            move.disabled = chosen.selectedOptions[0]?.disabled === true;
+          });
           move.addEventListener('click', () => {
             draftFor(association.associationId).locationId = chosen.value;
             void moveCopy(association, chosen.value, editor.status);
@@ -1219,6 +1261,8 @@ function tagViewPage(): UiPageDefinition {
       function draftFor(associationId: string): UiAssociationDraft {
         const existing = drafts.get(associationId);
         if (existing !== undefined) {
+          drafts.delete(associationId);
+          drafts.set(associationId, existing);
           return existing;
         }
         const created: UiAssociationDraft = {
@@ -1227,6 +1271,7 @@ function tagViewPage(): UiPageDefinition {
           locationId: null,
         };
         drafts.set(associationId, created);
+        boundDrafts(drafts);
         return created;
       }
 
@@ -1249,6 +1294,7 @@ function tagViewPage(): UiPageDefinition {
           association.targetId,
           quantity,
           editor?.status ?? null,
+          'quantity',
         );
       }
 
@@ -1259,7 +1305,12 @@ function tagViewPage(): UiPageDefinition {
         targetId: string,
         quantity: number | null,
         status: HTMLParagraphElement | null,
+        field: keyof UiAssociationDraft = 'printingId',
       ): Promise<void> {
+        const submitted =
+          field === 'printingId' && targetLevel !== 'printing'
+            ? undefined
+            : drafts.get(association.associationId)?.[field];
         const outcome = await saveAssociation(
           access,
           {
@@ -1271,7 +1322,7 @@ function tagViewPage(): UiPageDefinition {
           },
           context.signal,
         );
-        await presentAssociationOutcome(outcome, association, status);
+        await presentAssociationOutcome(outcome, association, status, true, field, submitted);
       }
 
       /** Removes one association after a brief confirmation. */
@@ -1313,6 +1364,7 @@ function tagViewPage(): UiPageDefinition {
         locationTagId: string,
         status: HTMLParagraphElement,
       ): Promise<void> {
+        const submitted = drafts.get(association.associationId)?.locationId;
         const outcome = await moveCopyById(
           access,
           association.targetId,
@@ -1321,12 +1373,19 @@ function tagViewPage(): UiPageDefinition {
         );
         // A move quotes the copy's own revision, which every attempt reads again: a conflict here
         // names the copy, not the association the row edits.
-        await presentAssociationOutcome(outcome, association, status, false);
+        await presentAssociationOutcome(
+          outcome,
+          association,
+          status,
+          false,
+          'locationId',
+          submitted,
+        );
       }
 
       /**
        * Presents one change's outcome. Only a committed change is reported as saved: its draft is
-       * cleared and the association list reads the tag's associations again. A conflict reads the
+       * cleared only for the submitted field, and the association list reads the tag's associations again. A conflict reads the
        * association's recorded state and presents it beside the unsaved input, so a deliberate
        * retry quotes the revision the page reviewed instead of the obsolete one it held
        * (docs/user-cards.md#persistence-and-recovery,
@@ -1338,22 +1397,28 @@ function tagViewPage(): UiPageDefinition {
         association: Association,
         status: HTMLParagraphElement | null,
         review = true,
+        field?: keyof UiAssociationDraft,
+        submitted?: string | null,
       ): Promise<void> {
         if (closed) {
           return;
         }
         if (outcome.status === 'committed') {
-          drafts.delete(association.associationId);
-          if (status !== null) {
-            status.textContent = outcome.message ?? 'Saved.';
+          const draft = drafts.get(association.associationId);
+          if (field === undefined) {
+            drafts.delete(association.associationId);
+          } else if (draft !== undefined && draft[field] === submitted) {
+            draft[field] = null;
           }
+          if (review && typeof outcome.record === 'object' && outcome.record !== null) {
+            keepAssociation(outcome.record as Association);
+          }
+          report(outcome.message ?? 'Saved.');
           associations?.refresh();
           return;
         }
         if (!review) {
-          if (status !== null) {
-            status.textContent = outcome.message ?? 'Saved.';
-          }
+          report(outcome.message ?? 'Saved.');
           if (outcome.status === 'unknown') {
             // The move may have committed: the list reads the tag's copies again for review.
             associations?.refresh();
@@ -1366,27 +1431,31 @@ function tagViewPage(): UiPageDefinition {
             return;
           }
           const reviewed = reread === null ? null : adoptAssociation(reread);
-          if (status !== null) {
-            status.textContent =
-              reviewed === null
-                ? (outcome.message ?? 'The association changed. Reload the view before retrying.')
-                : `${outcome.message ?? 'The association changed after this revision.'} Its saved ` +
-                  `state is now ${describeAssociation(reviewed)}. Your input stays for the retry.`;
-          }
+          report(
+            reviewed === null
+              ? (outcome.message ?? 'The association changed. Reload the view before retrying.')
+              : `${outcome.message ?? 'The association changed after this revision.'} Its saved ` +
+                  `state is now ${describeAssociation(reviewed)}. Your input stays for the retry.`,
+          );
           return;
         }
         if (outcome.status === 'unknown' && outcome.record !== null) {
           // A lost response is reviewed through the record it recovered; its revision becomes the
           // one a deliberate retry quotes, while the unsaved input stays untouched.
           const reviewed = adoptAssociation(outcome.record as Association);
-          if (status !== null) {
-            status.textContent =
-              outcome.message === null
-                ? null
-                : `${outcome.message} Its recorded state is now ${describeAssociation(reviewed)}.`;
-          }
-        } else if (status !== null) {
-          status.textContent = outcome.message ?? 'Saved.';
+          report(
+            `${outcome.message ?? 'The outcome is unknown.'} Its recorded state is now ${describeAssociation(reviewed)}.`,
+          );
+        } else {
+          report(outcome.message ?? 'Saved.');
+        }
+
+        // Paging may have replaced the initiating editor. Keep the outcome in the live row and
+        // at page level, so an uncertain result remains visible through reconciliation.
+        function report(message: string): void {
+          associationsStatus.textContent = message;
+          const current = editors.get(associationKey(association))?.status ?? status;
+          if (current !== null) current.textContent = message;
         }
       }
 
@@ -1411,9 +1480,26 @@ function tagViewPage(): UiPageDefinition {
         if (current !== undefined && next.revision < current.revision) {
           return current;
         }
-        records.set(key, next);
-        editors.get(key)?.refresh();
+        keepAssociation(next);
+        if (current?.targetLevel !== next.targetLevel || current.targetId !== next.targetId) {
+          // The list owns the entry and selected target. Reacquire its basics before retrying.
+          const editor = editors.get(key);
+          editor?.controls.querySelectorAll('button, input, select').forEach((control) => {
+            (control as HTMLButtonElement).disabled = true;
+          });
+          associations?.refresh();
+        } else {
+          editors.get(key)?.refresh();
+          associations?.reloadFragment(key, 'ownership');
+        }
         return next;
+      }
+
+      function keepAssociation(next: Association): void {
+        const key = associationKey(next);
+        if ((records.get(key)?.revision ?? 0) <= next.revision) {
+          records.set(key, next);
+        }
       }
 
       /** One association state in words, for the review a conflict or a lost response presents. */
@@ -1432,11 +1518,7 @@ function tagViewPage(): UiPageDefinition {
        * the control that reads further printings instead of presenting the known ones as the whole
        * list (docs/user-interface.md#browsing-and-organization).
        */
-      async function loadPrintings(
-        cardId: string,
-        editor: UiAssociationEditor,
-        continuation: string | null,
-      ): Promise<void> {
+      async function loadPrintings(cardId: string, continuation: string | null): Promise<void> {
         if (printingRequests.has(cardId)) {
           return;
         }
@@ -1445,11 +1527,11 @@ function tagViewPage(): UiPageDefinition {
         const previous = offered?.printings ?? [];
         printings.set(cardId, {
           printings: previous,
-          continuation: offered?.continuation ?? null,
+          continuation,
           loading: true,
           error: null,
         });
-        editor.refresh();
+        repaintEditors(cardId);
         try {
           const page = await context.capabilities.catalog.listCardPrintings(cardId, {
             pageSize: UI_LIMITS.printingPage,
@@ -1479,6 +1561,11 @@ function tagViewPage(): UiPageDefinition {
           if (closed) {
             return;
           }
+          if (continuation !== null && readUiFailureCode(cause) === 'stale-continuation') {
+            printingRequests.delete(cardId);
+            await loadPrintings(cardId, null);
+            return;
+          }
           const known = printings.get(cardId);
           printings.set(cardId, {
             printings: known?.printings ?? [],
@@ -1489,9 +1576,7 @@ function tagViewPage(): UiPageDefinition {
         } finally {
           printingRequests.delete(cardId);
         }
-        if (editor.controls.isConnected) {
-          editor.refresh();
-        }
+        repaintEditors(cardId);
       }
 
       /** Fills one refinement control with the printings the catalog published. */
@@ -1509,8 +1594,8 @@ function tagViewPage(): UiPageDefinition {
           }),
         );
         chosen.disabled = known.length === 0;
-        if (wanted !== undefined && known.some((printing) => printing.printingId === wanted)) {
-          chosen.value = wanted;
+        if (wanted !== undefined) {
+          retainChoice(chosen, wanted, 'Selected printing (not loaded)');
         }
       }
 
@@ -1536,9 +1621,15 @@ function tagViewPage(): UiPageDefinition {
       }
 
       /** Redraws the presented association editors, so they follow the choices now known. */
-      function repaintEditors(): void {
+      function repaintEditors(cardId?: string): void {
         for (const editor of editors.values()) {
-          editor.refresh();
+          const association = records.get(editor.entry.key);
+          if (
+            cardId === undefined ||
+            (association?.targetLevel === 'card' && association.targetId === cardId)
+          ) {
+            editor.refresh();
+          }
         }
       }
 
@@ -1556,13 +1647,7 @@ function tagViewPage(): UiPageDefinition {
             editors.delete(key);
           }
         }
-        while (drafts.size > UI_LIMITS.listWindow) {
-          const oldest = drafts.keys().next().value;
-          if (oldest === undefined) {
-            break;
-          }
-          drafts.delete(oldest);
-        }
+        boundDrafts(drafts);
       }
 
       /**
@@ -1646,7 +1731,7 @@ interface UiTagAddQuery {
 
 /**
  * The source of one tag view's association list: the tag's associations with resolved basics and
- * the private counts of the entries they present. The list reports the window it accumulated, so
+ * independently loaded private counts. The list reports the window it accumulated, so
  * the page releases the editors of rows that left it, and a continuation the provider rejects as
  * stale tells the page to read the sequence again from its first page instead of repeating an
  * unusable cursor forever (docs/user-interface.md#browsing-and-organization).
@@ -1654,8 +1739,6 @@ interface UiTagAddQuery {
 function associationSource(options: {
   readonly access: UiTagAccess;
   readonly catalog: Catalog;
-  readonly counts: UiCountsAccess;
-  readonly tagId: () => string | null;
   readonly records: Map<string, Association>;
   readonly onWindow: (presentedKeys: ReadonlySet<string>) => void;
   readonly onStaleContinuation: () => void;
@@ -1675,20 +1758,41 @@ function associationSource(options: {
           request.signal,
         );
       } catch (cause) {
-        if (request.continuation !== null && readUiFailureCode(cause) === 'stale-continuation') {
+        if (
+          !request.signal.aborted &&
+          request.continuation !== null &&
+          isPrivateContinuationFailure(cause)
+        ) {
           options.onStaleContinuation();
         }
         throw cause;
       }
+      request.signal.throwIfAborted();
+      const observed = page.associations.map((association) => {
+        const current = options.records.get(associationKey(association));
+        return current !== undefined && current.revision > association.revision
+          ? current
+          : association;
+      });
       const entries = await associationEntries(
-        page.associations,
+        observed,
         options.access,
         options.catalog,
-        options.counts,
-        options.tagId(),
-        options.records,
         request.signal,
       );
+      request.signal.throwIfAborted();
+      if (
+        observed.some(
+          (association) =>
+            (options.records.get(associationKey(association))?.revision ?? 0) >
+            association.revision,
+        )
+      ) {
+        throw new Error('An association changed while loading. Retry to read its current state.');
+      }
+      for (const association of observed) {
+        options.records.set(associationKey(association), association);
+      }
       if (request.continuation === null) {
         presented.length = 0;
       }
@@ -1696,27 +1800,23 @@ function associationSource(options: {
       if (presented.length > UI_LIMITS.listWindow) {
         presented.splice(0, presented.length - UI_LIMITS.listWindow);
       }
-      options.onWindow(new Set(presented));
+      const window = new Set(presented);
+      for (const key of options.records.keys()) {
+        if (!window.has(key)) {
+          options.records.delete(key);
+        }
+      }
+      options.onWindow(window);
       return { entries, continuation: page.continuation };
     },
   };
 }
 
-/**
- * Adapts one page of associations to the list boundary and records each association under its entry
- * key, so the row that presents it edits the identity and revision a read observed. The records of
- * entries the list no longer presents are retired under the bound the list renders, and the private
- * counts of the presented entries are read in one bounded batch: an unavailable count read leaves
- * their counts unknown instead of failing the page, because the ownership fragment reports that
- * failure and retries it on its own (docs/user-interface.md#cardlist).
- */
+/** Resolve basic entries without publishing state or waiting for optional counts. */
 async function associationEntries(
   associations: readonly Association[],
   access: UiTagAccess,
   catalog: Catalog,
-  counts: UiCountsAccess,
-  tagId: string | null,
-  records: Map<string, Association>,
   signal: AbortSignal,
 ): Promise<readonly UiListEntry[]> {
   const copies = await readAssociationCopies(associations, access, signal);
@@ -1741,53 +1841,9 @@ async function associationEntries(
     cardIds.add(printing.cardId);
   }
   const cards = await resolveCards(catalog, [...cardIds]);
-  const read = await readAssociationCounts(counts, associations, tagId, signal);
-  const entries: UiListEntry[] = [];
-  for (const association of associations) {
-    const key = associationKey(association);
-    records.set(key, association);
-    entries.push(
-      associationListEntry(key, association, copies, printings, cards, read.get(key) ?? null),
-    );
-  }
-  const presented = new Set(entries.map((entry) => entry.key));
-  while (records.size > UI_LIMITS.listWindow + UI_LIMITS.listPage) {
-    const oldest = records.keys().next().value;
-    if (oldest === undefined || presented.has(oldest)) {
-      break;
-    }
-    records.delete(oldest);
-  }
-  return entries;
-}
-
-/** Private counts of the presented association entries, or none when the read did not answer. */
-async function readAssociationCounts(
-  counts: UiCountsAccess,
-  associations: readonly Association[],
-  tagId: string | null,
-  signal: AbortSignal,
-): Promise<ReadonlyMap<string, UiEntryCounts>> {
-  const targets: UiEntryTarget[] = [];
-  for (const association of associations) {
-    targets.push(referenceOfAssociation(association));
-  }
-  try {
-    const read = await counts.ofBatch(targets, tagId, signal);
-    // The provider answers per entry reference; the rows look their counts up under their own
-    // association key.
-    const byKey = new Map<string, UiEntryCounts>();
-    targets.forEach((target, index) => {
-      const count = read.get(uiEntryKey(target));
-      const association = associations[index];
-      if (count !== undefined && association !== undefined) {
-        byKey.set(associationKey(association), count);
-      }
-    });
-    return byKey;
-  } catch {
-    return new Map();
-  }
+  return associations.map((association) =>
+    associationListEntry(associationKey(association), association, copies, printings, cards),
+  );
 }
 
 /** The presented target of one association. */
@@ -1809,7 +1865,6 @@ function associationListEntry(
   copies: ReadonlyMap<string, PhysicalCopy>,
   printings: ReadonlyMap<string, PrintingRecord>,
   cards: ReadonlyMap<string, CardRecord>,
-  counts: UiEntryCounts | null,
 ): UiListEntry {
   const target: UiEntryTarget =
     association.targetLevel === 'card'
@@ -1849,14 +1904,7 @@ function associationListEntry(
                 },
         }
       : null,
-    // The account's owned copies of the entry and its requirement stay distinct: a card or
-    // printing association carries its own intended quantity, while a physical copy presents the
-    // requirement covering the printing it belongs to
-    // (docs/user-interface.md#browsing-and-organization, docs/architecture.md#tags-and-associations).
-    quantity: {
-      copies: counts?.owned ?? null,
-      intended: association.quantity ?? counts?.intended ?? null,
-    },
+    quantity: null,
   };
 }
 
@@ -1930,64 +1978,20 @@ async function resolveCards(
   return cards;
 }
 
-/**
- * The source of one add search: the Search contract over the presented query, enriched with the
- * private counts of exactly the entries it presents. The counts come from the entries' own
- * references, so an entry the account does not own keeps its place in the result with an exact zero
- * instead of being dropped (docs/user-interface.md#browsing-and-organization,
- * docs/search.md#evaluation-and-grouping).
- */
-function addSource(
-  search: SearchClient,
-  counts: UiCountsAccess,
-  tagId: () => string | null,
-): UiListSource<UiTagAddQuery> {
+/** Basic search results; private counts load independently through the ownership fragment. */
+function addSource(search: SearchClient): UiListSource<UiTagAddQuery> {
   return {
     async load(request) {
       const page = await search.execute(
         addSearchRequest(request.context, request.pageSize, request.continuation),
         request.signal,
       );
-      const entries = page.entries.map((entry) => searchListEntry(entry));
-      const read = await readAddCounts(counts, page.entries, tagId(), request.signal);
       return {
-        entries: entries.map((entry) => ({
-          ...entry,
-          quantity: entryQuantity(entry, read.get(entry.key) ?? null),
-        })),
+        entries: page.entries.map((entry) => ({ ...searchListEntry(entry), quantity: null })),
         continuation: page.continuation,
       };
     },
   };
-}
-
-/** Private counts of the entries one add page presents, or none when the read did not answer. */
-async function readAddCounts(
-  counts: UiCountsAccess,
-  entries: readonly SearchEntry[],
-  tagId: string | null,
-  signal: AbortSignal,
-): Promise<ReadonlyMap<string, UiEntryCounts>> {
-  try {
-    return await counts.ofBatch(
-      entries.map((entry) => entry.target),
-      tagId,
-      signal,
-    );
-  } catch {
-    return new Map();
-  }
-}
-
-/**
- * Quantity one add entry presents: the copies the account owns, the presented tag's intended
- * quantity covering the entry, or the quantity the query itself evaluated when the count read did
- * not answer.
- */
-function entryQuantity(entry: UiListEntry, counts: UiEntryCounts | null): UiEntryQuantity | null {
-  return counts === null
-    ? entry.quantity
-    : { copies: counts.owned, intended: counts.intended ?? entry.quantity?.intended ?? null };
 }
 
 /** One add search as the Search contract receives it; a copy level reads the owned copies. */
@@ -2111,6 +2115,7 @@ function readDrafts(value: unknown): Map<string, string> {
       drafts.set(tagId, label.slice(0, UI_LIMITS.entryKey));
     }
   }
+  boundDrafts(drafts);
   return drafts;
 }
 
@@ -2136,6 +2141,7 @@ function readAssociationDrafts(value: unknown): Map<string, UiAssociationDraft> 
       locationId: readDraftValue(draft.locationId, UI_LIMITS.routeSegment),
     });
   }
+  boundDrafts(drafts);
   return drafts;
 }
 
@@ -2232,4 +2238,31 @@ function select(
 
 function readMessage(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message.length > 0 ? cause.message : fallback;
+}
+
+/** UserCards invalidates revision-bound continuations with conflict. */
+function isPrivateContinuationFailure(cause: unknown): boolean {
+  const code = readUiFailureCode(cause);
+  return code === 'conflict' || code === 'stale-continuation';
+}
+
+/** Keep selected identities explicit while their page of choices is unavailable. */
+function retainChoice(chosen: HTMLSelectElement, wanted: string, label: string): void {
+  if (![...chosen.options].some((option) => option.value === wanted)) {
+    const pending = chosen.ownerDocument.createElement('option');
+    pending.value = wanted;
+    pending.textContent = label;
+    pending.disabled = true;
+    chosen.append(pending);
+  }
+  chosen.value = wanted;
+}
+
+/** Each page retains at most one window of most recently edited drafts, independently of rows. */
+function boundDrafts<Value>(drafts: Map<string, Value>): void {
+  while (drafts.size > UI_LIMITS.listWindow) {
+    const oldest = drafts.keys().next().value;
+    if (oldest === undefined) break;
+    drafts.delete(oldest);
+  }
 }

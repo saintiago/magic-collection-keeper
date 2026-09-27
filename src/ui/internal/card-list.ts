@@ -56,6 +56,8 @@ export interface UiEntryImage {
 export interface UiEntryOwnership {
   /** Physical copies of the entry the account owns. */
   readonly owned: number;
+  /** Intended quantity for the presented tag, when this fragment reads one. */
+  readonly intended?: number | null;
   /** Physical locations holding those copies, or null when the count is unavailable. */
   readonly locations: number | null;
 }
@@ -1885,7 +1887,9 @@ function readFragmentValues(
       if (ownership === null || typeof owned !== 'number' || locations === undefined) {
         return unreadable;
       }
-      return { ok: true, values: { owned, locations } satisfies UiEntryOwnership };
+      const intended = readCount(ownership.intended ?? null);
+      if (intended === undefined) return unreadable;
+      return { ok: true, values: { owned, locations, intended } satisfies UiEntryOwnership };
     }
     case 'tags': {
       const tags = readItems(value as readonly unknown[]);

@@ -287,7 +287,7 @@ describe('private counts of explicit entries', () => {
     });
 
     expect(read).toEqual([
-      { key: 'card:card-1', status: 'ready', values: { owned: 2, locations: 1 } },
+      { key: 'card:card-1', status: 'ready', values: { owned: 2, locations: 1, intended: 3 } },
       { key: 'association:association-1', status: 'absent', values: null },
     ]);
   });
