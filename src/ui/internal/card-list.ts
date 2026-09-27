@@ -2148,7 +2148,10 @@ function readRestoredFocus(value: unknown): UiListFocus | null {
     }
     case 'element': {
       const id = focus.id;
-      if (typeof id === 'string' && id.length > 0 && id.length <= UI_LIMITS.entryKey) {
+      // This is the presentation's DOM id, not a source key: prefixes and encoding can expand
+      // a bounded key. Retain the one id capture read unchanged, as for other focus controls;
+      // restoration only focuses a matching element inside this list.
+      if (typeof id === 'string' && id.length > 0) {
         return { control: 'element', id };
       }
       break;

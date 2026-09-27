@@ -11,7 +11,8 @@
  * their query, Back restores the query, the controls, the selection and the result window, recent
  * activity belongs to the account that opened the card, and a closed page withdraws its search and
  * presents no late result. Results whose provider identities cross the previous route bound and
- * reach the provider maximum render, load and open.
+ * reach the provider maximum render, load and open. Encoded identities also preserve result focus,
+ * selection and drafts through Catalog and Home history restoration.
  */
 
 import path from 'node:path';
@@ -20,6 +21,8 @@ import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 
+import { createSearchClient } from '../../src/application/index.js';
+import { createSearch, SEARCH_LIMITS, type SearchSqlRow } from '../../src/search/index.js';
 import type {
   UiBrowseCatalogRequest,
   UiBrowseControl,
@@ -367,6 +370,88 @@ test('card results at the provider identity maximum render, open and return on H
   );
   expect(errors).toEqual([]);
 });
+
+for (const level of ['card', 'printing'] as const) {
+  const boundaryLength = level === 'card' ? 159 : 158;
+  for (const [label, identity] of [
+    ['at the old focus bound', '/'.repeat(boundaryLength)],
+    ['past the old focus bound', '/'.repeat(boundaryLength + 1)],
+    ['maximum accented and reserved', 'é/ ?%'.repeat(40)],
+    ['maximum encoding expansion', '界'.repeat(SEARCH_LIMITS.maxIdentifierLength)],
+    ['maximum supplementary Unicode', '🃏'.repeat(SEARCH_LIMITS.maxIdentifierLength / 2)],
+  ] as const) {
+    test(`encoded ${level} identities ${label} restore in Catalog and Home`, async ({ page }) => {
+      const errors = await openBrowse(page, `#/catalog?level=${level}`);
+      // Exercise actual Search key construction and Application response validation, replacing
+      // only the SQL read. Browser navigation below receives the provider's own result unchanged.
+      const sql = {
+        query: async (): Promise<readonly SearchSqlRow[]> => [
+          {
+            row_kind: 'revision',
+            row_position: 0,
+            catalog_revision: 'browse-revision',
+            private_revision: null,
+            total_count: 1,
+          },
+          {
+            row_kind: 'entry',
+            row_position: 1,
+            entry_id: identity,
+            card_id: identity,
+            card_name: 'Encoded result',
+            matched_name: null,
+            printing_id: level === 'printing' ? identity : null,
+            edition: level === 'printing' ? 'BLB' : null,
+            collector_number: level === 'printing' ? '1' : null,
+            language: level === 'printing' ? 'en' : null,
+            copies: null,
+            intended: null,
+          },
+        ],
+      };
+      const search = createSearch({ sql, withAccountScope: async (_account, work) => work(sql) });
+      const result = await createSearchClient(async () =>
+        search.execute({ resultLevel: level }),
+      ).execute({ resultLevel: level });
+      await settleSearch(page, (await searchRequest(page)).id, result);
+
+      const link = page.locator('#catalog-results [data-ui-open]');
+      const selected = page.getByLabel('Select Encoded result');
+      const href = `#/cards/${encodeURIComponent(identity)}${level === 'printing' ? `/${encodeURIComponent(identity)}` : ''}`;
+      await expect(link).toHaveAttribute('href', href);
+      await selected.check();
+      await page.getByLabel('Search cards').fill('retained draft');
+      await link.click();
+      await expect(page.locator('#card-level')).toHaveText(
+        `${identity}/${level === 'printing' ? identity : '-'}/-`,
+      );
+
+      await page.goBack();
+      await settleSearch(page, (await searchRequest(page, 1)).id, result);
+      await expect(link).toBeFocused();
+      await expect(selected).toBeChecked();
+      await expect(page.getByLabel('Search cards')).toHaveValue('retained draft');
+      await expect(page.locator('#catalog-results [data-ui-entry]')).toHaveCount(1);
+
+      // Recent activity uses the same renderer and retains its own list state on Back/Forward.
+      await page.getByRole('link', { name: 'Home', exact: true }).click();
+      const recent = page.locator('#home-results [data-ui-open]');
+      await expect(recent).toHaveAttribute('href', href);
+      await selected.check();
+      await recent.click();
+      await expect(page.locator('#card-level')).toBeVisible();
+      await page.goBack();
+      await expect(recent).toBeFocused();
+      await expect(selected).toBeChecked();
+      await page.goForward();
+      await expect(page.locator('#card-level')).toBeVisible();
+      await page.goBack();
+      await expect(recent).toBeFocused();
+      await expect(selected).toBeChecked();
+      expect(errors).toEqual([]);
+    });
+  }
+}
 
 test('printing results at the provider identity maximum render, load and open', async ({
   page,
