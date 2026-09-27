@@ -4,7 +4,10 @@
  * The shell owns routes, navigation and the frame; a page implementation owns one dedicated page's
  * content and supplies the sources and tools its lists use. Pages are mounted with the supplied
  * capabilities, the verified account and a signal that is aborted when the view closes, and they
- * return the bounded interaction state the shell keeps for restoration.
+ * return the bounded interaction state the shell keeps for restoration. A page whose sources
+ * supply entries only after the shell has presented the page reports when it presented the content
+ * of its history entry, and the shell reports the account it leaves so a page that keeps private
+ * presentation state ends that account's state with it.
  */
 
 import type { UserInterfaceCapabilities } from '../../application/index.js';
@@ -42,6 +45,12 @@ export interface UiPageContext {
 export interface UiPageHandle {
   /** Bounded query and selection state to keep for this history entry, or null to keep none. */
   capture?(): UiRestorationState | null;
+  /**
+   * Resolves once the page has presented the content this history entry restores, so the shell
+   * restores the entry's scroll offset and focus again over the presented content. Entries of an
+   * asynchronous source exist only after the shell has presented the page.
+   */
+  presented?(): void | Promise<void>;
   /** Releases the page; the shell has already aborted the context signal. */
   dispose?(): void;
 }
@@ -50,4 +59,10 @@ export interface UiPageHandle {
 export interface UiPageDefinition {
   readonly page: UiPageName;
   mount(container: HTMLElement, context: UiPageContext): UiPageHandle | void;
+  /**
+   * The shell leaves one presented account: it presents another account, the visitor signs out or
+   * the shell is disposed. A page that keeps private presentation state outside the shell's own
+   * bounded state releases that account's state here.
+   */
+  accountEnded?(accountId: string): void;
 }

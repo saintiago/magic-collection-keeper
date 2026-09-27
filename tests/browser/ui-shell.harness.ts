@@ -200,6 +200,8 @@ function fixturePages(document: Document, log: string[]): readonly UiPageDefinit
 function homePage(document: Document, log: string[]): UiPageDefinition {
   return {
     page: 'home',
+    // Reported for every account the shell leaves, whatever page is presented at that moment.
+    accountEnded: (accountId) => log.push(`account-ended:${accountId}`),
     mount(container, context) {
       const query = document.createElement('input');
       query.id = 'home-query';

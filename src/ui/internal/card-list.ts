@@ -19,7 +19,9 @@
  * convenient selection without losing their individual identities, and the tools invoke the owning
  * component's operation for the explicit selection and report its outcome; an invocation without a
  * receipt is unknown, never a definite failure. Each list owns its query, loaded window, selection
- * and presentation state, so one page can present several independent lists.
+ * and presentation state, so one page can present several independent lists. A list announces
+ * every settled window, so a page can present interaction that waits for entries a source supplies
+ * asynchronously (docs/user-interface.md#pages-and-navigation).
  */
 
 import { UI_LIMITS } from './limits.js';
@@ -177,6 +179,12 @@ export interface UiCardListOptions<Context = unknown> {
   readonly tools?: readonly UiCardListTool[];
   /** Presentation adjustments over the default rendering. */
   readonly presentation?: UiCardListPresentation;
+  /**
+   * Notified after every window request settles, with the list whose window, continuation and
+   * status are current then; a page restoring interaction over asynchronously supplied entries
+   * uses it.
+   */
+  readonly onWindowSettled?: (list: UiCardList<Context>) => void;
   /** Aborted when the page closes; the list stops loading and drops late results. */
   readonly signal?: AbortSignal;
 }
@@ -270,6 +278,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   const readers = readFragments(options?.fragments);
   const tools = readTools(options?.tools);
   const presentation = readPresentation(options?.presentation);
+  const onWindowSettled = readWindowListener(options?.onWindowSettled);
   const signal = readSignal(options?.signal);
   const document = container.ownerDocument;
 
@@ -339,17 +348,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   let fragmentSequence = 0;
   let disposed = false;
 
-  renderStatus();
-  renderSelection();
-  renderOutcome();
-  if (signal !== undefined && signal.aborted) {
-    dispose();
-  } else {
-    signal?.addEventListener('abort', () => dispose());
-    startRequest(null);
-  }
-
-  return {
+  const list: UiCardList<Context> = {
     get entries() {
       return [...entries];
     },
@@ -375,6 +374,18 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     invoke,
     dispose,
   };
+
+  renderStatus();
+  renderSelection();
+  renderOutcome();
+  if (signal !== undefined && signal.aborted) {
+    dispose();
+  } else {
+    signal?.addEventListener('abort', () => dispose());
+    startRequest(null);
+  }
+
+  return list;
 
   /**
    * Requests one page of the active result. A request the user still waits for is the active one:
@@ -437,6 +448,7 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     continues = continuation !== null;
     renderStatus();
     requestFragments();
+    announceWindow();
   }
 
   function settleFailure(current: number, requested: string | null, message: string): void {
@@ -448,6 +460,14 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     error = message;
     failed = { continuation: requested };
     renderStatus();
+    announceWindow();
+  }
+
+  /** Announces one settled window, after the list presented it; a closed list announces nothing. */
+  function announceWindow(): void {
+    if (!disposed) {
+      onWindowSettled?.(list);
+    }
   }
 
   /** Replaces the window; entries the new result no longer holds leave it. */
@@ -1757,6 +1777,18 @@ function readPresentation(value: unknown): UiCardListPresentation {
     throw new TypeError('CardList presentation overrides rendering through functions.');
   }
   return value as UiCardListPresentation;
+}
+
+function readWindowListener<Context>(
+  value: unknown,
+): ((list: UiCardList<Context>) => void) | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'function') {
+    throw new TypeError('CardList announces its settled windows through one supplied function.');
+  }
+  return value as (list: UiCardList<Context>) => void;
 }
 
 function readSignal(value: unknown): AbortSignal | undefined {

@@ -215,6 +215,19 @@ test('a late result of a closed page never reaches the new view', async ({ page 
   await expect(page.locator('#collection-marker')).toBeVisible();
 });
 
+test('every page implementation learns that the shell left an account', async ({ page }) => {
+  await openShell(page, '#/cards/card-1');
+  await expect(page.locator('#card-level')).toHaveText('card-1/-/-');
+
+  // The card is presented, and the Home implementation still learns that its account ended.
+  await signInAs(page, 'bob');
+  expect(await notes(page)).toContain('account-ended:alice');
+
+  // Disposal ends the presented account too, so no page keeps private state past the shell.
+  await disposeShell(page);
+  expect(await notes(page)).toContain('account-ended:bob');
+});
+
 test('sign-out removes private presentation state and ends the session', async ({ page }) => {
   await openShell(page, '#/');
   await page.getByLabel('Search cards').fill('lightning bolt');

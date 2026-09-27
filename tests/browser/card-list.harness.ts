@@ -75,6 +75,14 @@ export interface UiCardListState {
   readonly error: string | null;
 }
 
+/** One settled window a list announced, as the owner presenting over its entries would read it. */
+export interface UiCardListSettlement {
+  readonly list: string;
+  readonly entries: readonly string[];
+  readonly hasMore: boolean;
+  readonly error: string | null;
+}
+
 export interface UiCardListControl {
   install(id: string, options?: UiCardListInstall): void;
   /** Presents another query context through the list. */
@@ -86,6 +94,8 @@ export interface UiCardListControl {
   /** Aborts the page signal the list was installed with, as closing its page does. */
   close(id: string): void;
   state(id: string): UiCardListState;
+  /** Windows the installed lists announced as settled, oldest first. */
+  settlements(): readonly UiCardListSettlement[];
   pageRequests(): readonly UiCardListPageRequest[];
   settlePage(
     id: number,
@@ -125,6 +135,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
   const pages: PageRecord[] = [];
   const fragments: UiCardListFragmentRequest[] = [];
   const invocations: UiCardListToolRequest[] = [];
+  const settlements: UiCardListSettlement[] = [];
   const pendingPages = new Map<number, Pending<UiListPage>>();
   const pendingFragments = new Map<number, Pending<readonly UiFragmentResult<unknown>[]>>();
   const retiredFragments = new Set<number>();
@@ -157,6 +168,14 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
           fragments: readers as unknown as UiCardListFragments,
           tools,
           signal: controller.signal,
+          onWindowSettled: (settled) => {
+            settlements.push({
+              list: id,
+              entries: settled.entries.map((entry) => entry.key),
+              hasMore: settled.hasMore,
+              error: settled.error,
+            });
+          },
         }),
       );
     },
@@ -187,6 +206,9 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
         loading: installed.loading,
         error: installed.error,
       };
+    },
+    settlements() {
+      return settlements.map((settlement) => ({ ...settlement, entries: [...settlement.entries] }));
     },
     pageRequests() {
       return pages.map((page) => ({

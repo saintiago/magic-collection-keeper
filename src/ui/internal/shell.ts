@@ -6,7 +6,9 @@
  * history navigation and the bounded, account-isolated presentation state. Navigation keeps the
  * state of the view it leaves for the way back, closing a view aborts its work and detaches its
  * container so a late result cannot change the new view, and a changed account clears private
- * presentation state and ends the authenticated session the transport serves.
+ * presentation state and ends the authenticated session the transport serves. The shell also
+ * reports every account it leaves to the page implementations, so private state a page keeps
+ * outside the shell's store ends with the account that presented it.
  */
 
 import type { UserInterfaceCapabilities } from '../../application/index.js';
@@ -180,6 +182,11 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     browser.removeEventListener('hashchange', onBrowserNavigation);
     root.removeEventListener('click', onClick);
     unsubscribe();
+    const current = account;
+    if (current !== null) {
+      // Disposal ends the presented account's session state with the UI that presented it.
+      endAccount(current.accountId);
+    }
     store.clear();
     releaseDevice();
     history.scrollRestoration = previousScrollRestoration;
@@ -205,10 +212,22 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     closePage();
     store.clear();
     if (previous !== null) {
+      endAccount(previous.accountId);
       capabilities.request.endSession();
       releaseDevice();
     }
     render();
+  }
+
+  /**
+   * Reports one account the shell leaves to every page implementation. A browsing page records
+   * private activity while its views are open, so the activity must end with the account even when
+   * another page is the one presented at that moment (docs/user-interface.md#capture-and-review).
+   */
+  function endAccount(accountId: string): void {
+    for (const definition of pages.values()) {
+      definition.accountEnded?.(accountId);
+    }
   }
 
   /**
@@ -349,6 +368,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     }
     pageHandle = handle;
     restoreInteraction(heading, restored);
+    restorePresentedInteraction(handle, heading, restored, currentGeneration);
   }
 
   function renderPanel(heading: HTMLHeadingElement, content: readonly Node[]): void {
@@ -366,6 +386,40 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     const focus = restored.focusId === null ? null : document.getElementById(restored.focusId);
     (focus ?? heading).focus({ preventScroll: true });
     browser.scrollTo(0, restored.scrollY);
+  }
+
+  /**
+   * Restores the interaction of one history entry again once the page reports that it presented
+   * that entry's content. A source supplies its entries only after the shell has presented the
+   * page, so the scroll offset and the focused result of the entry are restored against the
+   * presented content instead of against the empty page (docs/user-interface.md#pages-and-navigation).
+   */
+  function restorePresentedInteraction(
+    handle: UiPageHandle | null,
+    heading: HTMLHeadingElement,
+    restored: UiViewSnapshot | null,
+    currentGeneration: number,
+  ): void {
+    if (restored === null || handle?.presented === undefined) {
+      return;
+    }
+    let pending: void | Promise<void>;
+    try {
+      pending = handle.presented();
+    } catch {
+      // A page that reports no presentation keeps the restoration the shell already made.
+      return;
+    }
+    void Promise.resolve(pending).then(
+      () => {
+        if (!disposed && generation === currentGeneration && pageHandle === handle) {
+          restoreInteraction(heading, restored);
+        }
+      },
+      () => {
+        // A page that could not present its content also keeps the synchronous restoration.
+      },
+    );
   }
 
   /** Dialogs of one presented page; a page the shell has left can no longer open one. */

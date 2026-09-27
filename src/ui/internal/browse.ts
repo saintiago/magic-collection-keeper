@@ -10,6 +10,13 @@
  * printing images the supplied contracts provide. Opening an entry navigates to its card details
  * and records it as the account's activity; both pages keep their input, controls and selection in
  * the shell's bounded state for the way back, and every provider value renders as text.
+ *
+ * Returning to a browsing view also presents the result window the history entry kept: the page
+ * reloads the further pages of the same result and reports its presentation, so the shell restores
+ * the entry's scroll offset and focused result over entries the source supplies asynchronously
+ * (docs/user-interface.md#pages-and-navigation). The activity of an account ends with that
+ * account, whatever page the shell presents when it leaves it
+ * (docs/user-interface.md#capture-and-review).
  */
 
 import type { UiCardList, UiCardListPresentation } from './card-list.js';
@@ -35,7 +42,20 @@ import { createCatalogSearchAccess, type UiCatalogQuery } from './search-source.
  */
 export function createBrowsePages(): readonly UiPageDefinition[] {
   const recent = createRecentCards();
-  return [homePage(recent), catalogPage(recent)];
+  return [browsePage(homePage(recent), recent), browsePage(catalogPage(recent), recent)];
+}
+
+/**
+ * One browsing page of the shared recent activity. The shell reports the account it leaves to every
+ * page implementation, so the activity ends with that account even when the page presented at that
+ * moment is another one, and neither another account nor a later sign-in of the same account reads
+ * it again (docs/user-interface.md#capture-and-review).
+ */
+function browsePage(definition: UiPageDefinition, recent: UiRecentCards): UiPageDefinition {
+  return {
+    ...definition,
+    accountEnded: (accountId) => recent.clear(accountId),
+  };
 }
 
 /** Home: the search entry that opens the catalog and the account's recent card activity. */
@@ -48,6 +68,12 @@ function homePage(recent: UiRecentCards): UiPageDefinition {
       // A browsing page presents one account: activity another account recorded before leaves the
       // UI instead of being presented again later (docs/user-interface.md#pages-and-navigation).
       recent.retain(accountId);
+      const restored = context.restored?.state ?? null;
+      const pageSize = UI_LIMITS.recentCards;
+      const restoredWindow =
+        context.restored === null
+          ? null
+          : restoreResultWindow(readLoadedWindow(restored), pageSize);
       const input = searchInput(document, 'home-search');
       const form = searchForm(document, input);
       const heading = document.createElement('h2');
@@ -70,19 +96,26 @@ function homePage(recent: UiRecentCards): UiPageDefinition {
         container: listHost,
         source: recentSource(recent),
         context: accountId,
-        pageSize: UI_LIMITS.recentCards,
-        presentation: openEntryPresentation(document, (entry) => recent.record(accountId, entry)),
+        pageSize,
+        presentation: openEntryPresentation(document, 'home-result', (entry) =>
+          recent.record(accountId, entry),
+        ),
+        onWindowSettled: (settled) => restoredWindow?.settle(settled),
         signal: context.signal,
       });
 
-      const restored = context.restored?.state ?? null;
       const restoredQuery = restoredValue(restored, 'query');
       if (typeof restoredQuery === 'string') {
         input.value = restoredQuery;
       }
       restoreSelection(list, restoredValue(restored, 'selection'));
       return {
-        capture: () => ({ query: input.value, selection: [...list.selection] }),
+        capture: () => ({
+          query: input.value,
+          selection: [...list.selection],
+          loaded: list.entries.length,
+        }),
+        ...(restoredWindow === null ? {} : { presented: () => restoredWindow.presented }),
       };
     },
   };
@@ -98,6 +131,12 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
         return;
       }
       recent.retain(context.account.accountId);
+      const restored = context.restored?.state ?? null;
+      const pageSize = UI_LIMITS.catalogPage;
+      const restoredWindow =
+        context.restored === null
+          ? null
+          : restoreResultWindow(readLoadedWindow(restored), pageSize);
       const document = container.ownerDocument;
       const input = searchInput(document, 'catalog-search');
       input.value = view.query;
@@ -139,11 +178,12 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
         container: listHost,
         source: access.source,
         context: query,
-        pageSize: UI_LIMITS.catalogPage,
+        pageSize,
         ...(view.level === 'printing' ? { fragments: { images: access.images } } : {}),
-        presentation: openEntryPresentation(document, (entry) =>
+        presentation: openEntryPresentation(document, 'catalog-result', (entry) =>
           recent.record(context.account.accountId, entry),
         ),
+        onWindowSettled: (settled) => restoredWindow?.settle(settled),
         signal: context.signal,
       });
       form.addEventListener('submit', (event) => {
@@ -165,7 +205,6 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
         list.refresh();
       });
 
-      const restored = context.restored?.state ?? null;
       const restoredQuery = restoredValue(restored, 'query');
       if (typeof restoredQuery === 'string') {
         input.value = restoredQuery;
@@ -190,7 +229,11 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
           owned: owned.checked,
           finish: finish.value === '' ? null : finish.value,
           selection: [...list.selection],
+          // The entries the presented window held, so the way back presents the same window of the
+          // same result instead of its first page (docs/user-interface.md#pages-and-navigation).
+          loaded: list.entries.length,
         }),
+        ...(restoredWindow === null ? {} : { presented: () => restoredWindow.presented }),
       };
     },
   };
@@ -218,11 +261,13 @@ function recentSource(recent: UiRecentCards): UiListSource<string> {
 
 /**
  * Presentation that opens one entry's card details and records the entry as the account's recent
- * activity. An entry without resolved basic information has no details to open and keeps the
- * default rendering.
+ * activity. The link carries a stable identity of the entry it opens, so the shell restores the
+ * focused result of a history entry by that identity; an entry without resolved basic information
+ * has no details to open and keeps the default rendering.
  */
 function openEntryPresentation(
   document: Document,
+  idPrefix: string,
   onOpen: (entry: UiListEntry) => void,
 ): UiCardListPresentation {
   return {
@@ -233,6 +278,7 @@ function openEntryPresentation(
         return content;
       }
       const link = document.createElement('a');
+      link.id = `${idPrefix}-${encodeURIComponent(entry.key)}`;
       link.href = uiHref(view);
       link.dataset.uiOpen = entry.key;
       link.append(content);
@@ -240,6 +286,57 @@ function openEntryPresentation(
       return link;
     },
   };
+}
+
+/**
+ * The result window one history entry kept, restored when the page returns
+ * (docs/user-interface.md#pages-and-navigation). The entry had loaded a window of one result; the
+ * page asks the list for the further pages of the same result until that window is back, bounded by
+ * the pages one bounded window can hold, and then reports the presentation, so the shell restores
+ * the entry's scroll offset and focused result over the entries it names.
+ */
+interface UiRestoredWindow {
+  /** Resolves once the window the history entry kept is presented again. */
+  readonly presented: Promise<void>;
+  /** One settled list window: reload what is missing, then report the presentation. */
+  settle(list: UiWindowList): void;
+}
+
+/** The list state restoring a result window reads: its entries, its continuation and its status. */
+interface UiWindowList {
+  readonly entries: readonly UiListEntry[];
+  readonly hasMore: boolean;
+  readonly loading: boolean;
+  loadMore(): void;
+}
+
+/** Reloads one result window page by page, within the pages one bounded window can hold. */
+function restoreResultWindow(loaded: number, pageSize: number): UiRestoredWindow {
+  const presented = Promise.withResolvers<void>();
+  const pageBudget = Math.ceil(UI_LIMITS.listWindow / pageSize);
+  let asked = 0;
+  let done = false;
+  return {
+    presented: presented.promise,
+    settle(list) {
+      if (done || list.loading) {
+        return;
+      }
+      if (list.entries.length < loaded && list.hasMore && asked < pageBudget) {
+        asked += 1;
+        list.loadMore();
+        return;
+      }
+      done = true;
+      presented.resolve();
+    },
+  };
+}
+
+/** Entries the window of one restored history entry had loaded, or none when it kept no window. */
+function readLoadedWindow(restored: Readonly<Record<string, unknown>> | null): number {
+  const value = restoredValue(restored, 'loaded');
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
 /** Card details view of one entry, or null when the entry carries no identity to open. */

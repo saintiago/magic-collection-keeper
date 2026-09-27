@@ -21,6 +21,7 @@ import type {
   UiCardListFragmentRequest,
   UiCardListInstall,
   UiCardListPageRequest,
+  UiCardListSettlement,
   UiCardListState,
   UiCardListToolRequest,
 } from './card-list.harness.js';
@@ -121,6 +122,12 @@ async function state(page: Page, id: string): Promise<UiCardListState> {
   return page.evaluate((listId) => {
     return (globalThis as unknown as GlobalControl).keeperCardListControl.state(listId);
   }, id);
+}
+
+async function settlements(page: Page): Promise<readonly UiCardListSettlement[]> {
+  return page.evaluate(() =>
+    (globalThis as unknown as GlobalControl).keeperCardListControl.settlements(),
+  );
 }
 
 async function pageRequests(page: Page): Promise<readonly UiCardListPageRequest[]> {
@@ -364,6 +371,35 @@ test('loads bounded pages and presents basic information with the entries', asyn
   await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(3);
   await expect(page.locator('#list-a [data-ui-more]')).toBeHidden();
   await expect(page.locator('#list-a [data-ui-status]')).toHaveText('');
+  expect(errors).toEqual([]);
+});
+
+test('announces every settled window after it presented the entries', async ({ page }) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 1 });
+
+  // The empty list announces nothing before its first window request settles.
+  expect(await settlements(page)).toEqual([]);
+
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, [card('card-1')], 'cursor-1');
+  await expect
+    .poll(() => settlements(page))
+    .toEqual([{ list: 'a', entries: ['card:card-1'], hasMore: true, error: null }]);
+
+  await page.locator('#list-a [data-ui-more]').click();
+  const requests = await pageRequests(page);
+  expect(requests).toHaveLength(2);
+  await failPage(page, requests[1]!.id, 'Search unavailable');
+
+  // A failed window settles too: the entries stay usable and the failure stays visible.
+  await expect
+    .poll(() => settlements(page))
+    .toEqual([
+      { list: 'a', entries: ['card:card-1'], hasMore: true, error: null },
+      { list: 'a', entries: ['card:card-1'], hasMore: false, error: 'Search unavailable' },
+    ]);
+  await expect(page.locator('#list-a [data-ui-status]')).toHaveText('Search unavailable');
   expect(errors).toEqual([]);
 });
 

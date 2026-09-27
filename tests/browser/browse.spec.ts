@@ -23,6 +23,7 @@ import type {
   UiBrowseCatalogRequest,
   UiBrowseControl,
   UiBrowseSearchRequest,
+  UiBrowseStart,
 } from './browse.harness.js';
 import type { PrintingRecord } from '../../src/catalog/index.js';
 import type { SearchPage, SearchEntry } from '../../src/search/index.js';
@@ -40,7 +41,9 @@ function browseBundle(): Promise<string> {
       stdin: {
         contents: [
           `import { installBrowseHarness } from ${JSON.stringify(harnessPath)};`,
-          "globalThis.keeperBrowseControl = installBrowseHarness(document.getElementById('ui-root'));",
+          'globalThis.keeperBrowseControl = installBrowseHarness(',
+          "  document.getElementById('ui-root'), globalThis.keeperBrowseStart,",
+          ');',
         ].join('\n'),
         resolveDir: repoRoot,
         sourcefile: 'browse-consumer.ts',
@@ -61,7 +64,7 @@ function browseBundle(): Promise<string> {
 }
 
 /** Serves a fresh document for the browsing pages, enters it at `hash` and loads the UI. */
-async function openBrowse(page: Page, hash: string): Promise<string[]> {
+async function openBrowse(page: Page, hash: string, start: UiBrowseStart = {}): Promise<string[]> {
   const errors: string[] = [];
   page.on('pageerror', (error) => {
     errors.push(String(error));
@@ -70,6 +73,9 @@ async function openBrowse(page: Page, hash: string): Promise<string[]> {
     route.fulfill({ contentType: 'text/html', body: browsePageHtml }),
   );
   await page.goto(`http://keeper-browse.test/${hash}`);
+  await page.evaluate((flags) => {
+    (globalThis as unknown as Record<string, unknown>).keeperBrowseStart = flags;
+  }, start);
   await page.addScriptTag({ content: await browseBundle(), type: 'module' });
   return errors;
 }
@@ -171,6 +177,15 @@ async function signInAs(page: Page, accountId: string): Promise<void> {
       globalThis as unknown as { keeperBrowseControl: UiBrowseControl }
     ).keeperBrowseControl.signInAs(value);
   }, accountId);
+}
+
+/** Rejects the sign-out the shell awaits, as an authentication outage would. */
+async function failSignOut(page: Page, message: string): Promise<void> {
+  await page.evaluate((text) => {
+    (
+      globalThis as unknown as { keeperBrowseControl: UiBrowseControl }
+    ).keeperBrowseControl.failSignOut(text);
+  }, message);
 }
 
 /** One card-level search entry. */
@@ -312,6 +327,89 @@ test('opening a card records recent activity for its account only', async ({ pag
   await expect(page.locator('[data-ui-entry="card:card-bolt"]')).toHaveCount(0);
   await signInAs(page, 'alice');
   await expect(page.locator('[data-ui-entry="card:card-bolt"]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('signing in again after a sign-out never reads the previous activity', async ({ page }) => {
+  const errors = await openBrowse(page, '#/catalog');
+  const request = await searchRequest(page);
+  await settleSearch(
+    page,
+    request.id,
+    searchPage([
+      cardEntry('card-bolt', {
+        name: 'Lightning Bolt',
+        quantity: { copies: 2, intended: 4 },
+      }),
+    ]),
+  );
+  await page.getByRole('link', { name: /Lightning Bolt/ }).click();
+  await expect(page.locator('#card-level')).toHaveText('card-bolt/-/-');
+  await page.getByRole('link', { name: 'Home', exact: true }).click();
+  await expect(page.locator('[data-ui-entry="card:card-bolt"] [data-ui-copies]')).toHaveText(
+    ' Copies: 2',
+  );
+  // Card details is presented again, so the transitions below happen away from browsing pages.
+  await page.goBack();
+  await expect(page.locator('#card-level')).toHaveText('card-bolt/-/-');
+
+  // Sign-out ends the activity although the presented page is a card, not a browsing page.
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+
+  // The same account signing in again never reads the activity of its previous session.
+  await signInAs(page, 'alice');
+  await expect(page.locator('#card-level')).toHaveText('card-bolt/-/-');
+  await page.getByRole('link', { name: 'Home', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Recent cards' })).toBeVisible();
+  await expect(page.locator('[data-ui-entry="card:card-bolt"]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('an account change on a card ends the activity of the account it leaves', async ({ page }) => {
+  const errors = await openBrowse(page, '#/catalog');
+  const request = await searchRequest(page);
+  await settleSearch(
+    page,
+    request.id,
+    searchPage([cardEntry('card-bolt', { name: 'Lightning Bolt' })]),
+  );
+  await page.getByRole('link', { name: /Lightning Bolt/ }).click();
+  await expect(page.locator('#card-level')).toHaveText('card-bolt/-/-');
+
+  // Both transitions happen on card details, so no browsing page is mounted to clean up.
+  await signInAs(page, 'bob');
+  await signInAs(page, 'alice');
+
+  await page.getByRole('link', { name: 'Home', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Recent cards' })).toBeVisible();
+  await expect(page.locator('[data-ui-entry="card:card-bolt"]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('a failed sign-out keeps the live page and its recent activity', async ({ page }) => {
+  const errors = await openBrowse(page, '#/catalog', { deferredSignOut: true });
+  const request = await searchRequest(page);
+  await settleSearch(
+    page,
+    request.id,
+    searchPage([cardEntry('card-bolt', { name: 'Lightning Bolt' })]),
+  );
+  await page.getByRole('link', { name: /Lightning Bolt/ }).click();
+  await expect(page.locator('#card-level')).toHaveText('card-bolt/-/-');
+
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('main')).toBeHidden();
+  await failSignOut(page, 'Authentication unavailable');
+
+  // The session never ended, so the page stays live and its activity stays with the account.
+  await expect(page.locator('#card-level')).toHaveText('card-bolt/-/-');
+  await expect(page.locator('#ui-root > p[role="status"]')).toHaveText(
+    'Authentication unavailable',
+  );
+  await page.getByRole('link', { name: 'Home', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Recent cards' })).toBeVisible();
+  await expect(page.locator('[data-ui-entry="card:card-bolt"]')).toContainText('Lightning Bolt');
   expect(errors).toEqual([]);
 });
 
@@ -513,6 +611,122 @@ test('Back and Forward restore the catalog query, its controls, focus and select
     searchPage([cardEntry('card-bolt', { name: 'Lightning Bolt' })]),
   );
   await expect(page.getByLabel('Select Lightning Bolt')).toBeChecked();
+  expect(errors).toEqual([]);
+});
+
+test('Back and Forward restore the result window, its scroll and the focused result', async ({
+  page,
+}) => {
+  const errors = await openBrowse(page, '#/');
+  await page.getByRole('link', { name: 'Catalog', exact: true }).click();
+
+  const entries = Array.from({ length: 50 }, (_, index) =>
+    cardEntry(`card-${index}`, { name: `Bolt ${index}` }),
+  );
+  const opening = await searchRequest(page);
+  await settleSearch(page, opening.id, searchPage(entries));
+
+  const last = page.locator('[data-ui-entry="card:card-49"] [data-ui-open]');
+  await last.focus();
+  const scrollY = await page.evaluate(() => {
+    window.scrollTo(0, 4000);
+    return window.scrollY;
+  });
+  expect(scrollY).toBeGreaterThan(0);
+
+  // The browser's Back leaves the catalog and Forward returns to the same history entry.
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Recent cards' })).toBeVisible();
+  await page.goForward();
+  await expect(page.getByRole('heading', { name: 'Catalog and search' })).toBeVisible();
+
+  // The restored entry evaluates its query again; the window, the scroll offset and the focused
+  // result come back once the entries it held are available.
+  const restored = await searchRequest(page, 1);
+  await settleSearch(page, restored.id, searchPage(entries));
+
+  await expect(last).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(scrollY);
+  expect(errors).toEqual([]);
+});
+
+test('returning to a paged result reloads the window that held its entry', async ({ page }) => {
+  const errors = await openBrowse(page, '#/catalog?query=bolt');
+
+  const first = await searchRequest(page);
+  await settleSearch(
+    page,
+    first.id,
+    searchPage([cardEntry('card-1', { name: 'Bolt One' })], {
+      totalCount: 2,
+      continuation: 'cursor-1',
+    }),
+  );
+  await page.getByRole('button', { name: 'Load more' }).click();
+  const second = await searchRequest(page, 1);
+  expect(second.request.continuation).toBe('cursor-1');
+  await settleSearch(page, second.id, searchPage([cardEntry('card-2', { name: 'Bolt Two' })]));
+
+  const opened = page.locator('[data-ui-entry="card:card-2"] [data-ui-open]');
+  await opened.focus();
+  await opened.click();
+  await expect(page.locator('#card-level')).toHaveText('card-2/-/-');
+
+  // Back reloads the window the entry had loaded, so the page the opened entry belonged to returns
+  // instead of only the first page of the result.
+  await page.goBack();
+  const reloaded = await searchRequest(page, 2);
+  expect(reloaded.request).toEqual({ resultLevel: 'card', query: 'bolt', pageSize: 50 });
+  await settleSearch(
+    page,
+    reloaded.id,
+    searchPage([cardEntry('card-1', { name: 'Bolt One' })], {
+      totalCount: 2,
+      continuation: 'cursor-1',
+    }),
+  );
+  const reloadedNext = await searchRequest(page, 3);
+  expect(reloadedNext.request.continuation).toBe('cursor-1');
+  await settleSearch(
+    page,
+    reloadedNext.id,
+    searchPage([cardEntry('card-2', { name: 'Bolt Two' })]),
+  );
+
+  await expect(page.locator('[data-ui-entry="card:card-2"]')).toContainText('Bolt Two');
+  await expect(opened).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test('a delayed restoration never reaches the page presented next', async ({ page }) => {
+  const errors = await openBrowse(page, '#/');
+  await page.getByRole('link', { name: 'Catalog', exact: true }).click();
+  const opening = await searchRequest(page);
+  await settleSearch(
+    page,
+    opening.id,
+    searchPage([cardEntry('card-bolt', { name: 'Lightning Bolt' })]),
+  );
+
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Recent cards' })).toBeVisible();
+  await page.goForward();
+  await expect(page.getByRole('heading', { name: 'Catalog and search' })).toBeVisible();
+
+  // Leave the restored view before its entries arrive, then settle the withdrawn search.
+  await page.getByRole('link', { name: 'Home', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+  const restored = await searchRequest(page, 1);
+  expect(restored.aborted).toBe(true);
+  await settleSearch(
+    page,
+    restored.id,
+    searchPage([cardEntry('card-bolt', { name: 'Lightning Bolt' })]),
+  );
+
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect(page.locator('[data-ui-entry]')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 

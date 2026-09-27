@@ -7,7 +7,9 @@
  * supplies. Every Search request and Catalog resolve the pages issue is recorded and settled from
  * the journey, so the journeys drive the real query building, list presentation and navigation
  * while observing exactly what crossed the component contracts. Card details are a fixture page
- * until their own task builds them; the marker proves which card a journey opened.
+ * until their own task builds them; the marker proves which card a journey opened. Identity can
+ * hold a sign-out until the journey completes or rejects it, so the journeys drive the session and
+ * account transitions the private browsing state follows.
  */
 
 import {
@@ -46,12 +48,21 @@ export interface UiBrowseCatalogRequest {
   readonly references: readonly CatalogReference[];
 }
 
+export interface UiBrowseStart {
+  /** Holds each sign-out until the journey completes or rejects it through the control. */
+  readonly deferredSignOut?: boolean;
+}
+
 export interface UiBrowseControl {
   /** Notes the harness recorded, oldest first. */
   log(): string[];
   readonly accountId: string | null;
   /** Reports a verified sign-in of another account, as the deployment's authentication would. */
   signInAs(accountId: string): void;
+  /** Completes the sign-out the shell awaits, reporting the verified sign-out as it would. */
+  completeSignOut(): void;
+  /** Rejects the sign-out the shell awaits, as an authentication outage would. */
+  failSignOut(message: string): void;
   searchRequests(): readonly UiBrowseSearchRequest[];
   settleSearch(id: number, page: SearchPage): void;
   failSearch(
@@ -91,7 +102,10 @@ const harnessRevision = {
 };
 
 /** Installs the browsing pages into `root`; identity starts signed in as the first account. */
-export function installBrowseHarness(root: Element | null): UiBrowseControl {
+export function installBrowseHarness(
+  root: Element | null,
+  start: UiBrowseStart = {},
+): UiBrowseControl {
   if (root === null) {
     throw new Error('The browsing journey needs its root element.');
   }
@@ -104,6 +118,7 @@ export function installBrowseHarness(root: Element | null): UiBrowseControl {
   let sequence = 0;
   let account: UiAccount | null = { accountId: 'alice', displayName: 'Alice' };
   const listeners = new Set<(account: UiAccount | null) => void>();
+  let pendingSignOut: Pending<void> | null = null;
 
   const identity: UiIdentity = {
     current: () => account,
@@ -111,7 +126,13 @@ export function installBrowseHarness(root: Element | null): UiBrowseControl {
       report({ accountId: 'bob', displayName: 'Bob' });
     },
     signOut: () => {
-      report(null);
+      if (start.deferredSignOut !== true) {
+        report(null);
+        return;
+      }
+      return new Promise<void>((resolve, reject) => {
+        pendingSignOut = { resolve, reject };
+      });
     },
     subscribe: (listener) => {
       listeners.add(listener);
@@ -194,6 +215,17 @@ export function installBrowseHarness(root: Element | null): UiBrowseControl {
     },
     signInAs: (accountId) => {
       report({ accountId, displayName: accountId });
+    },
+    completeSignOut() {
+      const pending = pendingSignOut;
+      pendingSignOut = null;
+      report(null);
+      pending?.resolve();
+    },
+    failSignOut(message) {
+      const pending = pendingSignOut;
+      pendingSignOut = null;
+      pending?.reject(new Error(message));
     },
     searchRequests: () =>
       searches.map((record) => ({
