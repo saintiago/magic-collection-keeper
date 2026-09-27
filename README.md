@@ -6,8 +6,8 @@ docs/architecture.md are rebuilt task by task: Catalog already provides its read
 atomic bulk synchronization and its published query surface with their contract tests, and
 UserCards provides physical-copy storage, tags, associations and physical locations with their
 account-scoped read surface; Search provides its normalized query model, the supported Scryfall
-subset and the request and continuation contract, while its evaluation against the published
-relations and the remaining components are not implemented yet.
+subset, the request and continuation contract and its evaluation over both published query
+surfaces, while the remaining components are not implemented yet.
 
 Start with AGENTS.md for the documentation index and engineering principles.
 The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
@@ -74,6 +74,15 @@ reviewed values, and confirmation under an account-scoped operation identity cre
 copies with their provenance or returns the recorded outcome, so a repeated import adds nothing.
 Pending entries have no published relation and never change ownership; source-format parsing and the
 UI remain with their own tasks.
+
+Search evaluates one normalized query in a single read-only statement over the published Catalog and
+UserCards relations: membership filters, the requested grouping and translated name resolution run
+over the complete result before ordering with a stable identity tie-breaker and the page boundary,
+and the same snapshot returns the exact total count and the catalog and private revisions. Public
+queries read the Catalog views alone, while private criteria or a physical-copy result level read
+UserCards' account-scoped views inside the scope Application binds, so a missing scope fails instead
+of reading another account's rows. A continuation resumes only the same criteria, ordering, user and
+revisions; anything else is a stale continuation that restarts the result.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
 WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without
