@@ -7,7 +7,7 @@
  * one. That identity cannot live only beside the rendered form: a request whose response is still
  * pending, a response that was lost and a reload of the page must keep the identity together with
  * the input it belongs to, and switching the source method away and back must not lose it either
- * (docs/user-interface.md#source-imports). This store keeps each source method's last request whose
+ * (docs/user-interface.md#source-imports). This store keeps every dispatched request whose
  * outcome the provider has not established in the presented account's session storage: retrying
  * that input reuses the identity it was dispatched under, another input composes an import of its
  * own, and an established outcome, an explicitly discarded import or the end of the account
@@ -19,7 +19,7 @@ import type { StageSourceImportInput } from '../../usercards/index.js';
 
 import { UI_LIMITS } from './limits.js';
 
-/** One source method the Import page parses into review; the key of one unfinished import. */
+/** One source method the Import page parses into review. */
 export type UiSourceFormat = StageSourceImportInput['format'];
 
 /** The unsaved source input of one method, before the page names the import it composes. */
@@ -43,18 +43,15 @@ export interface UiUnfinishedSourceImport {
 
 /** The unfinished source imports one account keeps and the storage that preserves them. */
 export interface UiSourceImportRecovery {
-  /** The unfinished import of each source method, in the order the page recorded them. */
-  readonly outstanding: ReadonlyMap<UiSourceFormat, UiUnfinishedSourceImport>;
+  /** The unfinished imports keyed by import identity, in the order the page recorded them. */
+  readonly outstanding: ReadonlyMap<string, UiUnfinishedSourceImport>;
   /**
-   * Identity the unfinished import of the input's method already carries when that input repeats
-   * it, or null when the input composes an import of its own.
+   * Identity of an unfinished request with this input, or null for a new import.
    */
   retained(input: UiSourceInput): string | null;
   /** Keeps one dispatched request until its outcome is established. */
   remember(importId: string, input: UiSourceInput): void;
-  /** Releases the unfinished import of one source method whose outcome is established. */
-  forget(format: UiSourceFormat): void;
-  /** Releases the unfinished imports naming one import the owner explicitly abandoned. */
+  /** Releases one import whose outcome is established or which the owner explicitly abandoned. */
   forgetImport(importId: string): void;
   /** Releases every unfinished import of the account; its private state ends with the account. */
   release(): void;
@@ -78,30 +75,21 @@ export function createSourceImportRecovery(
   return {
     outstanding,
     retained(input) {
-      const record = outstanding.get(input.format);
-      return record !== undefined && sameSourceInput(record.input, input) ? record.importId : null;
-    },
-    remember(importId, input) {
-      // A recorded method moves last, so the form restores the import the page dispatched most
-      // recently beside the input it composes.
-      outstanding.delete(input.format);
-      outstanding.set(input.format, { importId, input });
-      write();
-    },
-    forget(format) {
-      if (outstanding.delete(format)) {
-        write();
-      }
-    },
-    forgetImport(importId) {
-      let released = false;
-      for (const [format, record] of outstanding) {
-        if (record.importId === importId) {
-          outstanding.delete(format);
-          released = true;
+      for (const record of outstanding.values()) {
+        if (sameSourceInput(record.input, input)) {
+          return record.importId;
         }
       }
-      if (released) {
+      return null;
+    },
+    remember(importId, input) {
+      // Retrying moves only this import last; other unresolved requests remain recoverable.
+      outstanding.delete(importId);
+      outstanding.set(importId, { importId, input });
+      write();
+    },
+    forgetImport(importId) {
+      if (outstanding.delete(importId)) {
         write();
       }
     },
@@ -151,8 +139,8 @@ function storageKey(accountId: string): string {
 function readUnfinished(
   storage: Storage | null,
   accountId: string,
-): Map<UiSourceFormat, UiUnfinishedSourceImport> {
-  const unfinished = new Map<UiSourceFormat, UiUnfinishedSourceImport>();
+): Map<string, UiUnfinishedSourceImport> {
+  const unfinished = new Map<string, UiUnfinishedSourceImport>();
   const raw = readStored(storage, storageKey(accountId));
   if (raw === null) {
     return unfinished;
@@ -167,10 +155,10 @@ function readUnfinished(
   if (record === null) {
     return unfinished;
   }
-  for (const [format, value] of Object.entries(record)) {
-    const unfinishedImport = readUnfinishedImport(format, value);
+  for (const value of Object.values(record)) {
+    const unfinishedImport = readUnfinishedImport(value);
     if (unfinishedImport !== null) {
-      unfinished.set(unfinishedImport.input.format, unfinishedImport);
+      unfinished.set(unfinishedImport.importId, unfinishedImport);
     }
   }
   return unfinished;
@@ -180,14 +168,14 @@ function readUnfinished(
 function keepUnfinished(
   storage: Storage | null,
   accountId: string,
-  outstanding: ReadonlyMap<UiSourceFormat, UiUnfinishedSourceImport>,
+  outstanding: ReadonlyMap<string, UiUnfinishedSourceImport>,
 ): void {
   if (storage === null) {
     return;
   }
   const record: Record<string, UiUnfinishedSourceImport> = {};
-  for (const [format, unfinished] of outstanding) {
-    record[format] = unfinished;
+  for (const [importId, unfinished] of outstanding) {
+    record[importId] = unfinished;
   }
   try {
     storage.setItem(storageKey(accountId), JSON.stringify(record));
@@ -206,11 +194,12 @@ function readStored(storage: Storage | null, key: string): string | null {
 }
 
 /** One stored unfinished import, or null when the value is not one this page recorded. */
-function readUnfinishedImport(format: string, value: unknown): UiUnfinishedSourceImport | null {
+function readUnfinishedImport(value: unknown): UiUnfinishedSourceImport | null {
+  const record = readObject(value);
+  const format = readObject(record?.input)?.format;
   if (format !== 'pasted-list' && format !== 'moxfield' && format !== 'wizards-precon') {
     return null;
   }
-  const record = readObject(value);
   if (record === null) {
     return null;
   }

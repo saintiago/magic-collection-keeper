@@ -773,7 +773,13 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
        */
       function paintUnfinishedSource(): void {
         const format = readSourceFormat(sourceFormat.value);
-        if (format === null || recovery === null || !recovery.outstanding.has(format)) {
+        if (
+          format === null ||
+          recovery === null ||
+          !Array.from(recovery.outstanding.values()).some(
+            (record) => record.input.format === format,
+          )
+        ) {
           return;
         }
         sourceStatus.textContent = uiUnfinishedSourceMessage;
@@ -883,14 +889,16 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
           sourcing = false;
           paintSourceForm();
         }
+        // A departed page must not write its old recovery snapshot over the active page's
+        // requests or restore records after sign-out. The retained request can still be retried.
+        if (closed) {
+          return;
+        }
         // An outcome the provider established decides this import: a committed parse leaves nothing
         // to retry, and an input that was refused before writing composes a new import on its next
         // submission. A refused retry leaves the earlier uncertain attempt standing.
         if (outcome.status === 'committed' || (outcome.status === 'failed' && retained === null)) {
-          recovery?.forget(input.format);
-        }
-        if (closed) {
-          return;
+          recovery?.forgetImport(request.sessionId);
         }
         const result = outcome.record;
         if (result === null) {
@@ -2049,7 +2057,7 @@ function pageStorage(document: Document): Storage | null {
  */
 function readSourceDraft(
   value: unknown,
-  outstanding: ReadonlyMap<UiSourceFormat, UiUnfinishedSourceImport> | undefined,
+  outstanding: ReadonlyMap<string, UiUnfinishedSourceImport> | undefined,
 ): UiSourceDraft {
   const record = readPageState(value);
   if (record === null) {
@@ -2070,7 +2078,7 @@ function readSourceDraft(
  * recently dispatched last (docs/user-interface.md#source-imports).
  */
 function unfinishedSourceDraft(
-  outstanding: ReadonlyMap<UiSourceFormat, UiUnfinishedSourceImport>,
+  outstanding: ReadonlyMap<string, UiUnfinishedSourceImport>,
 ): UiSourceDraft {
   const draft: UiSourceDraft = {
     format: uiSourceFormats[0],

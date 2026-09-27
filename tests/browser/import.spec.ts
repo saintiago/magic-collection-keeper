@@ -2149,6 +2149,9 @@ const sourceMethods = [
       await page.selectOption('#import-source-format', 'pasted-list');
       await page.fill('#import-source-text', '4 Lightning Bolt (M11) 149');
     },
+    fillAnother: async (page: Page) => {
+      await page.fill('#import-source-text', '2 Counterspell (M10) 51');
+    },
     recorded: (sessionId: string) =>
       session({
         sessionId,
@@ -2163,6 +2166,9 @@ const sourceMethods = [
     fill: async (page: Page) => {
       await page.selectOption('#import-source-format', 'moxfield');
       await page.fill('#import-source-url', 'https://moxfield.com/decks/deck-reload-0001');
+    },
+    fillAnother: async (page: Page) => {
+      await page.fill('#import-source-url', 'https://moxfield.com/decks/deck-another-0002');
     },
     recorded: (sessionId: string) =>
       session({
@@ -2185,6 +2191,9 @@ const sourceMethods = [
       );
       await page.fill('#import-source-lines', '1 Kadena, Slinking Sorcerer');
     },
+    fillAnother: async (page: Page) => {
+      await page.fill('#import-source-lines', '2 Kadena, Slinking Sorcerer');
+    },
     recorded: (sessionId: string) =>
       session({
         sessionId,
@@ -2198,6 +2207,75 @@ const sourceMethods = [
 ] as const;
 
 for (const method of sourceMethods) {
+  for (const secondOutcome of ['rejected', 'committed', 'unknown'] as const) {
+    test(`keeps an unresolved ${method.format} import when another input is ${secondOutcome}`, async ({
+      page,
+    }) => {
+      const errors = await openImport(page, '#/import');
+      const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+      await settle(page, 'settleSessions', listing.id, []);
+      await method.fill(page);
+      await page.click('#import-source-submit');
+      const first = await requested<StageSourceImportInput>(page, 'source');
+      await control(page, 'fail', first.id, { code: 'unavailable', message: 'Response lost.' });
+      await expect(page.locator('#import-source-status')).toContainText('outcome is unknown');
+
+      // A different input starts its own import without resolving or abandoning the first one.
+      await method.fillAnother(page);
+      await page.click('#import-source-submit');
+      const second = await requested<StageSourceImportInput>(page, 'source', 1);
+      expect(second.arguments.sessionId).not.toBe(first.arguments.sessionId);
+      if (secondOutcome === 'committed') {
+        await settle(page, 'settleSource', second.id, {
+          session: method.recorded(second.arguments.sessionId),
+          rows: [],
+          staged: 0,
+        });
+        await requested<UiImportSessionsRequest>(page, 'sessions', 2);
+      } else {
+        await control(page, 'fail', second.id, {
+          code: secondOutcome === 'rejected' ? 'invalid-request' : 'unavailable',
+          message: 'Second input refused.',
+        });
+        await expect(page.locator('#import-source-status')).toContainText(
+          secondOutcome === 'rejected' ? 'Second input refused.' : 'outcome is unknown',
+        );
+      }
+
+      // Neither another submission nor its outcome can retire the first request's identity.
+      // Reload also verifies that the records survive beyond this page's in-memory state.
+      await page.reload();
+      await loadImport(page);
+      await method.fill(page);
+      await page.click('#import-source-submit');
+      const retry = await requested<StageSourceImportInput>(page, 'source');
+      expect(retry.arguments).toEqual(first.arguments);
+      await settle(page, 'settleSource', retry.id, {
+        session: method.recorded(first.arguments.sessionId),
+        rows: [],
+        staged: 0,
+      });
+      await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+
+      // Resolving the first request releases only that request. The second one retains its
+      // input and identity if its outcome is still unknown; resolved inputs start a new list.
+      await page.reload();
+      await loadImport(page);
+      if (secondOutcome !== 'unknown') {
+        await method.fill(page);
+        await method.fillAnother(page);
+      }
+      await page.click('#import-source-submit');
+      const secondRetry = await requested<StageSourceImportInput>(page, 'source');
+      if (secondOutcome === 'unknown') {
+        expect(secondRetry.arguments).toEqual(second.arguments);
+      } else {
+        expect(secondRetry.arguments.sessionId).not.toBe(second.arguments.sessionId);
+      }
+      expect(errors).toEqual([]);
+    });
+  }
+
   test(`reopens a ${method.format} import a lost response recorded, also after a reload`, async ({
     page,
   }) => {
@@ -2311,6 +2389,46 @@ test('keeps the unfinished import of a source method across a method switch', as
   await page.click('#import-source-submit');
   const retry = await requested<StageSourceImportInput>(page, 'source', 2);
   expect(retry.arguments).toEqual(moxfield.arguments);
+  expect(errors).toEqual([]);
+});
+
+test('keeps newer unresolved source imports when a departed page receives a late outcome', async ({
+  page,
+}) => {
+  const errors = await openImport(page, '#/import');
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, []);
+  await page.fill('#import-source-text', '4 Lightning Bolt (M11) 149');
+  await page.click('#import-source-submit');
+  const departed = await requested<StageSourceImportInput>(page, 'source');
+
+  await control(page, 'navigate', { page: 'home' });
+  await control(page, 'back');
+  const reopened = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', reopened.id, []);
+  await page.fill('#import-source-text', '2 Counterspell (M10) 51');
+  await page.click('#import-source-submit');
+  const current = await requested<StageSourceImportInput>(page, 'source', 1);
+  await control(page, 'fail', current.id, { code: 'unavailable', message: 'Response lost.' });
+  await expect(page.locator('#import-source-status')).toContainText('outcome is unknown');
+
+  // The departed page's recovery snapshot predates the current request. A late successful
+  // outcome must not write that old snapshot over the current page's unfinished imports.
+  await settle(page, 'settleSource', departed.id, {
+    session: session({
+      sessionId: departed.arguments.sessionId,
+      sourceKind: 'pasted-list',
+      sourceId: departed.arguments.sessionId,
+    }),
+    rows: [],
+    staged: 0,
+  });
+  await page.reload();
+  await loadImport(page);
+  await page.fill('#import-source-text', '2 Counterspell (M10) 51');
+  await page.click('#import-source-submit');
+  const retry = await requested<StageSourceImportInput>(page, 'source');
+  expect(retry.arguments).toEqual(current.arguments);
   expect(errors).toEqual([]);
 });
 
