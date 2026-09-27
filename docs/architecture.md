@@ -129,12 +129,13 @@ Acquisition provenance and operation history have their own representations in U
 ## Import
 
 UserCards owns transient and saved import state, including unresolved candidates, review decisions
-and pending quantities. System tags organize pending entries. Recognition supplies candidates;
-UserInterface provides capture and review through the Import page.
+and pending quantities. Recognition supplies candidates; UserInterface provides capture and review
+through the Import page.
 
-Pending entries are distinct from owned copies. Explicit confirmation of a quantity creates the
-corresponding individual physical-copy records and preserves provenance. Recognition output alone
-does not establish ownership.
+The [import lifecycle](user-cards.md#import-and-capture-state) uses system tags to distinguish
+pending entries, visible only on Import, from confirmed owned copies. Sessions group entries by
+acquisition source and track progress. UserCards owns the transition and enforces visibility through
+its public contracts. Recognition output alone does not establish ownership.
 
 ## UserInterface
 
