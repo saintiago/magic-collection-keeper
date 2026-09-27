@@ -54,6 +54,7 @@ record dependencies. This index groups tasks by subject and does not prescribe e
 - [KAN-23: Build tags, wishlist, deck and location workflows](https://malton-family.atlassian.net/browse/KAN-23)
 - [KAN-24: Build manual import, pending review and confirmation UI](https://malton-family.atlassian.net/browse/KAN-24)
 - [KAN-25: Integrate hands-free camera capture and recognition review](https://malton-family.atlassian.net/browse/KAN-25)
+- [KAN-37: Enforce affirmative single-card geometry for capture admission](https://malton-family.atlassian.net/browse/KAN-37)
 - [KAN-26: Build source import UI and review recovery](https://malton-family.atlassian.net/browse/KAN-26)
 
 ## Verification

@@ -130,6 +130,12 @@ Own camera permission, frame acquisition, capture controls and feedback. Admit s
 frames using geometry independently of identity matching. Keep ordinary capture hands-free after
 initial activation; release device resources when the session ends.
 
+Admission into pending review requires affirmative single-card geometry for the captured frame,
+independently of its identity candidates. A stable image or a possible identity is not geometry
+evidence. Missing, unknown or unavailable geometry does not admit a capture, just as no-card,
+multiple-card or ambiguous geometry does not. This applies to browser-only and hybrid recognition;
+preserve usable browser-only capture by obtaining geometry evidence through the supplied capability.
+
 Show provisional candidates, disagreement and uncertainty. A success cue means a candidate was
 accepted into review, never that ownership was confirmed. Unresolved captures receive no success
 cue; repeated error cues are bounded per attempt. Review exposes printing, finish, condition and

@@ -145,6 +145,11 @@ public settings and diagnostic failures contain no secrets or private record con
   lost responses and actual copy counts. Test camera permission failure, cancellation, geometry,
   accepted-identity sequence, feedback and resource cleanup using supplied device capabilities.
   Record real mobile-camera acceptance separately.
+- **Capture admission:** exercise actual Recognition output for browser-only and hybrid operation.
+  A candidate with missing, unknown, unavailable, no-card, multiple-card or ambiguous geometry must
+  not stage an entry or receive a success cue. Affirmative single-card geometry permits a usable
+  candidate to enter pending review; image stability alone does not. Preserve recognition engine
+  regression outcomes.
 - **Edit recovery and source UI:** verify unsaved corrections survive conflicts/failures, bulk tools
   retain explicit copy selection, import progress and row errors are visible, and source replay
   outcomes remain understandable after reload and confirmation recovery.
