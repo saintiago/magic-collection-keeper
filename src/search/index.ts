@@ -8,13 +8,18 @@
  * physical-copy result level require it. A page returns stable entry keys, typed targets, basic
  * information, quantity context and an opaque continuation bound to the normalized criteria, the
  * ordering, the user and the revisions; a stale continuation requires restarting the result
- * (docs/search.md#scryfall-compatibility, docs/search.md#request-and-result). Evaluating the query
- * against the published Catalog and UserCards relations belongs to the search evaluation task.
- * Other components import Search through this module only; its internal modules stay private to
- * the component (docs/architecture.md, .dependency-cruiser.mjs).
+ * (docs/search.md#scryfall-compatibility, docs/search.md#request-and-result). Evaluation combines
+ * the provider-owned read contracts in one read-only statement: membership and grouping run over
+ * the complete result before ordering and pagination, translated names keep the matched name for
+ * display, and copy counts and intended quantities stay distinct
+ * (docs/search.md#required-query-contracts, docs/search.md#evaluation-and-grouping). Other
+ * components import Search through this module only; its internal modules stay private to the
+ * component (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
+export type { SearchSqlExecutor, SearchSqlRow, SearchSqlValue } from './internal/executor.js';
 export { SearchError, type SearchFailureCode } from './internal/errors.js';
+export { createSearch, type Search, type SearchDependencies } from './internal/service.js';
 export {
   SEARCH_LIMITS,
   defaultSearchOrdering,

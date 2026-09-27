@@ -79,39 +79,72 @@ export function decodeSearchContinuation(
   token: string,
   binding: SearchContinuationBinding,
 ): number {
-  const unreadable = new SearchError(
-    'invalid-request',
-    'This continuation is not readable; start the search again.',
-  );
+  return verifySearchContinuation(readSearchContinuation(token), binding);
+}
+
+/** What one readable continuation promises, before it is checked against a query and revisions. */
+export interface SearchContinuationCursor {
+  /** Offset of the next page inside the result sequence. */
+  readonly offset: number;
+  /** Digest of the query, user and ordering the continuation was issued for. */
+  readonly fingerprint: string;
+  readonly catalogRevision: string;
+  readonly privateRevision: string | null;
+}
+
+/**
+ * Reads the offset and binding of a continuation token. Evaluation reads the cursor before it
+ * evaluates the page, because the revisions are part of that page's own snapshot; the cursor is
+ * checked against them with `verifySearchContinuation` once they are known.
+ */
+export function readSearchContinuation(token: string): SearchContinuationCursor {
   if (
     typeof token !== 'string' ||
     token.length === 0 ||
     token.length > SEARCH_LIMITS.maxContinuationLength
   ) {
-    throw unreadable;
+    throw unreadable();
   }
   let decoded: unknown;
   try {
     decoded = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
   } catch {
-    throw unreadable;
+    throw unreadable();
   }
   const parsed = continuationPayloadSchema.safeParse(decoded);
   if (!parsed.success) {
-    throw unreadable;
+    throw unreadable();
   }
+  return parsed.data;
+}
+
+/**
+ * Checks one readable cursor against the query, user and revisions the page was read with, and
+ * returns its offset. A continuation that belongs to another query, user or revision is stale.
+ */
+export function verifySearchContinuation(
+  cursor: SearchContinuationCursor,
+  binding: SearchContinuationBinding,
+): number {
   const accountId = boundAccountId(binding);
   if (
-    parsed.data.fingerprint !== searchQueryFingerprint(binding.query, accountId) ||
-    parsed.data.catalogRevision !== binding.revisions.catalogRevision ||
-    parsed.data.privateRevision !== binding.revisions.privateRevision
+    cursor.fingerprint !== searchQueryFingerprint(binding.query, accountId) ||
+    cursor.catalogRevision !== binding.revisions.catalogRevision ||
+    cursor.privateRevision !== binding.revisions.privateRevision
   ) {
     throw new SearchError(
       'stale-continuation',
       'The search results changed after this page was read; start the search again.',
     );
   }
-  return parsed.data.offset;
+  return cursor.offset;
+}
+
+function unreadable(): SearchError {
+  return new SearchError(
+    'invalid-request',
+    'This continuation is not readable; start the search again.',
+  );
 }
 
 /**
