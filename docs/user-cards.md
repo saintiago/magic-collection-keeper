@@ -35,7 +35,9 @@ mutation is reported as success.
 Expose read-only copies, tags and associations scoped to trusted user context. Copy rows contain
 copy ID, printing ID, finish, condition and derived ownership/location membership. Association rows
 contain association ID, tag ID, target level, target ID and optional intended quantity. Copy-targeted
-associations have no quantity. Pending entries remain outside the owned-copy relation.
+associations have no quantity. Pending entries are available only through import reads, excluded
+from ordinary query results and ownership totals according to the
+[import lifecycle](#import-and-capture-state). Consumers do not add their own pending-entry filters.
 
 Search reads these relations through the public query contract. The PostgreSQL implementation uses
 protected views with account scoping enforced at the database boundary. Missing context fails
@@ -69,7 +71,8 @@ copy operation that would start another transaction.
 
 A session names an acquisition source and serializes its pending changes. An entry holds reviewed
 printing, finish, condition, quantity, candidate evidence and revision. Pending, confirmed and discarded
-are distinct states. Staging and review never imply ownership; confirmation is the transition that does.
+are distinct states governed by the [import lifecycle](#import-and-capture-state). Session identity
+groups entries and tracks source progress; it does not independently determine ownership or visibility.
 
 Keep three identities separate:
 
@@ -109,13 +112,24 @@ Own both the active session and persisted pending entries, including candidates,
 quantities and source identity. A browser-resident session is part of this component's state;
 presentation controls do not maintain a second authoritative import model. Raw frames are transient input.
 
+Staging persists entries with `system:import-pending` membership. These entries are visible only on
+the Import page and are excluded from ownership totals, ordinary searches and other lists. Enforce
+this distinction in the component's read contracts. Pending entries can lack a resolved printing or
+represent several copies; they are not yet individual physical-copy records.
+
+Review and correction retain pending membership. Explicit confirmation validates the reviewed
+revision and atomically ends pending membership, creates the corresponding individual copies with
+provenance and gives them `system:owned` membership. The copies then become available through ordinary
+reads. There is no intermediate `system:ready` state. System memberships express this lifecycle and
+are managed by its operations, rather than edited independently.
+
 Consecutive accepted scan identities suppress repeated observation: A,A admits one entry; A,B,A
 admits all three. Explicit pending quantity represents repeated physical copies. Unresolved readings
 and late candidate updates do not advance the accepted sequence or erase user corrections.
 
-Pending entries remain reviewable until explicitly confirmed or discarded. Confirmation validates
-the reviewed revision and creates individual copies with provenance. Repeating the same confirmed
-operation returns its recorded outcome; changed input under that identity is rejected.
+Pending entries remain reviewable until explicitly confirmed or discarded. Discard ends pending
+membership without creating owned copies. Repeating the same confirmed operation returns its recorded
+outcome; changed input under that identity is rejected.
 
 ## Source imports
 
