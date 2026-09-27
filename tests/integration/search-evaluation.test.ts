@@ -114,6 +114,34 @@ const mh2Snake = {
   finishes: ['nonfoil', 'foil'],
 };
 
+const blankCard = {
+  cardId: 'oracle-blank-card',
+  name: 'Blank Card',
+  rulesText: null,
+  typeLine: null,
+  colors: [],
+  colorIdentity: [],
+  manaValue: 0,
+};
+
+const blankPrinting = {
+  printingId: 'printing-blank-mps-1-en',
+  cardId: blankCard.cardId,
+  edition: 'MPS',
+  collectorNumber: '1',
+  language: 'en',
+  finishes: ['nonfoil'],
+};
+
+const printlessCard = {
+  cardId: 'oracle-printless-artifact',
+  name: 'Printless Artifact',
+  typeLine: 'Artifact',
+  colors: [],
+  colorIdentity: [],
+  manaValue: 4,
+};
+
 describe('search evaluation', () => {
   let database: SearchTestDatabase;
 
@@ -268,12 +296,78 @@ describe('search evaluation', () => {
       expect(japanese.entries[0]?.card.matchedName).toBe('稲妻');
     });
 
+    it('keeps a translated match through double negation', async () => {
+      const direct = await database.search.execute({
+        resultLevel: 'card',
+        query: 'name:Blitzschlag',
+      });
+      const negated = await database.search.execute({
+        resultLevel: 'card',
+        query: '-(-name:Blitzschlag)',
+      });
+
+      expect(negated.entries).toEqual(direct.entries);
+      expect(negated.entries[0]?.card.matchedName).toBe('Blitzschlag');
+    });
+
     it('matches rules text and type text', async () => {
       const rules = await database.search.execute({ resultLevel: 'card', query: 'o:damage' });
       const type = await database.search.execute({ resultLevel: 'card', query: 't:elf' });
 
       expect(names(rules)).toEqual(['Lightning Bolt']);
       expect(names(type)).toEqual(['Llanowar Elves']);
+    });
+
+    it('matches absent text attributes under negation', async () => {
+      await publishCatalog(database, {
+        revisionId: 'revision-2',
+        cards: [lightningBolt, counterspell, llanowarElves, mysticSnake, blankCard],
+        printings: [
+          m11Bolt,
+          staBolt,
+          germanBolt,
+          mh2Counterspell,
+          m11Elves,
+          mh2Snake,
+          blankPrinting,
+        ],
+      });
+      await createCopies(alice, blankPrinting.printingId, 1);
+
+      const negatedRules = await database.search.execute({
+        resultLevel: 'card',
+        query: '-o:damage',
+      });
+      const negatedType = await database.search.execute({
+        resultLevel: 'card',
+        query: '-t:creature',
+      });
+      const nested = await database.search.execute({
+        resultLevel: 'card',
+        query: '-(o:damage OR t:creature)',
+      });
+      const printings = await database.search.execute({
+        resultLevel: 'printing',
+        query: '-t:creature',
+      });
+      const copies = await database.search.execute(
+        { resultLevel: 'copy', query: '-(o:damage OR t:creature)' },
+        alice,
+      );
+
+      // A card whose rules text and type information the catalog does not publish matches the
+      // negated filters; the attributes are absent, so the criteria they carry are not satisfied.
+      expect(names(negatedRules)).toEqual([
+        'Blank Card',
+        'Counterspell',
+        'Llanowar Elves',
+        'Mystic Snake',
+      ]);
+      expect(names(negatedType)).toEqual(['Blank Card', 'Counterspell', 'Lightning Bolt']);
+      expect(names(nested)).toEqual(['Blank Card', 'Counterspell']);
+      expect(printings.entries.map((entry) => entry.card.name)).toContain('Blank Card');
+      expect(printings.entries.map((entry) => entry.card.name)).not.toContain('Llanowar Elves');
+      expect(copies.entries.map((entry) => entry.card.name)).toEqual(['Blank Card']);
     });
 
     it('applies printing criteria at card level and reports the printing at printing level', async () => {
@@ -305,6 +399,50 @@ describe('search evaluation', () => {
       expect(german.entries).toEqual(printingLevel.entries);
       expect(etched.entries[0]?.printing?.printingId).toBe(staBolt.printingId);
       expect(names(etchedCard)).toEqual(['Lightning Bolt']);
+    });
+
+    it('keeps a printing and a nested group on one related printing', async () => {
+      const cardLevel = await database.search.execute({
+        resultLevel: 'card',
+        query: 'set:m10 (lang:en OR lang:fr)',
+      });
+      const printingLevel = await database.search.execute({
+        resultLevel: 'printing',
+        query: 'set:m10 (lang:en OR lang:fr)',
+      });
+      const german = await database.search.execute({
+        resultLevel: 'card',
+        query: 'set:m10 (lang:de OR lang:fr)',
+      });
+
+      // The card has an M10/de printing and an M11/en printing, but no single printing is both in
+      // M10 and in the requested language group.
+      expect(cardLevel.entries).toEqual([]);
+      expect(cardLevel.totalCount).toBe(0);
+      expect(printingLevel.entries).toEqual([]);
+      expect(names(german)).toEqual(['Lightning Bolt']);
+    });
+
+    it('negates a printing criterion against the same related printing', async () => {
+      const notGermanM11 = await database.search.execute({
+        resultLevel: 'card',
+        query: 'set:m11 -lang:de',
+      });
+      const notM10 = await database.search.execute({
+        resultLevel: 'printing',
+        query: '-set:m10',
+      });
+
+      // A negated printing criterion holds for the same related printing as the rest of the query,
+      // so Lightning Bolt keeps its English M11 printing although its M10 printing is German.
+      expect(names(notGermanM11)).toEqual(['Lightning Bolt', 'Llanowar Elves']);
+      expect(notM10.entries.map((entry) => entry.printing?.printingId)).toEqual([
+        mh2Counterspell.printingId,
+        m11Bolt.printingId,
+        staBolt.printingId,
+        m11Elves.printingId,
+        mh2Snake.printingId,
+      ]);
     });
   });
 
@@ -377,6 +515,162 @@ describe('search evaluation', () => {
       expect(copiesInSet.entries).toEqual([]);
     });
 
+    it('keeps ownership and a nested set group on the same printing', async () => {
+      await createCopies(alice, m11Bolt.printingId, 1);
+
+      const cardLevel = await database.search.execute(
+        { resultLevel: 'card', query: 'set:m10 OR set:sta', criteria: [{ kind: 'owned' }] },
+        alice,
+      );
+      const printingLevel = await database.search.execute(
+        { resultLevel: 'printing', query: 'set:m10 OR set:sta', criteria: [{ kind: 'owned' }] },
+        alice,
+      );
+      const copyLevel = await database.search.execute(
+        { resultLevel: 'copy', query: 'set:m10 OR set:sta', criteria: [{ kind: 'owned' }] },
+        alice,
+      );
+      const ownedInSet = await database.search.execute(
+        { resultLevel: 'card', query: 'set:m11', criteria: [{ kind: 'owned' }] },
+        alice,
+      );
+
+      // The account owns an M11 copy; the card's M10/de and STA/en printings are not owned.
+      expect(cardLevel.entries).toEqual([]);
+      expect(cardLevel.totalCount).toBe(0);
+      expect(printingLevel.entries).toEqual([]);
+      expect(copyLevel.entries).toEqual([]);
+      expect(names(ownedInSet)).toEqual(['Lightning Bolt']);
+    });
+
+    it('requires one copy for conjunctive copy membership', async () => {
+      const copies = await createCopies(alice, m11Bolt.printingId, 2);
+      const first = await createTag(alice, 'other', 'First');
+      const second = await createTag(alice, 'other', 'Second');
+      const both = await createTag(alice, 'other', 'Both');
+      await database.userCards.createAssociation(alice, {
+        tagId: first,
+        targetLevel: 'copy',
+        targetId: copies[0] as string,
+        quantity: null,
+      });
+      await database.userCards.createAssociation(alice, {
+        tagId: second,
+        targetLevel: 'copy',
+        targetId: copies[1] as string,
+        quantity: null,
+      });
+      await database.userCards.createAssociation(alice, {
+        tagId: both,
+        targetLevel: 'copy',
+        targetId: copies[0] as string,
+        quantity: null,
+      });
+
+      const cardLevel = await database.search.execute(
+        {
+          resultLevel: 'card',
+          criteria: [
+            { kind: 'tag', tagId: first },
+            { kind: 'tag', tagId: second },
+          ],
+        },
+        alice,
+      );
+      const printingLevel = await database.search.execute(
+        {
+          resultLevel: 'printing',
+          criteria: [
+            { kind: 'tag', tagId: first },
+            { kind: 'tag', tagId: second },
+          ],
+        },
+        alice,
+      );
+      const copyLevel = await database.search.execute(
+        {
+          resultLevel: 'copy',
+          criteria: [
+            { kind: 'tag', tagId: first },
+            { kind: 'tag', tagId: second },
+          ],
+        },
+        alice,
+      );
+      const bothOnOneCopy = await database.search.execute(
+        {
+          resultLevel: 'card',
+          criteria: [
+            { kind: 'tag', tagId: first },
+            { kind: 'tag', tagId: both },
+          ],
+        },
+        alice,
+      );
+
+      // No single copy carries both tags, so the grouped entry disappears instead of reporting a
+      // match with no matching copy.
+      expect(cardLevel.entries).toEqual([]);
+      expect(cardLevel.totalCount).toBe(0);
+      expect(printingLevel.entries).toEqual([]);
+      expect(copyLevel.entries).toEqual([]);
+      expect(bothOnOneCopy.entries).toHaveLength(1);
+      expect(bothOnOneCopy.entries[0]?.quantity).toEqual({ copies: 1, intended: null });
+    });
+
+    it('keeps a printing association and a copy association on one printing', async () => {
+      const [germanCopy] = await createCopies(alice, germanBolt.printingId, 1);
+      const decks = await createTag(alice, 'deck', 'Burn');
+      const binder = await createTag(alice, 'other', 'Binder');
+      await database.userCards.createAssociation(alice, {
+        tagId: decks,
+        targetLevel: 'printing',
+        targetId: m11Bolt.printingId,
+        quantity: 4,
+      });
+      await database.userCards.createAssociation(alice, {
+        tagId: binder,
+        targetLevel: 'copy',
+        targetId: germanCopy as string,
+        quantity: null,
+      });
+
+      const split = await database.search.execute(
+        {
+          resultLevel: 'card',
+          criteria: [
+            { kind: 'tag', tagId: decks },
+            { kind: 'tag', tagId: binder },
+          ],
+        },
+        alice,
+      );
+      const [m11Copy] = await createCopies(alice, m11Bolt.printingId, 1);
+      await database.userCards.createAssociation(alice, {
+        tagId: binder,
+        targetLevel: 'copy',
+        targetId: m11Copy as string,
+        quantity: null,
+      });
+      const shared = await database.search.execute(
+        {
+          resultLevel: 'card',
+          criteria: [
+            { kind: 'tag', tagId: decks },
+            { kind: 'tag', tagId: binder },
+          ],
+        },
+        alice,
+      );
+
+      // The deck names the M11 printing while the binder names a copy of the M10 printing; only
+      // after a copy of the M11 printing joins the binder do both criteria share a printing.
+      expect(split.entries).toEqual([]);
+      expect(split.totalCount).toBe(0);
+      expect(shared.entries).toHaveLength(1);
+      expect(shared.entries[0]?.quantity).toEqual({ copies: 0, intended: 4 });
+    });
+
     it('keeps a deck requirement and its physical copies distinct', async () => {
       const [copyId] = await createCopies(alice, m11Bolt.printingId, 1);
       const deck = await createTag(alice, 'deck', 'Burn');
@@ -439,6 +733,84 @@ describe('search evaluation', () => {
       expect(page.totalCount).toBe(1);
       expect(page.entries[0]?.quantity).toEqual({ copies: 0, intended: 3 });
       expect(printingPage.entries.map((entry) => entry.quantity?.intended)).toEqual([1, 2]);
+    });
+
+    it('counts only the intentions whose printing the query matches', async () => {
+      const wishlist = await createTag(alice, 'wishlist', 'To buy');
+      await database.userCards.createAssociation(alice, {
+        tagId: wishlist,
+        targetLevel: 'printing',
+        targetId: m11Bolt.printingId,
+        quantity: 1,
+      });
+      await database.userCards.createAssociation(alice, {
+        tagId: wishlist,
+        targetLevel: 'printing',
+        targetId: germanBolt.printingId,
+        quantity: 2,
+      });
+
+      const cardLevel = await database.search.execute(
+        { resultLevel: 'card', criteria: [{ kind: 'tag', tagId: wishlist }], query: 'set:m11' },
+        alice,
+      );
+      const printingLevel = await database.search.execute(
+        {
+          resultLevel: 'printing',
+          criteria: [{ kind: 'tag', tagId: wishlist }],
+          query: 'set:m11',
+        },
+        alice,
+      );
+      const unfiltered = await database.search.execute(
+        { resultLevel: 'card', criteria: [{ kind: 'tag', tagId: wishlist }] },
+        alice,
+      );
+
+      expect(cardLevel.entries).toHaveLength(1);
+      expect(cardLevel.entries[0]?.quantity).toEqual({ copies: 0, intended: 1 });
+      expect(printingLevel.entries.map((entry) => entry.quantity)).toEqual([
+        { copies: 0, intended: 1 },
+      ]);
+      expect(unfiltered.entries[0]?.quantity).toEqual({ copies: 0, intended: 3 });
+    });
+
+    it('matches a card-targeted association of a card without printings', async () => {
+      await publishCatalog(database, {
+        revisionId: 'revision-2',
+        cards: [lightningBolt, counterspell, llanowarElves, mysticSnake, printlessCard],
+        printings: [m11Bolt, staBolt, germanBolt, mh2Counterspell, m11Elves, mh2Snake],
+      });
+      const wishlist = await createTag(alice, 'wishlist', 'To buy');
+      await database.userCards.createAssociation(alice, {
+        tagId: wishlist,
+        targetLevel: 'card',
+        targetId: printlessCard.cardId,
+        quantity: 2,
+      });
+
+      const tagged = await database.search.execute(
+        { resultLevel: 'card', criteria: [{ kind: 'tag', tagId: wishlist }] },
+        alice,
+      );
+      const taggedType = await database.search.execute(
+        {
+          resultLevel: 'card',
+          criteria: [{ kind: 'tag', tagId: wishlist }],
+          query: 't:artifact',
+        },
+        alice,
+      );
+
+      // The catalog publishes the card without any printing; the card-level association and a
+      // card-level criterion do not need one.
+      expect(tagged.entries).toHaveLength(1);
+      expect(tagged.totalCount).toBe(1);
+      expect(tagged.entries[0]).toMatchObject({
+        target: { kind: 'card', cardId: printlessCard.cardId },
+        quantity: { copies: 0, intended: 2 },
+      });
+      expect(names(taggedType)).toEqual(['Printless Artifact']);
     });
 
     it('does not multiply a physical copy that matches several tags', async () => {

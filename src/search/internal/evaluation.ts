@@ -43,9 +43,10 @@ export interface SearchPageStatement {
 }
 
 /**
- * The evaluated scope of one criterion. Card criteria always read the entry's card. A printing or
- * private criterion reads the entry's own printing or copy when the entry represents one, and
- * otherwise a related printing of a card-level entry.
+ * The evaluated scope of one entry. Card criteria always read the entry's card. A printing or
+ * private criterion reads a related printing or copy: the entry's own when it represents one, and
+ * otherwise one of the card's printings, chosen once for the whole query
+ * (docs/search.md#evaluation-and-grouping).
  */
 interface SqlContext {
   readonly level: SearchResultLevel;
@@ -210,58 +211,148 @@ function printingColumnsSql(level: SearchResultLevel): string {
   );
 }
 
-function filterSql(filter: SearchFilter, context: SqlContext): string {
-  switch (filter.kind) {
-    case 'criterion':
-      return criterionSql(filter.criterion, context);
-    case 'not':
-      return `not (${filterSql(filter.operand, context)})`;
-    case 'or':
-      return `(${filter.operands.map((operand) => filterSql(operand, context)).join(' or ')})`;
-    case 'and':
-      return conjunctionSql(filter.operands, context);
+/**
+ * Membership of the entry a context describes (docs/search.md#scryfall-compatibility,
+ * docs/search.md#evaluation-and-grouping).
+ *
+ * The whole query is evaluated against one related printing and one related copy of the entry:
+ * printing criteria read that printing, private criteria read its copies, and card criteria read
+ * the entry's card. A criterion that needs a related row the evaluated binding has none of is
+ * unknown, so the entry is a member only when some related printing and copy satisfies the query —
+ * including the entry without any related row, so membership the account attached to the card
+ * itself matches a card the catalog publishes without printings. Two criteria of one query never
+ * match through two different printings or copies.
+ */
+function filterSqls(filters: readonly SearchFilter[], context: SqlContext): string {
+  if (filters.length === 0) {
+    return 'true';
   }
+  if (context.copy !== null) {
+    // A copy entry is its own related row: nothing else can satisfy one of its criteria.
+    return boundFiltersSql(filters, context, { printing: context.printing, copy: context.copy });
+  }
+  if (context.printing !== null) {
+    // A printing entry is its own related printing; a private criterion reads one of its copies.
+    return relatedPrintingSql(filters, context, context.printing);
+  }
+  const parts = [boundFiltersSql(filters, context, { printing: null, copy: null })];
+  if (relatedRowsRead(filters, context).printing) {
+    const printing = context.alias('related');
+    parts.push(
+      `exists (select 1 from ${relations.printings} as ${printing}` +
+        ` where ${printing}.card_id = ${context.card}.card_id` +
+        ` and ${relatedPrintingSql(filters, context, printing)})`,
+    );
+  }
+  return `(${parts.join(' or ')})`;
 }
 
 /**
- * One conjunction. When the entry is a card and the conjunction names related printing or private
- * criteria directly, those operands are bound to one related printing, so `set:` and ownership
- * cannot be satisfied by two different printings of the same card
- * (docs/search.md#evaluation-and-grouping). Groups and negations keep the entry-level meaning of
- * their own combination.
+ * The same membership against one chosen related printing: the entry's own, or one printing of a
+ * card entry. A private criterion reads one of that printing's copies, so two private criteria
+ * share their copy instead of matching one copy each.
  */
-function conjunctionSql(operands: readonly SearchFilter[], context: SqlContext): string {
-  if (context.printing !== null || context.copy !== null) {
-    return `(${operands.map((operand) => filterSql(operand, context)).join(' and ')})`;
-  }
-  const related: SearchCriterion[] = [];
-  const rest: SearchFilter[] = [];
-  for (const operand of operands) {
-    if (operand.kind === 'criterion' && isRelatedCriterion(operand.criterion)) {
-      related.push(operand.criterion);
-    } else {
-      rest.push(operand);
-    }
-  }
-  const parts = rest.map((operand) => filterSql(operand, context));
-  if (related.length > 0) {
-    const printing = context.alias('related');
-    const bound: SqlContext = { ...context, printing };
-    const predicate = related.map((criterion) => criterionSql(criterion, bound)).join(' and ');
-    parts.unshift(
-      `exists (select 1 from ${relations.printings} as ${printing}` +
-        ` where ${printing}.card_id = ${context.card}.card_id and ${predicate})`,
+function relatedPrintingSql(
+  filters: readonly SearchFilter[],
+  context: SqlContext,
+  printing: string,
+): string {
+  const parts = [boundFiltersSql(filters, context, { printing, copy: null })];
+  if (relatedRowsRead(filters, context).copy) {
+    const copy = context.alias('related_copy');
+    parts.push(
+      `exists (select 1 from ${relations.copies} as ${copy}` +
+        ` where ${copy}.printing_id = ${printing}.printing_id` +
+        ` and ${boundFiltersSql(filters, context, { printing, copy })})`,
     );
   }
-  return parts.length === 0 ? 'true' : `(${parts.join(' and ')})`;
+  return `(${parts.join(' or ')})`;
 }
 
-/** Whether one criterion is evaluated against a related printing or copy rather than the card. */
-function isRelatedCriterion(criterion: SearchCriterion): boolean {
-  return isPrivateCriterion(criterion) || searchPublicCriterionLevel(criterion) === 'printing';
+/**
+ * The related rows a query reads: a printing criterion reads a related printing, a private
+ * criterion reads the account's copies of one, and a copy belongs to a printing. Card criteria
+ * read no related row at all.
+ */
+function relatedRowsRead(
+  filters: readonly SearchFilter[],
+  context: SqlContext,
+): { readonly printing: boolean; readonly copy: boolean } {
+  let printing = false;
+  let copy = false;
+  const visit = (filter: SearchFilter): void => {
+    switch (filter.kind) {
+      case 'criterion':
+        if (isPrivateCriterion(filter.criterion)) {
+          copy = true;
+          return;
+        }
+        printing = printing || searchPublicCriterionLevel(filter.criterion) === 'printing';
+        return;
+      case 'and':
+      case 'or':
+        filter.operands.forEach(visit);
+        return;
+      case 'not':
+        visit(filter.operand);
+        return;
+    }
+  };
+  filters.forEach(visit);
+  // A copy belongs to a printing, so a card entry reaches the account's copies through one of its
+  // printings even though a copy criterion is the only thing that reads the copy itself.
+  return { printing: printing || (copy && context.printing === null), copy };
 }
 
-function criterionSql(criterion: SearchCriterion, context: SqlContext): string {
+/**
+ * One related-printing and related-copy binding: the criteria are evaluated against exactly these
+ * rows, and a criterion that needs a row this binding has none of is unknown rather than false.
+ */
+interface RelatedBinding {
+  readonly printing: string | null;
+  readonly copy: string | null;
+}
+
+function boundFiltersSql(
+  filters: readonly SearchFilter[],
+  context: SqlContext,
+  binding: RelatedBinding,
+): string {
+  return `(${filters.map((filter) => boundFilterSql(filter, context, binding)).join(' and ')})`;
+}
+
+/**
+ * One filter under one related-row binding: every criterion keeps its meaning, including a
+ * negation, which is evaluated against the same related printing and copy as the criteria it is
+ * combined with.
+ */
+function boundFilterSql(
+  filter: SearchFilter,
+  context: SqlContext,
+  binding: RelatedBinding,
+): string {
+  switch (filter.kind) {
+    case 'criterion':
+      return criterionSql(filter.criterion, context, binding);
+    case 'not':
+      return `not (${boundFilterSql(filter.operand, context, binding)})`;
+    case 'or':
+      return `(${filter.operands
+        .map((operand) => boundFilterSql(operand, context, binding))
+        .join(' or ')})`;
+    case 'and':
+      return boundFiltersSql(filter.operands, context, binding);
+  }
+}
+
+/** A criterion that needs a related row this binding has none of is unknown, not false. */
+const unknownMatch = 'null::boolean';
+
+function criterionSql(
+  criterion: SearchCriterion,
+  context: SqlContext,
+  binding: RelatedBinding,
+): string {
   switch (criterion.kind) {
     case 'name':
       return nameMatchSql(criterion.text, context);
@@ -276,25 +367,33 @@ function criterionSql(criterion: SearchCriterion, context: SqlContext): string {
     case 'manaValue':
       return manaValueSql(criterion.comparison, criterion.value, context);
     case 'set':
-      return printingSql(
+      return printingMatchSql(
+        binding,
         (printing) => `upper(${printing}.edition) = ${context.bind(criterion.edition)}`,
-        context,
       );
     case 'language':
-      return printingSql(
+      return printingMatchSql(
+        binding,
         (printing) => `lower(${printing}.language) = ${context.bind(criterion.language)}`,
-        context,
       );
     case 'finish':
-      return printingSql(
+      return printingMatchSql(
+        binding,
         (printing) => `${context.bind(criterion.finish)} = any(${printing}.finishes)`,
-        context,
       );
     case 'owned':
-      return ownedSql(context);
+      return binding.copy === null ? unknownMatch : `${binding.copy}.owned`;
     case 'tag':
-      return tagSql(criterion.tagId, context);
+      return tagSql(criterion.tagId, context, binding);
   }
+}
+
+/** One printing predicate, or unknown when this scope carries no related printing. */
+function printingMatchSql(
+  binding: RelatedBinding,
+  predicate: (printing: string) => string,
+): string {
+  return binding.printing === null ? unknownMatch : predicate(binding.printing);
 }
 
 /** Name matching covers the canonical name and every translated or face name of the identity. */
@@ -309,8 +408,13 @@ function nameMatchSql(text: string, context: SqlContext): string {
   );
 }
 
+/**
+ * Text containment. The published contract permits an absent attribute, and an absent attribute
+ * does not contain the text: the criterion is false rather than unknown, so a negation of it stays
+ * satisfiable (docs/search.md#scryfall-compatibility).
+ */
 function textMatchSql(column: string, text: string, context: SqlContext): string {
-  return `strpos(lower(${column}), ${context.bind(text)}) > 0`;
+  return `strpos(lower(coalesce(${column}, '')), ${context.bind(text)}) > 0`;
 }
 
 /**
@@ -338,73 +442,46 @@ function matchedNameSql(context: SqlContext): string {
   );
 }
 
-/** Wraps one printing-scoped predicate: the entry's printing, or any printing of a card entry. */
-function printingSql(predicate: (printing: string) => string, context: SqlContext): string {
-  if (context.printing !== null) {
-    return predicate(context.printing);
-  }
-  const related = context.alias('related');
-  return (
-    `exists (select 1 from ${relations.printings} as ${related}` +
-    ` where ${related}.card_id = ${context.card}.card_id and ${predicate(related)})`
-  );
-}
-
-/**
- * Ownership: the entry's own copy is owned, or one of the related printing's copies is. A card- or
- * printing-level entry represents the account's copies of that identity, so any owned copy makes
- * it owned.
- */
-function ownedSql(context: SqlContext): string {
-  if (context.copy !== null) {
-    return `${context.copy}.owned`;
-  }
-  return printingSql(
-    (printing) =>
-      `exists (select 1 from ${relations.copies} as owned_copy` +
-      ` where owned_copy.printing_id = ${printing}.printing_id and owned_copy.owned)`,
-    context,
-  );
-}
-
 /**
  * Tag membership of the identity the entry represents
  * (docs/search.md#evaluation-and-grouping, docs/architecture.md#tags-and-associations). A copy
  * entry is a member only when the tag associates that copy. A printing entry is a member when the
- * tag associates the printing or one of its copies. A card entry is also a member when the tag
- * associates the card itself: the card-level association is broader than any of its printings.
+ * tag associates the scope's related printing or one of its copies. A card entry is also a member
+ * when the tag associates the card itself: the card-level association is broader than any of its
+ * printings and needs no printing at all. A level this scope carries no related row for is
+ * unknown, so two tag criteria never match through two different copies.
  */
-function tagSql(tagId: string, context: SqlContext): string {
+function tagSql(tagId: string, context: SqlContext, binding: RelatedBinding): string {
   const tag = context.bind(tagId);
-  if (context.copy !== null) {
-    return (
-      `exists (select 1 from ${relations.associations} as copy_tag` +
-      ` where copy_tag.tag_id = ${tag} and copy_tag.target_level = 'copy'` +
-      ` and copy_tag.target_id = ${context.copy}.copy_id)`
-    );
+  const alternatives: string[] = [];
+  if (context.level === 'card') {
+    alternatives.push(associationSql(context, tag, 'card', `${context.card}.card_id`));
   }
-  return printingSql((printing) => {
-    const association = context.alias('tag_association');
-    const member = context.alias('tag_copy');
-    const levels = [
-      `(${association}.target_level = 'printing'` +
-        ` and ${association}.target_id = ${printing}.printing_id)`,
-      `(${association}.target_level = 'copy' and exists (` +
-        `select 1 from ${relations.copies} as ${member}` +
-        ` where ${member}.copy_id = ${association}.target_id` +
-        ` and ${member}.printing_id = ${printing}.printing_id))`,
-    ];
-    if (context.level === 'card') {
-      levels.push(
-        `(${association}.target_level = 'card'` +
-          ` and ${association}.target_id = ${context.card}.card_id)`,
-      );
-    }
-    return (
-      `exists (select 1 from ${relations.associations} as ${association}` +
-      ` where ${association}.tag_id = ${tag} and (${levels.join(' or ')}))`
-    );
-  }, context);
+  if (context.level !== 'copy' && binding.printing !== null) {
+    alternatives.push(associationSql(context, tag, 'printing', `${binding.printing}.printing_id`));
+  }
+  if (binding.copy !== null) {
+    alternatives.push(associationSql(context, tag, 'copy', `${binding.copy}.copy_id`));
+  }
+  if (context.level !== 'copy' && (binding.printing === null || binding.copy === null)) {
+    alternatives.push(unknownMatch);
+  }
+  return `(${alternatives.join(' or ')})`;
+}
+
+/** Membership of one identity in one tag, at one association level. */
+function associationSql(
+  context: SqlContext,
+  tag: string,
+  level: 'card' | 'printing' | 'copy',
+  target: string,
+): string {
+  const association = context.alias('association');
+  return (
+    `exists (select 1 from ${relations.associations} as ${association}` +
+    ` where ${association}.tag_id = ${tag} and ${association}.target_level = '${level}'` +
+    ` and ${association}.target_id = ${target})`
+  );
 }
 
 /**
@@ -445,8 +522,10 @@ function manaValueSql(comparison: SearchComparison, value: number, context: SqlC
 /**
  * Copies the entry represents, exact and grouped by identity. A copy entry represents exactly one
  * copy; a printing or card entry counts the account's distinct copies of that printing or card that
- * satisfy the query, so two matching tags or printings never multiply one copy. A public query
- * reads no private data and carries no count.
+ * satisfy the query as copy-level entries, so the grouped count agrees with the copies a copy-level
+ * search returns and two matching tags or printings never multiply one copy
+ * (docs/search.md#evaluation-and-grouping). A public query reads no private data and carries no
+ * count.
  */
 function copiesSql(context: SqlContext): string {
   if (!context.privateRead) {
@@ -455,17 +534,18 @@ function copiesSql(context: SqlContext): string {
   if (context.copy !== null) {
     return '1';
   }
-  if (context.level === 'printing' && context.printing !== null) {
-    const copy = context.alias('entry_copy');
-    const predicate = filterSqls(context.filters, { ...context, copy });
+  const copy = context.alias('entry_copy');
+  if (context.printing !== null) {
+    const copyContext: SqlContext = { ...context, level: 'copy', copy };
+    const predicate = filterSqls(context.filters, copyContext);
     return (
       `(select count(*)::int from ${relations.copies} as ${copy}` +
       ` where ${copy}.printing_id = ${context.printing}.printing_id and ${predicate})`
     );
   }
-  const copy = context.alias('entry_copy');
   const printing = context.alias('entry_printing');
-  const predicate = filterSqls(context.filters, { ...context, printing, copy });
+  const copyContext: SqlContext = { ...context, level: 'copy', printing, copy };
+  const predicate = filterSqls(context.filters, copyContext);
   return (
     `(select count(*)::int from ${relations.copies} as ${copy}` +
     ` join ${relations.printings} as ${printing} on ${printing}.printing_id = ${copy}.printing_id` +
@@ -475,9 +555,11 @@ function copiesSql(context: SqlContext): string {
 }
 
 /**
- * Intended or required quantity of the tags the query names positively. Card- and printing-level
- * associations of an entry's card or printing add up; copy membership carries no intent, so an
- * entry that only carries copy membership has no intended quantity.
+ * Intended or required quantity of the tags the query names positively
+ * (docs/search.md#evaluation-and-grouping). A card association covers its card; a printing
+ * association covers one of the entry's printings only when that printing satisfies the query, so
+ * a filtered search never adds up intentions of printings it excluded. Copy membership carries no
+ * intent, so an entry that only carries copy membership has no intended quantity.
  */
 function intendedSql(context: SqlContext): string {
   const tags = positiveTagIds(context.filters);
@@ -494,46 +576,50 @@ function intendedSql(context: SqlContext): string {
 }
 
 function associationCoversSql(association: string, context: SqlContext): string {
-  const printing = context.printing;
-  if (context.level === 'card' || printing === null) {
-    const intentPrinting = context.alias('intent_printing');
+  if (context.printing !== null) {
     return (
-      `((${association}.target_level = 'card' and ${association}.target_id = ${context.card}.card_id)` +
-      ` or (${association}.target_level = 'printing' and exists (` +
-      `select 1 from ${relations.printings} as ${intentPrinting}` +
-      ` where ${intentPrinting}.printing_id = ${association}.target_id` +
-      ` and ${intentPrinting}.card_id = ${context.card}.card_id)))`
+      `((${association}.target_level = 'printing'` +
+      ` and ${association}.target_id = ${context.printing}.printing_id)` +
+      ` or (${association}.target_level = 'card'` +
+      ` and ${association}.target_id = ${context.card}.card_id))`
     );
   }
+  const intentPrinting = context.alias('intent_printing');
   return (
-    `((${association}.target_level = 'printing'` +
-    ` and ${association}.target_id = ${printing}.printing_id)` +
-    ` or (${association}.target_level = 'card'` +
-    ` and ${association}.target_id = ${context.card}.card_id))`
+    `((${association}.target_level = 'card'` +
+    ` and ${association}.target_id = ${context.card}.card_id)` +
+    ` or (${association}.target_level = 'printing' and exists (` +
+    `select 1 from ${relations.printings} as ${intentPrinting}` +
+    ` where ${intentPrinting}.printing_id = ${association}.target_id` +
+    ` and ${intentPrinting}.card_id = ${context.card}.card_id` +
+    ` and ${relatedPrintingSql(context.filters, context, intentPrinting)})))`
   );
 }
 
-function filterSqls(filters: readonly SearchFilter[], context: SqlContext): string {
-  return filters.length === 0 ? 'true' : conjunctionSql(filters, context);
-}
-
-/** Criteria that the filter names outside every negation; a negated value has no display meaning. */
+/**
+ * Criteria the filter carries with a positive polarity: a negated value has no display meaning,
+ * but a value under an even number of negations still is the one that matched the entry. Counting
+ * the effective polarity keeps the metadata of an equivalent expression identical
+ * (docs/search.md#evaluation-and-grouping).
+ */
 function positiveCriteria(filters: readonly SearchFilter[]): readonly SearchCriterion[] {
   const found: SearchCriterion[] = [];
-  const visit = (filter: SearchFilter): void => {
+  const visit = (filter: SearchFilter, negated: boolean): void => {
     switch (filter.kind) {
       case 'criterion':
-        found.push(filter.criterion);
+        if (!negated) {
+          found.push(filter.criterion);
+        }
         return;
       case 'and':
       case 'or':
-        filter.operands.forEach(visit);
+        filter.operands.forEach((operand) => visit(operand, negated));
         return;
       case 'not':
-        return;
+        visit(filter.operand, !negated);
     }
   };
-  filters.forEach(visit);
+  filters.forEach((filter) => visit(filter, false));
   return found;
 }
 
