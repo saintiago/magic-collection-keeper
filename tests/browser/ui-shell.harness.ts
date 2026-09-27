@@ -29,6 +29,8 @@ export interface UiShellControl {
   completeSignOut(): void;
   /** Rejects the sign-out the shell awaits, as an authentication outage would. */
   failSignOut(message: string): void;
+  /** Settles the controlled device release, rejecting when a message is supplied. */
+  completeDeviceRelease(message?: string): void;
   /** Notes the harness recorded, oldest first. */
   log(): string[];
   /** Releases the shell and its listeners. */
@@ -40,6 +42,7 @@ export interface UiShellStart {
   readonly signedOut?: boolean;
   /** Holds each sign-out until the journey completes or rejects it through the control. */
   readonly deferredSignOut?: boolean;
+  readonly deviceRelease?: 'deferred' | 'throw';
 }
 
 /** Installs the shell into `root`; its identity starts signed in unless `signedOut` is set. */
@@ -53,6 +56,8 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     start.signedOut === true ? null : { accountId: 'alice', displayName: 'Alice' };
   const listeners = new Set<(account: UiAccount | null) => void>();
   let pendingSignOut: { resolve(): void; reject(cause: Error): void } | null = null;
+
+  let pendingDeviceRelease: { resolve(): void; reject(cause: Error): void } | null = null;
 
   const identity: UiIdentity = {
     current: () => account,
@@ -106,6 +111,14 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     device: {
       release: () => {
         log.push('device-released');
+        if (start.deviceRelease === 'throw') {
+          throw new Error('Device unavailable');
+        }
+        if (start.deviceRelease === 'deferred') {
+          return new Promise<void>((resolve, reject) => {
+            pendingDeviceRelease = { resolve, reject };
+          });
+        }
       },
     },
     pages: fixturePages(document, log),
@@ -137,6 +150,13 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       pendingSignOut = null;
       pending?.reject(new Error(message));
     },
+    completeDeviceRelease: (message) => {
+      const pending = pendingDeviceRelease;
+      pendingDeviceRelease = null;
+      if (pending === null) throw new Error('No device release is pending.');
+      if (message === undefined) pending.resolve();
+      else pending.reject(new Error(message));
+    },
     log: () => [...log],
     dispose: () => {
       shell.dispose();
@@ -152,6 +172,7 @@ function fixturePages(document: Document, log: string[]): readonly UiPageDefinit
     cardPage(document, log),
     collectionPage(document),
     redirectPage(document, log),
+    devicePage(document, log),
   ];
 }
 
@@ -332,4 +353,47 @@ function checkbox(document: Document, id: string, label: string): HTMLInputEleme
   input.id = id;
   input.setAttribute('aria-label', label);
   return input;
+}
+
+/** Exercises the supplied device through an active page and its synchronous teardown. */
+function devicePage(document: Document, log: string[]): UiPageDefinition {
+  return {
+    page: 'import',
+    mount(container, context) {
+      const release = document.createElement('button');
+      release.textContent = 'Release device';
+      const result = document.createElement('p');
+      result.setAttribute('role', 'status');
+      release.addEventListener('click', () => {
+        void (async () => {
+          result.textContent = 'Releasing';
+          try {
+            await context.device.release();
+            result.textContent = 'Released';
+          } catch {
+            result.textContent = 'Release failed';
+          }
+        })();
+      });
+      const replace = document.createElement('button');
+      replace.textContent = 'Replace with collection';
+      replace.addEventListener('click', () => context.replace({ page: 'collection' }));
+      container.append(release, replace, result);
+      context.signal.addEventListener('abort', () => {
+        context.device.release();
+        log.push('abort-release-called');
+        // Microtasks already run after synchronous teardown and must lose access.
+        queueMicrotask(() => {
+          context.device.release();
+          log.push('late-release-called');
+        });
+      });
+      return {
+        dispose() {
+          context.device.release();
+          log.push('dispose-release-called');
+        },
+      };
+    },
+  };
 }

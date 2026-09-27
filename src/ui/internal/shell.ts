@@ -110,6 +110,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   let pageController: AbortController | null = null;
   let pageHandle: UiPageHandle | null = null;
   let generation = 0;
+  let teardownGeneration: number | null = null;
   let disposed = false;
   let signOutPending = false;
   let lastHref = '';
@@ -376,12 +377,15 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     };
   }
 
-  /** Device capability of one presented page; a page the shell has left can no longer release it. */
+  /** Device access lasts through synchronous teardown, but never into a replacement page. */
   function pageDevice(currentGeneration: number): UiDevice {
     return {
       release() {
-        if (!disposed && generation === currentGeneration) {
-          releaseDevice();
+        const active = !disposed && generation === currentGeneration;
+        const tearingDown =
+          teardownGeneration === currentGeneration && generation === currentGeneration + 1;
+        if (active || tearingDown) {
+          return device.release();
         }
       },
     };
@@ -454,19 +458,28 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
 
   /** Closes the presented page: its work is cancelled and its container is left behind. */
   function closePage(): void {
+    teardownGeneration = generation;
     generation += 1;
     const controller = pageController;
     const handle = pageHandle;
     pageController = null;
     pageHandle = null;
-    controller?.abort();
-    handle?.dispose?.();
-    dialogs.closeAll();
+    try {
+      // Navigation and dialogs are already invalidated, but device cleanup is still permitted.
+      // A nested transition advances generation again, ending this page's device ownership too.
+      controller?.abort();
+      handle?.dispose?.();
+    } finally {
+      teardownGeneration = null;
+      dialogs.closeAll();
+    }
   }
 
   function releaseDevice(): void {
     try {
-      void device.release();
+      void Promise.resolve(device.release()).catch(() => {
+        // Shell-owned cleanup is best effort, including asynchronous provider failures.
+      });
     } catch {
       // Releasing device resources is best effort; it never blocks sign-out or disposal.
     }

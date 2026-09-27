@@ -34,6 +34,7 @@ function shellBundle(): Promise<string> {
           "globalThis.keeperUiControl = installUiShell(document.getElementById('ui-root'), {",
           '  signedOut: globalThis.keeperUiStartSignedOut === true,',
           '  deferredSignOut: globalThis.keeperUiDeferredSignOut === true,',
+          '  deviceRelease: globalThis.keeperUiDeviceRelease,',
           '});',
         ].join('\n'),
         resolveDir: repoRoot,
@@ -65,9 +66,10 @@ async function openShell(page: Page, hash: string, start: UiShellStart = {}): Pr
   );
   await page.goto(`http://keeper-ui.test/${hash}`);
   await page.evaluate((flags) => {
-    const globals = globalThis as unknown as Record<string, boolean>;
+    const globals = globalThis as unknown as Record<string, unknown>;
     globals.keeperUiStartSignedOut = flags.signedOut === true;
     globals.keeperUiDeferredSignOut = flags.deferredSignOut === true;
+    globals.keeperUiDeviceRelease = flags.deviceRelease;
   }, start);
   await loadShell(page);
   return errors;
@@ -406,3 +408,88 @@ test('a disposed shell ignores the delayed work of its last page', async ({ page
   await expect.poll(() => notes(page)).toContain('card-dialog:false');
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
+
+for (const transition of ['navigate', 'replace', 'back', 'hash', 'account', 'dispose'] as const) {
+  test(`device teardown releases before ownership passes on ${transition}`, async ({ page }) => {
+    await openShell(page, '#/collection');
+    await page.getByRole('link', { name: 'Import', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Release device', exact: true })).toBeVisible();
+
+    if (transition === 'navigate')
+      await page.getByRole('link', { name: 'Collection', exact: true }).click();
+    else if (transition === 'replace')
+      await page.getByRole('button', { name: 'Replace with collection' }).click();
+    else if (transition === 'back') await page.goBack();
+    else if (transition === 'hash')
+      await page.evaluate(() => {
+        location.hash = '#/collection';
+      });
+    else if (transition === 'account') await signInAs(page, 'bob');
+    else await disposeShell(page);
+
+    await expect.poll(() => notes(page)).toContain('late-release-called');
+    const log = await notes(page);
+    expect(log.slice(0, 4)).toEqual([
+      'device-released',
+      'abort-release-called',
+      'device-released',
+      'dispose-release-called',
+    ]);
+    // Account change and disposal also run shell-owned cleanup; the delayed page call adds none.
+    expect(log.filter((note) => note === 'device-released')).toHaveLength(
+      transition === 'account' || transition === 'dispose' ? 3 : 2,
+    );
+    if (transition !== 'account' && transition !== 'dispose') {
+      await expect(page.locator('#collection-marker')).toBeVisible();
+    }
+  });
+}
+
+for (const outcome of ['complete', 'reject', 'throw'] as const) {
+  test(`active page observes device release ${outcome}`, async ({ page }) => {
+    const errors = await openShell(page, '#/import', {
+      deviceRelease: outcome === 'throw' ? 'throw' : 'deferred',
+    });
+    await page.getByRole('button', { name: 'Release device', exact: true }).click();
+    if (outcome !== 'throw') {
+      await expect(page.getByText('Releasing', { exact: true })).toBeVisible();
+      await settleDeviceRelease(page, outcome === 'reject' ? 'Device unavailable' : undefined);
+    }
+    await expect(
+      page.getByText(outcome === 'complete' ? 'Released' : 'Release failed', { exact: true }),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const transition of ['account', 'sign-out', 'dispose'] as const) {
+  for (const outcome of ['reject', 'throw'] as const) {
+    test(`shell handles device ${outcome} during ${transition}`, async ({ page }) => {
+      const errors = await openShell(page, '#/', {
+        deviceRelease: outcome === 'throw' ? 'throw' : 'deferred',
+      });
+      if (transition === 'account') await signInAs(page, 'bob');
+      else if (transition === 'sign-out')
+        await page.getByRole('button', { name: 'Sign out' }).click();
+      else await disposeShell(page);
+      if (outcome === 'reject') await settleDeviceRelease(page, 'Device unavailable');
+
+      // Cross an event-loop turn so an unhandled rejection has reached pageerror.
+      await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+      expect((await notes(page)).filter((note) => note === 'device-released')).toHaveLength(1);
+      if (transition === 'account') expect(await accountId(page)).toBe('bob');
+      else if (transition === 'sign-out')
+        await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+      else await expect(page.locator('#ui-root')).toBeEmpty();
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+async function settleDeviceRelease(page: Page, message?: string): Promise<void> {
+  await page.evaluate((failure) => {
+    (
+      globalThis as unknown as { keeperUiControl: UiShellControl }
+    ).keeperUiControl.completeDeviceRelease(failure);
+  }, message);
+}
