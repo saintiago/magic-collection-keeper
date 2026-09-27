@@ -27,6 +27,7 @@ import {
 export interface UiCardListInstall {
   /** Entries one request asks for; the CardList's declared bound applies. */
   readonly pageSize?: number;
+  readonly selectionLimit?: number;
   /** Query context the list evaluates. */
   readonly context?: string;
   /** Fragment kinds the list reads; the others are not presented. */
@@ -165,6 +166,9 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
           source: pageSource(id),
           context: options.context ?? 'result',
           pageSize: options.pageSize ?? 2,
+          ...(options.selectionLimit === undefined
+            ? {}
+            : { selectionLimit: options.selectionLimit }),
           fragments: readers as unknown as UiCardListFragments,
           tools,
           signal: controller.signal,

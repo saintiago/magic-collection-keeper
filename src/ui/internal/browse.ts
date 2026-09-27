@@ -9,7 +9,9 @@
  * presents the same result, and CardList presents the entries with their basic information and the
  * printing images the supplied contracts provide. Opening an entry navigates to its card details
  * and records it as the account's activity; both pages keep their input, controls and selection in
- * the shell's bounded state for the way back, and every provider value renders as text.
+ * the shell's bounded state for the way back, and every provider value renders as text. Both lists
+ * limit selection to the snapshot's identity-list bound so every allowed selection fits alongside
+ * the draft and result position.
  *
  * Returning to a browsing view also presents the result window the history entry kept: the page
  * reloads the further pages of the same result and reports its presentation, so the shell restores
@@ -96,6 +98,7 @@ function homePage(recent: UiRecentCards): UiPageDefinition {
         source: recentSource(recent),
         context: accountId,
         pageSize,
+        selectionLimit: UI_LIMITS.restorationList,
         initialPosition: readPosition(restored, pageSize),
         presentation: openEntryPresentation(document, 'home-result', (entry) =>
           recent.record(accountId, entry),
@@ -180,6 +183,7 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
         source: access.source,
         context: query,
         pageSize,
+        selectionLimit: UI_LIMITS.restorationList,
         initialPosition: readPosition(restored, pageSize),
         ...(view.level === 'printing' ? { fragments: { images: access.images } } : {}),
         presentation: openEntryPresentation(document, 'catalog-result', (entry) =>

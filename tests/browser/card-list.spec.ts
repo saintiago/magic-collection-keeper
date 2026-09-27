@@ -1303,3 +1303,74 @@ test('retires selected tool reads when a replacement result arrives', async ({ p
     targets: ['copy:1'],
   });
 });
+
+test('selection limits apply to individual, grouped and programmatic selection without partial groups', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 3, selectionLimit: 2 });
+  const request = await onlyRequest(page, 'a');
+  await settlePage(page, request.id, [
+    copy('1', 'printing-1'),
+    copy('2', 'printing-1'),
+    copy('3', 'printing-2'),
+  ]);
+  const group = page.locator('#list-a [data-ui-group-select]');
+  const single = page.locator('#list-a [data-ui-select="copy:3"]');
+  await single.check();
+  await expect(group).toBeDisabled();
+  await single.uncheck();
+  await group.check();
+  await expect(single).toBeDisabled();
+  await expect(group).toBeEnabled();
+  await page.evaluate(() => {
+    (globalThis as unknown as GlobalControl).keeperCardListControl.setSelected('a', 'copy:3', true);
+  });
+  expect((await state(page, 'a')).selection).toEqual(['copy:1', 'copy:2']);
+  await group.uncheck();
+  await expect(single).toBeEnabled();
+  await single.check();
+  await page.getByRole('button', { name: 'Clear selection' }).click();
+  expect((await state(page, 'a')).selection).toEqual([]);
+  await expect(group).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
+test('selection limits count unloaded and retired keys and allow clearing them', async ({
+  page,
+}) => {
+  const errors = await openLists(page);
+  await install(page, 'a', { pageSize: 100, selectionLimit: 1 });
+  // Restoration selects a key before its asynchronous entry arrives.
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as GlobalControl).keeperCardListControl;
+    control.setSelected('a', 'card:0', true);
+    control.setSelected('a', 'card:1', true);
+  });
+  for (let index = 0; index < 6; index += 1) {
+    if (index > 0) await page.getByRole('button', { name: 'Load more' }).click();
+    const request = (await pageRequests(page))[index];
+    if (request === undefined) throw new Error('Missing page request');
+    await settlePage(
+      page,
+      request.id,
+      Array.from({ length: 100 }, (_, offset) => card(String(index * 100 + offset))),
+      index < 5 ? `next-${index}` : null,
+    );
+  }
+  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(500);
+  await expect(page.locator('#list-a [data-ui-select="card:0"]')).toHaveCount(0);
+  expect((await state(page, 'a')).selection).toEqual(['card:0']);
+  const next = page.locator('#list-a [data-ui-select]').first();
+  await expect(next).toBeDisabled();
+  await page.getByRole('button', { name: 'Clear selection' }).click();
+  await next.check();
+  expect((await state(page, 'a')).selection).toEqual(['card:100']);
+  await refresh(page, 'a');
+  const refreshed = (await pageRequests(page))[6];
+  if (refreshed === undefined) throw new Error('Missing refresh request');
+  await settlePage(page, refreshed.id, [card('100'), card('101')]);
+  await expect(page.locator('#list-a [data-ui-select="card:100"]')).toBeChecked();
+  await expect(page.locator('#list-a [data-ui-select="card:101"]')).toBeDisabled();
+  expect(errors).toEqual([]);
+});

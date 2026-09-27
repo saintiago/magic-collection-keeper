@@ -183,6 +183,12 @@ export interface UiCardListOptions<Context = unknown> {
   /** Entries one page asks for; from 1 to UI_LIMITS.listPage. */
   readonly pageSize: number;
   /**
+   * Optional positive bound on selected keys, including unloaded and retired entries. Additional
+   * selection is disabled at the bound; a group must fit in full. Deselecting and clearing remain
+   * available, including when paging has retired the selected rows.
+   */
+  readonly selectionLimit?: number;
+  /**
    * Resumes a retained window for the same context and page size using the source's opaque
    * continuation. Refresh starts at the beginning; a stale continuation remains a source failure.
    */
@@ -297,6 +303,13 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   const presentation = readPresentation(options?.presentation);
   const onWindowSettled = readWindowListener(options?.onWindowSettled);
   const signal = readSignal(options?.signal);
+  const selectionLimit = options.selectionLimit;
+  if (
+    selectionLimit !== undefined &&
+    (!Number.isSafeInteger(selectionLimit) || selectionLimit < 1)
+  ) {
+    throw new TypeError('A selection limit must be a positive, finite integer.');
+  }
   const document = container.ownerDocument;
   let initialPosition = options.initialPosition ?? null;
   if (
@@ -319,6 +332,11 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   selectionCount.dataset.uiSelectionCount = '';
   selectionCount.setAttribute('aria-live', 'polite');
   toolbar.append(selectionCount);
+  const clearSelectionButton = document.createElement('button');
+  clearSelectionButton.type = 'button';
+  clearSelectionButton.textContent = 'Clear selection';
+  clearSelectionButton.addEventListener('click', clearSelection);
+  if (selectionLimit !== undefined) toolbar.append(clearSelectionButton);
   const toolButtons = new Map<string, HTMLButtonElement>();
   for (const [id, definition] of tools) {
     const button = document.createElement('button');
@@ -616,9 +634,9 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (disposed || typeof key !== 'string' || key.length === 0) {
       return;
     }
-    if (selectedNow) {
+    if (selectedNow && canSelect([key])) {
       selected.add(key);
-    } else {
+    } else if (!selectedNow) {
       selected.delete(key);
       if (retiredSelection.delete(key)) {
         invalidateFragment(key, 'tools');
@@ -650,6 +668,10 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
     if (header === undefined) {
       return;
     }
+    if (selectedNow && !canSelect(header.keys)) {
+      renderSelection();
+      return;
+    }
     for (const key of header.keys) {
       if (selectedNow) {
         selected.add(key);
@@ -658,6 +680,14 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
       }
     }
     renderSelection();
+  }
+
+  /** Count retained keys too, so paging, refresh and restoration cannot bypass the bound. */
+  function canSelect(keys: readonly string[]): boolean {
+    return (
+      selectionLimit === undefined ||
+      selected.size + keys.filter((key) => !selected.has(key)).length <= selectionLimit
+    );
   }
 
   /** Selected result keys, including explicit targets retained when paging retires their rows. */
@@ -884,13 +914,19 @@ export function createCardList<Context>(options: UiCardListOptions<Context>): Ui
   function renderSelection(): void {
     const keys = selectedKeys();
     selectionCount.textContent = `${keys.length} selected`;
+    if (selectionLimit !== undefined) {
+      selectionCount.textContent = `${selected.size} of ${selectionLimit} selected`;
+    }
+    clearSelectionButton.hidden = selected.size === 0;
     for (const [key, row] of rows) {
       row.checkbox.checked = selected.has(key);
+      row.checkbox.disabled = !canSelect([key]);
     }
     for (const header of groupHeaders.values()) {
       const chosen = header.keys.filter((key) => selected.has(key)).length;
       header.checkbox.checked = chosen === header.keys.length;
       header.checkbox.indeterminate = chosen > 0 && chosen < header.keys.length;
+      header.checkbox.disabled = !canSelect(header.keys);
     }
     renderTools();
   }

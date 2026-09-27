@@ -958,3 +958,56 @@ for (const action of ['restore', 'input', 'account', 'navigate'] as const) {
     expect(errors).toEqual([]);
   });
 }
+
+for (const level of ['card', 'printing'] as const) {
+  for (const attempted of [100, 101]) {
+    test(`Back preserves browsing state after ${attempted} ${level} selection attempts`, async ({
+      page,
+    }) => {
+      const errors = await openBrowse(page, `#/catalog?level=${level}`);
+      const resultPage = (offset: number): SearchPage =>
+        searchPage(
+          Array.from({ length: 50 }, (_, index) => {
+            const id = offset + index;
+            return level === 'card'
+              ? cardEntry(`card-${id}`, { name: `Card ${id}` })
+              : printingEntry(`printing-${id}`, `card-${id}`, `Card ${id}`);
+          }),
+          { totalCount: 150, continuation: offset < 100 ? `cursor-${offset + 50}` : null },
+        );
+      for (let index = 0; index < 3; index += 1) {
+        if (index > 0) await page.getByRole('button', { name: 'Load more' }).click();
+        const request = await searchRequest(page, index);
+        await settleSearch(page, request.id, resultPage(index * 50));
+      }
+      await expect(page.locator('[data-ui-entry]')).toHaveCount(150);
+      // Native clicks exercise the checkbox behavior, including disabled controls at the bound.
+      await page.locator('[data-ui-select]').evaluateAll((inputs, count) => {
+        for (const input of inputs.slice(0, count)) (input as HTMLInputElement).click();
+      }, attempted);
+      await page.getByLabel('Search cards').fill('unsaved query');
+      await page.getByLabel('Owned only').check();
+      await page.getByLabel('Finish').selectOption('foil');
+      const opened = page.locator('[data-ui-open]').last();
+      await opened.click();
+      await expect(page.locator('#card-level')).toContainText('card-149/');
+      await page.goBack();
+      await expect(page.getByLabel('Search cards')).toHaveValue('unsaved query');
+      await expect(page.getByLabel('Owned only')).toBeChecked();
+      await expect(page.getByLabel('Finish')).toHaveValue('foil');
+      for (let index = 0; index < 3; index += 1) {
+        const request = await searchRequest(page, 3 + index);
+        await settleSearch(page, request.id, resultPage(index * 50));
+      }
+      await expect(page.locator('[data-ui-entry]')).toHaveCount(150);
+      await expect(page.locator('[data-ui-select]:checked')).toHaveCount(100);
+      await expect(opened).toBeFocused();
+      await expect(opened).toBeInViewport();
+      await expect(page.locator('[data-ui-select]').nth(100)).toBeDisabled();
+      await page.locator('[data-ui-select]').first().uncheck();
+      await page.locator('[data-ui-select]').nth(100).check();
+      await expect(page.locator('[data-ui-select]:checked')).toHaveCount(100);
+      expect(errors).toEqual([]);
+    });
+  }
+}
