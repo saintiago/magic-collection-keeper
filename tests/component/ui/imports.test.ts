@@ -22,6 +22,7 @@ import {
   createImportAccess,
   discardImportEntry,
   discardImportSession,
+  recoverConfirmation,
   reviewImportEntry,
   stageImportLines,
   uiImportCandidates,
@@ -391,5 +392,42 @@ describe('import confirmation', () => {
 
     expect(outcome).toMatchObject({ status: 'failed', message: 'Bad input.' });
     expect(recover).not.toHaveBeenCalled();
+  });
+
+  it('reads the recorded outcome of one confirmation independently of its entries', async () => {
+    const receipt = {
+      operationId: 'operation-1',
+      sessionId: 'manual',
+      sourceKind: 'manual',
+      sourceId: 'manual',
+      copies: [
+        {
+          copyId: 'copy-1',
+          printingId: 'printing-m11-149-en',
+          finish: 'nonfoil' as const,
+          condition: null,
+          revision: 1,
+        },
+      ],
+    };
+    const recorded = await recoverConfirmation(
+      access({ recover: async () => ({ outcome: 'recorded', receipt }) }),
+      'operation-1',
+    );
+    const absent = await recoverConfirmation(
+      access({ recover: async () => ({ outcome: 'absent' }) }),
+      'operation-1',
+    );
+    const unreadable = await recoverConfirmation(
+      access({ recover: () => Promise.reject(new Error('Offline.')) }),
+      'operation-1',
+    );
+
+    expect(recorded).toMatchObject({ status: 'committed', record: { copies: receipt.copies } });
+    expect(recorded.message).toContain('already been recorded');
+    expect(absent).toMatchObject({ status: 'unknown', record: null });
+    expect(absent.message).toContain('not recorded');
+    expect(unreadable).toMatchObject({ status: 'unknown', record: null });
+    expect(unreadable.message).toContain('could not be read');
   });
 });

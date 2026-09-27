@@ -217,6 +217,47 @@ function searchPage(printings: readonly PrintingRecord[]) {
   };
 }
 
+/** One printing of the fixture card, distinguished by its collector number. */
+function printingWith(collectorNumber: number): PrintingRecord {
+  return {
+    ...m11,
+    printingId: `printing-m11-${collectorNumber}-en`,
+    collectorNumber: String(collectorNumber),
+  };
+}
+
+/** One page of a longer printing result, with the continuation that follows it. */
+function searchSlice(printings: readonly PrintingRecord[], continuation: string | null) {
+  return { ...searchPage(printings), continuation };
+}
+
+/** Pending entries of one import in capture order. */
+function pendingEntries(count: number): ImportEntry[] {
+  return Array.from({ length: count }, (_, index) =>
+    entry({ entryId: `entry-${index + 1}`, position: index + 1 }),
+  );
+}
+
+/** The copies one confirmation receipt names for `count` confirmed lines. */
+function receiptCopies(count: number, offset = 0) {
+  return Array.from({ length: count }, (_, index) => ({
+    copyId: `copy-${offset + index + 1}`,
+    printingId: m11.printingId,
+    finish: 'nonfoil' as const,
+    condition: null,
+    revision: 1,
+  }));
+}
+
+/** Selects every entry the list currently presents through its own control. */
+async function selectAllRendered(page: Page, host: string): Promise<void> {
+  await page.locator(`${host} [data-ui-select]`).evaluateAll((inputs) => {
+    for (const input of inputs) {
+      (input as HTMLInputElement).click();
+    }
+  });
+}
+
 /** Presents the pending review of one account that already has a manual import. */
 async function openPendingReview(
   page: Page,
@@ -600,5 +641,505 @@ test('restores the presented import and an unsaved review draft on the way back'
   await settle(page, 'settleEntries', restored.id, { session: session(), entries: [entry()] });
   await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('4');
   await expect(page.locator('#import-pending [data-ui-entry="pending:entry-1"]')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('keeps every stored review value while one attribute is corrected', async ({ page }) => {
+  const errors = await openPendingReview(page, [
+    entry({ finish: 'foil', condition: 'NM', quantity: 1 }),
+  ]);
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveValue(m11.printingId);
+
+  // Correcting one attribute must keep the reviewed printing, finish and condition of the entry.
+  await page.fill('#import-review-quantity-entry-1', '2');
+  await control(page, 'navigate', { page: 'home' });
+  await control(page, 'back');
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', listing.id, [session()]);
+  const restored = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  await settle(page, 'settleEntries', restored.id, {
+    session: session(),
+    entries: [entry({ finish: 'foil', condition: 'NM', quantity: 1 })],
+  });
+
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveValue(m11.printingId);
+  await expect(page.locator('#import-review-finish-entry-1')).toHaveValue('foil');
+  await expect(page.locator('#import-review-condition-entry-1')).toHaveValue('NM');
+  await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('2');
+  expect(errors).toEqual([]);
+});
+
+test('offers the finish options of the printing a review selects', async ({ page }) => {
+  const errors = await openPendingReview(page, [entry({ printingId: m10.printingId })]);
+  const row = page.locator('#import-pending [data-ui-entry="pending:entry-1"]');
+  await expect(row.locator('[data-ui-import-printing]')).toHaveText('Printing: M10 146 · en');
+
+  // The M10 printing the entry names offers no foil; the M11 the review selects does.
+  await page.fill('#import-printing-query-entry-1', 'Lightning Bolt');
+  await page.click('#import-printing-find-entry-1');
+  const search = await requested<Record<string, unknown>>(page, 'searches');
+  await settle(page, 'settleSearch', search.id, searchPage([m11]));
+  await page.selectOption('#import-review-printing-entry-1', m11.printingId);
+  await expect(page.locator('#import-review-finish-entry-1 option[value="foil"]')).toHaveCount(1);
+
+  await page.selectOption('#import-review-finish-entry-1', 'foil');
+  await page.click('#import-review-save-entry-1');
+  const review = await requested<Record<string, unknown>>(page, 'review');
+  expect(review.arguments).toMatchObject({
+    entryId: 'entry-1',
+    printingId: m11.printingId,
+    finish: 'foil',
+  });
+  await settle(page, 'settleReview', review.id, {
+    entry: entry({ printingId: m11.printingId, finish: 'foil', revision: 4 }),
+    session: session({ revision: 5 }),
+  });
+  const refreshed = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  await settle(page, 'settleEntries', refreshed.id, {
+    session: session({ revision: 5 }),
+    entries: [entry({ printingId: m11.printingId, finish: 'foil', revision: 4 })],
+  });
+  await expect(row.locator('[data-ui-import-printing]')).toHaveText('Printing: M11 149 · en');
+  expect(errors).toEqual([]);
+});
+
+test('restores a selected pending entry on the way back', async ({ page }) => {
+  const errors = await openPendingReview(page, [entry()]);
+  const selection = '#import-pending [data-ui-entry="pending:entry-1"] [data-ui-select]';
+  await page.locator(selection).check();
+  await expect(page.locator('#import-pending [data-ui-selection-count]')).toHaveText('1 selected');
+
+  await control(page, 'navigate', { page: 'home' });
+  await control(page, 'back');
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', listing.id, [session()]);
+  const restored = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  await settle(page, 'settleEntries', restored.id, { session: session(), entries: [entry()] });
+
+  // The list's own captured state keeps the interaction: the entry stays selected and actionable.
+  await expect(page.locator(selection)).toBeChecked();
+  await expect(page.locator('#import-pending [data-ui-selection-count]')).toHaveText('1 selected');
+  await expect(page.locator('#import-pending [data-ui-tool="confirm-import"]')).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
+test('keeps the reviewed revision the page read when an older read answers late', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry()]);
+  const row = page.locator('#import-pending [data-ui-entry="pending:entry-1"]');
+
+  // Two refreshes leave the first read in flight; the second one reports the newer revision.
+  await page.click('#import-refresh');
+  const firstListing = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', firstListing.id, [session()]);
+  const older = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  await page.click('#import-refresh');
+  const secondListing = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
+  await settle(page, 'settleSessions', secondListing.id, [session()]);
+  const newer = await requested<UiImportEntriesRequest>(page, 'entries', 2);
+  await settle(page, 'settleEntries', newer.id, {
+    session: session({ revision: 5 }),
+    entries: [entry({ quantity: 2, revision: 4 })],
+  });
+  await expect(row.locator('[data-ui-import-quantity]')).toHaveText(' Quantity: 2');
+
+  // The withdrawn read answers late with the older revision; it cannot replace what is presented.
+  await settle(page, 'settleEntries', older.id, {
+    session: session({ revision: 4 }),
+    entries: [entry({ revision: 3 })],
+  });
+
+  await row.locator('[data-ui-select]').check();
+  await page.click('#import-pending [data-ui-tool="confirm-import"]');
+  const confirmation = await requested<Record<string, unknown>>(page, 'confirm');
+  expect(confirmation.arguments.entries).toEqual([{ entryId: 'entry-1', expectedRevision: 4 }]);
+  await settle(page, 'settleConfirm', confirmation.id, {
+    operationId: confirmation.arguments.operationId as string,
+    sessionId: 'manual',
+    sourceKind: 'manual',
+    sourceId: 'manual',
+    copies: receiptCopies(1),
+    replayed: false,
+  });
+  const afterConfirmation = await requested<UiImportSessionsRequest>(page, 'sessions', 3);
+  await settle(page, 'settleSessions', afterConfirmation.id, []);
+  const refresh = await requested<UiImportEntriesRequest>(page, 'entries', 3);
+  await settle(page, 'settleEntries', refresh.id, {
+    session: session({ state: 'confirmed', pendingEntries: 0, confirmedEntries: 1, revision: 5 }),
+    entries: [],
+  });
+  expect(errors).toEqual([]);
+});
+
+test('keeps the presented import when a review of another import completes', async ({ page }) => {
+  const captureSession = session({
+    sessionId: 'capture',
+    sourceKind: 'capture',
+    sourceId: 'session-1',
+    revision: 99,
+  });
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11, m10] });
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, [session(), captureSession]);
+  const manual = await requested<UiImportEntriesRequest>(page, 'entries');
+  await settle(page, 'settleEntries', manual.id, { session: session(), entries: [entry()] });
+
+  // The owner saves a review of the manual import, switches to another import while the request is
+  // in flight, and the response of the first import arrives afterwards.
+  await page.fill('#import-review-quantity-entry-1', '3');
+  await page.click('#import-review-save-entry-1');
+  const review = await requested<Record<string, unknown>>(page, 'review');
+  await page.selectOption('#import-session', 'capture');
+  const other = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  expect(other.arguments.sessionId).toBe('capture');
+  await settle(page, 'settleEntries', other.id, {
+    session: captureSession,
+    entries: [entry({ entryId: 'entry-capture', sessionId: 'capture', revision: 7 })],
+  });
+  await settle(page, 'settleReview', review.id, {
+    entry: entry({ quantity: 3, revision: 4 }),
+    session: session({ revision: 5 }),
+  });
+
+  // The presented import keeps its own values and its own revision for the discard.
+  await expect(page.locator('#import-review-quantity-entry-capture')).toHaveValue('1');
+  await page.click('#import-discard-session');
+  const dialog = page.locator('dialog', { hasText: 'Discard this import?' });
+  await dialog.getByRole('button', { name: 'Discard import' }).click();
+  const discarded = await requested<Record<string, unknown>>(page, 'discardSession');
+  expect(discarded.arguments).toEqual({ sessionId: 'capture', expectedRevision: 99 });
+  await settle(
+    page,
+    'settleDiscardSession',
+    discarded.id,
+    session({ sessionId: 'capture', state: 'discarded', pendingEntries: 0 }),
+  );
+  const afterDiscard = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', afterDiscard.id, []);
+  const afterDiscardEntries = await requested<UiImportEntriesRequest>(page, 'entries', 2);
+  await settle(page, 'settleEntries', afterDiscardEntries.id, {
+    session: session({ state: 'discarded', pendingEntries: 0 }),
+    entries: [],
+  });
+  expect(errors).toEqual([]);
+});
+
+test('keeps review input typed while a saved review was in flight', async ({ page }) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.fill('#import-review-quantity-entry-1', '2');
+  await page.click('#import-review-save-entry-1');
+  const review = await requested<Record<string, unknown>>(page, 'review');
+  // The owner corrects the quantity again before the response of the save arrives.
+  await page.fill('#import-review-quantity-entry-1', '7');
+  await settle(page, 'settleReview', review.id, {
+    entry: entry({ quantity: 2, revision: 4 }),
+    session: session({ revision: 5 }),
+  });
+  const refreshed = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  await settle(page, 'settleEntries', refreshed.id, {
+    session: session({ revision: 5 }),
+    entries: [entry({ quantity: 2, revision: 4 })],
+  });
+
+  // The committed save cleared only the input it submitted; the newer correction stays.
+  await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('7');
+  expect(errors).toEqual([]);
+});
+
+test('keeps another import saved review input when one import is discarded', async ({ page }) => {
+  const captureSession = session({
+    sessionId: 'capture',
+    sourceKind: 'capture',
+    sourceId: 'session-1',
+    revision: 99,
+  });
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11, m10] });
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, [session(), captureSession]);
+  const manual = await requested<UiImportEntriesRequest>(page, 'entries');
+  await settle(page, 'settleEntries', manual.id, { session: session(), entries: [entry()] });
+  await page.fill('#import-review-quantity-entry-1', '7');
+
+  await page.selectOption('#import-session', 'capture');
+  const other = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  await settle(page, 'settleEntries', other.id, {
+    session: captureSession,
+    entries: [entry({ entryId: 'entry-capture', sessionId: 'capture', revision: 7 })],
+  });
+  await page.click('#import-discard-session');
+  const dialog = page.locator('dialog', { hasText: 'Discard this import?' });
+  await dialog.getByRole('button', { name: 'Discard import' }).click();
+  const discarded = await requested<Record<string, unknown>>(page, 'discardSession');
+  await settle(
+    page,
+    'settleDiscardSession',
+    discarded.id,
+    session({ sessionId: 'capture', state: 'discarded', pendingEntries: 0, revision: 100 }),
+  );
+  const afterDiscard = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', afterDiscard.id, [session()]);
+  const manualAgain = await requested<UiImportEntriesRequest>(page, 'entries', 2);
+  await settle(page, 'settleEntries', manualAgain.id, { session: session(), entries: [entry()] });
+
+  // The discarded import cleared its own review input only; the other import keeps its draft.
+  await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('7');
+  expect(errors).toEqual([]);
+});
+
+test('stages a manual selection larger than one provider request', async ({ page }) => {
+  const printings = Array.from({ length: 51 }, (_, index) => printingWith(200 + index));
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings });
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, []);
+  await page.fill('#import-manual-query', 'Lightning Bolt');
+  await page.click('#import-manual-submit');
+
+  const first = await requested<Record<string, unknown>>(page, 'searches');
+  await settle(page, 'settleSearch', first.id, searchSlice(printings.slice(0, 20), 'cursor-20'));
+  for (const offset of [20, 40]) {
+    await page.locator('#import-results [data-ui-more]').click();
+    const next = await requested<Record<string, unknown>>(page, 'searches', offset / 20);
+    const continuation = offset + 20 < printings.length ? `cursor-${offset + 20}` : null;
+    await settle(
+      page,
+      'settleSearch',
+      next.id,
+      searchSlice(printings.slice(offset, offset + 20), continuation),
+    );
+  }
+  await selectAllRendered(page, '#import-results');
+  await expect(page.locator('#import-results [data-ui-selection-count]')).toHaveText('51 selected');
+
+  // The staging is decided through requests the provider accepts, with every line's own identity.
+  await page.click('#import-results [data-ui-tool="add-to-review"]');
+  const staged = await requested<Record<string, unknown>>(page, 'stage');
+  expect((staged.arguments.entries as readonly unknown[]).length).toBe(50);
+  await settle(page, 'settleStage', staged.id, {
+    session: session({ pendingEntries: 50 }),
+    entries: [],
+    staged: 50,
+    replayed: false,
+  });
+  const rest = await requested<Record<string, unknown>>(page, 'stage', 1);
+  expect((rest.arguments.entries as readonly unknown[]).length).toBe(1);
+  await settle(page, 'settleStage', rest.id, {
+    session: session({ pendingEntries: 51 }),
+    entries: [],
+    staged: 1,
+    replayed: false,
+  });
+
+  await expect(page.locator('#import-results [data-ui-outcome]')).toHaveText(
+    '51 lines are in review. Confirmation creates the physical copies.',
+  );
+  const reconciled = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', reconciled.id, []);
+  expect(errors).toEqual([]);
+});
+
+test('confirms a selection larger than one provider request', async ({ page }) => {
+  const all = pendingEntries(51);
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11, m10] });
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, [session({ pendingEntries: 51 })]);
+  const first = await requested<UiImportEntriesRequest>(page, 'entries');
+  await settle(page, 'settleEntries', first.id, {
+    session: session({ pendingEntries: 51 }),
+    entries: all.slice(0, 50),
+    continuation: 'cursor-50',
+  });
+  await page.locator('#import-pending [data-ui-more]').click();
+  const second = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  await settle(page, 'settleEntries', second.id, {
+    session: session({ pendingEntries: 51 }),
+    entries: all.slice(50),
+  });
+  await selectAllRendered(page, '#import-pending');
+  await expect(page.locator('#import-pending [data-ui-selection-count]')).toHaveText('51 selected');
+
+  // The confirmation covers the selection through requests the provider accepts.
+  await page.click('#import-pending [data-ui-tool="confirm-import"]');
+  const confirmed = await requested<Record<string, unknown>>(page, 'confirm');
+  expect((confirmed.arguments.entries as readonly unknown[]).length).toBe(50);
+  await settle(page, 'settleConfirm', confirmed.id, {
+    operationId: confirmed.arguments.operationId as string,
+    sessionId: 'manual',
+    sourceKind: 'manual',
+    sourceId: 'manual',
+    copies: receiptCopies(50),
+    replayed: false,
+  });
+  const rest = await requested<Record<string, unknown>>(page, 'confirm', 1);
+  expect((rest.arguments.entries as readonly unknown[]).length).toBe(1);
+  await settle(page, 'settleConfirm', rest.id, {
+    operationId: rest.arguments.operationId as string,
+    sessionId: 'manual',
+    sourceKind: 'manual',
+    sourceId: 'manual',
+    copies: receiptCopies(1, 50),
+    replayed: false,
+  });
+
+  await expect(page.locator('#import-review-status')).toHaveText(
+    'Confirmed: 51 physical copies created.',
+  );
+  const reconciled = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', reconciled.id, []);
+  const refresh = await requested<UiImportEntriesRequest>(page, 'entries', 2);
+  await settle(page, 'settleEntries', refresh.id, {
+    session: session({ state: 'confirmed', pendingEntries: 0, confirmedEntries: 51, revision: 6 }),
+    entries: [],
+  });
+  expect(errors).toEqual([]);
+});
+
+test('recovers a lost confirmation whose pending entries are gone', async ({ page }) => {
+  const errors = await openPendingReview(page, [entry()]);
+  const row = page.locator('#import-pending [data-ui-entry="pending:entry-1"]');
+  await row.locator('[data-ui-select]').check();
+  await page.click('#import-pending [data-ui-tool="confirm-import"]');
+  const confirmation = await requested<Record<string, unknown>>(page, 'confirm');
+  // Both the confirmation and the recovery read of its outcome are lost.
+  await control(page, 'fail', confirmation.id, { code: 'busy', message: 'The service is busy.' });
+  const lost = await requested<string>(page, 'recover');
+  expect(lost.arguments).toBe(confirmation.arguments.operationId);
+  await control(page, 'fail', lost.id, { code: 'unavailable', message: 'Offline.' });
+  await expect(page.locator('#import-recover')).toBeVisible();
+
+  // Reading the pending import finds the confirmed session without any pending entry left.
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', listing.id, []);
+  const read = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  await settle(page, 'settleEntries', read.id, {
+    session: session({ state: 'confirmed', pendingEntries: 0, confirmedEntries: 1, revision: 6 }),
+    entries: [],
+  });
+  await expect(page.locator('#import-pending')).toHaveText('No pending entries to review.');
+
+  // The kept operation identity recovers the outcome without any pending entry or selection.
+  const recovery = await requested<string>(page, 'recover', 1);
+  expect(recovery.arguments).toBe(confirmation.arguments.operationId);
+  await settle(page, 'settleRecover', recovery.id, {
+    outcome: 'recorded',
+    receipt: {
+      operationId: confirmation.arguments.operationId as string,
+      sessionId: 'manual',
+      sourceKind: 'manual',
+      sourceId: 'manual',
+      copies: receiptCopies(1),
+    },
+  });
+  await expect(page.locator('#import-review-status')).toHaveText(
+    'Confirmed: 1 physical copy created. This confirmation had already been recorded; the copies ' +
+      'it created are listed.',
+  );
+  const afterRecovery = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
+  await settle(page, 'settleSessions', afterRecovery.id, []);
+  expect(errors).toEqual([]);
+});
+
+test('recovers the confirmation a restored page kept', async ({ page }) => {
+  const errors = await openPendingReview(page, [entry()]);
+  const row = page.locator('#import-pending [data-ui-entry="pending:entry-1"]');
+  await row.locator('[data-ui-select]').check();
+  await page.click('#import-pending [data-ui-tool="confirm-import"]');
+  const confirmation = await requested<Record<string, unknown>>(page, 'confirm');
+  await control(page, 'fail', confirmation.id, { code: 'busy', message: 'The service is busy.' });
+  const lost = await requested<string>(page, 'recover');
+  await control(page, 'fail', lost.id, { code: 'unavailable', message: 'Offline.' });
+  const reconciled = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', reconciled.id, [session()]);
+  const refresh = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  await settle(page, 'settleEntries', refresh.id, { session: session(), entries: [entry()] });
+
+  // Leaving the view and returning to it reads the kept confirmation's recorded outcome again.
+  await control(page, 'navigate', { page: 'home' });
+  await control(page, 'back');
+  const restored = await requested<string>(page, 'recover', 1);
+  expect(restored.arguments).toBe(confirmation.arguments.operationId);
+  await settle(page, 'settleRecover', restored.id, {
+    outcome: 'recorded',
+    receipt: {
+      operationId: confirmation.arguments.operationId as string,
+      sessionId: 'manual',
+      sourceKind: 'manual',
+      sourceId: 'manual',
+      copies: receiptCopies(1),
+    },
+  });
+  await expect(page.locator('#import-review-status')).toHaveText(
+    'Confirmed: 1 physical copy created. This confirmation had already been recorded; the copies ' +
+      'it created are listed.',
+  );
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
+  await settle(page, 'settleSessions', listing.id, []);
+  const restoredEntries = await requested<UiImportEntriesRequest>(page, 'entries', 2);
+  await settle(page, 'settleEntries', restoredEntries.id, {
+    session: session({ state: 'confirmed', pendingEntries: 0, confirmedEntries: 1, revision: 6 }),
+    entries: [],
+  });
+  expect(errors).toEqual([]);
+});
+
+test('confirms a selected entry the loaded window no longer presents', async ({ page }) => {
+  const all = pendingEntries(550);
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11, m10] });
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, [session({ pendingEntries: 550 })]);
+  const first = await requested<UiImportEntriesRequest>(page, 'entries');
+  await settle(page, 'settleEntries', first.id, {
+    session: session({ pendingEntries: 550 }),
+    entries: all.slice(0, 50),
+    continuation: 'cursor-50',
+  });
+  await page.locator('#import-pending [data-ui-entry="pending:entry-1"] [data-ui-select]').check();
+
+  // Paging beyond the working window retires the row of the selected entry, not the selection.
+  for (let index = 1; index <= 10; index += 1) {
+    await page.locator('#import-pending [data-ui-more]').click();
+    const read = await requested<UiImportEntriesRequest>(page, 'entries', index);
+    expect(read.arguments).toEqual({
+      sessionId: 'manual',
+      pageSize: 50,
+      continuation: `cursor-${index * 50}`,
+    });
+    await settle(page, 'settleEntries', read.id, {
+      session: session({ pendingEntries: 550 }),
+      entries: all.slice(index * 50, index * 50 + 50),
+      continuation: index < 10 ? `cursor-${(index + 1) * 50}` : null,
+    });
+  }
+  await expect(page.locator('#import-pending [data-ui-entry="pending:entry-1"]')).toHaveCount(0);
+  await expect(page.locator('#import-pending [data-ui-selection-count]')).toHaveText('1 selected');
+
+  // The confirmation still quotes the revision the page read for that entry.
+  await page.click('#import-pending [data-ui-tool="confirm-import"]');
+  const confirmation = await requested<Record<string, unknown>>(page, 'confirm');
+  expect(confirmation.arguments.entries).toEqual([{ entryId: 'entry-1', expectedRevision: 3 }]);
+  await settle(page, 'settleConfirm', confirmation.id, {
+    operationId: confirmation.arguments.operationId as string,
+    sessionId: 'manual',
+    sourceKind: 'manual',
+    sourceId: 'manual',
+    copies: receiptCopies(1),
+    replayed: false,
+  });
+  await expect(page.locator('#import-review-status')).toHaveText(
+    'Confirmed: 1 physical copy created.',
+  );
+  const reconciled = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', reconciled.id, []);
+  const refresh = await requested<UiImportEntriesRequest>(page, 'entries', 11);
+  await settle(page, 'settleEntries', refresh.id, {
+    session: session({ state: 'confirmed', pendingEntries: 549, confirmedEntries: 1, revision: 7 }),
+    entries: all.slice(1),
+    continuation: null,
+  });
   expect(errors).toEqual([]);
 });

@@ -61,6 +61,7 @@ export {
   createImportAccess,
   discardImportEntry,
   discardImportSession,
+  recoverConfirmation,
   reviewImportEntry,
   stageImportLines,
   uiImportCandidates,

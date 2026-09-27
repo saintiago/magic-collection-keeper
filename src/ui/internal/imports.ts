@@ -45,6 +45,7 @@ import {
   createImportAccess,
   discardImportEntry,
   discardImportSession,
+  recoverConfirmation,
   reviewImportEntry,
   stageImportLines,
   uiImportCandidates,
@@ -105,6 +106,12 @@ interface UiReviewDraft {
   quantity: string;
 }
 
+/** Reviewed revision of one explicitly selected entry the loaded window no longer presents. */
+interface UiSelectedReview {
+  readonly entryId: string;
+  readonly revision: number;
+}
+
 /** One manual line a failed or uncertain staging keeps, so its retry reuses its identity. */
 interface UiStagingDraft {
   readonly entryId: string;
@@ -113,8 +120,13 @@ interface UiStagingDraft {
   readonly quantity: number;
 }
 
-/** One confirmation the page keeps, so a retry of the same reviewed entries reuses its identity. */
+/**
+ * One confirmation the page keeps, so a retry of the same reviewed entries reuses its identity and
+ * a lost response stays recoverable through its operation identity.
+ */
 interface UiConfirmationDraft {
+  /** Import session the confirmed entries belong to. */
+  readonly sessionId: string;
   readonly operationId: string;
   readonly entries: readonly ConfirmImportEntryInput[];
 }
@@ -183,6 +195,8 @@ function importPage(): UiPageDefinition {
       const sessionsMore = button(document, 'import-sessions-more', 'More imports');
       sessionsMore.hidden = true;
       const refresh = button(document, 'import-refresh', 'Refresh imports');
+      const recover = button(document, 'import-recover', 'Check confirmation outcome');
+      recover.hidden = true;
       const reviewStatus = statusLine(document, 'import-review-status');
       const pendingHost = document.createElement('div');
       pendingHost.id = 'import-pending';
@@ -198,6 +212,7 @@ function importPage(): UiPageDefinition {
         controlLabel(document, 'Import', sessionSelect),
         sessionsMore,
         refresh,
+        recover,
         reviewStatus,
         pendingHost,
         discard,
@@ -208,10 +223,18 @@ function importPage(): UiPageDefinition {
       /** Pending sessions the account reported, oldest page first. */
       let sessions: readonly ImportSession[] = [];
       let sessionsContinuation: string | null = null;
+      /** Read of the pending sessions now answering for the review; an older one never replaces it. */
+      let sessionsRead = 0;
       /** Session record the pending entries were read with; its revision guards a discard. */
       let session: ImportSession | null = null;
       /** Stored records of the presented pending entries, keyed by their entry key. */
       const records = new Map<string, UiPendingRecord>();
+      /**
+       * Reviewed revision of every explicitly selected entry the page has read, kept while the
+       * selection names it so a confirmation covers entries outside the loaded window
+       * (docs/user-interface.md#state-ownership-and-restoration).
+       */
+      const selectedRevisions = readSelectedRevisions(restored?.selection);
       /** Per-entry messages the page presents, kept across the redraws of their editor. */
       const messages = new Map<string, string>();
       /** Printings one row's own search offered, keyed by entry identity. */
@@ -223,6 +246,9 @@ function importPage(): UiPageDefinition {
       let confirmation = readConfirmationDraft(restored?.confirmation);
       let results: UiCardList<UiCatalogQuery> | null = null;
       let pending: UiCardList<string> | null = null;
+      /** Whether a confirmation or a recovery of one is in flight, so only one acts at a time. */
+      let confirming = false;
+      let recovering = false;
       /** The retained list states, kept while the lists are not composed yet. */
       const retainedResults = readPageState(restored?.results);
       const retainedPending = readRetainedPending(restored?.pending, sessionId);
@@ -240,6 +266,9 @@ function importPage(): UiPageDefinition {
       refresh.addEventListener('click', () => {
         void reconcileImport();
       });
+      recover.addEventListener('click', () => {
+        void recoverPendingConfirmation();
+      });
       discard.addEventListener('click', () => {
         void discardImport();
       });
@@ -248,7 +277,17 @@ function importPage(): UiPageDefinition {
         composeResults(readListState<UiCatalogQuery>(retainedResults));
       }
       if (retainedPending !== null) {
-        composePending(retainedPending.sessionId, readListState<string>(retainedPending.state));
+        composePending(retainedPending.sessionId, retainedPending.list);
+      }
+      paintConfirmation();
+      if (confirmation !== null) {
+        // A confirmation the page kept without an established outcome stays recoverable through
+        // its operation identity, also after returning to the view
+        // (docs/application.md#construction-and-request-boundary).
+        reviewStatus.textContent =
+          'A confirmation is kept whose outcome is not established. Check it before confirming ' +
+          'the same entries again.';
+        void recoverPendingConfirmation();
       }
       void open();
 
@@ -276,10 +315,16 @@ function importPage(): UiPageDefinition {
           // (docs/user-interface.md#state-ownership-and-restoration).
           staging: Object.fromEntries([...staging].map(([key, line]) => [key, { ...line }])),
           review: Object.fromEntries([...drafts].map(([id, draft]) => [id, { ...draft }])),
+          // The reviewed revisions of the explicit selection stay with the entry, so a
+          // confirmation still covers entries the loaded window no longer presents.
+          selection: Object.fromEntries(
+            [...selectionContext()].map(([key, review]) => [key, { ...review }]),
+          ),
           confirmation:
             confirmation === null
               ? null
               : {
+                  sessionId: confirmation.sessionId,
                   operationId: confirmation.operationId,
                   entries: confirmation.entries.map((entry) => ({ ...entry })),
                 },
@@ -322,6 +367,8 @@ function importPage(): UiPageDefinition {
 
       /** One page of the account's pending sessions, appended to the ones already presented. */
       async function readSessions(continuation: string | null, append: boolean): Promise<void> {
+        sessionsRead += 1;
+        const read = sessionsRead;
         let page: ImportSessionListResult;
         try {
           page = await access.sessions(
@@ -332,7 +379,7 @@ function importPage(): UiPageDefinition {
             context.signal,
           );
         } catch (cause) {
-          if (closed) {
+          if (closed || read !== sessionsRead) {
             return;
           }
           reviewStatus.textContent = `The pending imports could not be read: ${readMessage(
@@ -341,7 +388,9 @@ function importPage(): UiPageDefinition {
           )}`;
           return;
         }
-        if (closed) {
+        if (closed || read !== sessionsRead) {
+          // A response of a superseded read cannot replace the pending imports the review presents
+          // (docs/user-interface.md#pages-and-navigation).
           return;
         }
         sessions = append ? [...sessions, ...page.sessions] : [...page.sessions];
@@ -404,6 +453,7 @@ function importPage(): UiPageDefinition {
         }
         sessionId = next;
         records.clear();
+        selectedRevisions.clear();
         messages.clear();
         session = null;
         discard.disabled = true;
@@ -530,60 +580,50 @@ function importPage(): UiPageDefinition {
         if (lines.length === 0) {
           return { status: 'failed', message: 'Select the printings to add to review.' };
         }
-        const outcome = await stageImportLines(
-          access,
-          {
-            sessionId: manualImport.sessionId,
-            source: manualImport.source,
-            entries: lines.map((line) => ({
-              entryId: line.entryId,
-              printingId: line.printingId,
-              finish: line.finish,
-              condition: line.condition,
-              quantity: line.quantity,
-            })),
-          },
-          request.signal,
-        );
-        return applyStaging(lines, outcome);
-      }
-
-      /** Presents one staging outcome and reconciles the pending list it may have changed. */
-      function applyStaging(
-        lines: readonly UiImportLine[],
-        outcome: UiChangeCommit<ImportStageResult>,
-      ): UiOperationOutcome {
-        const keys = new Set(lines.map((line) => uiEntryKey(stagedLineTarget(line))));
-        if (outcome.status === 'committed') {
-          const staged = outcome.record?.staged ?? 0;
-          // The lines are in review now; only a confirmation creates the physical copies.
-          const message =
-            staged === 0
-              ? 'Those lines were already in review; no new entries were added.'
-              : `${staged} ${staged === 1 ? 'line is' : 'lines are'} in review. ` +
-                'Confirmation creates the physical copies.';
-          forgetStaged(keys);
-          void reconcileImport();
-          return { status: 'committed', message };
+        // One request stages at most the number of lines the provider bound accepts, so a
+        // selection larger than one request is staged through further bounded requests, each line
+        // keeping its identity for an idempotent retry (docs/user-cards.md#interface).
+        let inReview = 0;
+        let reported: UiOperationOutcome | null = null;
+        for (const batch of inBatches(lines, UI_LIMITS.importBatch)) {
+          const keys = batch.map((line) => uiEntryKey(stagedLineTarget(line)));
+          const outcome = await stageImportLines(
+            access,
+            {
+              sessionId: manualImport.sessionId,
+              source: manualImport.source,
+              entries: batch.map((line) => ({
+                entryId: line.entryId,
+                printingId: line.printingId,
+                finish: line.finish,
+                condition: line.condition,
+                quantity: line.quantity,
+              })),
+            },
+            request.signal,
+          );
+          if (outcome.status === 'committed') {
+            // The lines are in review now; only a confirmation creates the physical copies.
+            forgetStaged(keys);
+            inReview += outcome.record?.staged ?? 0;
+            continue;
+          }
+          if (outcome.status === 'conflict') {
+            // A line identity that conflicts cannot be retried as it is; the next attempt stages a
+            // fresh identity instead of overwriting the recorded line.
+            forgetStaged(keys);
+          }
+          reported = stagingOutcome(inReview, outcome);
+          break;
         }
-        if (outcome.status === 'conflict') {
-          // A line identity that conflicts cannot be retried as it is; the next attempt stages a
-          // fresh identity instead of overwriting the recorded line.
-          forgetStaged(keys);
-          void reconcileImport();
-          return { status: 'conflict', message: outcome.message };
-        }
-        if (outcome.status === 'unknown') {
-          // Reading the pending entries shows whether the staging committed even though its
-          // response was lost (docs/user-interface.md#capture-and-review).
-          void reconcileImport();
-          return { status: 'unknown', message: outcome.message };
-        }
-        return { status: 'failed', message: outcome.message };
+        // Reading the pending entries shows whether a staging committed even though its response
+        // was lost (docs/user-interface.md#capture-and-review).
+        void reconcileImport();
+        return reported ?? { status: 'committed', message: stagedMessage(inReview) };
       }
 
       /** Drops the kept line identities of the given entries after their staging was decided. */
-      function forgetStaged(keys: ReadonlySet<string>): void {
+      function forgetStaged(keys: Iterable<string>): void {
         for (const key of keys) {
           staging.delete(key);
         }
@@ -656,10 +696,7 @@ function importPage(): UiPageDefinition {
         const content: Node[] = [editor.status, reviewedContent(record)];
         const found = printings.get(entry.entryId) ?? [];
         const chosenPrintingId = draft?.printingId ?? entry.printingId ?? '';
-        const chosenPrinting =
-          record.printing ??
-          found.find((printing) => printing.printingId === chosenPrintingId) ??
-          null;
+        const chosenPrinting = knownPrinting(record, found, chosenPrintingId);
         const query = textInput(
           document,
           `import-printing-query-${encodeURIComponent(entry.entryId)}`,
@@ -704,18 +741,16 @@ function importPage(): UiPageDefinition {
         );
         query.addEventListener('input', () => {
           clearMessage(editor);
-          draftFor(entry.entryId).query = query.value;
+          draftFor(record).query = query.value;
         });
         find.addEventListener('click', () => {
           void findPrintings(editor, query.value);
         });
         chosen.addEventListener('change', () => {
           clearMessage(editor);
-          const next = draftFor(entry.entryId);
+          const next = draftFor(record);
           next.printingId = chosen.value;
-          const known =
-            found.find((printing) => printing.printingId === chosen.value) ??
-            (record.printing?.printingId === chosen.value ? record.printing : null);
+          const known = knownPrinting(record, found, chosen.value);
           if (known !== null && !known.finishes.includes(next.finish as Finish)) {
             next.finish = '';
           }
@@ -723,15 +758,15 @@ function importPage(): UiPageDefinition {
         });
         wantedFinish.addEventListener('change', () => {
           clearMessage(editor);
-          draftFor(entry.entryId).finish = wantedFinish.value;
+          draftFor(record).finish = wantedFinish.value;
         });
         wantedCondition.addEventListener('change', () => {
           clearMessage(editor);
-          draftFor(entry.entryId).condition = wantedCondition.value;
+          draftFor(record).condition = wantedCondition.value;
         });
         wantedQuantity.addEventListener('input', () => {
           clearMessage(editor);
-          draftFor(entry.entryId).quantity = wantedQuantity.value;
+          draftFor(record).quantity = wantedQuantity.value;
         });
         save.addEventListener('click', () => {
           void saveReview(editor, {
@@ -867,11 +902,11 @@ function importPage(): UiPageDefinition {
           report(editor, `Choose a quantity from 1 to ${uiMaxImportQuantity}.`);
           return;
         }
-        const chosenPrinting =
-          printings
-            .get(record.entry.entryId)
-            ?.find((printing) => printing.printingId === printingId) ??
-          (record.printing?.printingId === printingId ? record.printing : null);
+        const chosenPrinting = knownPrinting(
+          record,
+          printings.get(record.entry.entryId) ?? [],
+          printingId,
+        );
         const outcome = await reviewImportEntry(
           access,
           {
@@ -888,12 +923,20 @@ function importPage(): UiPageDefinition {
           return;
         }
         if (outcome.status === 'committed' && outcome.record !== null) {
-          drafts.delete(record.entry.entryId);
+          // Only the input this review committed leaves; a draft the owner changed while the
+          // request was in flight stays for the next review
+          // (docs/user-interface.md#browsing-and-organization).
+          const draft = drafts.get(record.entry.entryId);
+          if (draft !== undefined && sameReviewDraft(draft, submitted)) {
+            drafts.delete(record.entry.entryId);
+          }
           report(editor, 'Review saved.');
           adoptEntry(outcome.record.entry, outcome.record.session);
-          // The stored values and the printing the entry now names are read again, so the row
-          // presents what the review committed rather than the values it started from.
-          pending?.refresh();
+          if (outcome.record.session.sessionId === sessionId) {
+            // The stored values and the printing the entry now names are read again, so the row
+            // presents what the review committed rather than the values it started from.
+            pending?.refresh();
+          }
           return;
         }
         report(editor, outcome.message ?? 'The review was not saved.');
@@ -942,8 +985,9 @@ function importPage(): UiPageDefinition {
 
       /** Discards every pending entry of the presented import after a brief confirmation. */
       async function discardImport(): Promise<void> {
+        const presented = sessionId;
         const current = session;
-        if (sessionId === null || current === null) {
+        if (presented === null || current === null) {
           reviewStatus.textContent = 'Read the pending import before discarding it.';
           return;
         }
@@ -958,7 +1002,7 @@ function importPage(): UiPageDefinition {
         }
         const outcome = await discardImportSession(
           access,
-          { sessionId, expectedRevision: current.revision },
+          { sessionId: presented, expectedRevision: current.revision },
           context.signal,
         );
         if (closed) {
@@ -968,79 +1012,147 @@ function importPage(): UiPageDefinition {
           outcome.status === 'committed'
             ? 'The import was discarded; no copies were created.'
             : (outcome.message ?? 'The import was not discarded.');
-        if (outcome.status === 'committed') {
-          drafts.clear();
-          printings.clear();
-          records.clear();
-          confirmation = null;
+        if (outcome.status === 'committed' && presented === sessionId) {
+          // Only the discarded import's own review input ends; the unsaved work of another import
+          // the page still presents stays (docs/user-interface.md#state-ownership-and-restoration).
+          forgetPresentedEntries();
+          if (confirmation !== null && confirmation.sessionId === presented) {
+            confirmation = null;
+          }
+          paintConfirmation();
         }
         await reconcileImport();
       }
 
+      /** Drops the drafts, searches and messages of the presented import's loaded entries. */
+      function forgetPresentedEntries(): void {
+        for (const [key, record] of records) {
+          drafts.delete(record.entry.entryId);
+          printings.delete(record.entry.entryId);
+          messages.delete(key);
+        }
+        records.clear();
+        selectedRevisions.clear();
+      }
+
       /** One entry's confirmation: the reviewed revisions under one operation identity. */
-      function confirmationFor(entries: readonly ConfirmImportEntryInput[]): UiConfirmationDraft {
-        if (confirmation !== null && sameConfirmation(confirmation.entries, entries)) {
+      function confirmationFor(
+        presented: string,
+        entries: readonly ConfirmImportEntryInput[],
+      ): UiConfirmationDraft {
+        if (
+          confirmation !== null &&
+          confirmation.sessionId === presented &&
+          sameConfirmation(confirmation.entries, entries)
+        ) {
           return confirmation;
         }
-        confirmation = { operationId: uiImportIdentity(), entries: [...entries] };
+        confirmation = {
+          sessionId: presented,
+          operationId: uiImportIdentity(),
+          entries: [...entries],
+        };
+        paintConfirmation();
         return confirmation;
       }
 
       /** Confirms the selected entries and presents the copies its receipt names. */
       async function confirmSelection(request: UiToolRequest): Promise<UiOperationOutcome> {
-        if (sessionId === null) {
+        const presented = sessionId;
+        if (presented === null) {
           return { status: 'failed', message: 'Read the pending import before confirming it.' };
         }
-        const entries: ConfirmImportEntryInput[] = [];
+        const chosen: { readonly key: string; readonly entry: ConfirmImportEntryInput }[] = [];
         for (const target of request.targets) {
-          const record = target.kind === 'pending' ? records.get(uiEntryKey(target)) : undefined;
-          if (record === undefined) {
+          if (target.kind !== 'pending') {
+            continue;
+          }
+          const key = uiEntryKey(target);
+          // The reviewed revision the page read with the row, or the one it keeps for an explicit
+          // selection outside the loaded window
+          // (docs/user-interface.md#state-ownership-and-restoration).
+          const revision = reviewedRevision(key, target.entryId);
+          if (revision === null) {
             return {
               status: 'failed',
               message: 'Reload the pending import before confirming these entries.',
             };
           }
-          entries.push({
-            entryId: record.entry.entryId,
-            expectedRevision: record.entry.revision,
-          });
+          chosen.push({ key, entry: { entryId: target.entryId, expectedRevision: revision } });
         }
-        if (entries.length === 0) {
+        if (chosen.length === 0) {
           return { status: 'failed', message: 'Select the entries to confirm.' };
         }
-        const operation = confirmationFor(entries);
-        const outcome = await confirmImport(
-          access,
-          { operationId: operation.operationId, sessionId, entries },
-          request.signal,
-        );
-        if (closed) {
-          return { status: 'unknown', message: null };
-        }
-        const receipt = outcome.record;
-        if (outcome.status === 'committed' && receipt !== null) {
-          confirmation = null;
-          const message = confirmationMessage(receipt, outcome.message);
-          reviewStatus.textContent = message;
-          pending?.clearSelection();
-          for (const entry of entries) {
-            drafts.delete(entry.entryId);
-            printings.delete(entry.entryId);
+        // One request confirms at most the number of entries the provider bound accepts, so a
+        // larger explicit selection is confirmed through further bounded requests whose operation
+        // identities stay with the entries they cover (docs/user-cards.md#interface).
+        confirming = true;
+        paintConfirmation();
+        let copies = 0;
+        let note: string | null = null;
+        let reported: UiOperationOutcome | null = null;
+        try {
+          for (const batch of inBatches(chosen, UI_LIMITS.importBatch)) {
+            const entries = batch.map((one) => one.entry);
+            const operation = confirmationFor(presented, entries);
+            const outcome = await confirmImport(
+              access,
+              { operationId: operation.operationId, sessionId: presented, entries },
+              request.signal,
+            );
+            if (closed) {
+              return { status: 'unknown', message: null };
+            }
+            if (outcome.status !== 'committed' || outcome.record === null) {
+              reported = {
+                status: outcome.status,
+                message:
+                  copies === 0
+                    ? outcome.message
+                    : `${confirmationMessage(copies, note)} ${
+                        outcome.message ?? 'The remaining entries were not confirmed.'
+                      }`,
+              };
+              break;
+            }
+            copies += outcome.record.copies.length;
+            note ??= outcome.message;
+            // Only the entries this confirmation covered leave the review; the ones a failed
+            // request left undecided stay selected for their own confirmation.
+            for (const one of batch) {
+              pending?.setSelected(one.key, false);
+              drafts.delete(one.entry.entryId);
+              printings.delete(one.entry.entryId);
+              selectedRevisions.delete(one.key);
+            }
           }
-          void reconcileImport();
-          return { status: 'committed', message };
+        } finally {
+          confirming = false;
+          paintConfirmation();
         }
-        if (outcome.status === 'conflict') {
-          // The reviewed revisions changed under the selection; the page presents the stored
-          // entries again before another confirmation.
+        if (reported !== null) {
+          // The reviewed revisions changed under the selection, or a request failed: the page
+          // presents the stored entries again before another confirmation.
           void reconcileImport();
+          return reported;
         }
-        return { status: outcome.status, message: outcome.message };
+        confirmation = null;
+        paintConfirmation();
+        const message = confirmationMessage(copies, note);
+        reviewStatus.textContent = message;
+        void reconcileImport();
+        return { status: 'committed', message };
       }
 
       /** Takes the committed entry and session into the page's own view of them. */
       function adoptEntry(entry: ImportEntry, changed: ImportSession): void {
-        session = changed;
+        if (changed.sessionId !== sessionId) {
+          // The review committed in an import the page no longer presents: its listed counts
+          // follow the report, while the presented import's own state stays untouched
+          // (docs/user-interface.md#pages-and-navigation).
+          adoptSession(changed);
+          return;
+        }
         const key = uiEntryKey({ kind: 'pending', entryId: entry.entryId });
         const record = records.get(key);
         if (record !== undefined) {
@@ -1053,17 +1165,95 @@ function importPage(): UiPageDefinition {
 
       /** Updates the presented session counts after a change that reported them. */
       function adoptSession(changed: ImportSession): void {
-        session = changed;
         sessions = sessions.map((candidate) =>
           candidate.sessionId === changed.sessionId ? changed : candidate,
         );
+        if (changed.sessionId !== sessionId) {
+          paintSessions();
+          return;
+        }
+        session = changed;
         paintSessions();
         discard.disabled = changed.state !== 'pending';
-        if (changed.state !== 'pending' && changed.sessionId === sessionId) {
+        if (changed.state !== 'pending') {
           // Every entry of the presented import is decided: the review moves to an import that
           // still has pending entries instead of presenting a finished one.
           present(defaultSessionId(sessions.filter((one) => one.pendingEntries > 0)));
+          if (confirmation !== null && confirmation.sessionId === changed.sessionId) {
+            // The entries of the kept confirmation are no longer pending, so its recorded outcome
+            // decides whether they created copies (docs/user-interface.md#source-imports).
+            void recoverPendingConfirmation();
+          }
         }
+      }
+
+      /** The reviewed revision of one selected entry: the record the page read or its kept one. */
+      function reviewedRevision(key: string, entryId: string): number | null {
+        const record = records.get(key);
+        if (record !== undefined && record.entry.entryId === entryId) {
+          return record.entry.revision;
+        }
+        const kept = selectedRevisions.get(key);
+        return kept !== undefined && kept.entryId === entryId ? kept.revision : null;
+      }
+
+      /**
+       * The confirmation context of the explicit selection: the reviewed revision of every
+       * selected entry the page read, taken from its record or from the revision kept beside it.
+       */
+      function selectionContext(): ReadonlyMap<string, UiSelectedReview> {
+        const context = new Map<string, UiSelectedReview>();
+        for (const key of pending?.selection ?? []) {
+          const record = records.get(key);
+          const known =
+            record === undefined
+              ? selectedRevisions.get(key)
+              : { entryId: record.entry.entryId, revision: record.entry.revision };
+          if (known !== undefined) {
+            context.set(key, known);
+          }
+        }
+        return context;
+      }
+
+      /** Shows the recovery control while a confirmation's outcome is not yet established. */
+      function paintConfirmation(): void {
+        const outstanding = confirmation !== null;
+        recover.hidden = !outstanding;
+        recover.disabled = !outstanding || confirming || recovering;
+      }
+
+      /**
+       * Reads the recorded outcome of the confirmation the page kept, independently of the current
+       * selection and of whether the entries it covered are still pending
+       * (docs/application.md#construction-and-request-boundary).
+       */
+      async function recoverPendingConfirmation(): Promise<void> {
+        const outstanding = confirmation;
+        if (outstanding === null || confirming || recovering) {
+          return;
+        }
+        recovering = true;
+        paintConfirmation();
+        let outcome: UiChangeCommit<ImportReceipt>;
+        try {
+          outcome = await recoverConfirmation(access, outstanding.operationId, context.signal);
+        } finally {
+          recovering = false;
+          paintConfirmation();
+        }
+        if (closed) {
+          return;
+        }
+        if (outcome.status === 'committed' && outcome.record !== null) {
+          confirmation = null;
+          paintConfirmation();
+          const message = confirmationMessage(outcome.record.copies.length, outcome.message);
+          reviewStatus.textContent = message;
+          void reconcileImport();
+          return;
+        }
+        reviewStatus.textContent = outcome.message ?? 'The confirmation outcome could not be read.';
       }
 
       /** Keeps one message with its entry, so a redraw of the row presents it again. */
@@ -1079,20 +1269,25 @@ function importPage(): UiPageDefinition {
         editor.status.textContent = '';
       }
 
-      /** The unsaved review input of one entry, created from the stored values when first edited. */
-      function draftFor(entryId: string): UiReviewDraft {
-        const existing = drafts.get(entryId);
+      /**
+       * The unsaved review input of one entry, created from the values the page presented when the
+       * owner first edits one of them: reviewing a single attribute keeps every other stored value
+       * of that entry (docs/user-interface.md#capture-and-review).
+       */
+      function draftFor(record: UiPendingRecord): UiReviewDraft {
+        const entry = record.entry;
+        const existing = drafts.get(entry.entryId);
         if (existing !== undefined) {
           return existing;
         }
         const created: UiReviewDraft = {
           query: '',
-          printingId: '',
-          finish: '',
-          condition: '',
-          quantity: '',
+          printingId: entry.printingId ?? '',
+          finish: entry.finish ?? '',
+          condition: entry.condition ?? '',
+          quantity: String(entry.quantity),
         };
-        drafts.set(entryId, created);
+        drafts.set(entry.entryId, created);
         boundByWindow(drafts);
         return created;
       }
@@ -1105,7 +1300,7 @@ function importPage(): UiPageDefinition {
               request.keys.map((key) => ({
                 key,
                 status: 'ready' as const,
-                values: records.has(key) ? ['confirm-import'] : [],
+                values: records.has(key) || selectedRevisions.has(key) ? ['confirm-import'] : [],
               })),
             );
           },
@@ -1168,23 +1363,42 @@ function importPage(): UiPageDefinition {
               request.signal,
             );
             const read = await resolvePending(catalog, page.entries);
-            if (page.session.sessionId === sessionId) {
-              adoptSession(page.session);
-              discard.disabled = page.session.state !== 'pending';
+            const presented = request.context;
+            if (request.signal.aborted || closed || presented !== sessionId) {
+              // A withdrawn request, or a response of an import the review no longer presents,
+              // cannot change the page's own records or the session it presents
+              // (docs/user-interface.md#pages-and-navigation).
+              return {
+                entries: read.map((record) => pendingListEntry(entryKeyOf(record), record)),
+                continuation: page.continuation,
+              };
             }
+            const selected = new Set(pending?.selection ?? []);
             for (const record of read) {
-              const key = uiEntryKey({ kind: 'pending', entryId: record.entry.entryId });
+              const key = entryKeyOf(record);
               records.delete(key);
               records.set(key, record);
             }
+            for (const key of selected) {
+              const record = records.get(key);
+              if (record !== undefined) {
+                // The confirmation needs the revision the page read even after the row leaves the
+                // loaded window (docs/user-interface.md#state-ownership-and-restoration).
+                selectedRevisions.set(key, {
+                  entryId: record.entry.entryId,
+                  revision: record.entry.revision,
+                });
+              }
+            }
+            for (const key of [...selectedRevisions.keys()]) {
+              if (!selected.has(key)) {
+                selectedRevisions.delete(key);
+              }
+            }
             boundByWindow(records);
+            adoptSession(page.session);
             return {
-              entries: read.map((record) =>
-                pendingListEntry(
-                  uiEntryKey({ kind: 'pending', entryId: record.entry.entryId }),
-                  record,
-                ),
-              ),
+              entries: read.map((record) => pendingListEntry(entryKeyOf(record), record)),
               continuation: page.continuation,
             };
           },
@@ -1220,6 +1434,11 @@ function pendingListEntry(key: string, record: UiPendingRecord): UiListEntry {
             },
           },
   };
+}
+
+/** Entry key of one pending record, taken from its own identity. */
+function entryKeyOf(record: UiPendingRecord): string {
+  return uiEntryKey({ kind: 'pending', entryId: record.entry.entryId });
 }
 
 /** Resolves the printings and cards the pending entries name through Catalog. */
@@ -1370,12 +1589,17 @@ function readReviewDrafts(value: unknown): Map<string, UiReviewDraft> {
   return drafts;
 }
 
-/** The confirmation one history entry kept, so a retry reuses the recorded operation identity. */
+/**
+ * The confirmation one history entry kept, so a retry of the same reviewed entries reuses the
+ * recorded operation identity and a lost response stays recoverable independently of the pending
+ * entries it covered.
+ */
 function readConfirmationDraft(value: unknown): UiConfirmationDraft | null {
   const record = readPageState(value);
+  const sessionId = readSessionId(record?.sessionId);
   const operationId = readDraftValue(record?.operationId, UI_LIMITS.entryKey);
   const entries = record?.entries;
-  if (operationId === null || !Array.isArray(entries)) {
+  if (sessionId === null || operationId === null || !Array.isArray(entries)) {
     return null;
   }
   const read: ConfirmImportEntryInput[] = [];
@@ -1388,20 +1612,49 @@ function readConfirmationDraft(value: unknown): UiConfirmationDraft | null {
     }
     read.push({ entryId, expectedRevision: Number(revision) });
   }
-  return read.length === 0 ? null : { operationId, entries: read };
+  return read.length === 0 ? null : { sessionId, operationId, entries: read };
 }
 
-/** The pending list state one history entry kept, with the session it belongs to. */
+/**
+ * The pending list state one history entry kept, with the session it belongs to. The captured
+ * `{ sessionId, list }` representation is read exactly once, so the list's own state reaches the
+ * list that interprets it (docs/user-interface.md#state-ownership-and-restoration).
+ */
 function readRetainedPending(
   value: unknown,
   sessionId: string | null,
-): { readonly sessionId: string; readonly state: Readonly<Record<string, unknown>> | null } | null {
+): { readonly sessionId: string; readonly list: UiCardListState<string> | undefined } | null {
   const record = readPageState(value);
   const retainedSession = readSessionId(record?.sessionId);
   if (record === null || retainedSession === null || retainedSession !== sessionId) {
     return null;
   }
-  return { sessionId: retainedSession, state: readPageState(record.list) };
+  return { sessionId: retainedSession, list: readListState<string>(record) };
+}
+
+/** The reviewed revisions a history entry kept for its explicit selection, keyed by entry key. */
+function readSelectedRevisions(value: unknown): Map<string, UiSelectedReview> {
+  const selected = new Map<string, UiSelectedReview>();
+  const record = readPageState(value);
+  if (record === null) {
+    return selected;
+  }
+  for (const [key, candidate] of Object.entries(record)) {
+    const review = readPageState(candidate);
+    const entryId = readDraftValue(review?.entryId, UI_LIMITS.entryKey);
+    const revision = review?.revision;
+    if (
+      entryId === null ||
+      key.length === 0 ||
+      key.length > UI_LIMITS.entryKey ||
+      !Number.isSafeInteger(revision) ||
+      Number(revision) < 1
+    ) {
+      continue;
+    }
+    selected.set(key, { entryId, revision: Number(revision) });
+  }
+  return selected;
 }
 
 /** One retained draft value, bounded like the control that produced it. */
@@ -1449,6 +1702,24 @@ function conditionOptions(): readonly UiSelectOption[] {
     { value: '', label: 'Condition unknown' },
     ...uiCopyConditions.map((value) => ({ value, label: value })),
   ];
+}
+
+/**
+ * The printing one review names: the record's own printing while the chosen identity is that one
+ * — it is already read — and otherwise the printing the row's own search offered. A printing the
+ * page cannot resolve stays unresolved instead of presenting the previously stored one
+ * (docs/user-interface.md#capture-and-review).
+ */
+function knownPrinting(
+  record: UiPendingRecord,
+  found: readonly PrintingRecord[],
+  printingId: string,
+): PrintingRecord | null {
+  return (
+    (record.printing?.printingId === printingId ? record.printing : null) ??
+    found.find((printing) => printing.printingId === printingId) ??
+    null
+  );
 }
 
 /**
@@ -1521,10 +1792,40 @@ function sourceLineText(line: ImportSourceLine): string {
 }
 
 /** One confirmation's receipt as the page presents it; a recovered outcome stays explicit. */
-function confirmationMessage(receipt: ImportReceipt, recovered: string | null): string {
-  const copies = receipt.copies.length;
+function confirmationMessage(copies: number, recovered: string | null): string {
   const line = `Confirmed: ${copies} ${copies === 1 ? 'physical copy' : 'physical copies'} created.`;
   return recovered === null ? line : `${line} ${recovered}`;
+}
+
+/** How the manual form reports the lines a staging attempt left in review. */
+function stagedMessage(lines: number): string {
+  return lines === 0
+    ? 'Those lines were already in review; no new entries were added.'
+    : `${lines} ${lines === 1 ? 'line is' : 'lines are'} in review. ` +
+        'Confirmation creates the physical copies.';
+}
+
+/** One staging outcome as the manual form presents it, beside the lines an earlier request kept. */
+function stagingOutcome(
+  inReview: number,
+  outcome: UiChangeCommit<ImportStageResult>,
+): UiOperationOutcome {
+  if (inReview === 0) {
+    return { status: outcome.status, message: outcome.message };
+  }
+  return {
+    status: outcome.status,
+    message: `${stagedMessage(inReview)} ${outcome.message ?? ''}`.trim(),
+  };
+}
+
+/** One sequence split into batches of at most `size` values, preserving its order. */
+function inBatches<Value>(values: readonly Value[], size: number): readonly (readonly Value[])[] {
+  const batches: Value[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    batches.push(values.slice(index, index + size));
+  }
+  return batches;
 }
 
 /** Whether two confirmations name the same reviewed entries at the same revisions. */
@@ -1539,6 +1840,24 @@ function sameConfirmation(
     (entry, index) =>
       kept[index]?.entryId === entry.entryId &&
       kept[index]?.expectedRevision === entry.expectedRevision,
+  );
+}
+
+/** Whether one draft still holds exactly the reviewed input a save submitted. */
+function sameReviewDraft(
+  draft: UiReviewDraft,
+  submitted: {
+    readonly printingId: string;
+    readonly finish: string;
+    readonly condition: string;
+    readonly quantity: string;
+  },
+): boolean {
+  return (
+    draft.printingId === submitted.printingId &&
+    draft.finish === submitted.finish &&
+    draft.condition === submitted.condition &&
+    draft.quantity === submitted.quantity
   );
 }
 

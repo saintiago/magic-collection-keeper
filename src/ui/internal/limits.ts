@@ -43,6 +43,12 @@ export const UI_LIMITS = {
   importPage: 50,
   /** Pending import sessions one page of the Import page asks UserCards for. */
   importSessions: 50,
+  /**
+   * Pending import entries one staging or confirmation request carries. The bound mirrors the
+   * provider's own bound for those changes, so an explicit selection larger than one request is
+   * decided through further bounded requests instead of being rejected by the provider.
+   */
+  importBatch: 50,
   /** Printings one page of a manual entry search asks Search for. */
   importPrintings: 20,
   /**

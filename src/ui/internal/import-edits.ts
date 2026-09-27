@@ -267,36 +267,51 @@ export async function confirmImport(
     }
     // The response was lost or the service is busy: the operation identity decides, never an
     // inference from the pending entries that may or may not have produced copies.
-    let recovered: ImportOperationRecoveryResult | null;
-    try {
-      recovered = await access.recover(input.operationId, signal);
-    } catch {
-      recovered = null;
-    }
-    if (recovered?.outcome === 'recorded') {
-      return {
-        status: 'committed',
-        message: 'This confirmation had already been recorded; the copies it created are listed.',
-        record: recovered.receipt,
-      };
-    }
-    if (recovered?.outcome === 'absent') {
-      return {
-        status: 'unknown',
-        message:
-          'This confirmation is not recorded, so no copies were created. Review the entries and ' +
-          'confirm them again.',
-        record: null,
-      };
-    }
+    return recoverConfirmation(access, input.operationId, signal);
+  }
+}
+
+/** Note the page presents beside the copies of a confirmation that had already been recorded. */
+const recordedConfirmationNote =
+  'This confirmation had already been recorded; the copies it created are listed.';
+
+/**
+ * Reads the recorded outcome of one confirmation operation independently of the entries it
+ * covered. The receipt of a recorded outcome is reported as committed; an explicit absence says
+ * that no copies were created, so the page may retry the same operation identity; an unreadable
+ * outcome stays unknown, so the page keeps the identity instead of inferring commitment
+ * (docs/application.md#construction-and-request-boundary).
+ */
+export async function recoverConfirmation(
+  access: UiImportAccess,
+  operationId: ImportOperationId,
+  signal?: AbortSignal,
+): Promise<UiChangeCommit<ImportReceipt>> {
+  let recovered: ImportOperationRecoveryResult | null;
+  try {
+    recovered = await access.recover(operationId, signal);
+  } catch {
+    recovered = null;
+  }
+  if (recovered?.outcome === 'recorded') {
+    return { status: 'committed', message: recordedConfirmationNote, record: recovered.receipt };
+  }
+  if (recovered?.outcome === 'absent') {
     return {
       status: 'unknown',
       message:
-        'The confirmation outcome could not be read. Retry the same confirmation before ' +
-        'changing the reviewed entries.',
+        'This confirmation is not recorded, so no copies were created. Review the entries and ' +
+        'confirm them again.',
       record: null,
     };
   }
+  return {
+    status: 'unknown',
+    message:
+      'The confirmation outcome could not be read. Retry the same confirmation before ' +
+      'changing the reviewed entries.',
+    record: null,
+  };
 }
 
 /** Prefix of the identities this page generates for staged lines and confirmation operations. */
