@@ -13,9 +13,10 @@ from the provider publications; Recognition provides its session lifecycle, its 
 the execution bounds around the preserved engines; Application assembles those components behind
 validated configuration and authenticated transports, CardList provides the headless list
 presentation model its bindings, window, enrichment, selection, restoration and recent activity
-are built on, and UserInterface provides the shell and the dedicated pages, with Home's recent card
-activity, the catalog/search browser and the collection and card-details views built over the
-Search, Catalog and UserCards contracts Application supplies.
+are built on, Capture provides the headless camera session its device, scheduling, admission and
+staging coordination are built on, and UserInterface provides the shell and the dedicated pages,
+with Home's recent card activity, the catalog/search browser and the collection and card-details
+views built over the Search, Catalog and UserCards contracts Application supplies.
 
 Start with AGENTS.md for the documentation index and engineering principles.
 The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
@@ -248,12 +249,16 @@ physical copy's printing and language, finish and condition under the revision i
 or a failed edit keeps the unsaved change for review and retry. After a lost response, the outcome
 stays unknown while the current copy is read for review and revision-guarded retry; matching
 attributes cannot establish commitment. A saved outcome is presented only once the change reports
-it committed. The Import page captures cards hands-free through the camera the deployment supplies
-and the Recognition contract (docs/user-interface.md#capture-and-review): a settled frame the
-runtime reports as holding one card stages its candidate in the account's pending imports, the
-provider suppresses a repeated observation, an unresolved reading receives no success cue while a
-later comparison may still resolve the same capture, late alternatives are attached beside the
-reviewed values, and stopping or leaving the view releases the camera and the Recognition session.
+it committed. The Capture component owns one live camera session behind the Import page's controls
+(docs/capture.md#interface): it opens the device the deployment grants, samples frames with a
+stability gate, admits only a frame the runtime reports as holding one card with a usable identity
+and stages that observation in the account's pending imports through UserCards. The provider
+suppresses a repeated observation, an unresolved reading receives no success cue while a later
+comparison may still resolve the same capture, late alternatives are attached beside the reviewed
+values, an outcome whose response was lost stays recoverable through the capture identity that owns
+it, and stopping or leaving the view releases the camera and the Recognition session. The page
+presents the session's status, provisional evidence and identified feedback and forwards start,
+stop and retry; Application selects the implementation and supplies the composed capability.
 The remaining dedicated pages and source-import UI build on that in their own tasks.
 
 Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to

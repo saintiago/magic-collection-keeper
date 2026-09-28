@@ -10,12 +10,15 @@
  * in src/search/index.ts. UserCards publishes its browser operation facade and constraints
  * through src/usercards/browser.ts, while its backend contracts stay in src/usercards/index.ts.
  * CardList publishes its headless list contract, its source bindings and its account-local recent
- * activity through src/card-list/index.ts; the presentation of the UserInterface renders it.
+ * activity through src/card-list/index.ts, and Capture publishes its headless session contract,
+ * its device capability and its browser composition through src/capture/index.ts; the
+ * presentation of the UserInterface renders both.
  */
 
 export const components = [
   'application',
   'card-list',
+  'capture',
   'catalog',
   'recognition',
   'search',
@@ -27,6 +30,7 @@ export const components = [
 const componentEntries = {
   application: ['index', 'backend', 'deployment'],
   'card-list': ['index'],
+  capture: ['index'],
   catalog: ['index'],
   recognition: ['index'],
   search: ['index', 'browser'],
@@ -51,24 +55,25 @@ const publicInterfaceRules = components.map((component) => ({
 
 // Source dependencies follow the composition graph, including type-only imports.
 const providers = {
-  application: ['card-list', 'catalog', 'recognition', 'search', 'usercards'],
+  application: ['card-list', 'capture', 'catalog', 'recognition', 'search', 'usercards'],
   'card-list': ['catalog', 'search', 'usercards'],
-  ui: ['application', 'card-list', 'catalog', 'recognition', 'search', 'usercards'],
+  capture: ['recognition', 'usercards'],
+  // UserInterface presents Capture instead of reaching Recognition: the composed capability
+  // carries the recognition and staging bindings a capture session needs.
+  ui: ['application', 'card-list', 'capture', 'catalog', 'search', 'usercards'],
   catalog: [],
   recognition: ['catalog'],
   search: ['catalog', 'usercards'],
   usercards: ['catalog'],
 };
-const directionRules = components
-  .filter((component) => component !== 'ui')
-  .map((component) => ({
-    name: `allowed-providers-of-${component}`,
-    severity: 'error',
-    from: { path: `^src/${component}/` },
-    to: {
-      path: `^src/(${components.filter((target) => target !== component && !providers[component].includes(target)).join('|')})/`,
-    },
-  }));
+const directionRules = components.map((component) => ({
+  name: `allowed-providers-of-${component}`,
+  severity: 'error',
+  from: { path: `^src/${component}/` },
+  to: {
+    path: `^src/(${components.filter((target) => target !== component && !providers[component].includes(target)).join('|')})/`,
+  },
+}));
 
 /** @type {import('dependency-cruiser').IConfiguration} */
 const config = {

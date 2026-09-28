@@ -1,114 +1,50 @@
 /**
- * Camera capture of the Import page (docs/user-interface.md#capture-and-review,
- * docs/recognition.md#interface, docs/user-cards.md#import-and-capture-state).
+ * Capture conventions of the Import page (docs/ui/capture-controls.md,
+ * docs/capture.md#interface).
  *
- * The view owns camera permission, frame acquisition, capture controls and feedback. It opens the
- * camera the deployment grants, presents its live stream and samples frames continuously: a frame
- * that has held still starts one Recognition attempt, and only a reading the runtime reports as
- * holding one card with a usable identity is staged as a pending entry: geometry admits the frame
- * independently of identity, and a frame whose geometry is not established is never affirmative
- * evidence. Ordinary capture stays hands-free after the initial activation — the next card is read
- * from the next settled frame without another control — and the provider's accepted-identity
- * sequence suppresses a repeated observation, so one card never becomes two entries. A success cue
- * means a candidate was accepted into review, never that the card is owned; an unresolved capture
- * receives no success cue, geometry that does not admit a capture withdraws the cue of the frame
- * before it instead of leaving a success cue presented for it, and an attempt never repeats its
- * error cue. Late readings of the same capture are attached as alternatives, leaving the owner's
- * reviewed values untouched, and a comparison that finds no usable identity never retracts an
- * accepted capture. An observation
- * whose staging response was lost stays retained by UserCards and is recovered by replaying it
- * identically through its own handle, so the provider returns its recorded decision instead of the
- * same capture staging changed content; the view keeps no copy of that input for recovery, and it
- * presents the attempts an earlier view left retained as well. Recovery retains late alternatives
- * and pauses new attempts until the writes resolve; its control remains available after Recognition
- * completes or the camera stops.
- * The session releases the camera and the Recognition session when it stops, and the page disposes
- * it when the view closes, so sign-out leaves no private capture state or outstanding work behind.
+ * The view presents one Capture session of the Import page: it owns the mounted preview surface,
+ * the controls and the accessible status line, observes the session's status, provisional evidence
+ * and identified feedback and forwards start, stop and retry. It makes no admission or matching
+ * decision of its own: the session decides what a frame was admitted as, and a success cue is
+ * presented only for the accepted event it reported. Disposal detaches the preview and disposes
+ * the session through its public contract, so no camera, stream or subscription stays alive.
  */
 
-import {
-  RECOGNITION_LIMITS,
-  type Recognition,
-  type RecognitionCardPresence,
-  type RecognitionEngineName,
-  type RecognitionReading,
-} from '../../recognition/index.js';
 import type {
-  CaptureStageResult,
-  ImportCandidate,
-  ImportSession,
-  StageCaptureInput,
-} from '../../usercards/index.js';
-
-import {
-  createCaptureAdmission,
-  UI_CAPTURE,
-  type UiCaptureCue,
-  type UiCaptureOutcome,
-} from './capture-admission.js';
-import type { UiCamera, UiDevice } from './device.js';
-import { readUiFailureMessage, type UiChangeCommit } from './failure.js';
-import {
-  attachImportCandidates,
-  retryRetainedAttempt,
-  stageCaptureObservation,
-  uiCaptureIdentity,
-  type UiImportAccess,
-} from './import-edits.js';
+  Capture,
+  CaptureBrowser,
+  CaptureBrowserDevice,
+  CaptureComparisonEvent,
+  CaptureCue,
+  CaptureEvent,
+  CapturePreview,
+  CaptureReading,
+  CaptureReviewChange,
+  CaptureSnapshot,
+  CaptureStatusKind,
+} from '../../capture/index.js';
 
 /** Longest candidate name the capture status presents, so one engine reading stays bounded. */
 const uiCaptureNameLength = 120;
 
-/** Status text of an attempt whose frame reported no usable identity to stage. */
-const captureUnresolved =
-  'The card could not be identified. Hold it still to retry; no card was counted.';
-
-/** A lost staging response does not establish whether the capture was admitted. */
-const captureStagingUnknown =
-  'The staging outcome is unknown. The capture may be in review; use Recover capture to check it.';
-
-/** Status text of a reading whose frame never established the geometry that admits a capture. */
-const captureGeometryMissing =
-  'The frame was not admitted as one card. Hold one card still to retry; no card was counted.';
-
-/** Evidence labels of one stored alternative; the review presents them beside the printing. */
-const captureEvidenceLabels = {
-  /** Whole-title corroboration supported this printing. */
-  title: 'title-evidence',
-  /** The engine ranked this printing without corroborating the observed edition. */
-  ranking: 'engine-ranking',
-} as const;
+/** Longest candidate names the capture status lists as alternatives. */
+const uiCaptureNameCount = 3;
 
 export interface UiCaptureOptions {
   readonly document: Document;
-  /** Private import operations the capture stages its observations through. */
-  readonly access: UiImportAccess;
+  /** Capture capability Application supplies; the view owns the session it creates. */
+  readonly capture: CaptureBrowser;
+  /** Verified account the session stages for. */
+  readonly accountId: string;
+  /** Pending import identity this mounted view binds the session to. */
+  readonly importId: string;
   /** Device capability of this deployment; one without a camera only reports that. */
-  readonly device: UiDevice;
-  /** Builds the Recognition contract over the deployment's preserved engines. */
-  readonly createRecognition: () => Recognition<HTMLCanvasElement>;
-  /** Engine names the deployment's pipeline prepares, from `recognitionEngineNames`. */
-  readonly engines: readonly RecognitionEngineName[];
+  readonly device: CaptureBrowserDevice;
   /** Aborted when the view closes; its work must not change a replacement view. */
   readonly signal: AbortSignal;
   /** Reports that the pending review changed, so the page presents what the provider now holds. */
-  readonly reviewChanged: (change: UiCaptureReviewChange) => void;
+  readonly reviewChanged: (change: CaptureReviewChange) => void;
 }
-
-/**
- * One capture change the page takes into its review: an observation staged into an import, late
- * alternatives attached to one of its entries, or an unknown outcome that must be re-read instead
- * of being inferred (docs/application.md#construction-and-request-boundary).
- */
-export type UiCaptureReviewChange =
-  | {
-      readonly kind: 'staged';
-      readonly session: ImportSession;
-      /** Entry the observation was admitted as, or null when it was suppressed or unresolved. */
-      readonly entryId: string | null;
-    }
-  | { readonly kind: 'attached'; readonly session: ImportSession; readonly entryId: string }
-  | { readonly kind: 'unknown' };
 
 export interface UiCaptureControls {
   /** The capture section this view presents. */
@@ -119,84 +55,10 @@ export interface UiCaptureControls {
   dispose(): void;
 }
 
-/** One capture attempt of the running session. */
-interface UiCaptureAttempt {
-  readonly sessionId: string;
-  readonly captureId: string;
-  readonly id: number;
-  /** Whether one of the attempt's readings staged an observation. */
-  staged: boolean;
-  /** Entry the observation was admitted as, or null while none is reviewable. */
-  entryId: string | null;
-  /**
-   * The observation this attempt is submitting now, or null once its request settled. Recovery
-   * replays the attempt UserCards retains under the capture identity, not a copy of this input.
-   */
-  staging: StageCaptureInput | null;
-  /** Whether the provider has not established this attempt's staging outcome yet. */
-  unresolved: boolean;
-  /** Usable later readings, retained until their alternatives are attached to the admitted entry. */
-  alternatives: { readonly reading: RecognitionReading; uncertain: boolean }[];
-}
-
-/** The recognition alternatives of one reading as the review stores them. */
-export function uiCaptureCandidates(reading: RecognitionReading): readonly ImportCandidate[] {
-  return reading.candidates.map((candidate) => ({
-    printingId: candidate.printingId,
-    // The public reading reports engine versions for the attempt, not for each candidate, so the
-    // alternative names the component that produced it and the evidence it carried.
-    provider: 'recognition',
-    evidence:
-      reading.evidence.printingId === candidate.printingId ||
-      (reading.suggestion?.basis === 'corroborated' &&
-        reading.suggestion.printingId === candidate.printingId)
-        ? captureEvidenceLabels.title
-        : captureEvidenceLabels.ranking,
-  }));
-}
-
-/**
- * One capture observation as UserCards stages it: the printing the reading suggests, with the
- * reading's ordered alternatives beside it, or null when the reading names no usable identity. The
- * suggestion is the editable starting point of review and never evidence of the observed edition
- * (docs/recognition.md#interface).
- */
-export function uiCaptureObservation(
-  sessionId: string,
-  captureId: string,
-  reading: RecognitionReading,
-): StageCaptureInput | null {
-  if (reading.status !== 'possible' || reading.candidates.length === 0) {
-    return null;
-  }
-  const suggested =
-    reading.suggestion === null
-      ? reading.candidates[0]
-      : reading.candidates[reading.suggestion.candidateIndex];
-  const printingId = suggested?.printingId ?? reading.candidates[0]?.printingId ?? null;
-  if (printingId === null) {
-    return null;
-  }
-  return {
-    sessionId,
-    captureId,
-    printingId,
-    // The provider takes the printing's first offered finish; review changes it explicitly.
-    finish: null,
-    candidates: [...uiCaptureCandidates(reading)],
-  };
-}
-
 /** The camera capture section of the Import page. */
 export function createCaptureControls(options: UiCaptureOptions): UiCaptureControls {
   const document = options.document;
-  const view = document.defaultView;
-  if (view === null) {
-    throw new TypeError('The capture view reads frames from a browsing document.');
-  }
-  const browser: Window = view;
-  const { access, device } = options;
-
+  const { device } = options;
   const heading = document.createElement('h3');
   heading.id = 'import-capture-heading';
   heading.textContent = 'Camera capture';
@@ -220,674 +82,284 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
   element.id = 'import-capture';
   element.append(heading, status, preview, startButton, stopButton, recoverButton);
 
-  let camera: UiCamera | null = null;
-  let recognition: Recognition<HTMLCanvasElement> | null = null;
-  let sessionId: string | null = null;
-  let controller: AbortController | null = null;
-  let attempts = 0;
-  let running = false;
-  let starting = false;
-  let busy = false;
-  let prepared = false;
-  let preparing: Promise<void> | null = null;
-  let closed = options.signal.aborted;
-  let admission = createCaptureAdmission();
-  let timer: number | null = null;
-  let analysis: HTMLCanvasElement | null = null;
-  let current: UiCaptureAttempt | null = null;
-  // A submitted write belongs to the view, not to the camera or Recognition lifetime. New
-  // attempts wait until it is resolved; stopping the camera still leaves explicit recovery.
-  let pending: UiCaptureAttempt | null = null;
-  /**
-   * Capture identities whose staging outcome UserCards has not established, oldest first. The
-   * provider keeps the attempt and its input, so this view recovers them through their own handles
-   * — also when the page was reloaded in between (docs/user-cards.md#browser-operation-lifecycle).
-   */
-  let retained: readonly string[] = [];
-  let saving = false;
-
-  refreshRetained();
-
-  if (typeof device.openCamera === 'function') {
-    say('Start the camera to capture cards hands-free.', null);
-  } else {
+  const session: Capture = options.capture.create({
+    accountId: options.accountId,
+    importId: options.importId,
+    device,
+    reviewed: options.reviewChanged,
+  });
+  const cameraAvailable = typeof device.openCamera === 'function';
+  if (!cameraAvailable) {
     // A deployment without a camera cannot capture; the view says so instead of offering a
-    // control that can never work (docs/user-interface.md#capture-and-review).
+    // control that can never work (docs/ui/capture-controls.md#presentation-and-lifetime).
     startButton.disabled = true;
-    say('Camera capture is unavailable in this deployment.', null);
   }
-  options.signal.addEventListener(
-    'abort',
-    () => {
-      closed = true;
-      stopCapture();
-    },
-    { once: true },
-  );
+  /** Lifecycle kind the status line presents now, so a repaint does not repeat its text. */
+  let presentedStatus: CaptureStatusKind | null = null;
+  /** Highest event identity the view has presented; a redraw never repeats a cue. */
+  let presentedEvent = 0;
+  /** Reading identity the status line presents now, so a repaint does not repeat its text. */
+  let presentedReading: string | null = null;
+  /** Whether this view already released its subscription, its session and its preview. */
+  let disposed = false;
+
+  const unsubscribe = session.observe(paint);
+  const stopObserving = (): void => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    options.signal.removeEventListener('abort', stopObserving);
+    unsubscribe();
+    session.dispose();
+    // Disposal detaches what this view attached: no stream or preview state stays on its surface
+    // (docs/ui/capture-controls.md#presentation-and-lifetime).
+    presentPreview(null);
+  };
+  options.signal.addEventListener('abort', stopObserving, { once: true });
+  if (options.signal.aborted) {
+    stopObserving();
+  }
   startButton.addEventListener('click', () => {
-    void startCapture();
+    void session.start();
   });
   stopButton.addEventListener('click', () => {
-    stopCapture();
-    if (pending === null) {
-      say('Capture stopped. Start the camera to scan more cards.', null);
-    }
+    session.stop();
   });
-
   recoverButton.addEventListener('click', () => {
-    if (!busy && !saving && !closed) {
-      void recoverCapture();
-    }
+    void session.retry();
   });
-  paintRecovery();
 
-  return { element, stop: stopCapture, dispose: dispose };
+  return { element, stop: () => session.stop(), dispose: stopObserving };
 
-  function paintRecovery(): void {
-    // The control stays available for the attempt this view presents — while its write is in
-    // flight, and while its outcome or its later alternatives are unresolved — and for the
-    // attempts UserCards still retains from an earlier view.
-    recoverButton.hidden = pending === null && retained.length === 0;
-    recoverButton.disabled = busy || saving;
-    startButton.disabled = starting || pending !== null || retained.length > 0;
-  }
-
-  /** Reads back the capture attempts UserCards still retains for this account. */
-  function refreshRetained(): void {
-    retained = access
-      .retained()
-      .flatMap((attempt) =>
-        attempt.kind === 'stageCaptureObservation' && attempt.operationId !== pending?.captureId
-          ? [attempt.operationId]
-          : [],
-      );
-  }
-
-  /** Starts the capture session: camera permission, then the hands-free capture loop. */
-  async function startCapture(): Promise<void> {
-    if (running || starting || closed || pending !== null) {
-      return;
-    }
-    const open = device.openCamera;
-    if (typeof open !== 'function') {
-      say('Camera capture is unavailable in this deployment.', null);
-      return;
-    }
-    starting = true;
-    startButton.disabled = true;
-    say('Waiting for camera permission…', null);
-    const session = new AbortController();
-    controller = session;
-    try {
-      const granted = await open.call(device);
-      if (closed || session.signal.aborted) {
-        closeCamera(granted);
-        return;
+  /** Presents one published state: the preview, the status line, the current evidence and events. */
+  function paint(snapshot: CaptureSnapshot): void {
+    presentPreview(snapshot.preview);
+    presentStatus(snapshot);
+    presentReading(snapshot.attempt?.reading ?? null);
+    for (const event of snapshot.events) {
+      if (event.sequence <= presentedEvent) {
+        continue;
       }
-      camera = granted;
-      preview.srcObject = granted.stream;
-      preview.hidden = false;
-      try {
-        await preview.play();
-      } catch (cause) {
-        throw new Error('the camera stream could not be presented', { cause });
-      }
-      if (closed || session.signal.aborted) {
-        stopCapture();
-        return;
-      }
-      sessionId = uiCaptureIdentity();
-      recognition = options.createRecognition();
-      admission = createCaptureAdmission();
-      prepared = false;
-      preparing = null;
-      running = true;
-      starting = false;
-      startButton.disabled = false;
-      startButton.hidden = true;
-      stopButton.hidden = false;
-      say('Preparing recognition…', null);
-      void ensurePrepared();
-      schedule();
-    } catch (cause) {
-      if (controller === session) {
-        controller = null;
-      }
-      starting = false;
-      startButton.disabled = false;
-      stopCapture();
-      say(
-        `Camera unavailable: ${readUiFailureMessage(cause, 'the camera could not be started.')}`,
-        'error',
-      );
+      presentedEvent = event.sequence;
+      presentEvent(event);
     }
-  }
-
-  /** Ends the capture session, releasing the camera and the Recognition session. */
-  function stopCapture(): void {
-    const session = controller;
-    const scanner = recognition;
-    const held = sessionId;
-    const heldCamera = camera;
-    running = false;
-    starting = false;
-    busy = false;
-    controller = null;
-    recognition = null;
-    sessionId = null;
-    prepared = false;
-    preparing = null;
-    current = null;
-    if (pending === null) {
-      admission = createCaptureAdmission();
-    }
-    clearTimer();
-    session?.abort();
-    if (scanner !== null && held !== null) {
-      try {
-        scanner.dispose({ sessionId: held });
-      } catch {
-        /* Releasing the recognition session is best effort. */
-      }
-    }
-    camera = null;
-    if (heldCamera !== null) {
-      closeCamera(heldCamera);
-      void Promise.resolve(device.release()).catch(() => {
-        /* Releasing the device is best effort. */
-      });
-    }
-    preview.srcObject = null;
-    preview.hidden = true;
-    startButton.hidden = false;
-    startButton.disabled = false;
-    stopButton.hidden = true;
-    paintRecovery();
-  }
-
-  function dispose(): void {
-    closed = true;
-    stopCapture();
-  }
-
-  /** Prepares the Recognition session on demand; a failed preparation is retried by the next one. */
-  async function ensurePrepared(): Promise<void> {
-    const scanner = recognition;
-    const session = sessionId;
-    if (prepared || preparing !== null || scanner === null || session === null || closed) {
-      await preparing;
-      return;
-    }
-    const signal = controller?.signal;
-    preparing = Promise.resolve()
-      // A replacement implementation could also fail without returning a promise.
-      .then(() =>
-        scanner.prepare({
-          sessionId: session,
-          engines: [...options.engines],
-          ...(signal === undefined ? {} : { signal }),
-        }),
-      )
-      .then(
-        () => {
-          prepared = true;
-          if (running && !closed) {
-            say('Scanner ready. Hold one card inside the frame until it is accepted.', null);
-          }
-        },
-        (cause: unknown) => {
-          if (running && !closed) {
-            say(
-              `Recognition is unavailable: ${readUiFailureMessage(cause, 'preparation failed')}`,
-              null,
-            );
-          }
-        },
-      )
-      .finally(() => {
-        preparing = null;
-      });
-    await preparing;
-  }
-
-  /** Samples the camera and starts one attempt for a settled frame that is due. */
-  function tick(): void {
-    timer = null;
-    if (!running || closed) {
-      return;
-    }
-    const now = browser.performance.now();
-    const signature = readSignature();
-    if (signature !== null) {
-      admission.observe(signature, now);
-    }
-    if (!busy && pending === null && admission.ready(now)) {
-      void attempt(now);
-    }
-    schedule();
-  }
-
-  function schedule(): void {
-    clearTimer();
-    if (!running || closed) {
-      return;
-    }
-    timer = browser.setTimeout(tick, UI_CAPTURE.sampleMs);
-  }
-
-  function clearTimer(): void {
-    if (timer !== null) {
-      browser.clearTimeout(timer);
-      timer = null;
-    }
-  }
-
-  /** Runs one capture attempt and settles it with the outcome its readings produced. */
-  async function attempt(now: number): Promise<void> {
-    const scanner = recognition;
-    const session = sessionId;
-    const signal = controller?.signal;
-    if (scanner === null || session === null || signal === undefined) {
-      return;
-    }
-    busy = true;
-    admission.started(now);
-    attempts += 1;
-    const record: UiCaptureAttempt = {
-      sessionId: session,
-      captureId: uiCaptureIdentity(),
-      id: ((attempts - 1) % (RECOGNITION_LIMITS.maxAttempt - 1)) + 1,
-      staged: false,
-      entryId: null,
-      staging: null,
-      unresolved: false,
-      alternatives: [],
-    };
-    current = record;
-    const frame = readFrame();
-    if (frame === null) {
-      busy = false;
-      settle(record, 'unavailable', 'The camera delivered no frame. Keep one card in view.');
-      return;
-    }
-    await ensurePrepared();
-    if (closed || current !== record) {
-      return;
-    }
-    if (!prepared) {
-      busy = false;
-      settle(record, 'unavailable', 'Recognition is unavailable. Retrying to read the card.');
-      return;
-    }
-    // Retain each reading on delivery, before any network wait. The single save drains retained
-    // alternatives in order, even if the camera stops while an earlier write is in flight.
-    let handled: Promise<void> = Promise.resolve();
-    const handle = (reading: RecognitionReading): Promise<void> => {
-      if (closed || !running || current !== record) {
-        return handled;
-      }
-      const retained =
-        (record.staging !== null || record.entryId !== null) &&
-        reading.evidence.cardPresence === 'single' &&
-        uiCaptureObservation(record.sessionId, record.captureId, reading) !== null;
-      if (retained) {
-        record.alternatives.push({ reading, uncertain: false });
-      }
-      handled = handled.then(() => handleReading(record, reading, retained));
-      return handled;
-    };
-    const started = scanner.recognize({
-      sessionId: session,
-      captureId: record.captureId,
-      attempt: record.id,
-      frame,
-      signal,
-      onReading: (later) => {
-        void handle(later);
-      },
-    });
-    try {
-      await handle(await started.initial);
-      await started.completion;
-      await handled;
-    } catch (cause) {
-      if (!closed && current === record && pending !== record) {
-        settle(
-          record,
-          'unavailable',
-          readUiFailureMessage(cause, 'Recognition failed. Hold one card still to retry.'),
-        );
-      }
-    } finally {
-      if (current === record) {
-        busy = false;
-      }
-      paintRecovery();
-    }
+    startButton.hidden = snapshot.running;
+    stopButton.hidden = !snapshot.running;
+    recoverButton.hidden = !snapshot.recoverable;
+    recoverButton.disabled = snapshot.busy;
+    startButton.disabled =
+      !cameraAvailable ||
+      snapshot.running ||
+      snapshot.status.kind === 'starting' ||
+      snapshot.recoverable;
   }
 
   /**
-   * Applies one reading of an attempt. Geometry decides admission independently of identity: only
-   * a reading the runtime reports as holding one card is staged, a frame whose geometry is not
-   * established is never affirmative evidence, and a reading without a usable identity stays
-   * unresolved without creating an entry. The first reading that names an identity stages its
-   * observation; later readings of the same capture only add alternatives, so an accepted capture
-   * is never retracted by a comparison that finds no usable identity
-   * (docs/user-interface.md#capture-and-review).
+   * Presents the attempt's current provisional evidence once per reading: the candidates the
+   * reading holds and its uncertainty, without a cue and without presenting its suggestion as a
+   * certain identity (docs/ui/capture-controls.md#presentation-and-lifetime). A settled, certain
+   * reading is what its own outcome event reports, and an event the same state carries replaces
+   * this text below.
    */
-  async function handleReading(
-    record: UiCaptureAttempt,
-    reading: RecognitionReading,
-    retained: boolean,
-  ): Promise<void> {
-    if (closed || !running || current !== record) {
+  function presentReading(reading: CaptureReading | null): void {
+    const identity =
+      reading === null ? null : `${reading.captureId}:${reading.attempt}:${reading.revision}`;
+    if (identity === presentedReading) {
       return;
     }
-    // An earlier save may already have drained this delivered comparison while this handler
-    // waited. Do not attach it twice or replay an attachment that was definitely rejected.
+    presentedReading = identity;
     if (
-      retained &&
-      record.staged &&
-      !record.alternatives.some((alternative) => alternative.reading === reading)
+      reading === null ||
+      reading.status !== 'possible' ||
+      reading.candidates.length === 0 ||
+      (!reading.provisional && !reading.uncertain)
     ) {
       return;
     }
-    const presence = reading.evidence.cardPresence;
-    const observation =
-      presence === 'single'
-        ? uiCaptureObservation(record.sessionId, record.captureId, reading)
-        : null;
-    if (record.staging !== null || record.unresolved) {
-      // Keep every usable comparison before replaying: that response may be lost too. Even an
-      // unusable comparison must recover the prior write before it can report any admission.
-      if (observation !== null && !retained) {
-        record.alternatives.push({ reading, uncertain: false });
-      }
-      await saveCapture(record);
-      if (closed || !running || current !== record || pending === record || observation !== null) {
-        return;
-      }
-      // A recorded suppression/unresolved outcome has no entry for this comparison to explain.
-      if (record.entryId === null) {
-        return;
-      }
-    }
-    if (presence !== 'single') {
-      if (record.entryId !== null) {
-        // The review already holds this capture's entry, so the later comparison explains its own
-        // uncertainty instead of denying the acceptance.
-        say(lateGeometryMessage(presence), null);
-        return;
-      }
-      if (presence === null) {
-        // The frame's geometry was never established, so the reading admits nothing.
-        settle(record, 'unresolved', captureGeometryMissing);
-        return;
-      }
-      settle(record, 'guidance', captureGeometryGuidance(presence));
-      return;
-    }
-    if (observation === null) {
-      if (record.entryId !== null) {
-        say(lateMessage(reading), null);
-        return;
-      }
-      settle(record, 'unresolved', captureUnresolved);
-      return;
-    }
-    if (!record.staged) {
-      // If the first submission was rejected or unresolved, this reading can stage the capture
-      // itself. It no longer needs a separate attachment alongside that same observation.
-      record.alternatives = record.alternatives.filter(
-        (alternative) => alternative.reading !== reading,
-      );
-      record.staging = observation;
-      await saveCapture(record, reading);
-    } else if (record.entryId !== null) {
-      if (!retained) {
-        record.alternatives.push({ reading, uncertain: false });
-      }
-      await saveCapture(record);
-    }
+    const names = captureNames(reading);
+    say(
+      reading.uncertain
+        ? `Reading one of ${names}. Identification is uncertain.`
+        : `Reading ${captureName(reading) ?? names}.`,
+      null,
+    );
   }
 
-  /**
-   * Resolves the submitted observation and then drains its later readings in delivery order.
-   * Each request keeps its original input until acknowledged. Recognition completion and camera
-   * stop cannot discard it, and replay never relies on a session refresh to infer an entry ID.
-   */
-  async function saveCapture(
-    record: UiCaptureAttempt,
-    initialReading?: RecognitionReading,
-  ): Promise<void> {
-    pending = record;
-    saving = true;
-    paintRecovery();
-    try {
-      if (record.staging !== null || record.unresolved) {
-        const commit = await submitCapture(record);
-        if (closed) {
-          return;
-        }
-        if (commit.status !== 'committed' || commit.record === null) {
-          if (commit.status === 'unknown') {
-            // The provider keeps the attempt: the view presents the recovery control and keeps
-            // nothing of the observation it dispatched itself.
-            record.staging = null;
-            record.unresolved = true;
-            options.reviewChanged({ kind: 'unknown' });
-            settle(record, 'unavailable', captureStagingUnknown);
-          } else {
-            // A definite refusal establishes that the observation staged nothing.
-            record.staging = null;
-            record.unresolved = false;
-            settle(record, 'unavailable', commit.message ?? 'The capture was not added to review.');
-          }
-          return;
-        }
-        record.staging = null;
-        record.unresolved = false;
-        record.entryId = commit.record.entry?.entryId ?? null;
-        // An explicitly unresolved decision is not recorded by the provider, so a later reading
-        // can still resolve the capture. Suppression and admission are authoritative decisions.
-        record.staged = commit.record.outcome !== 'unresolved';
-        settle(
-          record,
-          captureOutcome(commit.record),
-          initialReading === undefined
-            ? recoveredMessage(commit.record)
-            : captureMessage(initialReading, commit.record),
-        );
-        options.reviewChanged({
-          kind: 'staged',
-          session: commit.record.session,
-          entryId: record.entryId,
-        });
-      }
-      if (record.entryId === null) {
-        record.alternatives = [];
-        return;
-      }
-      while (record.alternatives.length > 0) {
-        const alternative = record.alternatives[0];
-        if (alternative === undefined) {
-          break;
-        }
-        const { reading } = alternative;
-        const commit = await attachImportCandidates(
-          access,
-          { entryId: record.entryId, candidates: [...uiCaptureCandidates(reading)] },
-          options.signal,
-        );
-        if (closed) {
-          return;
-        }
-        if (commit.status !== 'committed' || commit.record === null) {
-          if (commit.status === 'unknown') {
-            alternative.uncertain = true;
-            options.reviewChanged({ kind: 'unknown' });
-          } else if (!alternative.uncertain) {
-            // A first request that was definitely rejected has no lost outcome to recover.
-            record.alternatives.shift();
-            say(commit.message ?? 'The later alternatives could not be stored.', null);
-            return;
-          }
-          say(
-            'The capture is in review, but its later alternatives are not yet verified. Use Recover capture to retry.',
-            null,
-          );
-          return;
-        }
-        record.alternatives.shift();
-        options.reviewChanged({
-          kind: 'attached',
-          session: commit.record.session,
-          entryId: record.entryId,
-        });
-        // Alternatives never retract the acceptance, so this update carries no cue of its own.
-        say(lateMessage(reading), null);
-      }
-    } finally {
-      saving = false;
-      if (!record.unresolved && record.staging === null && record.alternatives.length === 0) {
-        pending = null;
-      }
-      refreshRetained();
-      paintRecovery();
-    }
-  }
-
-  /**
-   * Submits the observation this attempt holds, or replays the attempt UserCards retains under the
-   * capture identity. Recovery goes through the provider's own handle and input, so a reloaded view
-   * re-reads the recorded decision instead of composing a second observation
-   * (docs/user-cards.md#browser-operation-lifecycle).
-   */
-  async function submitCapture(
-    record: UiCaptureAttempt,
-  ): Promise<UiChangeCommit<CaptureStageResult>> {
-    if (record.unresolved) {
-      const attempt = access.resume(record.captureId);
-      if (attempt !== null && attempt.kind === 'stageCaptureObservation') {
-        return retryRetainedAttempt(
-          attempt,
-          options.signal,
-          'The capture was not added to review.',
-          captureStagingUnknown,
-        );
-      }
-      return { status: 'unknown', message: captureStagingUnknown, record: null };
-    }
-    const observation = record.staging;
-    if (observation === null) {
-      return { status: 'unknown', message: captureStagingUnknown, record: null };
-    }
-    return stageCaptureObservation(access, observation, options.signal);
-  }
-
-  /**
-   * Recovers every observation whose staging outcome UserCards has not established — the attempt
-   * this view already presents, and the attempts an earlier view left retained, also across a
-   * reload — through their own handles (docs/user-cards.md#browser-operation-lifecycle).
-   */
-  async function recoverCapture(): Promise<void> {
-    if (busy || saving || closed) {
+  /** Attaches the session's live preview to the surface this view presents. */
+  function presentPreview(attached: CapturePreview | null): void {
+    const stream = attached?.stream ?? null;
+    if (preview.srcObject === stream) {
       return;
     }
-    if (pending !== null) {
-      // The attempt this view presents still has work: its staging outcome or its later
-      // alternatives are not established yet, so that attempt is what recovery resumes.
-      await saveCapture(pending);
-      return;
-    }
-    refreshRetained();
-    for (const captureId of retained) {
-      const attempt = access.resume(captureId);
-      if (attempt === null || attempt.kind !== 'stageCaptureObservation') {
-        continue;
-      }
-      attempts += 1;
-      await saveCapture({
-        sessionId: attempt.request.sessionId,
-        captureId,
-        id: ((attempts - 1) % (RECOGNITION_LIMITS.maxAttempt - 1)) + 1,
-        staged: false,
-        entryId: null,
-        staging: null,
-        unresolved: true,
-        alternatives: [],
+    preview.srcObject = stream;
+    preview.hidden = stream === null;
+    if (stream !== null) {
+      // The device presented the stream it samples before reporting it; replaying it here is
+      // presentation only, and its failure is reported by the device's own start.
+      void Promise.resolve(preview.play()).catch(() => {
+        /* Presenting the live preview is best effort. */
       });
-      if (closed) {
+    }
+  }
+
+  /** Text of the current lifecycle state; an event's own outcome replaces it below. */
+  function presentStatus(snapshot: CaptureSnapshot): void {
+    const { kind, failure } = snapshot.status;
+    if (kind === presentedStatus) {
+      return;
+    }
+    presentedStatus = kind;
+    switch (kind) {
+      case 'idle':
+        say('Start the camera to capture cards hands-free.', null);
         return;
-      }
+      case 'unavailable':
+        say('Camera capture is unavailable in this deployment.', null);
+        return;
+      case 'starting':
+        say('Waiting for camera permission…', null);
+        return;
+      case 'preparing':
+        say('Preparing recognition…', null);
+        return;
+      case 'running':
+        say('Scanner ready. Hold one card inside the frame until it is accepted.', null);
+        return;
+      case 'stopped':
+        // An attempt whose outcome is not established keeps presenting its own message; the
+        // stopped session is what recovery resumes (docs/capture.md#admission-and-lifecycle).
+        if (!snapshot.recoverable) {
+          say('Capture stopped. Start the camera to scan more cards.', null);
+        }
+        return;
+      case 'failed':
+        say(`Camera unavailable: ${failure ?? 'the camera could not be started.'}`, 'error');
+        return;
     }
-    refreshRetained();
-    paintRecovery();
   }
 
-  /**
-   * Presents one attempt's outcome and the cue it earns, at most once each. Geometry guidance
-   * earns no cue of its own, so it withdraws the cue of the attempt before it: a frame that was
-   * never admitted is never presented with a success cue
-   * (docs/user-interface.md#capture-and-review).
-   */
-  function settle(record: UiCaptureAttempt, outcome: UiCaptureOutcome, message: string): void {
-    const cue = admission.settled(record.id, outcome, browser.performance.now());
-    if (cue !== null) {
-      presentCue(cue);
-    } else if (outcome === 'guidance') {
-      clearCue();
+  /** One identified event: its message and the cue only an accepted or failed outcome earns. */
+  function presentEvent(event: CaptureEvent): void {
+    switch (event.kind) {
+      case 'accepted':
+        presentCue(event.cue);
+        say(
+          event.reading === null
+            ? 'The earlier capture was already accepted into review.'
+            : acceptedMessage(event.reading),
+          null,
+        );
+        return;
+      case 'repeat':
+        presentCue(event.cue);
+        say(
+          'The same card is already in review. Show a different card or set its quantity in review.',
+          null,
+        );
+        return;
+      case 'unresolved':
+        presentCue(event.cue);
+        say(
+          event.reason === 'geometry'
+            ? 'The frame was not admitted as one card. Hold one card still to retry; no card was counted.'
+            : 'The card could not be identified. Hold it still to retry; no card was counted.',
+          null,
+        );
+        return;
+      case 'guidance':
+        // Geometry guidance earns no cue of its own; it withdraws the cue of the attempt before it
+        // so no frame is presented with the cue of an earlier attempt.
+        clearCue();
+        say(
+          event.presence === 'none'
+            ? 'Place one card inside the frame.'
+            : 'Wait until only one card is visible.',
+          null,
+        );
+        return;
+      case 'unavailable':
+        presentCue(event.cue);
+        say(unavailableMessage(event.reason, event.failure, event.recoverable), null);
+        return;
+      case 'comparison':
+        say(comparisonMessage(event), null);
+        return;
     }
-    say(message, null);
   }
 
-  /** Status text of one reading that staged nothing. */
-  function captureMessage(reading: RecognitionReading, result: CaptureStageResult): string {
-    if (result.outcome === 'suppressed') {
-      return 'The same card is already in review. Show a different card or set its quantity in review.';
+  /** Status text of one admitted observation, as the reading that staged it reported it. */
+  function acceptedMessage(reading: CaptureReading): string {
+    const name = captureName(reading) ?? 'the card';
+    const uncertain = reading.uncertain
+      ? ` Identification is uncertain: ${captureNames(reading)}.`
+      : '';
+    const comparing = reading.provisional ? ' Comparing printings…' : '';
+    return (
+      `Accepted ${name} into review.${uncertain}${comparing} ` +
+      'Check printing, finish, condition and quantity before confirming.'
+    );
+  }
+
+  /** Status text of one attempt or submission that could not complete. */
+  function unavailableMessage(
+    reason: 'frame' | 'preparation' | 'recognition' | 'staging',
+    failure: string | null,
+    recoverable: boolean,
+  ): string {
+    switch (reason) {
+      case 'frame':
+        return 'The camera delivered no frame. Keep one card in view.';
+      case 'preparation':
+        return `Recognition is unavailable: ${failure ?? 'preparation failed'}`;
+      case 'recognition':
+        return failure ?? 'Recognition failed. Hold one card still to retry.';
+      case 'staging':
+        if (recoverable) {
+          return (
+            'The staging outcome is unknown. The capture may be in review; use Recover ' +
+            'capture to check it.'
+          );
+        }
+        return failure ?? 'The capture was not added to review.';
     }
-    if (result.outcome === 'admitted') {
-      const name = captureName(reading) ?? 'the card';
-      const uncertain =
-        reading.disagreement === null
-          ? ''
-          : ` Identification is uncertain: ${captureNames(reading)}.`;
-      const comparing = reading.provisional ? ' Comparing printings…' : '';
+  }
+
+  /** Status text of one later comparison; it never retracts the accepted capture. */
+  function comparisonMessage(event: CaptureComparisonEvent): string {
+    if (event.outcome === 'rejected') {
+      return event.failure ?? 'The later alternatives could not be stored.';
+    }
+    if (event.outcome === 'unverified') {
       return (
-        `Accepted ${name} into review.${uncertain}${comparing} ` +
-        'Check printing, finish, condition and quantity before confirming.'
+        'The capture is in review, but its later alternatives are not yet verified. Use ' +
+        'Recover capture to retry.'
       );
     }
-    return captureUnresolved;
-  }
-
-  /**
-   * Status text of an observation whose recorded decision an identical replay returned: the
-   * provider had already decided it, so the message names that decision instead of the newer
-   * reading that triggered the recovery.
-   */
-  function recoveredMessage(result: CaptureStageResult): string {
-    if (result.outcome === 'suppressed') {
-      return 'The same card is already in review. Show a different card or set its quantity in review.';
+    if (event.outcome === 'attached') {
+      return lateMessage(event.reading);
     }
-    if (result.outcome === 'admitted') {
-      return 'The earlier capture was already accepted into review.';
+    // A comparison whose frame still holds one card but names no usable identity explains its own
+    // uncertainty; only geometry that no longer establishes one card reports that instead.
+    return event.reading.presence === 'single'
+      ? lateMessage(event.reading)
+      : lateGeometryMessage(event.reading.presence);
+  }
+
+  /** Status text of one later comparison that added alternatives beside the accepted entry. */
+  function lateMessage(reading: CaptureReading): string {
+    if (reading.status !== 'possible' || reading.candidates.length === 0) {
+      return 'A later comparison found no usable identity. Check the accepted card before confirming.';
     }
-    return captureUnresolved;
+    const uncertain = reading.uncertain ? ' Identification is uncertain.' : '';
+    return (
+      `A later comparison added ${captureNames(reading)} as alternatives.${uncertain} ` +
+      'Review them before confirming.'
+    );
   }
 
-  /** Guidance for a reported geometry that does not hold exactly one card. */
-  function captureGeometryGuidance(presence: Exclude<RecognitionCardPresence, 'single'>): string {
-    return presence === 'none'
-      ? 'Place one card inside the frame.'
-      : 'Wait until only one card is visible.';
-  }
-
-  /**
-   * Status text of one later comparison whose frame geometry does not establish one card; it never
-   * retracts the capture the review already holds.
-   */
-  function lateGeometryMessage(presence: RecognitionCardPresence | null): string {
+  /** Status text of one later comparison whose frame geometry does not establish one card. */
+  function lateGeometryMessage(presence: CaptureReading['presence']): string {
     const observed =
       presence === null
         ? 'A later comparison could not establish one card'
@@ -897,122 +369,44 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
     return `${observed}. Check the accepted card before confirming.`;
   }
 
-  /** The cue one staged observation earns: only an admitted candidate is a success. */
-  function captureOutcome(result: CaptureStageResult): UiCaptureOutcome {
-    switch (result.outcome) {
-      case 'admitted':
-        return 'accepted';
-      case 'suppressed':
-        return 'repeat';
-      case 'unresolved':
-        return 'unresolved';
-    }
-  }
-
-  /** Status text of one later comparison; it adds alternatives and never retracts the candidate. */
-  function lateMessage(reading: RecognitionReading): string {
-    if (reading.status !== 'possible' || reading.candidates.length === 0) {
-      return 'A later comparison found no usable identity. Check the accepted card before confirming.';
-    }
-    const uncertain = reading.disagreement === null ? '' : ' Identification is uncertain.';
-    return (
-      `A later comparison added ${captureNames(reading)} as alternatives.${uncertain} ` +
-      'Review them before confirming.'
-    );
-  }
-
   /** Suggested candidate name, or the leading candidate when the reading suggests none. */
-  function captureName(reading: RecognitionReading): string | null {
+  function captureName(reading: CaptureReading): string | null {
     const suggested =
-      reading.suggestion === null
-        ? reading.candidates[0]
-        : reading.candidates[reading.suggestion.candidateIndex];
+      reading.suggestedPrintingId === null
+        ? undefined
+        : reading.candidates.find(
+            (candidate) => candidate.printingId === reading.suggestedPrintingId,
+          );
     const name = suggested?.name ?? reading.candidates[0]?.name ?? '';
     return name.length === 0 ? null : name.slice(0, uiCaptureNameLength);
   }
 
   /** Names of the reading's candidates, most likely first and bounded for presentation. */
-  function captureNames(reading: RecognitionReading): string {
+  function captureNames(reading: CaptureReading): string {
     const names = [...new Set(reading.candidates.map((candidate) => candidate.name))]
       .filter((name) => name.length > 0)
-      .slice(0, 3)
+      .slice(0, uiCaptureNameCount)
       .map((name) => name.slice(0, uiCaptureNameLength));
     return names.length === 0 ? 'an unknown card' : names.join(', ');
   }
 
-  function say(text: string, cue: UiCaptureCue | null): void {
-    if (closed) {
-      return;
-    }
+  function say(text: string, cue: CaptureCue | null): void {
     status.textContent = text;
     if (cue !== null) {
       presentCue(cue);
     }
   }
 
-  function presentCue(cue: UiCaptureCue): void {
-    status.dataset.uiCaptureCue = cue;
+  /** Presents the cue one identified event earned; an event without one leaves the cue as it is. */
+  function presentCue(cue: CaptureCue | null): void {
+    if (cue !== null) {
+      status.dataset.uiCaptureCue = cue;
+    }
   }
 
   /** Withdraws the presented cue, so no frame is presented with the cue of an earlier attempt. */
   function clearCue(): void {
     status.dataset.uiCaptureCue = 'idle';
-  }
-
-  /** Samples the live preview into a bounded brightness signature. */
-  function readSignature(): readonly number[] | null {
-    if (preview.videoWidth === 0 || preview.videoHeight === 0) {
-      return null;
-    }
-    const view = (analysis ??= document.createElement('canvas'));
-    view.width = UI_CAPTURE.signature;
-    view.height = UI_CAPTURE.signature;
-    const context = view.getContext('2d', { willReadFrequently: true });
-    if (context === null) {
-      return null;
-    }
-    context.drawImage(preview, 0, 0, view.width, view.height);
-    const pixels = context.getImageData(0, 0, view.width, view.height).data;
-    const signature: number[] = [];
-    for (let index = 0; index < pixels.length; index += 4) {
-      signature.push(
-        ((pixels[index] ?? 0) + (pixels[index + 1] ?? 0) + (pixels[index + 2] ?? 0)) / 3,
-      );
-    }
-    return signature;
-  }
-
-  /**
-   * Reads the current frame, bounded to the image the Recognition contract accepts. The width is
-   * scaled first and the height follows from the provider's limit, so both dimensions stay whole
-   * numbers whose product can never exceed it, whatever the camera's aspect ratio
-   * (docs/recognition.md#interface).
-   */
-  function readFrame(): HTMLCanvasElement | null {
-    const width = preview.videoWidth;
-    const height = preview.videoHeight;
-    if (width < 1 || height < 1) {
-      return null;
-    }
-    const bound = RECOGNITION_LIMITS.maxImagePixels;
-    const scale = Math.min(1, Math.sqrt(bound / (width * height)));
-    const frame = document.createElement('canvas');
-    frame.width = Math.max(1, Math.floor(width * scale));
-    frame.height = Math.max(1, Math.min(height, Math.floor(bound / frame.width)));
-    const context = frame.getContext('2d');
-    if (context === null) {
-      return null;
-    }
-    context.drawImage(preview, 0, 0, frame.width, frame.height);
-    return frame;
-  }
-
-  function closeCamera(held: UiCamera): void {
-    try {
-      held.close();
-    } catch {
-      /* Releasing the camera is best effort. */
-    }
   }
 }
 

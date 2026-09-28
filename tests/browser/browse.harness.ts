@@ -40,6 +40,7 @@ import {
 } from '../../src/ui/index.js';
 
 import { unusedUserCards } from './unused-usercards.js';
+import { unusedCapture } from './unused-capture.js';
 
 /** One Search request the catalog page issued. */
 export interface UiBrowseSearchRequest {
@@ -216,9 +217,7 @@ export function installBrowseHarness(
     // the capabilities Application supplies.
     userCards: unusedUserCards,
     cardList,
-    createRecognition: () => {
-      throw new Error('The browsing journeys do not run recognition.');
-    },
+    capture: unusedCapture(unusedUserCards),
   };
   const pages: readonly UiPageDefinition[] = [...createBrowsePages(), cardPage(document)];
   const shell: UserInterface = createUserInterface({

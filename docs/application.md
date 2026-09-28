@@ -25,6 +25,10 @@ change invalidation; transport code does not implement these semantics. UserInte
 capabilities rather than constructing clients. Concrete wiring remains separate from the supplied
 component interfaces, including the browser-only components.
 
+The supplied UserCards account lookup accepts only the current authenticated account. This check
+also applies when a retained Capture factory constructs staging, before acquiring device or inference
+resources. Account departure releases existing scopes; signing in again permits a fresh scope.
+
 Connect UserCards' committed-change positions to Search's browser indexing-progress capability.
 Supply its account-scoped observable status to the UI shell and its freshness capability to CardList.
 This wiring forwards published values; Search owns progress decisions and polling/wait behavior.

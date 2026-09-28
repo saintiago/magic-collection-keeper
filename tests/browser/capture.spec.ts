@@ -298,6 +298,44 @@ test('a settled single-card frame is admitted hands-free and a repeat stays one 
   expect(errors).toEqual([]);
 });
 
+test('a provisional reading is presented while its staging is unresolved', async ({ page }) => {
+  const errors = await openCapture(page);
+  await settleSessions(page, 0, []);
+  await control(page, 'scriptReading', {
+    candidates: [hostName('bolt')],
+    printingId: 'printing-bolt',
+    provisional: true,
+  });
+
+  await page.click('#import-camera-start');
+  const staged = await requested<StageCaptureInput>(page, 'captures');
+  // The submission is still unresolved, so the reading the attempt delivered is the evidence the
+  // controls present; it earns no cue of its own
+  // (docs/ui/capture-controls.md#presentation-and-lifetime).
+  await expect(page.locator('#import-camera-status')).toHaveText('Reading Lightning Bolt.');
+  await expect(page.locator('#import-camera-status')).toHaveAttribute(
+    'data-ui-capture-cue',
+    'idle',
+  );
+
+  await control(page, 'settleCapture', staged.id, {
+    outcome: 'admitted',
+    replayed: false,
+    session: captureSession(),
+    entry: captureEntry(),
+  });
+
+  // The outcome the provider established replaces the provisional text and earns the cue.
+  await expect(page.locator('#import-camera-status')).toHaveText(
+    /Accepted Lightning Bolt into review\./,
+  );
+  await expect(page.locator('#import-camera-status')).toHaveAttribute(
+    'data-ui-capture-cue',
+    'accepted',
+  );
+  expect(errors).toEqual([]);
+});
+
 test('an unresolved reading receives no success cue while a later comparison may resolve it', async ({
   page,
 }) => {

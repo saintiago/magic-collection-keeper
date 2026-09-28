@@ -24,6 +24,8 @@ import {
   readPublicSettings,
   resolveApplicationConfiguration,
 } from '../../../src/application/index.js';
+import type { CaptureSnapshot } from '../../../src/capture/index.js';
+import type { RecognitionPrepareRequest } from '../../../src/recognition/index.js';
 
 import { signedInStorage, testConfiguration, testPrompt } from './harness.js';
 
@@ -1090,25 +1092,26 @@ describe('browser application', () => {
     expect(capabilities?.catalog.resolve).toBeTypeOf('function');
     expect(capabilities?.search.execute).toBeTypeOf('function');
     expect(capabilities?.userCards.account).toBeTypeOf('function');
-    expect(capabilities?.userCards.account('alice').readCopies).toBeTypeOf('function');
-    expect(capabilities?.userCards.account('alice').correctCopy).toBeTypeOf('function');
+    const accountId = application.identity.current()!.accountId;
+    expect(capabilities?.userCards.account(accountId).readCopies).toBeTypeOf('function');
+    expect(capabilities?.userCards.account(accountId).correctCopy).toBeTypeOf('function');
     // Application selects the CardList implementation and supplies its provider bindings and the
     // account lifecycle; the UserInterface never names the component's own factory
     // (docs/architecture.md#composition-and-replacement).
     expect(capabilities?.cardList.create).toBeTypeOf('function');
-    expect(capabilities?.cardList.account('alice').catalogQuery).toBeTypeOf('function');
-    expect(capabilities?.cardList.account('alice').collectionQuery).toBeTypeOf('function');
-    expect(capabilities?.cardList.account('alice').pickerQuery).toBeTypeOf('function');
-    expect(capabilities?.cardList.account('alice').changes).toBeTypeOf('function');
-    expect(capabilities?.cardList.account('alice').recent().source.load).toBeTypeOf('function');
-    expect(capabilities?.cardList.account('alice').printingImages).toBeTypeOf('function');
-    expect(capabilities?.cardList.account('alice').pendingEntries).toBeTypeOf('function');
-    expect(capabilities?.cardList.account('alice').tagAssociations).toBeTypeOf('function');
-    expect(Object.keys(capabilities?.createRecognition() ?? {}).sort()).toEqual([
-      'dispose',
-      'prepare',
-      'recognize',
-    ]);
+    expect(capabilities?.cardList.account(accountId).catalogQuery).toBeTypeOf('function');
+    expect(capabilities?.cardList.account(accountId).collectionQuery).toBeTypeOf('function');
+    expect(capabilities?.cardList.account(accountId).pickerQuery).toBeTypeOf('function');
+    expect(capabilities?.cardList.account(accountId).changes).toBeTypeOf('function');
+    expect(capabilities?.cardList.account(accountId).recent().source.load).toBeTypeOf('function');
+    expect(capabilities?.cardList.account(accountId).printingImages).toBeTypeOf('function');
+    expect(capabilities?.cardList.account(accountId).pendingEntries).toBeTypeOf('function');
+    expect(capabilities?.cardList.account(accountId).tagAssociations).toBeTypeOf('function');
+    // Application selects the Capture implementation and supplies its composed factory; the
+    // UserInterface names neither the component's wiring nor the Recognition contract behind it
+    // (docs/architecture.md#composition-and-replacement).
+    expect(capabilities?.capture.create).toBeTypeOf('function');
+    expect(capabilities?.capture.createImportId()).toBeTypeOf('string');
     expect(application.userInterface).toEqual({ constructed: true });
   });
 
@@ -1160,7 +1163,7 @@ describe('browser application', () => {
     ).toThrow();
   });
 
-  it('ends the UserCards scope of the account it leaves and composes a fresh one on return', async () => {
+  it('ends the UserCards scope of the account it leaves', async () => {
     const { fetch } = jsonFetch({ error: 'The service is unavailable.' }, { status: 503 });
     const received: UserInterfaceCapabilities[] = [];
     const application = createBrowserApplication({
@@ -1188,10 +1191,184 @@ describe('browser application', () => {
     await expect(alice?.readCopies(['copy-1'])).rejects.toThrow(/has ended/);
     expect(() => alice?.subscribe(() => {})).toThrow(/has ended/);
 
-    // Signing back in as the same account composes a fresh, usable scope.
-    const again = userCards?.account('cognito-alice');
-    expect(again).not.toBe(alice);
-    expect(again?.retained()).toEqual([]);
+    expect(() => userCards?.account('cognito-alice')).toThrow(/authenticated account/);
+  });
+
+  it.each(['sign-out', 'replacement', 'end-session'] as const)(
+    'rejects retained capture creation after %s and permits a fresh sign-in',
+    async (transition) => {
+      const received: UserInterfaceCapabilities[] = [];
+      let signingInAs = 'cognito-bob';
+      const fetch = vi.fn<typeof globalThis.fetch>(
+        async () =>
+          new Response(
+            JSON.stringify({
+              AuthenticationResult: {
+                IdToken: `header.${Buffer.from(JSON.stringify({ sub: signingInAs })).toString('base64url')}.signature`,
+                AccessToken: 'access',
+                RefreshToken: 'refresh',
+                ExpiresIn: 3600,
+              },
+            }),
+          ),
+      );
+      const prepare = vi.fn(async (request: RecognitionPrepareRequest) => ({
+        sessionId: request.sessionId,
+        engines: [...request.engines],
+        versions: {},
+        timings: {},
+      }));
+      const recognize = vi.fn(() => {
+        throw new Error('No frames are supplied in this lifecycle case.');
+      });
+      const createRecognition = vi.fn(() => ({ prepare, recognize, dispose: vi.fn() }));
+      const application = createBrowserApplication({
+        settings: publicSettings(),
+        prompt: testPrompt(),
+        storage: signedInStorage(),
+        attemptStorage: null,
+        fetch,
+        createRecognition,
+        createUserInterface: (value) => received.push(value),
+      });
+      const { capture, userCards, cardList } = received[0]!;
+      const alice = userCards.account('cognito-alice');
+      const close = vi.fn();
+      const device = {
+        openCamera: vi.fn(async () => ({
+          preview: { stream: {} as MediaStream },
+          sample: () => null,
+          read: () => null,
+          close,
+        })),
+        release: vi.fn(),
+      };
+      const create = (accountId: string) =>
+        capture.create({
+          accountId,
+          importId: capture.createImportId(),
+          device,
+        });
+      // Even before departure, a caller cannot bind another account to the active transport.
+      expect(() => create('cognito-bob')).toThrow(/authenticated account/);
+
+      if (transition === 'sign-out') await application.identity.signOut();
+      else if (transition === 'replacement') await application.identity.signIn();
+      else application.endSession();
+
+      const sent = fetch.mock.calls.length;
+      expect(() => create('cognito-alice')).toThrow(/authenticated account/);
+      // The same account lookup also serves direct operations and CardList's private bindings.
+      expect(() => userCards.account('cognito-alice')).toThrow(/authenticated account/);
+      expect(() => cardList.account('cognito-alice').tagAssociations('deck')).toThrow(
+        /authenticated account/,
+      );
+      expect(device.openCamera).not.toHaveBeenCalled();
+      expect(createRecognition).not.toHaveBeenCalled();
+      expect(prepare).not.toHaveBeenCalled();
+      expect(recognize).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledTimes(sent);
+
+      if (transition === 'replacement') {
+        const bob = create('cognito-bob');
+        await bob.start();
+        expect(device.openCamera).toHaveBeenCalledTimes(1);
+        expect(prepare).toHaveBeenCalledTimes(1);
+        await application.identity.signOut();
+        expect(close).toHaveBeenCalledTimes(1);
+        await bob.start();
+        expect(device.openCamera).toHaveBeenCalledTimes(1);
+      }
+
+      signingInAs = 'cognito-alice';
+      await application.identity.signIn();
+      expect(application.identity.current()?.accountId).toBe('cognito-alice');
+      expect(userCards.account('cognito-alice')).not.toBe(alice);
+      const fresh = create('cognito-alice');
+      await fresh.start();
+      expect(device.openCamera).toHaveBeenCalledTimes(transition === 'replacement' ? 2 : 1);
+      expect(prepare).toHaveBeenCalledTimes(transition === 'replacement' ? 2 : 1);
+      application.endSession();
+      expect(close).toHaveBeenCalledTimes(transition === 'replacement' ? 2 : 1);
+    },
+  );
+
+  it('disposes the capture sessions of the account it leaves with no page presenting them', async () => {
+    const received: UserInterfaceCapabilities[] = [];
+    const releasedRecognition: string[] = [];
+    const application = createBrowserApplication({
+      settings: publicSettings(),
+      prompt: testPrompt(),
+      storage: signedInStorage(),
+      attemptStorage: null,
+      fetch: jsonFetch({ ok: true }).fetch,
+      // The session is driven headlessly here, so the case owns the recognition lifecycle the
+      // account teardown must reach instead of loading the preserved browser engines.
+      createRecognition: () => ({
+        prepare: (request) =>
+          Promise.resolve({
+            sessionId: request.sessionId,
+            engines: [...request.engines],
+            versions: {},
+            timings: {},
+          }),
+        recognize: () => ({
+          initial: Promise.reject(new Error('The case does not run inference.')),
+          completion: Promise.resolve(),
+        }),
+        dispose: (request) => {
+          releasedRecognition.push(request.sessionId);
+        },
+      }),
+      createUserInterface: (capabilities) => {
+        received.push(capabilities);
+        return null;
+      },
+    });
+    const capabilities = received[0]!;
+    const accountId = application.identity.current()!.accountId;
+    let closed = 0;
+    let released = 0;
+    let opened = 0;
+    const session = capabilities.capture.create({
+      accountId,
+      importId: capabilities.capture.createImportId(),
+      device: {
+        openCamera: () => {
+          opened += 1;
+          return Promise.resolve({
+            preview: { stream: {} as MediaStream },
+            sample: () => null,
+            read: () => null,
+            close: () => {
+              closed += 1;
+            },
+          });
+        },
+        release: () => {
+          released += 1;
+        },
+      },
+    });
+    const states: CaptureSnapshot[] = [];
+    session.observe((snapshot) => {
+      states.push(snapshot);
+    });
+    await session.start();
+    expect(states.at(-1)?.running).toBe(true);
+
+    application.endSession();
+
+    // The camera, the recognition session and the subscription end with the account even though no
+    // page disposed the view that created the session
+    // (docs/capture.md#admission-and-lifecycle, docs/architecture.md#runtime-boundaries).
+    expect(closed).toBe(1);
+    expect(released).toBe(1);
+    expect(releasedRecognition).toHaveLength(1);
+    const observed = states.length;
+    await session.start();
+    expect(opened).toBe(1);
+    expect(states.length).toBe(observed);
   });
 
   it('reads Search through the entry point UserInterface received', async () => {

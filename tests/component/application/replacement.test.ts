@@ -13,6 +13,7 @@ import {
   createSearchSpy,
   createUserCardsSpy,
   createSourceImportsSpy,
+  signedInStorage,
   testAccount,
   testConfiguration,
   testIdentityVerifier,
@@ -139,7 +140,7 @@ describe('component replacement at Application', () => {
     expect(JSON.parse(response.body)).toMatchObject({ error: { code: 'unavailable' } });
   });
 
-  it('supplies a replacement recognition implementation to the UI without starting default engines', () => {
+  it('supplies a replacement recognition implementation to Capture without starting default engines', async () => {
     const dispose = vi.fn();
     const recognition: Recognition<HTMLCanvasElement> = {
       prepare: vi.fn(),
@@ -150,11 +151,34 @@ describe('component replacement at Application', () => {
     const application = createBrowserApplication({
       settings: readPublicSettings(resolveApplicationConfiguration(testConfiguration())),
       prompt: testPrompt(),
+      storage: signedInStorage(),
       fetch,
       createRecognition: () => recognition,
-      createUserInterface: (capabilities) => capabilities.createRecognition(),
+      // The replacement is supplied behind the Capture capability the UserInterface receives:
+      // a session Application composes over it prepares through the replacement, not the engines.
+      createUserInterface: (capabilities) =>
+        capabilities.capture.create({
+          accountId: capabilities.identity.current()!.accountId,
+          importId: capabilities.capture.createImportId(),
+          device: {
+            openCamera: () =>
+              Promise.resolve({
+                preview: { stream: {} as MediaStream },
+                sample: () => null,
+                read: () => null,
+                close: () => {},
+              }),
+            release: () => {},
+          },
+        }),
     });
-    expect(application.userInterface).toBe(recognition);
+    const session = application.userInterface as { start(): Promise<void>; stop(): void };
+    await session.start();
+    expect(recognition.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ engines: ['browser-onnx'] }),
+    );
+    session.stop();
+    expect(dispose).toHaveBeenCalledWith({ sessionId: expect.any(String) });
     application.createRecognition().dispose({ sessionId: 'scan' });
     expect(dispose).toHaveBeenCalledWith({ sessionId: 'scan' });
     expect(fetch).not.toHaveBeenCalled();

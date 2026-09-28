@@ -37,9 +37,17 @@ import type {
 } from '../../src/catalog/index.js';
 import {
   createRecognition,
+  recognitionEngineNames,
+  type Recognition,
   type RecognitionEngineOutcome,
   type RecognitionEnginePipeline,
 } from '../../src/recognition/index.js';
+import {
+  createBrowserCaptureDevice,
+  createCaptureBrowser,
+  type CaptureCamera,
+  type CaptureDevice,
+} from '../../src/capture/index.js';
 import type {
   AttachImportCandidatesInput,
   CaptureStageResult,
@@ -54,8 +62,6 @@ import {
   createImportPages,
   createUserInterface,
   type UiAccount,
-  type UiCamera,
-  type UiDevice,
   type UiIdentity,
   type UiView,
   type UserInterface,
@@ -391,6 +397,32 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
       scopedAccountId = nextAccountId;
     }
   });
+  /** The Recognition contract of one capture session, over the scripted engine pipeline. */
+  const createRecognitionContract = (): Recognition<HTMLCanvasElement> => {
+    const recognition = createRecognition<HTMLCanvasElement>({
+      createEnginePipeline: () => scriptedPipeline(),
+      catalog,
+      inspectFrame: inspectCanvasFrame,
+    });
+    return {
+      ...recognition,
+      recognize(request) {
+        const attempt = recognition.recognize({
+          ...request,
+          onReading(reading) {
+            request.onReading?.(reading);
+            log.push('recognition-reading-delivered');
+          },
+        });
+        return {
+          ...attempt,
+          completion: attempt.completion.then(() => {
+            log.push('recognition-completed');
+          }),
+        };
+      },
+    };
+  };
   const capabilities: UserInterfaceCapabilities = {
     settings: {
       environment: 'test',
@@ -405,31 +437,11 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
     search,
     userCards,
     cardList: createCardListBrowser({ progress: idleProgress, search, catalog, userCards }),
-    createRecognition: () => {
-      const recognition = createRecognition<HTMLCanvasElement>({
-        createEnginePipeline: () => scriptedPipeline(),
-        catalog,
-        inspectFrame: inspectCanvasFrame,
-      });
-      return {
-        ...recognition,
-        recognize(request) {
-          const attempt = recognition.recognize({
-            ...request,
-            onReading(reading) {
-              request.onReading?.(reading);
-              log.push('recognition-reading-delivered');
-            },
-          });
-          return {
-            ...attempt,
-            completion: attempt.completion.then(() => {
-              log.push('recognition-completed');
-            }),
-          };
-        },
-      };
-    },
+    capture: createCaptureBrowser({
+      userCards,
+      createRecognition: createRecognitionContract,
+      engines: recognitionEngineNames(false),
+    }),
   };
 
   const shell: UserInterface = createUserInterface({
@@ -589,29 +601,45 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
     };
   }
 
-  /** The device capability of the journey: a synthetic canvas camera. */
-  function syntheticDevice(): UiDevice {
+  /**
+   * The device capability of the journey: the real browser device over a synthetic canvas camera,
+   * so the journeys exercise the shipped frame sampling and bounding against controlled scenes.
+   */
+  function syntheticDevice(): CaptureDevice<HTMLCanvasElement> {
+    const device = createBrowserCaptureDevice({
+      media: {
+        getUserMedia() {
+          cameraOpened += 1;
+          if (cameraDenial !== null) {
+            return Promise.reject(new Error(cameraDenial));
+          }
+          canvas ??= document.createElement('canvas');
+          canvas.width = videoWidth;
+          canvas.height = videoHeight;
+          paint();
+          stream = canvas.captureStream(15);
+          cameraClosed = false;
+          painting = document.defaultView?.setInterval(() => paint(), 80) ?? null;
+          return Promise.resolve(stream);
+        },
+      },
+    });
     return {
-      openCamera(): Promise<UiCamera> {
-        cameraOpened += 1;
-        if (cameraDenial !== null) {
-          return Promise.reject(new Error(cameraDenial));
-        }
-        canvas ??= document.createElement('canvas');
-        canvas.width = videoWidth;
-        canvas.height = videoHeight;
-        paint();
-        stream = canvas.captureStream(15);
-        cameraClosed = false;
-        painting = document.defaultView?.setInterval(() => paint(), 80) ?? null;
-        return Promise.resolve({
-          stream,
-          close: () => closeCamera(),
-        });
+      async openCamera(): Promise<CaptureCamera<HTMLCanvasElement>> {
+        const camera = await device.openCamera!();
+        return {
+          preview: camera.preview,
+          sample: () => camera.sample(),
+          read: () => camera.read(),
+          close: () => {
+            camera.close();
+            closeCamera();
+          },
+        };
       },
       release() {
         cameraReleased += 1;
-        closeCamera();
+        return device.release();
       },
     };
   }

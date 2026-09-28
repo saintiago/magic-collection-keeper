@@ -34,8 +34,8 @@
 import type { UiOperationOutcome, UiActionRequest, UiListAction } from './actions.js';
 
 import type { SearchClient } from '../../application/index.js';
+import type { CaptureReviewChange } from '../../capture/index.js';
 import type { Catalog, Finish, PrintingRecord } from '../../catalog/index.js';
-import { recognitionEngineNames } from '../../recognition/index.js';
 import type {
   ConfirmImportEntryInput,
   CopyCondition,
@@ -50,7 +50,7 @@ import type {
   SourceImportRow,
 } from '../../usercards/index.js';
 
-import { createCaptureControls, type UiCaptureReviewChange } from './capture.js';
+import { createCaptureControls } from './capture.js';
 import {
   cardListEntryKey,
   readableSearchPage,
@@ -324,15 +324,16 @@ function importPage(): UiPageDefinition {
       );
       sourceNote.id = 'import-source-note';
 
-      // Hands-free camera capture feeds the same pending review as manual entry and stays with the
-      // page: closing the view disposes it, releasing the camera and the Recognition session
-      // (docs/user-interface.md#capture-and-review).
+      // Hands-free camera capture feeds the same pending review as manual entry: the page binds
+      // one Capture session to this account and one pending import, presents its controls and
+      // disposes it with the view, releasing the camera and the Recognition session
+      // (docs/ui/capture-controls.md, docs/capture.md#interface).
       const capture = createCaptureControls({
         document,
-        access,
+        capture: context.capabilities.capture,
+        accountId: context.account.accountId,
+        importId: context.capabilities.capture.createImportId(),
         device: context.device,
-        createRecognition: context.capabilities.createRecognition,
-        engines: recognitionEngineNames(context.capabilities.settings.recognition.cloudEnabled),
         signal: context.signal,
         reviewChanged: (change) => {
           void reconcileCapture(change);
@@ -1266,7 +1267,7 @@ function importPage(): UiPageDefinition {
        * what the provider holds instead of inferring an entry
        * (docs/user-interface.md#capture-and-review).
        */
-      async function reconcileCapture(change: UiCaptureReviewChange): Promise<void> {
+      async function reconcileCapture(change: CaptureReviewChange): Promise<void> {
         if (change.kind === 'unknown') {
           pending?.refresh();
           await readSessions(null, false);

@@ -27,9 +27,11 @@ import type {
 } from '../../catalog/index.js';
 import { createSearchProgress, type SearchIndexingProgress } from '../../search/browser.js';
 import { createCardListBrowser, type CardListBrowser } from '../../card-list/index.js';
+import { createCaptureBrowser, type CaptureBrowser } from '../../capture/index.js';
 import {
   createRecognition,
   createBrowserRecognitionPipeline,
+  recognitionEngineNames,
   type Recognition,
   type RecognitionFrameFacts,
 } from '../../recognition/index.js';
@@ -719,8 +721,13 @@ export interface UserInterfaceCapabilities {
    * component's implementation or constructing its providers.
    */
   readonly cardList: CardListBrowser;
-  /** Builds the Recognition contract over the browser's preserved engines. */
-  readonly createRecognition: () => Recognition<HTMLCanvasElement>;
+  /**
+   * The Capture capability Application selected: the composed pending-import identity and the
+   * factory of the sessions that bind it over a deployment-supplied device
+   * (docs/capture.md#interface). Capture views consume this contract instead of naming the
+   * component's implementation or constructing its providers.
+   */
+  readonly capture: CaptureBrowser;
 }
 
 export interface BrowserApplicationOptions {
@@ -794,7 +801,7 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
   // UserCards owns the browser operation lifecycle: its facade composes the transport adapter,
   // retains unfinished attempts in the account's browsing session and publishes the constraints
   // and invalidations its consumers present (docs/user-cards.md#browser-operation-lifecycle).
-  const userCards = createUserCardsOperations({
+  const operations = createUserCardsOperations({
     client: createUserCardsClient(request),
     storage: options.attemptStorage ?? browserAttemptStorage(),
     ...(settings.capabilities.sourceImports
@@ -805,6 +812,21 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
           ),
         }),
   });
+  // A retained factory must not recreate a departed account's scope over the current account's
+  // transport. Keep this check in the shared public capability supplied to Capture, CardList and
+  // UserInterface, before any consumer constructs private work or acquires device resources.
+  const userCards: UserCardsOperations = {
+    account(id) {
+      if (authentication.identity.current()?.accountId !== id) {
+        throw new ApplicationError(
+          'unauthorized',
+          'Private operations require the authenticated account.',
+        );
+      }
+      return operations.account(id);
+    },
+    release: (id) => operations.release(id),
+  };
   // Application selects the CardList implementation and hands the UserInterface its factory with
   // the provider bindings of the authenticated clients, so pages describe their lists instead of
   // naming the component or constructing Search, Catalog or UserCards bindings
@@ -832,6 +854,27 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
       return progress;
     },
   });
+  const createRecognitionContract = () =>
+    options.createRecognition !== undefined
+      ? options.createRecognition({ settings, request })
+      : createRecognition<HTMLCanvasElement>({
+          createEnginePipeline: () =>
+            createBrowserRecognitionPipeline({
+              request,
+              cloudEnabled: settings.recognition.cloudEnabled,
+            }),
+          catalog,
+          inspectFrame: inspectCanvasFrame,
+        });
+  // Application selects the Capture implementation and hands the UserInterface its factory with
+  // the Recognition contract and UserCards' account-scoped staging, so the capture views bind a
+  // session to one account and one pending import instead of naming the component's wiring
+  // (docs/architecture.md#composition-and-replacement).
+  const capture = createCaptureBrowser({
+    userCards,
+    createRecognition: createRecognitionContract,
+    engines: recognitionEngineNames(settings.recognition.cloudEnabled),
+  });
   // Account isolation belongs to Application even when no UserInterface is constructed. A token
   // refresh for the same account keeps its requests valid, including the one awaiting that token;
   // leaving an account ends its UserCards scope before another account can bind, so no read or
@@ -849,6 +892,10 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
       progress?.dispose();
       progress = null;
       if (ended !== null) {
+        // Live capture work of the departed account ends with it even when no page presented the
+        // session: Application disposes what its own composition handed out
+        // (docs/capture.md#admission-and-lifecycle, docs/architecture.md#runtime-boundaries).
+        capture.endAccount(ended);
         cardList.endAccount(ended);
         userCards.release(ended);
       }
@@ -856,18 +903,6 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
       if (nextAccountId !== null) bindProgress(nextAccountId);
     }
   });
-  const createRecognitionContract = () =>
-    options.createRecognition !== undefined
-      ? options.createRecognition({ settings, request })
-      : createRecognition<HTMLCanvasElement>({
-          createEnginePipeline: () =>
-            createBrowserRecognitionPipeline({
-              request,
-              cloudEnabled: settings.recognition.cloudEnabled,
-            }),
-          catalog,
-          inspectFrame: inspectCanvasFrame,
-        });
   const userInterface =
     typeof options.createUserInterface === 'function'
       ? options.createUserInterface({
@@ -878,7 +913,7 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
           search,
           userCards,
           cardList,
-          createRecognition: createRecognitionContract,
+          capture,
         })
       : null;
   return {

@@ -15,15 +15,12 @@
  * corrections over the supplied UserCards contract. The Import page stages manually entered cards as pending entries and presents the
  * account's pending imports for review and confirmation through the same private contract, so a
  * staged line is never presented as owned before its confirmation reports the copies it created.
- * The same page captures cards hands-free through the supplied device and the Recognition
- * contract: a settled frame the runtime reports as one card stages its candidate in review, a
- * frame whose geometry is not established is never admitted, a repeated observation stays one
- * entry, unresolved readings receive no success cue, late alternatives are attached to the entry
- * they belong to without rewriting its reviewed values, and a capture whose staging response was
- * lost is recovered by replaying its own observation.
+ * The same page presents one Capture session hands-free: it binds the session to the account and a
+ * pending import, presents its preview, status, provisional evidence and identified feedback, and
+ * forwards start, stop and retry (docs/capture.md#interface, docs/ui/capture-controls.md).
  * Application supplies the public configuration, the authenticated transport and the component
- * access, and the deployment supplies the verified identity and its device capability, including
- * the camera the capture view opens. Other
+ * access, including the Capture factory; the deployment supplies the verified identity and the
+ * device capability the session opens. Other
  * components import UserInterface through this module only; its internal modules stay private to
  * the component (docs/architecture.md, .dependency-cruiser.mjs).
  */
@@ -43,6 +40,11 @@ export {
 } from './internal/copy-edits.js';
 export { createCollectionPages } from './internal/collection.js';
 export {
+  createCaptureControls,
+  type UiCaptureControls,
+  type UiCaptureOptions,
+} from './internal/capture.js';
+export {
   cardListBasicContent,
   createCardListView,
   type UiCardList,
@@ -52,11 +54,9 @@ export {
   type UiEntryOwnership,
   type UiEntryTag,
 } from './internal/card-list.js';
-export type { UiCamera, UiDevice } from './internal/device.js';
 export type { UiDialogOptions, UiDialogs } from './internal/dialogs.js';
 export type { UiAccount, UiIdentity } from './internal/identity.js';
 export {
-  attachImportCandidates,
   beginSourceImport,
   confirmImport,
   createImportAccess,
@@ -66,9 +66,7 @@ export {
   reopenSourceImport,
   retryRetainedAttempt,
   reviewImportEntry,
-  stageCaptureObservation,
   stageImportLines,
-  uiCaptureIdentity,
   uiImportCandidates,
   uiImportIdentity,
   uiImportSourceLabel,
