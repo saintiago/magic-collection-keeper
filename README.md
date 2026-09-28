@@ -85,6 +85,12 @@ the service stack's public outputs (`npm run package -- --from-outputs infra/ser
 prepared file), and only the settings the browser may receive are accepted. Publishing, deployment,
 rollback and the live checks are recorded in `infra/README.md`.
 
+`npm run release:evidence` prepares the release acceptance evidence beside the packaged artifacts: it
+re-verifies every byte the packaging and recognition manifests name, requires both to come from a
+clean committed revision, ties them and a captured `release.json` to the same release, and records
+source completion, deployment and production acceptance separately, with the unresolved provider,
+physical-device and collection-reconciliation checks named explicitly (docs/release-checklist.md).
+
 `npm run prepare:recognition` and `npm run package:recognition` package the retained recognition
 engine for both runtimes (docs/operations.md#recognition-packaging): preparation fetches the pinned
 public model, catalog, OCR and title-name bytes through the retained scripts and copies the browser

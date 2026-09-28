@@ -70,6 +70,7 @@ All documents in `docs/` are relevant to the rebuild.
 - [Tech stack](docs/tech-stack.md)
 - [Testing architecture](docs/testing.md)
 - [Build and release operations](docs/operations.md)
+- [Release checklist](docs/release-checklist.md)
 - [Rebuild requirements](docs/requirements.md)
 - [Recognition baseline](docs/recognition-preservation.md)
 - [Implementation task inventory](docs/tasks/inventory.md)

@@ -26,6 +26,7 @@ import JSZip from 'jszip';
 
 import { resolvePublicSettings, type PublicApplicationSettings } from '../src/application/index.js';
 import {
+  artifactLayout,
   describeFile,
   readPackageVersion,
   readRevision,
@@ -33,6 +34,8 @@ import {
   repoRoot,
   type ArtifactFile,
 } from './packaging-support.js';
+
+export { artifactLayout };
 
 /** Fixed timestamp of every archive entry, so a rebuilt package keeps the same bytes. */
 const archiveDate = new Date('2000-01-01T00:00:00.000Z');
@@ -42,18 +45,6 @@ const nodeTarget = 'node24';
 
 /** Region of the deployed stack (docs/tech-stack.md#aws-stack). */
 const defaultRegion = 'us-east-1';
-
-export const artifactLayout = {
-  backendArchive: 'backend/api.zip',
-  backendEntry: 'backend/index.mjs',
-  browserDirectory: 'browser',
-  browserEntry: 'browser/app.js',
-  browserPage: 'browser/index.html',
-  browserSettings: 'browser/config.json',
-  catalogEntry: 'catalog/job.mjs',
-  catalogDockerfile: 'catalog/Dockerfile',
-  manifest: 'manifest.json',
-} as const;
 
 export interface ArtifactManifest {
   readonly schema: 1;
