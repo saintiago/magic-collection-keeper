@@ -10,8 +10,9 @@
  * representation opaque to the others.
  */
 
-import { cardListBasicContent, type UiCardList, type UiCardListState } from './card-list.js';
-import type { UiListEntry } from './list.js';
+import type { CardListEntry, CardListRetained } from '../../card-list/index.js';
+
+import { cardListBasicContent, type UiCardList } from './card-list.js';
 import type { UiPageHandle } from './pages.js';
 import { UI_LIMITS } from './limits.js';
 import { uiHref, type UiView } from './routes.js';
@@ -34,9 +35,29 @@ export function pageHandle<Context>(
   const restoration = list.restoration;
   return {
     capture,
-    ...(restoration === null ? {} : { presented: () => restoration.presented }),
+    ...(restoration === null ? {} : { presented: presented(list) }),
     dispose: () => list.dispose(),
   };
+}
+
+/**
+ * The list's restoration as the page lifecycle reports it: the shell restores its own scroll and
+ * focus once the list presented the retained window of this page, and the list's own logical
+ * position is applied by the view that mounts it.
+ */
+export function presented<Context>(list: UiCardList<Context>): () => Promise<void> {
+  return async () => {
+    await restoredPresentation(list);
+  };
+}
+
+/**
+ * The list's restoration as one page child reports it, or null when this visit restored none. The
+ * page reports the interruption when it rejects; the shell keeps the entry's own context then.
+ */
+export function restoredPresentation<Context>(list: UiCardList<Context>): Promise<void> | null {
+  const restoration = list.restoration;
+  return restoration === null ? null : restoration.presented.then(() => undefined);
 }
 
 /**
@@ -48,8 +69,8 @@ export function pageHandle<Context>(
 export function openEntryPresentation(
   document: Document,
   idPrefix: string,
-  onOpen: (entry: UiListEntry) => void = () => {},
-): { renderEntry(entry: UiListEntry): Node | null } {
+  onOpen: (entry: CardListEntry) => void = () => {},
+): { renderEntry(entry: CardListEntry): Node | null } {
   return {
     renderEntry(entry) {
       const content = cardListBasicContent(document, entry);
@@ -69,7 +90,7 @@ export function openEntryPresentation(
 }
 
 /** Card details view of one entry, or null when the entry carries no identity to open. */
-export function cardViewOf(entry: UiListEntry): UiView | null {
+export function cardViewOf(entry: CardListEntry): UiView | null {
   const basic = entry.basic;
   if (basic === null) {
     return null;
@@ -177,9 +198,9 @@ export function readPageState(value: unknown): Readonly<Record<string, unknown>>
 /** The list state one page kept, or undefined when this visit restored none. */
 export function readListState<Context>(
   state: Readonly<Record<string, unknown>> | null,
-): UiCardListState<Context> | undefined {
+): CardListRetained<Context> | undefined {
   const list = state?.list;
   return typeof list === 'object' && list !== null && !Array.isArray(list)
-    ? (list as UiCardListState<Context>)
+    ? (list as CardListRetained<Context>)
     : undefined;
 }

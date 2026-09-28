@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import * as application from '../../src/application/index.js';
+import * as cardList from '../../src/card-list/index.js';
 import * as catalog from '../../src/catalog/index.js';
 import * as recognition from '../../src/recognition/index.js';
 import * as search from '../../src/search/index.js';
@@ -15,6 +16,7 @@ import * as usercards from '../../src/usercards/index.js';
 
 const publicContracts = {
   application,
+  cardList,
   catalog,
   recognition,
   search,

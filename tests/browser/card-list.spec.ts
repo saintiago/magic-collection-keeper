@@ -28,16 +28,17 @@ import type {
   UiCardListToolRequest,
 } from './card-list.harness.js';
 import type {
-  UiFragmentKind,
-  UiFragmentResult,
-  UiCardListState as UiCardListStateShape,
-  UiListEntry,
-  UiOperationOutcome,
-} from '../../src/ui/index.js';
-import { UI_LIMITS } from '../../src/ui/index.js';
+  CardListFragmentKind as UiFragmentKind,
+  CardListFragmentResult as UiFragmentResult,
+  CardListEntry as UiListEntry,
+  CardListOperationOutcome as UiOperationOutcome,
+} from '../../src/card-list/index.js';
+import { CARD_LIST_LIMITS } from '../../src/card-list/index.js';
 
 /** State one list retains for its page's history entry; these journeys evaluate text queries. */
-type UiCardListRetainedState = UiCardListStateShape<string | null | undefined>;
+type UiCardListRetainedState = import('./card-list.harness.js').UiCardListRetainedState<
+  string | null | undefined
+>;
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const harnessPath = path.join(repoRoot, 'tests', 'browser', 'card-list.harness.ts');
@@ -796,22 +797,22 @@ test('bounds the working set and the fragment batches of a large source', async 
     await settlePage(page, request.id, window(number), `more-${number}`);
   }
 
-  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(UI_LIMITS.listWindow);
+  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(CARD_LIST_LIMITS.window);
   const paged = await state(page, 'a');
-  expect(paged.entries).toHaveLength(UI_LIMITS.listWindow);
+  expect(paged.entries).toHaveLength(CARD_LIST_LIMITS.window);
   expect(paged.hasMore).toBe(true);
 
   const reads = (await fragmentRequests(page)).filter((request) => request.kind === 'images');
   expect(reads.length).toBeGreaterThan(0);
   for (const read of reads) {
-    expect(read.keys.length).toBeLessThanOrEqual(UI_LIMITS.fragmentBatch);
+    expect(read.keys.length).toBeLessThanOrEqual(CARD_LIST_LIMITS.fragmentBatch);
   }
   const waiting = reads.at(-1)!;
   expect(waiting.aborted).toBe(false);
   await settleFragment(page, waiting.id, absent(waiting.keys));
   const following = (await fragmentRequests(page)).filter((request) => request.kind === 'images');
   expect(following).toHaveLength(reads.length + 1);
-  expect(following.at(-1)!.keys.length).toBe(UI_LIMITS.fragmentBatch);
+  expect(following.at(-1)!.keys.length).toBe(CARD_LIST_LIMITS.fragmentBatch);
 });
 
 test('never pages a retained window with the context of a failed refinement', async ({ page }) => {
@@ -1103,10 +1104,10 @@ for (const selectedCount of [500, 475]) {
       loaded.push(...next);
       await settlePage(page, request.id, next, number < 6 ? `more-${number}` : null);
       await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(
-        Math.min(loaded.length, UI_LIMITS.listWindow),
+        Math.min(loaded.length, CARD_LIST_LIMITS.window),
       );
       expect((await state(page, 'a')).entries).toEqual(
-        loaded.slice(-UI_LIMITS.listWindow).map((entry) => entry.key),
+        loaded.slice(-CARD_LIST_LIMITS.window).map((entry) => entry.key),
       );
       if (selectedCount === 475) {
         const toolsRead = (await fragmentRequests(page))
@@ -1184,7 +1185,9 @@ for (const selectedCount of [500, 475]) {
     expect(invocation.targets).toEqual(expected);
     await settleTool(page, invocation.id, { status: 'committed', message: null });
     expect(
-      (await fragmentRequests(page)).every((read) => read.keys.length <= UI_LIMITS.fragmentBatch),
+      (await fragmentRequests(page)).every(
+        (read) => read.keys.length <= CARD_LIST_LIMITS.fragmentBatch,
+      ),
     ).toBe(true);
 
     // Evicted entries remain individually deselectable and clearing releases the whole selection.

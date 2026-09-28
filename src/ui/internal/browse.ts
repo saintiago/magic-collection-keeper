@@ -17,9 +17,17 @@
  * leaves it (docs/user-interface.md#capture-and-review).
  */
 
-import { createCardList } from './card-list.js';
+import {
+  catalogQuerySource,
+  createRecentActivity,
+  printingImagesReader,
+  usercardsChanges,
+  type CardListCatalogQuery,
+  type CardListRecentActivity,
+} from '../../card-list/index.js';
+
+import { createCardListView } from './card-list.js';
 import { UI_LIMITS } from './limits.js';
-import type { UiListSource } from './list.js';
 import type { UiPageDefinition } from './pages.js';
 import {
   controlLabel,
@@ -31,7 +39,6 @@ import {
   searchInput,
   selectControl,
 } from './page-support.js';
-import { createRecentCards, type UiRecentCards } from './recent.js';
 import {
   readUiCatalogFinish,
   readUiCatalogLevel,
@@ -41,7 +48,6 @@ import {
   uiHref,
   type UiView,
 } from './routes.js';
-import { createCatalogSearchAccess, type UiCatalogQuery } from './search-source.js';
 
 /**
  * The browsing pages Application's capabilities present: Home and the catalog/search page. They
@@ -49,7 +55,7 @@ import { createCatalogSearchAccess, type UiCatalogQuery } from './search-source.
  * appears on Home and no other account ever sees it.
  */
 export function createBrowsePages(): readonly UiPageDefinition[] {
-  const recent = createRecentCards();
+  const recent = createRecentActivity();
   return [
     withRecentCleanup(homePage(recent), recent),
     withRecentCleanup(catalogPage(recent), recent),
@@ -62,7 +68,10 @@ export function createBrowsePages(): readonly UiPageDefinition[] {
  * moment is another one, and neither another account nor a later sign-in of the same account reads
  * it again (docs/user-interface.md#capture-and-review).
  */
-function withRecentCleanup(definition: UiPageDefinition, recent: UiRecentCards): UiPageDefinition {
+function withRecentCleanup(
+  definition: UiPageDefinition,
+  recent: CardListRecentActivity,
+): UiPageDefinition {
   return {
     ...definition,
     accountEnded: (accountId) => recent.clear(accountId),
@@ -70,7 +79,7 @@ function withRecentCleanup(definition: UiPageDefinition, recent: UiRecentCards):
 }
 
 /** Home: the search entry that opens the catalog and the account's recent card activity. */
-function homePage(recent: UiRecentCards): UiPageDefinition {
+function homePage(recent: CardListRecentActivity): UiPageDefinition {
   return {
     page: 'home',
     mount(container, context) {
@@ -96,10 +105,11 @@ function homePage(recent: UiRecentCards): UiPageDefinition {
         );
       });
 
-      const list = createCardList<string>({
+      const list = createCardListView({
         container: listHost,
-        source: recentSource(recent),
+        source: recent.source(accountId),
         context: accountId,
+        accountId,
         pageSize: UI_LIMITS.recentCards,
         restored: readListState<string>(restored),
         presentation: openEntryPresentation(document, 'home-result', (entry) =>
@@ -117,7 +127,7 @@ function homePage(recent: UiRecentCards): UiPageDefinition {
 }
 
 /** Catalog and search: the query of the presented view and the CardList that presents its entries. */
-function catalogPage(recent: UiRecentCards): UiPageDefinition {
+function catalogPage(recent: CardListRecentActivity): UiPageDefinition {
   return {
     page: 'catalog',
     mount(container, context) {
@@ -154,17 +164,21 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
       listHost.id = 'catalog-results';
       container.append(form, heading, refresh, listHost);
 
-      const access = createCatalogSearchAccess(
-        context.capabilities.search,
-        context.capabilities.catalog,
-      );
-      const list = createCardList<UiCatalogQuery>({
+      const list = createCardListView<CardListCatalogQuery>({
         container: listHost,
-        source: access.source,
+        source: catalogQuerySource(context.capabilities.search),
         context: catalogQueryOf(view),
+        accountId: context.account.accountId,
+        // A committed private change can alter an owned-only query, so the list reacquires the
+        // result through Search with the position the change reported.
+        changes: usercardsChanges(
+          context.capabilities.userCards.account(context.account.accountId),
+        ),
         pageSize: UI_LIMITS.catalogPage,
-        restored: readListState<UiCatalogQuery>(restored),
-        ...(view.level === 'printing' ? { fragments: { images: access.images } } : {}),
+        restored: readListState<CardListCatalogQuery>(restored),
+        ...(view.level === 'printing'
+          ? { fragments: { images: printingImagesReader(context.capabilities.catalog) } }
+          : {}),
         presentation: openEntryPresentation(document, 'catalog-result', (entry) =>
           recent.record(context.account.accountId, entry),
         ),
@@ -213,7 +227,7 @@ function catalogPage(recent: UiRecentCards): UiPageDefinition {
 }
 
 /** The query the catalog page presents for one view. */
-function catalogQueryOf(view: Extract<UiView, { page: 'catalog' }>): UiCatalogQuery {
+function catalogQueryOf(view: Extract<UiView, { page: 'catalog' }>): CardListCatalogQuery {
   return {
     text: view.query,
     level: view.level,
@@ -223,26 +237,15 @@ function catalogQueryOf(view: Extract<UiView, { page: 'catalog' }>): UiCatalogQu
 }
 
 /** One catalog view from a query; the URL then identifies the whole presented query. */
-function catalogView(query: UiCatalogQuery): UiView {
+function catalogView(query: CardListCatalogQuery): UiView {
   return {
     page: 'catalog',
     query: query.text,
-    level: query.level,
+    // The catalog route presents the card and printing levels; a copy-level query belongs to the
+    // collection and organization pages.
+    level: query.level === 'printing' ? 'printing' : 'card',
     owned: query.owned,
     finish: query.finish,
-  };
-}
-
-/** Home's list source: the account's recorded activity, which ends after that one page. */
-function recentSource(recent: UiRecentCards): UiListSource<string> {
-  return {
-    load(request) {
-      return Promise.resolve({
-        status: 'page',
-        entries: recent.entries(request.context),
-        continuation: null,
-      });
-    },
   };
 }
 

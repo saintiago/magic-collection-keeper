@@ -44,7 +44,11 @@ import type {
 } from '../../usercards/index.js';
 
 import { commitUiOperation, readUiFailureMessage, type UiChangeCommit } from './failure.js';
-import type { UiEntryTarget, UiOperationOutcome, UiToolRequest } from './list.js';
+import type {
+  CardListOperationOutcome,
+  CardListTarget,
+  CardListToolRequest,
+} from '../../card-list/index.js';
 
 /**
  * Tag kinds the organization views create and edit. The values are the UserCards provider's
@@ -353,7 +357,7 @@ export interface UiAddToTagTool {
   readonly id: string;
   readonly label: string;
   readonly tool: {
-    invoke(request: UiToolRequest): Promise<UiAddOutcome>;
+    invoke(request: CardListToolRequest): Promise<UiAddOutcome>;
   };
 }
 
@@ -363,7 +367,7 @@ export interface UiAddToTagTool {
  * is visible instead of presented as an unchanged result, and only a committed change is reported
  * as saved (docs/user-interface.md#browsing-and-organization).
  */
-export interface UiAddOutcome extends UiOperationOutcome {
+export interface UiAddOutcome extends CardListOperationOutcome {
   /** Targets whose change committed. */
   readonly committed: number;
   /** Targets whose outcome stays unknown. */
@@ -384,7 +388,7 @@ export function addToTagTool(options: {
     id: options.id,
     label: options.label,
     tool: {
-      invoke(request: UiToolRequest): Promise<UiAddOutcome> {
+      invoke(request: CardListToolRequest): Promise<UiAddOutcome> {
         return addSelection(options, request);
       },
     },
@@ -393,7 +397,7 @@ export function addToTagTool(options: {
 
 async function addSelection(
   options: Parameters<typeof addToTagTool>[0],
-  request: UiToolRequest,
+  request: CardListToolRequest,
 ): Promise<UiAddOutcome> {
   const tag = options.tag();
   if (tag === null) {
@@ -429,7 +433,7 @@ async function addSelection(
 async function addTarget(
   access: UiTagAccess,
   tag: Tag,
-  target: UiEntryTarget,
+  target: CardListTarget,
   quantity: number | null,
   signal: AbortSignal,
 ): Promise<UiChangeOutcome<unknown>> {
@@ -490,7 +494,7 @@ export async function moveCopyById(
   );
 }
 
-function targetIdOf(target: Extract<UiEntryTarget, { kind: 'card' | 'printing' }>): string {
+function targetIdOf(target: Extract<CardListTarget, { kind: 'card' | 'printing' }>): string {
   return target.kind === 'card' ? target.cardId : target.printingId;
 }
 

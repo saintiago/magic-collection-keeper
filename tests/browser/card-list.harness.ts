@@ -13,22 +13,49 @@
  */
 
 import {
-  createCardList,
-  type UiCardList,
-  type UiCardListFragments,
-  type UiCardListState as UiCardListStateShape,
-  type UiCardListTool,
-  type UiFragmentKind,
-  type UiFragmentReader,
-  type UiFragmentResult,
-  type UiListEntry,
-  type UiListRead,
-  type UiListSource,
-  type UiOperationOutcome,
-} from '../../src/ui/index.js';
+  type CardListFragmentKind as UiFragmentKind,
+  type CardListFragmentReader as UiFragmentReader,
+  type CardListFragmentReaders as UiCardListFragments,
+  type CardListFragmentResult as UiFragmentResult,
+  type CardListOperationOutcome as UiOperationOutcome,
+  type CardListRetained,
+  type CardListSource as UiListSource,
+  type CardListRead as UiListRead,
+  type CardListTarget as UiListTarget,
+  type CardListTool as UiCardListTool,
+  type CardListEntry as UiListEntry,
+  type CardListFocus as UiListFocus,
+} from '../../src/card-list/index.js';
+import { createCardListView, type UiCardList } from '../../src/ui/index.js';
 
-/** State one list retains for its page's history entry; the harness lists evaluate text queries. */
-type UiCardListRetainedState = UiCardListStateShape<string | null | undefined>;
+/**
+ * State one visit restores, as a journey describes it: the shape a CardList retains when it
+ * captures its query, position, window, selection and logical position. Journeys describe the
+ * state directly, and the harness hands it to the list through the component's opaque handle.
+ */
+export interface UiCardListRetainedState<Context = string | null | undefined> {
+  readonly kind?: 'card-list-retained';
+  readonly accountId?: string;
+  readonly context: Context;
+  readonly window: number;
+  readonly position: CardListPositionShape | null;
+  readonly selection: readonly string[];
+  readonly selectedTargets: readonly {
+    readonly key: string;
+    readonly target: UiListTarget;
+  }[];
+  readonly scrollTop: number;
+  readonly focus: UiListFocus | null;
+}
+
+/** Source position of one retained window. */
+export interface CardListPositionShape {
+  readonly continuation: string | null;
+  readonly offset: number;
+}
+
+/** Account every harness list belongs to, so one journey's retained state restores into it. */
+const harnessAccount = 'contract-account';
 
 /** One list the journey installs. */
 export interface UiCardListInstall {
@@ -114,7 +141,11 @@ export interface UiCardListControl {
   pageRequests(): readonly UiCardListPageRequest[];
   settlePage(
     id: number,
-    page: { readonly entries: readonly UiListEntry[]; readonly continuation?: string | null },
+    page: {
+      readonly entries: readonly UiListEntry[];
+      readonly continuation?: string | null;
+      readonly current?: boolean;
+    },
   ): void;
   /** Answers a request with the report that its sequence was invalidated and must restart. */
   invalidatePage(id: number): void;
@@ -181,12 +212,17 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       }));
       const controller = new AbortController();
       controllers.set(id, controller);
-      const installed = createCardList<string | null | undefined>({
+      const installed = createCardListView<string | null | undefined>({
         container,
         source: pageSource(id),
         context: options.context ?? 'result',
+        accountId: harnessAccount,
         pageSize: options.pageSize ?? 2,
-        ...(options.restored === undefined ? {} : { restored: options.restored }),
+        ...(options.restored === undefined
+          ? {}
+          : {
+              restored: options.restored === null ? null : retainedHandleOf(options.restored),
+            }),
         fragments: readers as unknown as UiCardListFragments,
         tools,
         ...(options.openEntry === true
@@ -251,7 +287,14 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       };
     },
     capture(id) {
-      return list(id).capture();
+      // The component's handle is opaque; the journey reads the state it recorded, without the
+      // scope a handle carries.
+      const handle = list(id).capture() as unknown as UiCardListRetainedState &
+        Readonly<Record<string, unknown>>;
+      const state: Record<string, unknown> = { ...handle };
+      delete state.kind;
+      delete state.accountId;
+      return state as unknown as UiCardListRetainedState;
     },
     restoration(id) {
       const report = restorations.get(id);
@@ -280,6 +323,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
         status: 'page',
         entries: page.entries,
         continuation: page.continuation ?? null,
+        current: page.current !== false,
       });
     },
     invalidatePage(id) {
@@ -345,6 +389,18 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       pending.reject(new Error(message));
     },
   };
+
+  /** Wraps one journey's described state into the handle the component validates and restores. */
+  function retainedHandleOf(
+    state: UiCardListRetainedState,
+  ): CardListRetained<string | null | undefined> {
+    return {
+      kind: 'card-list-retained',
+      accountId: harnessAccount,
+      ...state,
+      context: state.context,
+    } as unknown as CardListRetained<string | null | undefined>;
+  }
 
   function list(id: string): UiCardList<string | null | undefined> {
     const installed = lists.get(id);
@@ -443,7 +499,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
 }
 
 /** Target of one entry as the journeys assert it. */
-export function describeTarget(target: UiListEntry['target']): string {
+export function describeTarget(target: UiListTarget): string {
   switch (target.kind) {
     case 'card':
       return `card:${target.cardId}`;

@@ -8,15 +8,15 @@
  * without a backend or a production account.
  */
 
+import type { CardListRetained as UiCardListState } from '../../src/card-list/index.js';
 import {
   createUserInterface,
-  createCardList,
+  createCardListView,
   uiHref,
   type UiAccount,
   type UiIdentity,
   type UiPageDefinition,
   type UiView,
-  type UiCardListState,
   type UserInterface,
 } from '../../src/ui/index.js';
 import type { UserInterfaceCapabilities } from '../../src/application/index.js';
@@ -731,9 +731,10 @@ function listHomePage(document: Document, identity: 'identified' | 'anonymous'):
       const host = document.createElement('div');
       if (identity === 'identified') host.id = 'composed-list';
       container.append(host);
-      const list = createCardList({
+      const list = createCardListView({
         container: host,
         context: 'cards',
+        accountId: context.account.accountId,
         pageSize: 2,
         restored: context.restored?.state as UiCardListState<string> | undefined,
         signal: context.signal,
@@ -741,6 +742,7 @@ function listHomePage(document: Document, identity: 'identified' | 'anonymous'):
           load: () =>
             Promise.resolve({
               status: 'page' as const,
+              current: true,
               entries: [
                 {
                   key: 'card:1',
@@ -762,7 +764,9 @@ function listHomePage(document: Document, identity: 'identified' | 'anonymous'):
       });
       return {
         capture: () => list.capture(),
-        presented: () => list.restoration?.presented,
+        presented: async () => {
+          await list.restoration?.presented;
+        },
         dispose: () => list.dispose(),
       };
     },

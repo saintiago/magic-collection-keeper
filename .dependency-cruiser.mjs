@@ -9,13 +9,24 @@
  * browser-safe contract is src/search/browser.ts; its query, count and indexing capabilities stay
  * in src/search/index.ts. UserCards publishes its browser operation facade and constraints
  * through src/usercards/browser.ts, while its backend contracts stay in src/usercards/index.ts.
+ * CardList publishes its headless list contract, its source bindings and its account-local recent
+ * activity through src/card-list/index.ts; the presentation of the UserInterface renders it.
  */
 
-export const components = ['application', 'catalog', 'recognition', 'search', 'ui', 'usercards'];
+export const components = [
+  'application',
+  'card-list',
+  'catalog',
+  'recognition',
+  'search',
+  'ui',
+  'usercards',
+];
 
 /** Public entry modules of the components, relative to src/<component>/, without the extension. */
 const componentEntries = {
   application: ['index', 'backend', 'deployment'],
+  'card-list': ['index'],
   catalog: ['index'],
   recognition: ['index'],
   search: ['index', 'browser'],
@@ -40,8 +51,9 @@ const publicInterfaceRules = components.map((component) => ({
 
 // Source dependencies follow the composition graph, including type-only imports.
 const providers = {
-  application: ['catalog', 'recognition', 'search', 'usercards'],
-  ui: ['application', 'catalog', 'recognition', 'search', 'usercards'],
+  application: ['card-list', 'catalog', 'recognition', 'search', 'usercards'],
+  'card-list': ['catalog', 'search', 'usercards'],
+  ui: ['application', 'card-list', 'catalog', 'recognition', 'search', 'usercards'],
   catalog: [],
   recognition: ['catalog'],
   search: ['catalog', 'usercards'],

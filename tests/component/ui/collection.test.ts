@@ -21,20 +21,23 @@ import {
 } from '../../../src/usercards/browser.js';
 import { unusedUserCardsClient } from '../../support/usercards-browser.js';
 import {
-  collectionSearchRequest,
+  cardListEntryKey as uiEntryKey,
+  collectionQueryRequest as collectionSearchRequest,
+  collectionQuerySource as createCollectionQuerySource,
+  printingImagesReader,
+  type CardListEntry as UiListEntry,
+} from '../../../src/card-list/index.js';
+import {
   copyChangeTool,
   correctCopy,
-  createCollectionSearchAccess,
   createCopyAccess,
   readUiCollectionLevel,
   readUiView,
   uiCollectionLevels,
   uiCopyConditions,
-  uiEntryKey,
   uiHref,
   type UiCopyAccess,
   type UiCopyCorrection,
-  type UiListEntry,
 } from '../../../src/ui/index.js';
 import { copyConditions } from '../../../src/usercards/index.js';
 import { finishes } from '../../../src/catalog/index.js';
@@ -181,7 +184,10 @@ describe('collection search access', () => {
         }),
       listCardPrintings: () => Promise.reject(new Error('The list source reads no printings.')),
     } as unknown as Catalog;
-    const access = createCollectionSearchAccess(search, catalog);
+    const access = {
+      source: createCollectionQuerySource(search),
+      images: printingImagesReader(catalog),
+    };
     const signal = new AbortController().signal;
 
     const read = await access.source.load({
@@ -189,6 +195,7 @@ describe('collection search access', () => {
       pageSize: 50,
       continuation: 'cursor-1',
       signal,
+      required: { positions: [] },
     });
     if (read.status !== 'page') {
       throw new Error('The collection source did not report a page.');
@@ -254,7 +261,10 @@ describe('collection search access', () => {
       execute: () => Promise.reject(new Error('The images reader runs no query.')),
       counts: () => Promise.reject(new Error('The images reader reads no private counts.')),
     };
-    const access = createCollectionSearchAccess(search, catalog);
+    const access = {
+      source: createCollectionQuerySource(search),
+      images: printingImagesReader(catalog),
+    };
 
     const results = await access.images.read({
       keys: ['printing:printing-1', 'card:card-bolt'],

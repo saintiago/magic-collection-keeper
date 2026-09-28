@@ -18,7 +18,16 @@
  * (docs/user-interface.md#state-ownership-and-restoration). Every provider value renders as text.
  */
 
-import { createCardList } from './card-list.js';
+import {
+  collectionQuerySource,
+  printingImagesReader,
+  usercardsChanges,
+  type CardListCollectionQuery,
+  type CardListFragmentReader,
+  type CardListFragmentResult,
+} from '../../card-list/index.js';
+
+import { createCardListView } from './card-list.js';
 import {
   copyChangeTool,
   createCopyAccess,
@@ -27,7 +36,6 @@ import {
 } from './copy-edits.js';
 import { createCardDetailsPage } from './card-details.js';
 import { UI_LIMITS } from './limits.js';
-import type { UiFragmentReader, UiFragmentResult } from './list.js';
 import {
   controlLabel,
   openEntryPresentation,
@@ -48,7 +56,6 @@ import {
   uiHref,
   type UiView,
 } from './routes.js';
-import { createCollectionSearchAccess, type UiCollectionQuery } from './search-source.js';
 
 /** The two collection views: the account's collection and one card's details. */
 export function createCollectionPages(): readonly UiPageDefinition[] {
@@ -89,23 +96,24 @@ function collectionPage(): UiPageDefinition {
       listHost.id = 'collection-results';
       container.append(form, refresh, changes.fieldset, heading, listHost);
 
-      const access = createCollectionSearchAccess(
-        context.capabilities.search,
-        context.capabilities.catalog,
-      );
-      const copies = createCopyAccess(
-        context.capabilities.userCards.account(context.account.accountId),
-      );
-      const list = createCardList<UiCollectionQuery>({
+      const account = context.capabilities.userCards.account(context.account.accountId);
+      const copies = createCopyAccess(account);
+      const list = createCardListView<CardListCollectionQuery>({
         container: listHost,
-        source: access.source,
+        source: collectionQuerySource(context.capabilities.search),
         context: collectionQueryOf(view),
+        accountId: context.account.accountId,
+        // A committed change of the account's copies makes this result stale: the list reacquires
+        // it through Search instead of a page patching the presented rows.
+        changes: usercardsChanges(account),
         pageSize: UI_LIMITS.catalogPage,
-        restored: readListState<UiCollectionQuery>(restored),
+        restored: readListState<CardListCollectionQuery>(restored),
         fragments: {
           // A printing entry names the printing its image belongs to; a physical copy is presented
           // with the printing of its group, so only the printing level loads images.
-          ...(view.level === 'printing' ? { images: access.images } : {}),
+          ...(view.level === 'printing'
+            ? { images: printingImagesReader(context.capabilities.catalog) }
+            : {}),
           tools: copyToolsReader(),
         },
         tools: [
@@ -176,12 +184,12 @@ function collectionPage(): UiPageDefinition {
 }
 
 /** The query the collection page presents for one view. */
-function collectionQueryOf(view: Extract<UiView, { page: 'collection' }>): UiCollectionQuery {
+function collectionQueryOf(view: Extract<UiView, { page: 'collection' }>): CardListCollectionQuery {
   return { text: view.query, level: view.level };
 }
 
 /** One collection view from a query; the URL then identifies the whole presented result. */
-function collectionView(query: UiCollectionQuery): UiView {
+function collectionView(query: CardListCollectionQuery): UiView {
   return { page: 'collection', query: query.text, level: query.level };
 }
 
@@ -252,12 +260,12 @@ function readConditionChange(select: HTMLSelectElement): UiCopyChange | null {
 }
 
 /** Whether the presented entries offer the bulk copy changes; only copies can be changed. */
-function copyToolsReader(): UiFragmentReader<readonly string[]> {
+function copyToolsReader(): CardListFragmentReader<readonly string[]> {
   const available: readonly string[] = ['apply-finish', 'apply-condition'];
   return {
     read(request) {
       return Promise.resolve(
-        request.keys.map((key): UiFragmentResult<readonly string[]> => ({
+        request.keys.map((key): CardListFragmentResult<readonly string[]> => ({
           key,
           status: 'ready',
           values: key.startsWith('copy:') ? available : [],

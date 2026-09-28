@@ -1,5 +1,7 @@
+import { CARD_LIST_LIMITS } from '../../card-list/index.js';
+
 /**
- * Bounds the UserInterface enforces (docs/user-interface.md#interface,
+ * Bounds the UserInterface enforces (docs/ui/architecture.md#load-time-and-rendering,
  * docs/user-interface.md#pages-and-navigation, docs/user-interface.md#list-boundary,
  * docs/user-interface.md#browsing-and-organization). Routes and the history entries the shell
  * keeps are bounded, and each owner bounds the state it retains itself: the shell never interprets
@@ -17,24 +19,27 @@ export const UI_LIMITS = {
   routeSegment: 200,
   /** History entries whose opaque retained state the shell keeps for restoration. */
   viewStates: 20,
-  /** Characters one entry key or target identity may carry before the source answer is rejected. */
-  entryKey: 500,
+  /** Characters one entry key or target identity may carry; CardList owns the list bound. */
+  entryKey: CARD_LIST_LIMITS.entryKey,
   /** Characters one browsing text expression (a catalog or collection query) may carry. */
   catalogQuery: 500,
-  /** Entries one catalog page asks the Search contract for. */
+  /**
+   * Entries one browsing, collection or organization page asks its list for. The page picks a
+   * bound within the list's own page bound, so a page of a provider result stays small.
+   */
   catalogPage: 50,
   /** Printings one page of a card's published printings asks the Catalog contract for. */
   printingPage: 100,
-  /** Recent card entries Home presents for one account, most recent first. */
-  recentCards: 24,
-  /** Entries one CardList request asks a source for at most. */
-  listPage: 100,
-  /** Entries one CardList renders in its working set; further results slide it forward. */
-  listWindow: 500,
-  /** Entry keys one CardList fragment request asks a reader for at most. */
-  fragmentBatch: 100,
+  /** Recent card entries one account's activity keeps, most recent first. */
+  recentCards: CARD_LIST_LIMITS.recentCards,
+  /** Entries one list request asks a source for at most. */
+  listPage: CARD_LIST_LIMITS.page,
+  /** Entries one list keeps in its working set; further results slide it forward. */
+  listWindow: CARD_LIST_LIMITS.window,
+  /** Entry keys one fragment request asks a reader for at most. */
+  fragmentBatch: CARD_LIST_LIMITS.fragmentBatch,
   /** Items one entry's fragment result may present, so a broken source cannot grow one row. */
-  fragmentItems: 20,
+  fragmentItems: CARD_LIST_LIMITS.fragmentItems,
   /** Printings one page of a manual entry search asks Search for. */
   importPrintings: 20,
   /**
@@ -42,5 +47,5 @@ export const UI_LIMITS = {
    * published by the Catalog contract, whose barrel is not browser-safe, so the page sizes its
    * requests itself within that bound and a larger set is resolved in further requests.
    */
-  catalogResolveBatch: 100,
+  catalogResolveBatch: CARD_LIST_LIMITS.resolveBatch,
 } as const;

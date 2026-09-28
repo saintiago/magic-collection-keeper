@@ -22,9 +22,12 @@ import type {
 } from '../../usercards/browser.js';
 import type { CopyChangeResult, CopyCondition, PhysicalCopy } from '../../usercards/index.js';
 
-import type { UiCardListTool } from './card-list.js';
+import type {
+  CardListOperationOutcome,
+  CardListTool,
+  CardListToolRequest,
+} from '../../card-list/index.js';
 import { readUiFailureMessage } from './failure.js';
-import type { UiOperationOutcome, UiToolRequest } from './list.js';
 
 /**
  * Conditions the copy corrections offer. The values are the UserCards provider's published
@@ -191,12 +194,12 @@ export function copyChangeTool(options: {
   change(): UiCopyChange | null;
   /** What the user must choose before the tool can act, reported when `change` names none. */
   readonly guidance: string;
-}): UiCardListTool {
+}): CardListTool {
   return {
     id: options.id,
     label: options.label,
     tool: {
-      invoke(request: UiToolRequest): Promise<UiOperationOutcome> {
+      invoke(request: CardListToolRequest): Promise<CardListOperationOutcome> {
         return applyCopyChange(options.access, request, options.change(), options.guidance);
       },
     },
@@ -205,10 +208,10 @@ export function copyChangeTool(options: {
 
 async function applyCopyChange(
   access: UiCopyAccess,
-  request: UiToolRequest,
+  request: CardListToolRequest,
   change: UiCopyChange | null,
   guidance: string,
-): Promise<UiOperationOutcome> {
+): Promise<CardListOperationOutcome> {
   if (change === null) {
     return { status: 'failed', message: guidance };
   }
@@ -271,7 +274,7 @@ function changeOf(
 function copyChangeOutcome(
   counts: { committed: number; conflict: number; failed: number; unknown: number },
   total: number,
-): UiOperationOutcome {
+): CardListOperationOutcome {
   if (counts.unknown > 0) {
     return {
       status: 'unknown',

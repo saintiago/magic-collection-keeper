@@ -52,12 +52,21 @@ import type {
 
 import { createCaptureControls, type UiCaptureReviewChange } from './capture.js';
 import {
-  cardListBasicContent,
-  createCardList,
-  type UiCardList,
-  type UiCardListState,
-  type UiCardListTool,
-} from './card-list.js';
+  catalogQuerySource,
+  cardListEntryKey,
+  isInvalidatedContinuation,
+  readableSearchPage,
+  type CardListCatalogQuery,
+  type CardListEntry,
+  type CardListFragmentReader,
+  type CardListOperationOutcome,
+  type CardListRetained,
+  type CardListSource,
+  type CardListTarget,
+  type CardListTool,
+  type CardListToolRequest,
+} from '../../card-list/index.js';
+import { cardListBasicContent, createCardListView, type UiCardList } from './card-list.js';
 import { uiCopyConditions } from './copy-edits.js';
 import {
   beginSourceImport,
@@ -75,7 +84,7 @@ import {
   uiImportSourceLabel,
   type UiImportLine,
 } from './import-edits.js';
-import { isUiInvalidatedContinuation, type UiChangeCommit } from './failure.js';
+import { type UiChangeCommit } from './failure.js';
 import type {
   UserCardsConfirmationOutcome,
   UserCardsOperation,
@@ -84,29 +93,16 @@ import type {
   UserCardsSourceImportRequest,
 } from '../../usercards/browser.js';
 import { UI_LIMITS } from './limits.js';
-import type {
-  UiEntryTarget,
-  UiFragmentReader,
-  UiListEntry,
-  UiListSource,
-  UiOperationOutcome,
-  UiToolRequest,
-} from './list.js';
 import type { UiPageDefinition } from './pages.js';
 import {
   controlLabel,
   readListState,
   readPageState,
+  restoredPresentation,
   selectControl,
   type UiSelectOption,
 } from './page-support.js';
 import { uiCatalogFinishes, uiFinishLabel } from './routes.js';
-import {
-  createCatalogSearchAccess,
-  readableSearchPage,
-  uiEntryKey,
-  type UiCatalogQuery,
-} from './search-source.js';
 
 /** The one manual entry queue of an account; its lines are reviewed and confirmed like any import. */
 const manualImport = {
@@ -202,7 +198,7 @@ interface UiConfirmationDraft {
 /** One presented pending-entry editor, redrawn as its draft or its stored record changes. */
 interface UiImportEditor {
   readonly controls: HTMLSpanElement;
-  readonly entry: UiListEntry;
+  readonly entry: CardListEntry;
   readonly status: HTMLParagraphElement;
 }
 
@@ -419,7 +415,7 @@ function importPage(): UiPageDefinition {
       /** Unsaved review input per entry, kept across redraws and with the history entry. */
       const drafts = readReviewDrafts(restored?.review);
       let confirmation = retainedConfirmation();
-      let results: UiCardList<UiCatalogQuery> | null = null;
+      let results: UiCardList<CardListCatalogQuery> | null = null;
       let pending: UiCardList<string> | null = null;
       /** Whether a confirmation or a recovery of one is in flight, so only one acts at a time. */
       let confirming = false;
@@ -471,7 +467,7 @@ function importPage(): UiPageDefinition {
       });
 
       if (retainedResults !== null) {
-        composeResults(readListState<UiCatalogQuery>(retainedResults));
+        composeResults(readListState<CardListCatalogQuery>(retainedResults));
       }
       if (retainedPending !== null) {
         composePending(retainedPending.sessionId, retainedPending.list);
@@ -554,8 +550,8 @@ function importPage(): UiPageDefinition {
         const target = sessionId ?? defaultSessionId(sessions);
         present(target);
         const restorations: (Promise<void> | null)[] = [
-          results?.restoration?.presented ?? null,
-          pending?.restoration?.presented ?? null,
+          results === null ? null : restoredPresentation(results),
+          pending === null ? null : restoredPresentation(pending),
         ];
         const outstanding = restorations.filter(
           (restoration): restoration is Promise<void> => restoration !== null,
@@ -710,13 +706,14 @@ function importPage(): UiPageDefinition {
       /** Composes the pending-entry list of one session, restoring the state the entry retained. */
       function composePending(
         presentedSession: string,
-        restoredState: UiCardListState<string> | undefined,
+        restoredState: CardListRetained<string> | undefined,
       ): void {
         pending?.dispose();
-        pending = createCardList<string>({
+        pending = createCardListView({
           container: pendingHost,
           source: pendingSource(),
           context: presentedSession,
+          accountId: context.account.accountId,
           pageSize: constraints.pages.imports.default,
           restored: restoredState,
           fragments: { tools: pendingToolsReader() },
@@ -730,12 +727,14 @@ function importPage(): UiPageDefinition {
       }
 
       /** Composes the catalog result list of the manual entry search. */
-      function composeResults(restoredState: UiCardListState<UiCatalogQuery> | undefined): void {
-        const resultsAccess = createCatalogSearchAccess(search, catalog);
-        results = createCardList<UiCatalogQuery>({
+      function composeResults(
+        restoredState: CardListRetained<CardListCatalogQuery> | undefined,
+      ): void {
+        results = createCardListView<CardListCatalogQuery>({
           container: resultsHost,
-          source: resultsAccess.source,
+          source: catalogQuerySource(search),
           context: { text: query.value.trim(), level: 'printing', owned: false, finish: null },
+          accountId: context.account.accountId,
           pageSize: UI_LIMITS.importPrintings,
           restored: restoredState,
           fragments: { tools: resultToolsReader() },
@@ -752,7 +751,7 @@ function importPage(): UiPageDefinition {
           return;
         }
         manualStatus.textContent = '';
-        const wanted: UiCatalogQuery = {
+        const wanted: CardListCatalogQuery = {
           text,
           level: 'printing',
           owned: false,
@@ -1030,7 +1029,7 @@ function importPage(): UiPageDefinition {
        * never staged twice under two identities
        * (docs/user-cards.md#import-and-capture-state).
        */
-      async function addSelection(request: UiToolRequest): Promise<UiOperationOutcome> {
+      async function addSelection(request: CardListToolRequest): Promise<CardListOperationOutcome> {
         const waiting = retainedStagingAttempts();
         if (waiting.length > 0) {
           // The provider keeps an earlier staging whose outcome is not established: retrying it is
@@ -1073,9 +1072,9 @@ function importPage(): UiPageDefinition {
         // carrying the identity UserCards retains while its outcome is not established
         // (docs/user-cards.md#interface).
         let inReview = 0;
-        let reported: UiOperationOutcome | null = null;
+        let reported: CardListOperationOutcome | null = null;
         for (const batch of inBatches(lines, constraints.batch.stageEntries)) {
-          const keys = batch.map((line) => uiEntryKey(stagedLineTarget(line)));
+          const keys = batch.map((line) => cardListEntryKey(stagedLineTarget(line)));
           const outcome = await stageImportLines(
             access,
             {
@@ -1159,7 +1158,7 @@ function importPage(): UiPageDefinition {
               for (const entry of attempt.request.entries) {
                 const printingId = entry.printingId ?? null;
                 if (printingId !== null) {
-                  results?.setSelected(uiEntryKey({ kind: 'printing', printingId }), false);
+                  results?.setSelected(cardListEntryKey({ kind: 'printing', printingId }), false);
                 }
               }
               inReview += outcome.record.staged;
@@ -1230,7 +1229,7 @@ function importPage(): UiPageDefinition {
       }
 
       /** One row's basic information: the printing it will create and its reviewed values. */
-      function entryContent(entry: UiListEntry): Node {
+      function entryContent(entry: CardListEntry): Node {
         return cardListBasicContent(document, entry);
       }
 
@@ -1239,7 +1238,7 @@ function importPage(): UiPageDefinition {
        * exposes before confirmation, the printing search that corrects them and the controls that
        * save the review or discard the entry (docs/user-interface.md#capture-and-review).
        */
-      function entryEditor(entry: UiListEntry): Node | null {
+      function entryEditor(entry: CardListEntry): Node | null {
         const record = records.get(entry.key);
         if (record === undefined) {
           return null;
@@ -1643,7 +1642,9 @@ function importPage(): UiPageDefinition {
       }
 
       /** Confirms the selected entries and presents the copies its receipt names. */
-      async function confirmSelection(request: UiToolRequest): Promise<UiOperationOutcome> {
+      async function confirmSelection(
+        request: CardListToolRequest,
+      ): Promise<CardListOperationOutcome> {
         if (confirming || recovering || confirmation !== null) {
           return {
             status: 'failed',
@@ -1659,7 +1660,7 @@ function importPage(): UiPageDefinition {
           if (target.kind !== 'pending') {
             continue;
           }
-          const key = uiEntryKey(target);
+          const key = cardListEntryKey(target);
           // The reviewed revision the page read with the row, or the one it keeps for an explicit
           // selection outside the loaded window
           // (docs/user-interface.md#state-ownership-and-restoration).
@@ -1682,7 +1683,7 @@ function importPage(): UiPageDefinition {
         paintConfirmation();
         let copies = 0;
         let note: string | null = null;
-        let reported: UiOperationOutcome | null = null;
+        let reported: CardListOperationOutcome | null = null;
         try {
           for (const entries of inBatches(chosen, constraints.batch.confirmEntries)) {
             // The provider owns the operation identity; the page presents the attempt while its
@@ -1737,7 +1738,7 @@ function importPage(): UiPageDefinition {
       /** Clears only the selection and drafts covered by this established confirmation. */
       function forgetConfirmed(operation: UiConfirmationDraft): void {
         for (const entry of operation.entries) {
-          const key = uiEntryKey({ kind: 'pending', entryId: entry.entryId });
+          const key = cardListEntryKey({ kind: 'pending', entryId: entry.entryId });
           if (sessionId === operation.sessionId) {
             pending?.setSelected(key, false);
             selectedRevisions.delete(key);
@@ -1757,7 +1758,7 @@ function importPage(): UiPageDefinition {
           adoptSession(changed);
           return;
         }
-        const key = uiEntryKey({ kind: 'pending', entryId: entry.entryId });
+        const key = cardListEntryKey({ kind: 'pending', entryId: entry.entryId });
         const record = records.get(key);
         if (record !== undefined) {
           records.delete(key);
@@ -1900,7 +1901,7 @@ function importPage(): UiPageDefinition {
       }
 
       /** Whether each presented entry's stored revision is known for a confirmation. */
-      function pendingToolsReader(): UiFragmentReader<readonly string[]> {
+      function pendingToolsReader(): CardListFragmentReader<readonly string[]> {
         return {
           read(request) {
             return Promise.resolve(
@@ -1915,7 +1916,7 @@ function importPage(): UiPageDefinition {
       }
 
       /** Whether each printed search result can enter the manual import. */
-      function resultToolsReader(): UiFragmentReader<readonly string[]> {
+      function resultToolsReader(): CardListFragmentReader<readonly string[]> {
         return {
           read(request) {
             return Promise.resolve(
@@ -1930,23 +1931,24 @@ function importPage(): UiPageDefinition {
       }
 
       /** The tool that stages the explicit selected printings as manual pending lines. */
-      function addTool(): UiCardListTool {
+      function addTool(): CardListTool {
         return {
           id: 'add-to-review',
           label: 'Add to review',
           tool: {
-            invoke: (request: UiToolRequest): Promise<UiOperationOutcome> => addSelection(request),
+            invoke: (request: CardListToolRequest): Promise<CardListOperationOutcome> =>
+              addSelection(request),
           },
         };
       }
 
       /** The tool that confirms the explicit selected pending entries. */
-      function confirmTool(): UiCardListTool {
+      function confirmTool(): CardListTool {
         return {
           id: 'confirm-import',
           label: 'Confirm selected',
           tool: {
-            invoke: (request: UiToolRequest): Promise<UiOperationOutcome> =>
+            invoke: (request: CardListToolRequest): Promise<CardListOperationOutcome> =>
               confirmSelection(request),
           },
         };
@@ -1956,10 +1958,17 @@ function importPage(): UiPageDefinition {
        * The pending entries of one session through the list boundary: each entry keeps its own
        * identity as a pending target and is enriched with the catalog record its printing names.
        * An entry the catalog cannot resolve stays explicitly unresolved instead of presenting
-       * another card's information.
+       * another card's information. The page composes this read with the provider records its
+       * review holds (the revision and stored values a confirmation or correction quotes), so the
+       * source stays here while CardList owns the window, selection, enrichment and restoration
+       * built on the list protocol it produces (docs/card-list.md#interface).
        */
-      function pendingSource(): UiListSource<string> {
+      function pendingSource(): CardListSource<string> {
         return {
+          // Only a change that names the presented import may change its entries; a change of
+          // another import or of the account's copies reacquires nothing here.
+          affects: (change, presented) =>
+            change.imports.includes(presented) || change.scope === 'catalog',
           async load(request) {
             let page: ImportEntryListResult;
             try {
@@ -1972,7 +1981,7 @@ function importPage(): UiPageDefinition {
                 request.signal,
               );
             } catch (cause) {
-              if (request.continuation !== null && isUiInvalidatedContinuation(cause)) {
+              if (request.continuation !== null && isInvalidatedContinuation(cause)) {
                 // The session's private revision changed after the continuation was read: the
                 // list restarts the pending entries from their first page instead of repeating a
                 // continuation the provider keeps refusing (docs/user-cards.md#interface).
@@ -1990,6 +1999,7 @@ function importPage(): UiPageDefinition {
                 status: 'page',
                 entries: read.map((record) => pendingListEntry(entryKeyOf(record), record)),
                 continuation: page.continuation,
+                current: true,
               };
             }
             const selected = new Set(pending?.selection ?? []);
@@ -2020,6 +2030,7 @@ function importPage(): UiPageDefinition {
               status: 'page',
               entries: read.map((record) => pendingListEntry(entryKeyOf(record), record)),
               continuation: page.continuation,
+              current: true,
             };
           },
         };
@@ -2029,7 +2040,7 @@ function importPage(): UiPageDefinition {
 }
 
 /** One pending entry as the list boundary presents it, with the catalog record it names. */
-function pendingListEntry(key: string, record: UiPendingRecord): UiListEntry {
+function pendingListEntry(key: string, record: UiPendingRecord): CardListEntry {
   const printing = record.printing;
   return {
     key,
@@ -2058,7 +2069,7 @@ function pendingListEntry(key: string, record: UiPendingRecord): UiListEntry {
 
 /** Entry key of one pending record, taken from its own identity. */
 function entryKeyOf(record: UiPendingRecord): string {
-  return uiEntryKey({ kind: 'pending', entryId: record.entry.entryId });
+  return cardListEntryKey({ kind: 'pending', entryId: record.entry.entryId });
 }
 
 /** Resolves the printings and cards the pending entries name through Catalog. */
@@ -2339,7 +2350,7 @@ function readReviewDrafts(value: unknown): Map<string, UiReviewDraft> {
 function readRetainedPending(
   value: unknown,
   sessionId: string | null,
-): { readonly sessionId: string; readonly list: UiCardListState<string> | undefined } | null {
+): { readonly sessionId: string; readonly list: CardListRetained<string> | undefined } | null {
   const record = readPageState(value);
   const retainedSession = readSessionId(record?.sessionId);
   if (record === null || retainedSession === null || retainedSession !== sessionId) {
@@ -2525,7 +2536,7 @@ function stagedMessage(lines: number): string {
 function stagingOutcome(
   inReview: number,
   outcome: UiChangeCommit<ImportStageResult>,
-): UiOperationOutcome {
+): CardListOperationOutcome {
   if (inReview === 0) {
     return { status: outcome.status, message: outcome.message };
   }
@@ -2556,7 +2567,7 @@ function sameReviewDraft(draft: UiReviewDraft, submitted: Readonly<UiReviewDraft
 }
 
 /** The printing target whose entry key keeps one staged line's identity for an idempotent retry. */
-function stagedLineTarget(line: UiImportLine): UiEntryTarget {
+function stagedLineTarget(line: UiImportLine): CardListTarget {
   return { kind: 'printing', printingId: line.printingId };
 }
 

@@ -476,7 +476,7 @@ test('the card level lists published printings and opens one printing level', as
   await expect(page.locator('#card-printings a')).toHaveCount(2);
   await expect(page.locator('#card-printings [data-ui-more]')).toBeHidden();
 
-  await page.locator('#card-printing-printing-2').click();
+  await page.locator('[id="card-printing-printing%3Aprinting-2"]').click();
   await expect(page).toHaveURL(/#\/cards\/card-1\/printing-2$/);
   await settlePrinting(page, 'printing-2', { printings: [printingRecord('printing-2')] });
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
@@ -497,7 +497,7 @@ test('returning to a card level re-presents the printing window it held', async 
   await expect(page.locator('#card-printings a')).toHaveCount(2);
 
   // A printing of the second page is opened; Back returns to the window it was opened from.
-  await page.locator('#card-printing-printing-2').click();
+  await page.locator('[id="card-printing-printing%3Aprinting-2"]').click();
   await expect(page).toHaveURL(/#\/cards\/card-1\/printing-2$/);
   await settlePrinting(page, 'printing-2', { printings: [printingRecord('printing-2')] });
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
@@ -513,7 +513,7 @@ test('returning to a card level re-presents the printing window it held', async 
   expect(restoredSecond?.options.continuation).toBe('cursor-2');
   await settlePrintings(page, restoredSecond!.id, [printingRecord('printing-2')], null);
   await expect(page.locator('#card-printings a')).toHaveCount(2);
-  await expect(page.locator('#card-printing-printing-2')).toBeFocused();
+  await expect(page.locator('[id="card-printing-printing%3Aprinting-2"]')).toBeFocused();
   expect(errors).toEqual([]);
 });
 
@@ -563,7 +563,7 @@ test('an invalidated printing continuation restarts the card printing list', asy
   expect(restart?.options.continuation).toBeUndefined();
   await expect(page.locator('#card-printings a')).toHaveCount(1);
   await settlePrintings(page, restart!.id, [printingRecord('printing-3')], null);
-  await expect(page.locator('#card-printing-printing-3')).toBeVisible();
+  await expect(page.locator('[id="card-printing-printing%3Aprinting-3"]')).toBeVisible();
   await expect(page.locator('#card-printings a')).toHaveCount(1);
   await expect(page.locator('#card-printings [data-ui-more]')).toBeHidden();
   expect(errors).toEqual([]);
@@ -585,7 +585,7 @@ test('a failed card-level restore keeps the printing window it was holding', asy
     [printingRecord('printing-2')],
     null,
   );
-  await page.locator('#card-printing-printing-2').click();
+  await page.locator('[id="card-printing-printing%3Aprinting-2"]').click();
   await settlePrinting(page, 'printing-2', { printings: [printingRecord('printing-2')] });
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
   await expect(page.locator('#printing-name')).toHaveText('Lightning Bolt');
