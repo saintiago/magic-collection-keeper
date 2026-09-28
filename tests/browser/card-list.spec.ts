@@ -885,6 +885,17 @@ test('presents equivalent copies as one group without losing individual copies',
       .evaluate((element) => (element as HTMLInputElement).indeterminate),
   ).toBe(true);
   expect(await state(page, 'a')).toMatchObject({ selection: ['copy:1'] });
+
+  await page.getByRole('button', { name: 'Clear selection' }).click();
+  expect(await state(page, 'a')).toMatchObject({ selection: [] });
+  await expect(equivalent.locator('[data-ui-group-select]')).not.toBeChecked();
+  await expect(page.locator('#list-a [data-ui-select="copy:1"]')).not.toBeChecked();
+  expect(
+    await equivalent
+      .locator('[data-ui-group-select]')
+      .evaluate((element) => (element as HTMLInputElement).indeterminate),
+  ).toBe(false);
+  await expect(page.getByRole('button', { name: 'Clear selection' })).toBeDisabled();
 });
 
 test('keeps two lists independent in query, window, selection and failure state', async ({

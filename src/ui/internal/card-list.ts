@@ -163,7 +163,12 @@ export function createCardListView<Context>(
   const selectionCount = document.createElement('span');
   selectionCount.dataset.uiSelectionCount = '';
   selectionCount.setAttribute('aria-live', 'polite');
-  toolbar.append(selectionCount);
+  const clearSelectionButton = document.createElement('button');
+  clearSelectionButton.type = 'button';
+  clearSelectionButton.textContent = 'Clear selection';
+  clearSelectionButton.dataset.uiClearSelection = '';
+  clearSelectionButton.disabled = true;
+  toolbar.append(selectionCount, clearSelectionButton);
   for (const [id, definition] of tools) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -626,6 +631,7 @@ export function createCardListView<Context>(
     renderedSelection = signature;
     const selected = new Set(snapshot.selection.keys);
     selectionCount.textContent = `${snapshot.selection.keys.length} selected`;
+    clearSelectionButton.disabled = selected.size === 0;
     for (const [key, row] of rows) {
       row.checkbox.checked = selected.has(key);
     }
@@ -684,8 +690,8 @@ export function createCardListView<Context>(
       const unavailable = snapshot.selection.unavailable.length;
       parts.push(
         unavailable === 1
-          ? '1 selected entry changed; select it again to act on the presented entry.'
-          : `${unavailable} selected entries changed; select them again to act on the presented entries.`,
+          ? '1 selected entry changed or is unavailable. Clear selection to choose entries again, or select it again if it is shown.'
+          : `${unavailable} selected entries changed or are unavailable. Clear selection to choose entries again, or select them again if they are shown.`,
       );
     }
     statusLine.textContent = parts.join(' ');
@@ -857,9 +863,14 @@ export function createCardListView<Context>(
     }
     const target = event.target as Element | null;
     const control =
-      target?.closest?.('[data-ui-more],[data-ui-retry],[data-ui-tool],[data-ui-fragment-retry]') ??
-      null;
+      target?.closest?.(
+        '[data-ui-more],[data-ui-retry],[data-ui-tool],[data-ui-fragment-retry],[data-ui-clear-selection]',
+      ) ?? null;
     if (control === null) {
+      return;
+    }
+    if (control.hasAttribute('data-ui-clear-selection')) {
+      list.clearSelection();
       return;
     }
     if (control.hasAttribute('data-ui-more')) {

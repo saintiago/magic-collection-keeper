@@ -735,7 +735,8 @@ function importPage(): UiPageDefinition {
       /**
        * Follows the presented pending entries: the session record the binding read keeps the
        * page's provenance and discard state current, and every explicitly selected entry keeps the
-       * revision its confirmation quotes even after the row leaves the loaded window
+       * revision its confirmation quotes even after the row leaves the loaded window. Release
+       * editors outside that window; their drafts and selected revisions have separate owners
        * (docs/user-interface.md#state-ownership-and-restoration).
        */
       function observePendingEntries(list: UiCardList<string>): void {
@@ -743,6 +744,12 @@ function importPage(): UiPageDefinition {
           const binding = pendingEntries;
           if (binding === null || closed) {
             return;
+          }
+          const presented = new Set(list.entries.map((entry) => entry.key));
+          for (const key of editors.keys()) {
+            if (!presented.has(key)) {
+              editors.delete(key);
+            }
           }
           const readSession = binding.session();
           if (
