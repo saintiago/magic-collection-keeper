@@ -119,7 +119,7 @@ const printingUpsertStatement = `insert into catalog_private.printing (
 const revisionUpsertStatement = `insert into catalog_private.revision (
     singleton, revision_id, source_name, source_version, published_at
   )
-  values (true, :revision_id, :source_name, :source_version, :published_at)
+  values (true, :revision_id, :source_name, :source_version, cast(:published_at as timestamptz))
   on conflict (singleton) do update set
     revision_id = excluded.revision_id,
     source_name = excluded.source_name,

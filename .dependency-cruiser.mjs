@@ -3,18 +3,20 @@
  * tests/integration/boundaries.test.ts. Each component owns its provider-owned public entry points
  * under src/<component> (docs/architecture.md); other components import those modules rather than
  * the component's internals. Application serves a browser and a backend runtime, so its browser-safe
- * contract is src/application/index.ts and its backend composition is src/application/backend.ts.
+ * contract is src/application/index.ts and its backend compositions are src/application/backend.ts
+ * and the packaged deployment composition src/application/deployment.ts. UserInterface's browser
+ * entry points are src/ui/index.ts and the deployment composition src/ui/deployment.ts.
  */
 
 export const components = ['application', 'catalog', 'recognition', 'search', 'ui', 'usercards'];
 
 /** Public entry modules of the components, relative to src/<component>/, without the extension. */
 const componentEntries = {
-  application: ['index', 'backend'],
+  application: ['index', 'backend', 'deployment'],
   catalog: ['index'],
   recognition: ['index'],
   search: ['index'],
-  ui: ['index'],
+  ui: ['index', 'deployment'],
   usercards: ['index'],
 };
 
@@ -76,7 +78,7 @@ const config = {
       name: 'no-backend-in-ui',
       severity: 'error',
       from: { path: '^src/ui/' },
-      to: { path: '^src/application/backend\\.ts$' },
+      to: { path: '^src/application/(backend|deployment)\\.ts$' },
     },
   ],
   options: {

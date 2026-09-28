@@ -101,6 +101,12 @@ import {
   ApplicationError,
   type ApplicationFailureCode,
 } from './failures.js';
+import {
+  createBrowserAuthentication,
+  type BrowserCredentialPrompt,
+  type BrowserIdentity,
+  type BrowserSessionStore,
+} from './browser-authentication.js';
 import { resolvePublicSettings, type PublicApplicationSettings } from './configuration.js';
 import { applicationRoutes } from './paths.js';
 import { applicationPath } from './transport.js';
@@ -133,7 +139,7 @@ export interface AuthenticatedRequest extends RequestTransport {
 export interface AuthenticatedRequestOptions {
   /** Base URL of the entry point; the request path is appended. */
   readonly baseUrl: string;
-  /** Supplies the current Cognito ID token, or null when the caller is signed out. */
+  /** Supplies the current ID token, null when signed out, or throws when acquisition is unavailable. */
   readonly token: () => string | null | Promise<string | null>;
   readonly fetch?: typeof globalThis.fetch;
 }
@@ -725,6 +731,8 @@ export function createUserCardsClient(request: RequestTransport): UserCardsClien
 /** Component access and public configuration the UserInterface receives (docs/user-interface.md#interface). */
 export interface UserInterfaceCapabilities {
   readonly settings: PublicApplicationSettings;
+  /** Verified-account capability of this environment's sign-in. */
+  readonly identity: BrowserIdentity;
   /** Authenticated transport to the interactive backend entry point. */
   readonly request: AuthenticatedRequest;
   /** Public Catalog reads: card and printing information of the presented entries. */
@@ -740,8 +748,17 @@ export interface UserInterfaceCapabilities {
 export interface BrowserApplicationOptions {
   /** Raw public settings as the deployment published them; private settings are rejected. */
   readonly settings: unknown;
-  readonly token: () => string | null | Promise<string | null>;
+  /**
+   * Sign-in interaction of this environment's UserInterface. Application owns the session behind
+   * it: the shell asks this prompt for credentials, and the transport carries the token of the
+   * session it establishes.
+   */
+  readonly prompt: BrowserCredentialPrompt;
+  /** Where the sign-in keeps its tokens; defaults to this browsing session. */
+  readonly storage?: BrowserSessionStore;
   readonly fetch?: typeof globalThis.fetch;
+  /** Current time in milliseconds; tests control refresh without changing the system clock. */
+  readonly now?: () => number;
   /** Selects a replacement Recognition implementation; defaults to the preserved engines. */
   readonly createRecognition?: (capabilities: {
     readonly settings: PublicApplicationSettings;
@@ -753,6 +770,8 @@ export interface BrowserApplicationOptions {
 
 export interface BrowserApplication {
   readonly settings: PublicApplicationSettings;
+  /** Verified-account capability Application supplies to the UserInterface. */
+  readonly identity: BrowserIdentity;
   /** Authenticated transport to every backend entry point of this environment. */
   readonly request: AuthenticatedRequest;
   readonly createRecognition: () => Recognition<HTMLCanvasElement>;
@@ -769,9 +788,16 @@ export interface BrowserApplication {
  */
 export function createBrowserApplication(options: BrowserApplicationOptions): BrowserApplication {
   const settings = resolvePublicSettings(options?.settings);
+  const authentication = createBrowserAuthentication({
+    settings,
+    prompt: options?.prompt,
+    ...(options?.storage === undefined ? {} : { storage: options.storage }),
+    ...(options?.fetch === undefined ? {} : { fetch: options.fetch }),
+    ...(options?.now === undefined ? {} : { now: options.now }),
+  });
   const api = createAuthenticatedRequest({
     baseUrl: settings.apiBaseUrl,
-    token: options.token,
+    token: () => authentication.token(),
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
   const compute =
@@ -779,10 +805,20 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
       ? null
       : createAuthenticatedRequest({
           baseUrl: settings.recognition.computeBaseUrl,
-          token: options.token,
+          token: () => authentication.token(),
           ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
         });
   const request = createEntryPointRequest(api, compute);
+  // Account isolation belongs to Application even when no UserInterface is constructed. A token
+  // refresh for the same account keeps its requests valid, including the one awaiting that token.
+  let accountId = authentication.identity.current()?.accountId ?? null;
+  authentication.identity.subscribe((account) => {
+    const nextAccountId = account?.accountId ?? null;
+    if (nextAccountId !== accountId) {
+      accountId = nextAccountId;
+      request.endSession();
+    }
+  });
   const catalog = createCatalogClient(request);
   const search = createSearchClient(request);
   const userCards = createUserCardsClient(request);
@@ -802,6 +838,7 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
     typeof options.createUserInterface === 'function'
       ? options.createUserInterface({
           settings,
+          identity: authentication.identity,
           request,
           catalog,
           search,
@@ -811,11 +848,13 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
       : null;
   return {
     settings,
+    identity: authentication.identity,
     request,
     createRecognition: createRecognitionContract,
     userInterface,
     endSession() {
       request.endSession();
+      void authentication.identity.signOut();
     },
   };
 }
@@ -875,7 +914,9 @@ async function readCredential(
   try {
     credential = await token();
   } catch (cause) {
-    throw new ApplicationError('unauthorized', 'Sign in to use the collection.', { cause });
+    throw new ApplicationError('unavailable', 'The sign-in service could not be reached.', {
+      cause,
+    });
   }
   if (typeof credential !== 'string' || credential.length === 0) {
     throw new ApplicationError('unauthorized', 'Sign in to use the collection.');

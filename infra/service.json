@@ -601,7 +601,7 @@
                 {
                   "Sid": "SnapshotObjects",
                   "Effect": "Allow",
-                  "Action": "s3:GetObject",
+                  "Action": ["s3:GetObject", "s3:GetObjectVersion"],
                   "Resource": {
                     "Fn::Sub": [
                       "arn:${AWS::Partition}:s3:::${Bucket}/${Prefix}*",

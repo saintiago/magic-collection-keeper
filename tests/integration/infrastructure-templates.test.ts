@@ -15,6 +15,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import { GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+
+import {
+  createS3SnapshotClient,
+  createS3SnapshotSource,
+} from '../../src/application/deployment.js';
 
 import { applicationEnvironments } from '../../src/application/index.js';
 
@@ -420,6 +426,59 @@ describe('rebuild infrastructure templates', () => {
     expect(databaseGroup?.Properties?.SecurityGroupIngress ?? []).toEqual([]);
   });
 
+  it('permits the snapshot adapter’s metadata and version-pinned reads within its object prefix', async () => {
+    const role = service.Resources.CatalogTaskRole;
+    expect(role).toBeDefined();
+    const objects = policyStatements(role!).find(
+      (statement) => statement.Sid === 'SnapshotObjects',
+    );
+    expect(objects?.Effect).toBe('Allow');
+    expect(objects?.Resource).toEqual({
+      'Fn::Sub': [
+        'arn:${AWS::Partition}:s3:::${Bucket}/${Prefix}*',
+        {
+          Bucket: { 'Fn::ImportValue': { 'Fn::Sub': 'keeper-${Environment}-snapshot-bucket' } },
+          Prefix: { 'Fn::ImportValue': { 'Fn::Sub': 'keeper-${Environment}-snapshot-prefix' } },
+        },
+      ],
+    });
+    const permitted = actionsOf(objects ?? {});
+    const required: string[] = [];
+    const source = createS3SnapshotSource({
+      bucket: 'keeper-test-snapshots',
+      prefix: 'snapshots/',
+      client: createS3SnapshotClient({
+        async send(command: unknown) {
+          // AWS requires GetObject for unversioned HEAD, GetObjectVersion for a versioned GET.
+          expect(command instanceof HeadObjectCommand || command instanceof GetObjectCommand).toBe(
+            true,
+          );
+          const input = (command as HeadObjectCommand | GetObjectCommand).input;
+          expect(input).toMatchObject({
+            Bucket: 'keeper-test-snapshots',
+            Key: 'snapshots/default_cards.jsonl',
+          });
+          const action = input.VersionId === undefined ? 's3:GetObject' : 's3:GetObjectVersion';
+          required.push(action);
+          expect(permitted).toContain(action);
+          return {
+            Metadata: { 'source-version': '2026-09-01T00:00:00.000Z' },
+            VersionId: 'version-1',
+            Body: (async function* () {
+              yield '{}';
+            })(),
+          };
+        },
+      } as never),
+    });
+    const snapshot = await source.open({ dataset: 'default_cards' });
+    const chunks: string[] = [];
+    for await (const chunk of snapshot.text) chunks.push(chunk);
+    expect(chunks).toEqual(['{}']);
+    expect(required).toEqual(['s3:GetObject', 's3:GetObjectVersion']);
+    expect(permitted).toEqual(required);
+  });
+
   it('grants every workload role one bounded inline policy', () => {
     const expectedAccess: Readonly<
       Record<string, { readonly prefixes: readonly string[]; readonly actions: readonly string[] }>
@@ -440,6 +499,7 @@ describe('rebuild infrastructure templates', () => {
         prefixes: ['logs:', 'rds-data:', 's3:', 'secretsmanager:'],
         actions: [
           's3:GetObject',
+          's3:GetObjectVersion',
           'rds-data:ExecuteStatement',
           'secretsmanager:GetSecretValue',
           'logs:PutLogEvents',

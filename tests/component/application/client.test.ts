@@ -25,7 +25,7 @@ import {
   resolveApplicationConfiguration,
 } from '../../../src/application/index.js';
 
-import { testConfiguration } from './harness.js';
+import { signedInStorage, testConfiguration, testPrompt } from './harness.js';
 
 interface FetchCall {
   readonly url: string;
@@ -1048,7 +1048,8 @@ describe('browser application', () => {
           ...(publicSettings() as Record<string, unknown>),
           resources: { catalogDatabase: { secretArn: 'arn:aws:secretsmanager:secret' } },
         },
-        token: () => 'id-token-value',
+        prompt: testPrompt(),
+        storage: signedInStorage(),
       }),
     ).toThrow(ConfigurationError);
   });
@@ -1064,7 +1065,8 @@ describe('browser application', () => {
 
     const application = createBrowserApplication({
       settings,
-      token: () => 'id-token-value',
+      prompt: testPrompt(),
+      storage: signedInStorage(),
       fetch,
       createUserInterface,
     });
@@ -1096,7 +1098,8 @@ describe('browser application', () => {
     const received: UserInterfaceCapabilities[] = [];
     createBrowserApplication({
       settings: publicSettings(),
-      token: () => 'id-token-value',
+      prompt: testPrompt(),
+      storage: signedInStorage(),
       fetch,
       createUserInterface: (capabilities) => {
         received.push(capabilities);
@@ -1121,7 +1124,8 @@ describe('browser application', () => {
     const { fetch, calls } = jsonFetch({ ok: true });
     const application = createBrowserApplication({
       settings,
-      token: () => 'id-token-value',
+      prompt: testPrompt(),
+      storage: signedInStorage(),
       fetch,
     });
 
@@ -1156,7 +1160,8 @@ describe('browser application', () => {
         );
         const application = createBrowserApplication({
           settings,
-          token: () => 'id-token-value',
+          prompt: testPrompt(),
+          storage: signedInStorage(),
           fetch,
         });
 
@@ -1171,7 +1176,8 @@ describe('browser application', () => {
     const { fetch, calls } = jsonFetch({ ok: true });
     const application = createBrowserApplication({
       settings: publicSettings(),
-      token: () => 'id-token-value',
+      prompt: testPrompt(),
+      storage: signedInStorage(),
       fetch,
     });
 
@@ -1189,7 +1195,8 @@ describe('browser application', () => {
       })) as typeof globalThis.fetch;
     const application = createBrowserApplication({
       settings: publicSettings(),
-      token: () => 'id-token-value',
+      prompt: testPrompt(),
+      storage: signedInStorage(),
       fetch,
     });
 

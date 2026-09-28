@@ -45,6 +45,7 @@ npm run test:browser        # Playwright browser journeys
 npm run test:python         # Python unittest recognition suite (src/recognition/python/tests)
 npm run test:recognition    # Retained browser recognition regressions (tests/recognition)
 npm run build               # compile the component public entry points into build/
+npm run package             # build the deployable backend, browser and catalog artifacts
 ```
 
 Focus a scope with a path filter, for example `npm run test:component -- public-contracts`. Component
@@ -67,6 +68,17 @@ environment stay separate evidence (infra/README.md).
 The build clears `build/` before compiling; caching is disabled so restoring cached artifacts cannot
 leave output from deleted sources behind.
 Nexus uses the same commands for preparation and validation (nexus.project.json).
+
+`npm run package` builds the artifacts an explicit deployment publishes into the ignored
+`artifacts/` directory: the interactive API package the Lambda runs, the browser bundle CloudFront
+delivers and the finite catalog job with the Dockerfile that packages it. The manifest beside them
+records the source revision, the version label and the digest of every artifact, so a rebuilt
+revision produces the same bytes and a released combination can be inspected and restored. The
+browser artifact carries no environment-specific file; the deployment publishes `config.json` from
+the service stack's public outputs (`npm run package -- --from-outputs infra/service-outputs.json
+--environment test` projects the captured service stack, `--public-settings <file>` publishes a
+prepared file), and only the settings the browser may receive are accepted. Publishing, deployment,
+rollback and the live checks are recorded in `infra/README.md`.
 
 Synchronization is the finite catalog job of the deployed stack (docs/tech-stack.md#aws-stack): the
 configured source streams one provider snapshot from the private data bucket, and Catalog upserts it

@@ -374,6 +374,7 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
       recognition: { cloudEnabled: false, computeBaseUrl: null },
       capabilities: { sourceImports: false },
     },
+    identity,
     request,
     catalog,
     search,

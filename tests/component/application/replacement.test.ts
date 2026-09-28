@@ -16,6 +16,7 @@ import {
   testAccount,
   testConfiguration,
   testIdentityVerifier,
+  testPrompt,
   testRevision,
 } from './harness.js';
 
@@ -134,7 +135,7 @@ describe('component replacement at Application', () => {
     const fetch = vi.fn();
     const application = createBrowserApplication({
       settings: readPublicSettings(resolveApplicationConfiguration(testConfiguration())),
-      token: () => null,
+      prompt: testPrompt(),
       fetch,
       createRecognition: () => recognition,
       createUserInterface: (capabilities) => capabilities.createRecognition(),

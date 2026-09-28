@@ -20,7 +20,7 @@ import {
   type ApplicationResources,
 } from '../../../src/application/backend.js';
 
-import { testConfiguration, testIdentityVerifier } from './harness.js';
+import { testConfiguration, testIdentityVerifier, testPrompt } from './harness.js';
 
 function resources(): ApplicationResources {
   return {
@@ -162,6 +162,26 @@ describe('application composition', () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  it('serves a runtime that holds no catalog writer credential and reports the job as unavailable', async () => {
+    // The interactive deployment composes no synchronization, because it never receives the
+    // Catalog writer secret (docs/application.md#configuration-and-lifecycle).
+    const application = createPostgresApplication({
+      configuration: testConfiguration(),
+      identity: testIdentityVerifier(),
+      resources: { ...resources(), catalogSynchronization: null },
+    });
+
+    const response = await application.handle({
+      method: 'GET',
+      path: '/api/card',
+      query: { printing: 'printing-1' },
+    });
+    expect(response.status).toBe(503);
+    await expect(application.synchronizeCatalog({ dataset: 'default_cards' })).rejects.toThrow(
+      /does not run catalog synchronization/,
+    );
+  });
+
   it('validates the browser transports at construction', () => {
     expect(() =>
       createAuthenticatedRequest({ baseUrl: 'not-a-url', token: () => 'token' }),
@@ -173,7 +193,7 @@ describe('application composition', () => {
       }),
     ).toThrow(TypeError);
     expect(() => createCatalogClient(undefined as never)).toThrow(TypeError);
-    expect(() => createBrowserApplication({ settings: {}, token: () => 'token' })).toThrow(
+    expect(() => createBrowserApplication({ settings: {}, prompt: testPrompt() })).toThrow(
       ConfigurationError,
     );
   });

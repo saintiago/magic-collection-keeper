@@ -25,8 +25,8 @@ const managedLint = path.join(environment, windows ? 'Scripts/cfn-lint.exe' : 'b
 
 const requested = process.env.KEEPER_PYTHON ?? 'python3';
 
-/** Deployment captures under infra/ that are not templates; infra/outputs.json is ignored by Git. */
-const CAPTURES = new Set(['outputs.json']);
+/** Deployment captures under infra/ that are not templates; both are ignored by Git. */
+const CAPTURES = new Set(['outputs.json', 'service-outputs.json']);
 
 function fail(message: string): never {
   console.error(message);

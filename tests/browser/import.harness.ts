@@ -332,6 +332,7 @@ export function installImportHarness(
       recognition: { cloudEnabled: false, computeBaseUrl: null },
       capabilities: { sourceImports: options.sourceImports ?? true },
     },
+    identity,
     request,
     catalog,
     search,

@@ -4,29 +4,18 @@
  *
  * Application supplies the authenticated transport and the public configuration; the deployment's
  * authentication supplies this capability, which reports the verified account and its transitions.
- * The shell never decodes credentials itself: it presents what identity reports and isolates
- * private presentation state by the reported account.
+ * The capability and its verified account are Application's contract — UserInterface presents them
+ * and derives nothing from tokens, because the shell never decodes credentials itself: it presents
+ * what identity reports and isolates private presentation state by the reported account.
  */
 
-/** One verified account the presentation keeps private state apart for. */
-export interface UiAccount {
-  /** Verified account identity, stable across sign-ins of the same account. */
-  readonly accountId: string;
-  /** Name to present for the account, or null when the deployment reports none. */
-  readonly displayName: string | null;
-}
+import type { BrowserAccount, BrowserIdentity } from '../../application/index.js';
 
-/** Identity capability the deployment supplies to the UserInterface. */
-export interface UiIdentity {
-  /** Current verified account, or null while the visitor is signed out. */
-  current(): UiAccount | null;
-  /** Starts the deployment's sign-in interaction. */
-  signIn(): void | Promise<void>;
-  /** Ends the session in the deployment's authentication. */
-  signOut(): void | Promise<void>;
-  /** Reports verified-account changes, including sign-out; returns the unsubscribe function. */
-  subscribe(listener: (account: UiAccount | null) => void): () => void;
-}
+/** One verified account the presentation keeps private state apart for (Application's account). */
+export type UiAccount = BrowserAccount;
+
+/** Identity capability Application supplies to the UserInterface. */
+export type UiIdentity = BrowserIdentity;
 
 /** Reads one verified account; an invalid report counts as signed out, never as a partial account. */
 export function readAccount(value: unknown): UiAccount | null {

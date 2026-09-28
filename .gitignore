@@ -17,7 +17,10 @@ src/recognition/python/artifacts/
 # Browser ONNX runtime and catalog assets prepared next to the recognition modules.
 src/recognition/browser/vendor/
 build/
+# Packaged deployment artifacts (npm run package); a deployment publishes its own copies.
+artifacts/
 public/vendor/
 public/config.json
 infra/outputs.json
+infra/service-outputs.json
 .local-secrets/

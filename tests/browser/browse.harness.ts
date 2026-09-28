@@ -186,6 +186,7 @@ export function installBrowseHarness(
       recognition: { cloudEnabled: false, computeBaseUrl: null },
       capabilities: { sourceImports: false },
     },
+    identity,
     request,
     catalog,
     search,

@@ -33,7 +33,7 @@ async function bundleBrowserConsumer(): Promise<string> {
         )};`,
         'const application = createBrowserApplication({',
         `  settings: ${JSON.stringify(publicSettings)},`,
-        "  token: () => 'id-token-value',",
+        "  prompt: { request: async () => ({ username: 'user', password: 'password' }) },",
         '});',
         'globalThis.keeperBrowserContract = {',
         '  environment: application.settings.environment,',

@@ -124,6 +124,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       recognition: { cloudEnabled: false, computeBaseUrl: null },
       capabilities: { sourceImports: false },
     },
+    identity,
     request,
     // The shell fixture presents no browsing page, so the component access they read through is
     // only present to satisfy the capabilities Application supplies.

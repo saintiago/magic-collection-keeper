@@ -7,7 +7,12 @@
 
 import { vi, type Mock } from 'vitest';
 
-import { type Diagnostics, type IdentityVerifier } from '../../../src/application/index.js';
+import {
+  type BrowserCredentialPrompt,
+  type BrowserSessionStore,
+  type Diagnostics,
+  type IdentityVerifier,
+} from '../../../src/application/index.js';
 import { createPostgresApplication, type Application } from '../../../src/application/backend.js';
 import type { CardPrintingsPage, Catalog, CatalogResolution } from '../../../src/catalog/index.js';
 import type { CatalogSnapshotSource } from '../../../src/catalog/index.js';
@@ -34,6 +39,37 @@ import { createSnapshotSource } from '../../support/catalog-snapshot.js';
 
 export { claimsFor, testAccount, testConfiguration, testIdentityVerifier, testRevision };
 export type { TestConfiguration };
+
+/** One credential prompt a case answers without presenting a page. */
+export function testPrompt(
+  answer: () => { readonly username: string; readonly password: string } = () => ({
+    username: 'alice@example.test',
+    password: 'correct horse battery staple',
+  }),
+): BrowserCredentialPrompt {
+  return { request: async () => answer() };
+}
+
+/**
+ * A session store already holding one valid session, so the transport of a composed browser
+ * application carries its token without driving the sign-in against a service.
+ */
+export function signedInStorage(idToken = 'id-token-value'): BrowserSessionStore {
+  return {
+    read: () =>
+      JSON.stringify({
+        idToken,
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+        expiresAt: Date.now() + 3_600_000,
+        accountId: 'cognito-alice',
+        displayName: 'Alice',
+      }),
+    write() {
+      // The case inspects the session it supplied, not what the composition wrote back.
+    },
+  };
+}
 
 export interface CatalogSpy {
   readonly contract: Catalog;
