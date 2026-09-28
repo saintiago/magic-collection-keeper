@@ -61,8 +61,11 @@ All documents in `docs/` are relevant to the rebuild.
 
 - [Product charter](docs/PRODUCT-CHARTER.md)
 - [Architecture](docs/architecture.md)
+- [Data architecture](docs/data-architecture.md)
 - [Application](docs/application.md)
-- [UserInterface](docs/user-interface.md)
+- [UserInterface](docs/ui/architecture.md)
+- [CardList](docs/card-list.md)
+- [Capture](docs/capture.md)
 - [Catalog](docs/catalog.md)
 - [UserCards](docs/user-cards.md)
 - [Search](docs/search.md)

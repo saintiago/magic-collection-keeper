@@ -7,7 +7,7 @@ recognition engines, model artifacts and matching policies across API and deploy
 
 ## Interface
 
-- Provide UserInterface with preparation, image recognition, optional later candidate updates and
+- Provide Capture with preparation, image recognition, optional later candidate updates and
   cancellation. Results retain capture/attempt identity so stale updates can be rejected.
 - Use Catalog to validate candidate identities and resolve canonical printings. The inference
   dataset is a versioned model asset, not a second authoritative public catalog.
@@ -19,11 +19,12 @@ recognition engines, model artifacts and matching policies across API and deploy
 
 ### Provided operations
 
-| Operation | Input                                                     | Result                                                                            |
-| --------- | --------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Prepare   | Session identity, enabled engines and cancellation.       | Ready state or preparation failure.                                               |
-| Recognize | Image, session/capture/attempt identity and cancellation. | Initial reading and completion; optional later readings retain the same identity. |
-| Dispose   | Session identity.                                         | Releases local resources and prevents further delivery for that session.          |
+| Operation | Input                                                     | Result                                                                                      |
+| --------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Prepare   | Session identity, enabled engines and cancellation.       | Ready state or preparation failure.                                                         |
+| Recognize | Image, session/capture/attempt identity and cancellation. | Initial reading and completion; optional later readings retain the same identity.           |
+| Geometry  | Image and the same session/capture/frame identity.        | Affirmative single-card, no-card, multiple-card, ambiguous or unavailable/unknown evidence. |
+| Dispose   | Session identity.                                         | Releases local resources and prevents further delivery for that session.                    |
 
 A reading identifies status, ordered candidates, optional suggestion, printing evidence, provisional
 state, disagreement, engine versions and timings. A suggestion must belong to the candidate set.
@@ -33,6 +34,11 @@ inference. Completion means no further reading updates for that attempt.
 Catalog resolution can enrich an engine result but cannot turn a representative printing into
 evidence of the observed edition. Preserve raw engine outcomes behind the mapping boundary.
 Transport paths and envelopes can change while these guarantees and engine behavior remain stable.
+
+Geometry may accompany a reading or come from a separate supplied geometry capability. Preserve its
+frame identity in either case; absence is never affirmative evidence. Capture consumes this contract
+for admission. Providing geometry in a browser-only deployment may change boundary wiring but must
+not change the preserved recognition engine's matching behavior.
 
 ## Internal design
 

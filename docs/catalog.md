@@ -7,10 +7,10 @@ information. Keep provider synchronization independent of interactive reads.
 
 ## Interface
 
-- Provide UserInterface and UserCards with card and printing lookup, including batched resolution,
+- Provide CardList, UserInterface editors and UserCards with card and printing lookup, including batched resolution,
   language, available finishes and physical-printing eligibility.
-- Provide Search with a public read contract for card attributes and printing relationships that
-  can participate in complete database queries.
+- Provide Search with consistent snapshots and durable changes for public card facts through the
+  publication contract below. Consumers build their own searchable storage from those facts.
 - Provide Recognition with canonical identity and printing resolution. Recognition's model-specific
   inference dataset remains its own versioned asset.
 - Accept synchronization requests from Application and report the published data revision or a
@@ -40,23 +40,28 @@ Consumers that only resolve identities depend on the narrower `CatalogResolver` 
 
 ### Query surface
 
-Publish read-only card, name and printing relations. Card and printing IDs are unique in their
-respective relations; names are separate rows so aliases cannot multiply card counts. Printings
-carry a card reference. The surface exposes the basic attributes above and the published revision.
+Publish card, name and printing records through a versioned data interface. Card and printing IDs
+are stable and unique; names preserve their associated identity. Records include the basic attributes
+above and printing-to-card relationships. The contract exposes no SQL, tables or database connections.
 
-In PostgreSQL these are versioned provider-owned views. Search depends on their declared columns
-and meaning, never underlying table names. A replacement maps its storage to the same views and
-passes the same contract tests. Publishing a revision exposes a mutually consistent set of relations.
+Provide a consistent, paginated snapshot of one published revision and a resumable change position.
+Changes carry stable identity, revision and upsert/removal meaning. Publication of a bulk revision is
+complete and atomic from the consumer's perspective. Repeated reads preserve meaning; an expired
+position explicitly requires a new snapshot. Snapshot and change handoff must leave no gap.
+
+Durably record publication with the authoritative revision. Search can rebuild independently and
+continue after interrupted delivery. A replacement preserves these records and lifecycle guarantees,
+regardless of storage technology. Internal views remain private implementation choices.
 
 ## Internal design
 
-| Unit              | Owns                                                                            |
-| ----------------- | ------------------------------------------------------------------------------- |
-| Read service      | Bounded reference resolution, printing lists and revision-bound continuation.   |
-| Printing lookup   | Matching edition, collector number and language within one card identity.       |
-| Read storage      | Local queries and record decoding against the published revision.               |
-| Synchronization   | Source acquisition, normalization, candidate validation and atomic publication. |
-| Query publication | Public relation names, columns and revision semantics; reader permissions.      |
+| Unit              | Owns                                                                                |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| Read service      | Bounded reference resolution, printing lists and revision-bound continuation.       |
+| Printing lookup   | Matching edition, collector number and language within one card identity.           |
+| Read storage      | Local queries and record decoding against the published revision.                   |
+| Synchronization   | Source acquisition, normalization, candidate validation and atomic publication.     |
+| Query publication | Consistent snapshots, durable revision publication, change positions and retention. |
 
 The read service and synchronization have separate construction and execution lifecycles. Interactive
 reads never start synchronization. Selection policy operates on the public read contract, so a storage
