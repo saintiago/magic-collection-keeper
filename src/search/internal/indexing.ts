@@ -13,10 +13,19 @@
  * A replacement generation is built beside the published one and becomes queryable only once
  * every source in its scope is caught up and the projection carries no unresolved reference, so
  * reads continue over the complete previous generation during a rebuild
- * (docs/data-architecture.md#bootstrap-and-rebuild). An expired change position is never resumed
- * or skipped: the run rebuilds from fresh snapshots instead. References a private record makes to
- * catalog facts are retained while they are unresolved, so a publication that is not yet
- * resolvable is reported rather than published as a complete generation.
+ * (docs/data-architecture.md#bootstrap-and-rebuild). The generation queries read never keeps a
+ * reference it cannot resolve: a publication that would introduce one stays pending at the
+ * position the generation already holds, and a later run applies it once the catalog fact it
+ * needs has been indexed.
+ *
+ * An expired change position is never resumed or skipped
+ * (docs/data-architecture.md#bootstrap-and-rebuild). A generation that is not queryable is
+ * snapshotted again in place, which keeps the checkpoints that carry the account scope of a
+ * resumable rebuild; the generation queries read is rebuilt beside itself from fresh snapshots
+ * instead. Overlapping runs cannot regress the projection or its checkpoints: every write locks
+ * the generation it works on and is rejected when that generation was retired or published under
+ * it, and a batch advances a checkpoint only while the checkpoint still holds the position the
+ * batch started from (docs/data-architecture.md#asynchronous-synchronization).
  */
 
 import {
@@ -63,13 +72,14 @@ export const SEARCH_INDEXING_LIMITS = {
   maxBatches: 32,
   /** Accounts one request may name; the scope of a rebuild also carries its known accounts. */
   maxRequestedAccounts: 100,
-  /** Snapshot reads or rebuild attempts that may restart after a position expired. */
+  /** Restarts of a run whose position expired or whose generation another run replaced. */
   maxAttempts: 3,
   /**
-   * Safety bound on pages one batch reads while it waits for a publication to complete. A page
-   * always advances or ends the stream, so this only stops a provider that repeats a page forever.
+   * Pages one batch reads without its resume position advancing before it treats the delivery as
+   * stalled. A valid publication advances on every page however many it spans, so this bounds a
+   * provider that only repeats a page; it is not a limit on the size of a publication.
    */
-  maxPagesPerBatch: 1000,
+  maxStalledPagesPerBatch: 3,
   maxIdentifierLength: 200,
   maxPositionLength: 20,
   maxRevisionLength: 200,
@@ -103,7 +113,11 @@ export interface SearchCatalogProgress {
 /** Private progress of one account's projection in one indexing run. */
 export interface SearchAccountProgress {
   readonly accountId: string;
-  /** Account-scoped publication position the generation applied through. */
+  /**
+   * Account-scoped publication position the generation applied through. A run that could not
+   * apply the account reports the position it already holds, or "0" when the generation holds no
+   * checkpoint for it yet.
+   */
   readonly position: string;
   /** Whether the run applied the complete private change stream of the account. */
   readonly caughtUp: boolean;
@@ -121,7 +135,9 @@ export interface SearchIndexingResult {
   readonly caughtUp: boolean;
   /**
    * References the projection could not resolve to a catalog fact it holds. A nonzero count keeps
-   * a replacement generation from being published as an apparently complete one.
+   * a replacement generation from being published as an apparently complete one; a publication
+   * that would introduce an unresolved reference into the generation queries read is left pending
+   * instead, so it does not appear here.
    */
   readonly unresolvedReferences: number;
   readonly catalog: SearchCatalogProgress;
@@ -195,15 +211,69 @@ interface ChangeCheckpoint {
 }
 
 interface ChangeSource {
+  /** The checkpoint this generation holds for the source, or null when it is not bootstrapped. */
+  readCheckpoint(sql: SearchSqlExecutor): Promise<ChangeCheckpoint | null>;
+  /**
+   * Replaces the source's projection from the provider's consistent snapshot and writes its
+   * checkpoint, inside one open transaction.
+   */
+  writeSnapshot(statements: SearchSqlExecutor): Promise<ChangeCheckpoint>;
   /** Reads the changes the provider published after a position. */
   read(position: string): Promise<readonly PendingChange[]>;
-  /** Persists what one batch applied; only called when at least one change was applied. */
-  checkpoint(sql: SearchSqlExecutor, checkpoint: ChangeCheckpoint): Promise<void>;
+  /** Advances the checkpoint a completed publication ends at, guarded by the position it held. */
+  advance(
+    statements: SearchSqlExecutor,
+    applied: ChangeCheckpoint,
+    start: ChangeCheckpoint | null,
+  ): Promise<void>;
 }
 
 interface GenerationState {
   readonly published: string | null;
   readonly building: string | null;
+}
+
+/**
+ * The generation one run writes to: the queryable one, or a replacement being built beside it. A
+ * run that writes to the queryable generation never weakens it: a publication it cannot resolve
+ * stays pending and a checkpoint it does not own stays put.
+ */
+interface GenerationTarget {
+  readonly generation: string;
+  readonly queryable: boolean;
+  /**
+   * The generation that was queryable when this run read the state, which is the one a replacement
+   * is built to succeed. A run whose scope was drawn from a generation another run has already
+   * replaced must not publish over it.
+   */
+  readonly replaces: string | null;
+}
+
+/** Why a write transaction rolled back instead of applying. */
+type AbandonedReason = 'stale-checkpoint' | 'obsolete-generation' | 'unresolved-references';
+
+/**
+ * Signals that a write transaction rolled back because the work it carried is no longer current:
+ * another run moved the checkpoint or generation it started from, or the publication it would
+ * apply cannot be resolved yet. The caller decides whether to resume, restart or report it.
+ */
+class AbandonedWrite extends Error {
+  readonly reason: AbandonedReason;
+
+  constructor(reason: AbandonedReason, message: string) {
+    super(message);
+    this.name = 'AbandonedWrite';
+    this.reason = reason;
+  }
+}
+
+function isAbandoned(cause: unknown, reason: AbandonedReason): boolean {
+  return cause instanceof AbandonedWrite && cause.reason === reason;
+}
+
+/** Whether a failed run can start over: its position expired or its generation moved on. */
+function isRestartable(cause: unknown): boolean {
+  return isStaleContinuation(cause) || isAbandoned(cause, 'obsolete-generation');
 }
 
 /**
@@ -240,7 +310,7 @@ export function createSearchIndexer(dependencies: SearchIndexerDependencies): Se
   const catalogPublication: CatalogPublication = catalog;
   const userCardsPublication: UserCardsPublication = userCards;
 
-  /** One pass over the generation's sources; a stale position escapes to the retry loop. */
+  /** One pass over the generation's sources; an expired position escapes to the retry loop. */
   async function indexGeneration(
     options: IndexingOptions,
     rebuild: boolean,
@@ -248,32 +318,40 @@ export function createSearchIndexer(dependencies: SearchIndexerDependencies): Se
     const state = await readGenerationState(projection);
     const startBuild = state.building === null && (state.published === null || rebuild);
     const started = startBuild ? await createGeneration(projection) : null;
+    if (startBuild && started === null) {
+      // Another run opened the replacement generation first: take that one up on the next attempt.
+      throw new AbandonedWrite(
+        'obsolete-generation',
+        'Another run started the replacement generation first.',
+      );
+    }
     const generation = started ?? state.building ?? state.published;
     if (generation === null) {
       throw new SearchError('unavailable', 'The search projection could not be opened.');
     }
-    const building = started !== null || state.building !== null;
-    const accounts = building
-      ? await rebuildScope(projection, generation, state.published, options.accounts)
-      : uniqueAccounts(options.accounts);
+    const target: GenerationTarget = {
+      generation,
+      queryable: started === null && state.building === null,
+      replaces: state.published,
+    };
+    const accounts = target.queryable
+      ? uniqueAccounts(options.accounts)
+      : await rebuildScope(projection, generation, state.published, options.accounts);
 
-    const catalogProgress = await alignCatalog(projection, catalogPublication, generation, options);
+    const catalogProgress = await alignCatalog(projection, catalogPublication, target, options);
     const accountProgress: SearchAccountProgress[] = [];
     for (const accountId of accounts) {
       accountProgress.push(
-        await alignAccount(projection, userCardsPublication, generation, accountId, options),
+        await alignAccount(projection, userCardsPublication, target, accountId, options),
       );
     }
     const unresolvedReferences = await countUnresolvedReferences(projection, generation);
     const caughtUp =
       catalogProgress.caughtUp && accountProgress.every((progress) => progress.caughtUp);
-    const publish = building && caughtUp && unresolvedReferences === 0;
-    if (publish) {
-      await publishGeneration(projection, generation);
-    }
+    const publish = !target.queryable && caughtUp && unresolvedReferences === 0;
     return {
       generation,
-      published: !building || publish,
+      published: target.queryable || (publish && (await publishGeneration(projection, target))),
       rebuilt: started !== null,
       caughtUp,
       unresolvedReferences,
@@ -290,13 +368,17 @@ export function createSearchIndexer(dependencies: SearchIndexerDependencies): Se
         try {
           return await indexGeneration(options, rebuild);
         } catch (cause) {
-          if (!isStaleContinuation(cause) || attempt >= SEARCH_INDEXING_LIMITS.maxAttempts) {
+          if (!isRestartable(cause) || attempt >= SEARCH_INDEXING_LIMITS.maxAttempts) {
             throw translateIndexingFailure(cause);
           }
-          // An expired position requires a new snapshot, never a skipped region: discard the
-          // unfinished replacement and build one from fresh snapshots on the next attempt.
-          await discardBuildingGeneration(projection);
-          rebuild = true;
+          // An expired position requires a new snapshot, never a skipped region, and a generation
+          // retired under this run requires the one that replaced it
+          // (docs/data-architecture.md#bootstrap-and-rebuild). Both are taken up on the next
+          // attempt: a serving generation is replaced from fresh snapshots beside itself, while a
+          // generation that is not queryable is snapshotted again in place.
+          if (isStaleContinuation(cause)) {
+            rebuild = true;
+          }
         }
       }
     },
@@ -333,7 +415,12 @@ function uniqueAccounts(accounts: readonly string[]): readonly string[] {
   return [...new Set(accounts)].sort();
 }
 
-/** The accounts a rebuild covers: the ones it already knows plus the ones this request names. */
+/**
+ * The accounts a run covers while it works on a generation that is not queryable: the ones that
+ * generation already knows, the ones the serving generation knows, and the ones this request
+ * names. A generation is recovered in place or replaced only after being published, so this scope
+ * survives both an expired position and a restart (docs/data-architecture.md#bootstrap-and-rebuild).
+ */
 async function rebuildScope(
   sql: SearchSqlTransactor,
   generation: string,
@@ -348,59 +435,101 @@ async function rebuildScope(
 async function alignCatalog(
   sql: SearchSqlTransactor,
   catalog: CatalogPublication,
-  generation: string,
+  target: GenerationTarget,
   options: IndexingOptions,
 ): Promise<SearchCatalogProgress> {
-  const checkpoint =
-    (await readCatalogCheckpoint(sql, generation)) ??
-    (await applySnapshot(sql, (statements) =>
-      readCatalogSnapshot(catalog, statements, generation, options),
-    ));
-  if (checkpoint.revisionId === null) {
+  const source: ChangeSource = {
+    readCheckpoint: (statements) => readCatalogCheckpoint(statements, target.generation),
+    writeSnapshot: (statements) => writeCatalogSnapshot(catalog, statements, target, options),
+    read: (position) => readCatalogChanges(catalog, target.generation, position, options),
+    advance: (statements, applied, start) =>
+      advanceCatalogCheckpoint(statements, target.generation, applied, start),
+  };
+  const aligned = await alignSource(sql, target, source, options);
+  if (aligned.revisionId === null) {
     throw unreadableProjection();
   }
-  const revisionId = checkpoint.revisionId;
-  const source: ChangeSource = {
-    read: (position) => readCatalogChanges(catalog, generation, position, options),
-    checkpoint: (statements, applied) =>
-      writeCatalogCheckpoint(
-        statements,
-        generation,
-        applied.position,
-        applied.revisionId ?? revisionId,
-      ),
-  };
-  const drained = await drainChanges(sql, source, checkpoint, options.maxBatches);
   return {
-    position: drained.position,
-    revisionId: drained.revisionId ?? revisionId,
-    caughtUp: drained.caughtUp,
+    position: aligned.position,
+    revisionId: aligned.revisionId,
+    caughtUp: aligned.caughtUp,
   };
 }
 
 async function alignAccount(
   sql: SearchSqlTransactor,
   userCards: UserCardsPublication,
-  generation: string,
+  target: GenerationTarget,
   accountId: string,
   options: IndexingOptions,
 ): Promise<SearchAccountProgress> {
-  const checkpoint =
-    (await readAccountCheckpoint(sql, generation, accountId)) ??
-    (await applySnapshot(sql, (statements) =>
-      readAccountSnapshot(userCards, statements, generation, accountId, options),
-    ));
   const source: ChangeSource = {
-    read: (position) => readAccountChanges(userCards, generation, accountId, position, options),
-    checkpoint: (statements, applied) =>
-      writeAccountCheckpoint(statements, generation, accountId, applied.position),
+    readCheckpoint: (statements) => readAccountCheckpoint(statements, target.generation, accountId),
+    writeSnapshot: (statements) =>
+      writeAccountSnapshot(userCards, statements, target, accountId, options),
+    read: (position) =>
+      readAccountChanges(userCards, target.generation, accountId, position, options),
+    advance: (statements, applied, start) =>
+      advanceAccountCheckpoint(statements, target.generation, accountId, applied, start),
   };
-  const drained = await drainChanges(sql, source, checkpoint, options.maxBatches);
+  const aligned = await alignSource(sql, target, source, options);
   return {
     accountId,
-    position: drained.position,
-    caughtUp: drained.caughtUp,
+    position: aligned.position,
+    caughtUp: aligned.caughtUp,
   };
+}
+
+/**
+ * Aligns one source with the run's generation: resume from the checkpoint the generation holds,
+ * or bootstrap the source from its provider's consistent snapshot, and then apply its complete
+ * publications up to the run's budget.
+ *
+ * An expired position requires a fresh snapshot rather than a skipped region
+ * (docs/data-architecture.md#bootstrap-and-rebuild). A generation that is not queryable is
+ * snapshotted again in place — the generation, and with it the checkpoints that carry the account
+ * scope of a resumable rebuild, survives — while an expired position of the queryable generation
+ * escapes to the run, which rebuilds beside it. A publication the run cannot resolve yet keeps
+ * the position and state the generation already holds.
+ */
+async function alignSource(
+  sql: SearchSqlTransactor,
+  target: GenerationTarget,
+  source: ChangeSource,
+  options: IndexingOptions,
+): Promise<ChangeCheckpoint & { readonly caughtUp: boolean }> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const checkpoint =
+        (await source.readCheckpoint(sql)) ?? (await bootstrapSource(sql, target, source));
+      return await drainSource(sql, target, source, checkpoint, options);
+    } catch (cause) {
+      if (isAbandoned(cause, 'unresolved-references')) {
+        // The change stream published something this generation cannot resolve yet. Nothing was
+        // applied: the usable previous state and its position stand until the reference resolves
+        // (docs/search.md#internal-design).
+        const held = await source.readCheckpoint(sql);
+        return {
+          position: held?.position ?? unindexedPosition,
+          revisionId: held?.revisionId ?? null,
+          caughtUp: false,
+        };
+      }
+      if (attempt >= SEARCH_INDEXING_LIMITS.maxAttempts) {
+        throw cause;
+      }
+      if (isStaleContinuation(cause) && !target.queryable) {
+        await bootstrapSource(sql, target, source);
+        continue;
+      }
+      if (isAbandoned(cause, 'stale-checkpoint')) {
+        // Another run advanced this checkpoint while this one was reading: resume from the
+        // position that run applied.
+        continue;
+      }
+      throw cause;
+    }
+  }
 }
 
 /**
@@ -410,13 +539,14 @@ async function alignAccount(
  * revision over is obsolete, so the snapshot restarts from its first page instead of mixing
  * revisions.
  */
-async function applySnapshot(
+async function bootstrapSource(
   sql: SearchSqlTransactor,
-  read: (statements: SearchSqlExecutor) => Promise<ChangeCheckpoint>,
+  target: GenerationTarget,
+  source: ChangeSource,
 ): Promise<ChangeCheckpoint> {
   for (let attempt = 1; ; attempt += 1) {
     try {
-      return await sql.transaction(read);
+      return await writeTransaction(sql, target, (statements) => source.writeSnapshot(statements));
     } catch (cause) {
       if (!isStaleContinuation(cause) || attempt >= SEARCH_INDEXING_LIMITS.maxAttempts) {
         throw cause;
@@ -425,12 +555,14 @@ async function applySnapshot(
   }
 }
 
-async function readCatalogSnapshot(
+async function writeCatalogSnapshot(
   catalog: CatalogPublication,
   statements: SearchSqlExecutor,
-  generation: string,
+  target: GenerationTarget,
   options: IndexingOptions,
 ): Promise<ChangeCheckpoint> {
+  const generation = target.generation;
+  const start = await readCatalogCheckpoint(statements, generation);
   let page = await catalog.readSnapshot({ pageSize: options.pageSize });
   const revisionId = page.revision.revisionId;
   const checkpoint: ChangeCheckpoint = {
@@ -448,17 +580,22 @@ async function readCatalogSnapshot(
       continuation: page.continuation,
     });
   }
-  await writeCatalogCheckpoint(statements, generation, checkpoint.position, revisionId);
+  await advanceCatalogCheckpoint(statements, generation, checkpoint, start);
+  if (target.queryable) {
+    await assertResolved(statements, generation);
+  }
   return checkpoint;
 }
 
-async function readAccountSnapshot(
+async function writeAccountSnapshot(
   userCards: UserCardsPublication,
   statements: SearchSqlExecutor,
-  generation: string,
+  target: GenerationTarget,
   accountId: string,
   options: IndexingOptions,
 ): Promise<ChangeCheckpoint> {
+  const generation = target.generation;
+  const start = await readAccountCheckpoint(statements, generation, accountId);
   let page = await userCards.readSnapshot({ accountId, pageSize: options.pageSize });
   const checkpoint: ChangeCheckpoint = { position: page.position, revisionId: null };
   await clearAccountProjection(statements, generation, accountId);
@@ -473,7 +610,10 @@ async function readAccountSnapshot(
       continuation: page.continuation,
     });
   }
-  await writeAccountCheckpoint(statements, generation, accountId, checkpoint.position);
+  await advanceAccountCheckpoint(statements, generation, accountId, checkpoint, start);
+  if (target.queryable) {
+    await assertResolved(statements, generation);
+  }
   return checkpoint;
 }
 
@@ -482,15 +622,16 @@ async function readAccountSnapshot(
  * spent. A batch commits the rows of every publication it covers together with the checkpoint of
  * the last change it applied, so a restart never observes half a publication.
  */
-async function drainChanges(
+async function drainSource(
   sql: SearchSqlTransactor,
+  target: GenerationTarget,
   source: ChangeSource,
   start: ChangeCheckpoint,
-  maxBatches: number,
+  options: IndexingOptions,
 ): Promise<ChangeCheckpoint & { readonly caughtUp: boolean }> {
   let checkpoint = start;
-  for (let batch = 0; batch < maxBatches; batch += 1) {
-    const applied = await applyChangeBatch(sql, source, checkpoint);
+  for (let batch = 0; batch < options.maxBatches; batch += 1) {
+    const applied = await applyChangeBatch(sql, target, source, checkpoint);
     checkpoint = { position: applied.position, revisionId: applied.revisionId };
     if (applied.exhausted) {
       return { ...checkpoint, caughtUp: true };
@@ -504,29 +645,36 @@ async function drainChanges(
 
 async function applyChangeBatch(
   sql: SearchSqlTransactor,
+  target: GenerationTarget,
   source: ChangeSource,
   start: ChangeCheckpoint,
 ): Promise<ChangeCheckpoint & { readonly exhausted: boolean }> {
-  return await sql.transaction(async (statements) => {
+  return await writeTransaction(sql, target, async (statements) => {
     let checkpoint = start;
     let applied = false;
-    let complete = false;
-    let exhausted = false;
-    for (let page = 0; page < SEARCH_INDEXING_LIMITS.maxPagesPerBatch; page += 1) {
+    let stalled = 0;
+    for (;;) {
       const changes = await source.read(checkpoint.position);
       if (changes.length === 0) {
-        exhausted = true;
-        break;
+        if (applied) {
+          // A provider always publishes a completion marker after a change's records; a stream
+          // that stops inside a publication must not advance an apparently complete checkpoint.
+          throw new SearchError(
+            'unavailable',
+            'A publication ended without its completion marker; the projection was not advanced.',
+          );
+        }
+        return { ...checkpoint, exhausted: true };
       }
       const marker = lastMarkerIndex(changes);
       // Without a marker the page ends inside a publication: its records are applied inside this
       // batch's transaction and the next page is read until the publication completes.
       const through = marker === -1 ? changes : changes.slice(0, marker + 1);
+      const resumedAt = checkpoint.position;
       for (const change of through) {
         if (change.kind === 'record') {
           await change.write(statements);
         } else {
-          complete = true;
           if (change.revisionId !== null) {
             checkpoint = { ...checkpoint, revisionId: change.revisionId };
           }
@@ -537,19 +685,26 @@ async function applyChangeBatch(
       if (marker >= 0) {
         break;
       }
+      // A publication of any size advances on every page, so a page that repeats what the
+      // checkpoint already holds is not progress. The batch stays bounded by what the provider
+      // publishes, never by an implicit publication-size ceiling.
+      stalled = checkpoint.position === resumedAt ? stalled + 1 : 0;
+      if (stalled > SEARCH_INDEXING_LIMITS.maxStalledPagesPerBatch) {
+        throw new SearchError(
+          'unavailable',
+          'The provider repeated a change page without publishing the completion of its change.',
+        );
+      }
     }
-    if (applied && !complete) {
-      // A provider always publishes a completion marker after a change's records; a stream that
-      // stops inside a publication must not advance an apparently complete checkpoint.
-      throw new SearchError(
-        'unavailable',
-        'A publication ended without its completion marker; the projection was not advanced.',
-      );
+    // The loop only leaves through a completion marker, so the batch ends a complete publication.
+    await source.advance(statements, checkpoint, start);
+    if (target.queryable) {
+      // The generation queries read stays resolvable: a publication that would leave an
+      // unresolved reference behind is held back until a later run can apply it completely
+      // (docs/search.md#internal-design).
+      await assertResolved(statements, target.generation);
     }
-    if (applied) {
-      await source.checkpoint(statements, checkpoint);
-    }
-    return { ...checkpoint, exhausted };
+    return { ...checkpoint, exhausted: false };
   });
 }
 
@@ -657,12 +812,20 @@ async function readGenerationState(sql: SearchSqlTransactor): Promise<Generation
   return { published, building };
 }
 
-async function createGeneration(sql: SearchSqlTransactor): Promise<string> {
+/**
+ * Opens a replacement generation, or reports that another run opened one first: the building
+ * generation is unique, so a lost race is the caller's cue to take up the winner's generation.
+ */
+async function createGeneration(sql: SearchSqlTransactor): Promise<string | null> {
   const rows = await statementsQuery(
     sql,
     `insert into ${searchPrivateSchema}.generation default values
+     on conflict (state) where state = 'building' do nothing
      returning generation_id::text as generation_id`,
   );
+  if (rows.length === 0) {
+    return null;
+  }
   const parsed = z.object({ generation_id: identifierSchema }).safeParse(rows[0]);
   if (!parsed.success) {
     throw unreadableProjection();
@@ -670,21 +833,85 @@ async function createGeneration(sql: SearchSqlTransactor): Promise<string> {
   return parsed.data.generation_id;
 }
 
-async function discardBuildingGeneration(sql: SearchSqlTransactor): Promise<void> {
-  await statementsQuery(
-    sql,
-    `delete from ${searchPrivateSchema}.generation where state = 'building'`,
-  );
+/**
+ * Writes one transaction over the run's generation. The generation is locked for the duration, so
+ * a batch cannot be interleaved with the retirement or publication of the generation it works on,
+ * and rejected outright when that generation is no longer in the state the run read it in.
+ */
+async function writeTransaction<T>(
+  sql: SearchSqlTransactor,
+  target: GenerationTarget,
+  work: (statements: SearchSqlExecutor) => Promise<T>,
+): Promise<T> {
+  return await sql.transaction(async (statements) => {
+    await lockGeneration(statements, target, 'share');
+    return await work(statements);
+  });
 }
 
-/** Makes a caught-up replacement generation queryable and retires the generation it replaces. */
-async function publishGeneration(sql: SearchSqlTransactor, generation: string): Promise<void> {
-  await sql.transaction(async (statements) => {
+async function lockGeneration(
+  sql: SearchSqlExecutor,
+  target: GenerationTarget,
+  mode: 'share' | 'update',
+): Promise<void> {
+  const rows = await statementsQuery(
+    sql,
+    `select generation_id::text as generation_id
+       from ${searchPrivateSchema}.generation
+      where generation_id = cast(:generation_id as bigint)
+        and state = :state
+        for ${mode}`,
+    { generation_id: target.generation, state: target.queryable ? 'published' : 'building' },
+  );
+  if (rows.length !== 1) {
+    throw new AbandonedWrite(
+      'obsolete-generation',
+      'The generation this run was writing to is no longer current.',
+    );
+  }
+}
+
+/**
+ * Makes a caught-up replacement generation queryable and retires the generation it replaces. Both
+ * generations are locked, so a concurrent batch either finished before this validation or waits
+ * for the publication: a generation is never published with a reference it cannot resolve, and a
+ * run never publishes a generation built for a scope another run already replaced.
+ */
+async function publishGeneration(
+  sql: SearchSqlTransactor,
+  target: GenerationTarget,
+): Promise<boolean> {
+  return await sql.transaction(async (statements) => {
+    await lockGeneration(statements, target, 'update');
+    const published = await statementsQuery(
+      statements,
+      `select generation_id::text as generation_id
+         from ${searchPrivateSchema}.generation
+        where state = 'published'
+          for update`,
+    );
+    let served: string | null = null;
+    if (published.length === 1) {
+      const parsed = z.object({ generation_id: identifierSchema }).safeParse(published[0]);
+      if (!parsed.success) {
+        throw unreadableProjection();
+      }
+      served = parsed.data.generation_id;
+    }
+    if (served !== target.replaces) {
+      throw new AbandonedWrite(
+        'obsolete-generation',
+        'The generation this replacement was built for was replaced.',
+      );
+    }
+    if ((await countUnresolvedReferences(statements, target.generation)) !== 0) {
+      return false;
+    }
     await statementsQuery(
       statements,
       `delete from ${searchPrivateSchema}.generation
         where state = 'published' and generation_id <> cast(:generation_id as bigint)`,
-      { generation_id: generation },
+      { generation_id: target.generation },
     );
     const rows = await statementsQuery(
       statements,
@@ -692,11 +919,15 @@ async function publishGeneration(sql: SearchSqlTransactor, generation: string): 
           set state = 'published', published_at = now()
         where generation_id = cast(:generation_id as bigint) and state = 'building'
         returning generation_id::text as generation_id`,
-      { generation_id: generation },
+      { generation_id: target.generation },
     );
     if (rows.length !== 1) {
-      throw new SearchError('unavailable', 'The replacement generation could not be published.');
+      throw new AbandonedWrite(
+        'obsolete-generation',
+        'The replacement generation could not be published.',
+      );
     }
+    return true;
   });
 }
 
@@ -723,20 +954,50 @@ async function readCatalogCheckpoint(
   return { position: parsed.data.position, revisionId: parsed.data.revision_id };
 }
 
-async function writeCatalogCheckpoint(
+/**
+ * Advances a source's checkpoint only while it still holds the position the write started from: a
+ * checkpoint never moves backwards, and a batch another run already superseded changes nothing
+ * (docs/data-architecture.md#asynchronous-synchronization).
+ */
+async function advanceCheckpoint(
+  sql: SearchSqlExecutor,
+  statement: string,
+  parameters: Readonly<Record<string, SearchSqlValue>>,
+): Promise<void> {
+  const rows = await statementsQuery(sql, statement, parameters);
+  if (rows.length !== 1) {
+    throw new AbandonedWrite(
+      'stale-checkpoint',
+      'Another run advanced this checkpoint; this write is obsolete.',
+    );
+  }
+}
+
+async function advanceCatalogCheckpoint(
   sql: SearchSqlExecutor,
   generation: string,
-  position: string,
-  revisionId: string,
+  applied: ChangeCheckpoint,
+  start: ChangeCheckpoint | null,
 ): Promise<void> {
-  await statementsQuery(
+  const revisionId = applied.revisionId ?? start?.revisionId ?? null;
+  if (revisionId === null) {
+    throw unreadableProjection();
+  }
+  await advanceCheckpoint(
     sql,
     `insert into ${searchPrivateSchema}.catalog_checkpoint (generation_id, position, revision_id)
      values (cast(:generation_id as bigint), :position, :revision_id)
      on conflict (generation_id) do update set
        position = excluded.position,
-       revision_id = excluded.revision_id`,
-    { generation_id: generation, position, revision_id: revisionId },
+       revision_id = excluded.revision_id
+      where catalog_checkpoint.position = :start_position
+     returning generation_id::text as generation_id`,
+    {
+      generation_id: generation,
+      position: applied.position,
+      revision_id: revisionId,
+      start_position: start?.position ?? null,
+    },
   );
 }
 
@@ -762,18 +1023,26 @@ async function readAccountCheckpoint(
   return { position: parsed.data.position, revisionId: null };
 }
 
-async function writeAccountCheckpoint(
+async function advanceAccountCheckpoint(
   sql: SearchSqlExecutor,
   generation: string,
   accountId: string,
-  position: string,
+  applied: ChangeCheckpoint,
+  start: ChangeCheckpoint | null,
 ): Promise<void> {
-  await statementsQuery(
+  await advanceCheckpoint(
     sql,
     `insert into ${searchPrivateSchema}.account_checkpoint (generation_id, account_id, position)
      values (cast(:generation_id as bigint), :account_id, :position)
-     on conflict (generation_id, account_id) do update set position = excluded.position`,
-    { generation_id: generation, account_id: accountId, position },
+     on conflict (generation_id, account_id) do update set position = excluded.position
+      where account_checkpoint.position = :start_position
+     returning generation_id::text as generation_id`,
+    {
+      generation_id: generation,
+      account_id: accountId,
+      position: applied.position,
+      start_position: start?.position ?? null,
+    },
   );
 }
 
@@ -830,9 +1099,19 @@ async function clearAccountProjection(
 /**
  * References the generation cannot resolve to a catalog fact it holds: a printing or name without
  * its card, a copy without its printing or location tag, an association without its tag or target.
- * They are retained rather than dropped, and a nonzero count keeps a replacement from becoming
- * queryable as an apparently complete generation (docs/search.md#internal-design).
+ * They are retained rather than dropped: a nonzero count keeps a replacement from becoming
+ * queryable as an apparently complete generation, and a write that would introduce one into the
+ * queryable generation is rolled back and left pending (docs/search.md#internal-design).
  */
+async function assertResolved(sql: SearchSqlExecutor, generation: string): Promise<void> {
+  if ((await countUnresolvedReferences(sql, generation)) !== 0) {
+    throw new AbandonedWrite(
+      'unresolved-references',
+      'A publication references a catalog fact the projection does not hold yet.',
+    );
+  }
+}
+
 async function countUnresolvedReferences(
   sql: SearchSqlExecutor,
   generation: string,
@@ -895,6 +1174,14 @@ async function countUnresolvedReferences(
 const identifierSchema = z.string().min(1).max(SEARCH_INDEXING_LIMITS.maxIdentifierLength);
 const positionSchema = z.string().min(1).max(SEARCH_INDEXING_LIMITS.maxPositionLength);
 const revisionSchema = z.string().min(1).max(SEARCH_INDEXING_LIMITS.maxRevisionLength);
+
+/**
+ * Position a source reports while the generation holds no checkpoint for it: the UserCards
+ * publication's "before everything this account published" position, which acknowledges no change
+ * (docs/user-cards.md#query-surface). A queryable generation always holds a catalog checkpoint, so
+ * this reports an account whose bootstrap could not be applied yet.
+ */
+const unindexedPosition = '0';
 
 const generationRowSchema = z.object({
   generation_id: identifierSchema,

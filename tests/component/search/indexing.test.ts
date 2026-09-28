@@ -17,6 +17,7 @@ import type {
 } from '../../../src/catalog/index.js';
 import {
   createSearchIndexer,
+  SEARCH_INDEXING_LIMITS,
   SearchError,
   searchSchemaSql,
   type SearchIndexer,
@@ -134,6 +135,22 @@ const staCopy: UserCardsPublishedRecord = {
     locationId: null,
   },
 };
+
+/** One distinct card of a publication that spans many pages. */
+function fillerCard(index: number): CatalogPublishedRecord {
+  return {
+    kind: 'card',
+    card: {
+      cardId: `oracle-filler-${index}`,
+      name: `Filler ${index}`,
+      rulesText: null,
+      typeLine: null,
+      colors: [],
+      colorIdentity: [],
+      manaValue: null,
+    },
+  };
+}
 
 function catalogCardChange(
   position: string,
@@ -289,16 +306,18 @@ describe('search indexing', () => {
 
     catalog.publish(
       catalogCardChange('11', 'revision-2', counterspellCard),
-      catalogRevisionChange('12', 'revision-2'),
-      catalogCardChange('13', 'revision-3', boltSpanishName, true),
-      catalogRevisionChange('14', 'revision-3'),
+      // The second printing must be indexed before the copy that references it can be applied.
+      catalogCardChange('12', 'revision-2', staPrinting),
+      catalogRevisionChange('13', 'revision-2'),
+      catalogCardChange('14', 'revision-3', boltSpanishName, true),
+      catalogRevisionChange('15', 'revision-3'),
     );
     alice.publish(copyChange('5', '2', staCopy, 'copy-alice-2'), accountRevisionChange('6', '2'));
 
     const result = await indexer.index({ accounts: [accountId] });
 
     expect(result.catalog).toEqual({
-      position: '14',
+      position: '15',
       revisionId: 'revision-3',
       caughtUp: true,
     });
@@ -312,7 +331,7 @@ describe('search indexing', () => {
     ).toEqual([{ language: 'en' }]);
     expect(
       await database.query('select position, revision_id from search_private.catalog_checkpoint'),
-    ).toEqual([{ position: '14', revision_id: 'revision-3' }]);
+    ).toEqual([{ position: '15', revision_id: 'revision-3' }]);
     expect(
       await database.query('select copy_id from search_private.copy order by copy_id'),
     ).toEqual([{ copy_id: 'copy-alice-1' }, { copy_id: 'copy-alice-2' }]);
@@ -523,6 +542,193 @@ describe('search indexing', () => {
     expect(
       await readScoped(accountId, 'select copy_id from search.copies order by copy_id'),
     ).toEqual([{ copy_id: 'copy-alice-1' }, { copy_id: 'copy-alice-2' }]);
+  });
+
+  it('keeps a private publication pending until the catalog publishes what it references', async () => {
+    await indexer.index({ accounts: [accountId] });
+
+    // A complete private publication references a printing the catalog does not publish yet.
+    alice.publish(copyChange('5', '2', staCopy, 'copy-alice-2'), accountRevisionChange('6', '2'));
+
+    const pending = await indexer.index({ accounts: [accountId] });
+
+    expect(pending).toMatchObject({ published: true, caughtUp: false, unresolvedReferences: 0 });
+    expect(pending.accounts).toEqual([{ accountId, position: '4', caughtUp: false }]);
+    // Nothing of the unresolvable publication was applied and its position did not advance.
+    expect(
+      await database.query('select account_id, position from search_private.account_checkpoint'),
+    ).toEqual([{ account_id: accountId, position: '4' }]);
+    expect(await readScoped(accountId, 'select copy_id from search.copies')).toEqual([
+      { copy_id: 'copy-alice-1' },
+    ]);
+
+    // Once the catalog publishes the printing, the pending publication applies completely.
+    catalog.publish(
+      catalogCardChange('11', 'revision-2', staPrinting),
+      catalogRevisionChange('12', 'revision-2'),
+    );
+
+    const applied = await indexer.index({ accounts: [accountId] });
+
+    expect(applied).toMatchObject({ published: true, caughtUp: true, unresolvedReferences: 0 });
+    expect(applied.accounts).toEqual([{ accountId, position: '6', caughtUp: true }]);
+    expect(
+      await readScoped(accountId, 'select copy_id from search.copies order by copy_id'),
+    ).toEqual([{ copy_id: 'copy-alice-1' }, { copy_id: 'copy-alice-2' }]);
+  });
+
+  it('holds a new account pending while its snapshot references an unpublished printing', async () => {
+    // The generation is published with the catalog only; the account joins it later.
+    await indexer.index();
+    expect(await generationState()).toEqual([{ generation_id: '1', state: 'published' }]);
+    alice.replaceSnapshot({ position: '4', records: [binderTag, boltCopy, staCopy] });
+
+    const pending = await indexer.index({ accounts: [accountId] });
+
+    expect(pending).toMatchObject({
+      published: true,
+      rebuilt: false,
+      caughtUp: false,
+      unresolvedReferences: 0,
+    });
+    expect(pending.accounts).toEqual([{ accountId, position: '0', caughtUp: false }]);
+    expect(
+      await database.query('select count(*)::int as count from search_private.account_checkpoint'),
+    ).toEqual([{ count: 0 }]);
+    expect(await readScoped(accountId, 'select copy_id from search.copies')).toEqual([]);
+
+    catalog.publish(
+      catalogCardChange('11', 'revision-2', staPrinting),
+      catalogRevisionChange('12', 'revision-2'),
+    );
+    const applied = await indexer.index({ accounts: [accountId] });
+
+    expect(applied).toMatchObject({ published: true, caughtUp: true, unresolvedReferences: 0 });
+    expect(applied.accounts).toEqual([{ accountId, position: '4', caughtUp: true }]);
+    expect(
+      await readScoped(accountId, 'select copy_id from search.copies order by copy_id'),
+    ).toEqual([{ copy_id: 'copy-alice-1' }, { copy_id: 'copy-alice-2' }]);
+  });
+
+  it('holds a catalog removal pending while a private record still references it', async () => {
+    await indexer.index({ accounts: [accountId] });
+
+    // The catalog drops the card the account's copy belongs to through its printing.
+    catalog.publish(
+      catalogCardChange('11', 'revision-2', boltCard, true),
+      catalogRevisionChange('12', 'revision-2'),
+    );
+
+    const pending = await indexer.index({ accounts: [accountId] });
+
+    expect(pending).toMatchObject({ published: true, caughtUp: false, unresolvedReferences: 0 });
+    expect(pending.catalog).toEqual({ position: '10', revisionId: 'revision-1', caughtUp: false });
+    // The previous usable facts stay queryable while the removal is pending.
+    expect(await database.query('select card_id from search.cards')).toEqual([
+      { card_id: 'oracle-bolt' },
+    ]);
+    expect(await readScoped(accountId, 'select copy_id from search.copies')).toEqual([
+      { copy_id: 'copy-alice-1' },
+    ]);
+
+    // A later publication restores the card, so the pending removal and the restore apply together.
+    catalog.publish(
+      catalogCardChange('13', 'revision-2', boltCard),
+      catalogRevisionChange('14', 'revision-2'),
+    );
+
+    const applied = await indexer.index({ accounts: [accountId] });
+
+    expect(applied.catalog).toEqual({ position: '14', revisionId: 'revision-2', caughtUp: true });
+    expect(await database.query('select card_id from search.cards')).toEqual([
+      { card_id: 'oracle-bolt' },
+    ]);
+  });
+
+  it('keeps the accounts of an unfinished generation when its position expired', async () => {
+    alice.replaceSnapshot({ position: '4', records: [binderTag, boltCopy, staCopy] });
+
+    // The account snapshot cannot be published yet: its copy references an unpublished printing.
+    const pending = await indexer.index({ accounts: [accountId] });
+    expect(pending).toMatchObject({ published: false, caughtUp: true, unresolvedReferences: 1 });
+    expect(await generationState()).toEqual([{ generation_id: '1', state: 'building' }]);
+
+    // Retention expires the generation's catalog position while a fresh snapshot resolves the copy.
+    catalog.dropHistoryBefore('20');
+    catalog.replaceSnapshot({
+      revision: revision('revision-2'),
+      position: '20',
+      records: [boltCard, boltName, m11Printing, staPrinting],
+    });
+
+    const recovered = await indexer.index();
+
+    expect(recovered).toMatchObject({
+      published: true,
+      rebuilt: false,
+      caughtUp: true,
+      unresolvedReferences: 0,
+    });
+    expect(recovered.accounts).toEqual([{ accountId, position: '4', caughtUp: true }]);
+    expect(await generationState()).toEqual([{ generation_id: '1', state: 'published' }]);
+    expect(
+      await readScoped(accountId, 'select copy_id from search.copies order by copy_id'),
+    ).toEqual([{ copy_id: 'copy-alice-1' }, { copy_id: 'copy-alice-2' }]);
+  });
+
+  it('applies a publication that spans more pages than a batch used to read', async () => {
+    await indexer.index({ accounts: [accountId] });
+    const recordCount = 1000;
+    const changes: CatalogChange[] = [];
+    for (let index = 0; index < recordCount; index += 1) {
+      changes.push(catalogCardChange(String(11 + index), 'revision-2', fillerCard(index)));
+    }
+    changes.push(catalogRevisionChange(String(11 + recordCount), 'revision-2'));
+    catalog.publish(...changes);
+
+    const result = await indexer.index({ accounts: [accountId], pageSize: 1 });
+
+    expect(result.catalog).toEqual({
+      position: String(11 + recordCount),
+      revisionId: 'revision-2',
+      caughtUp: true,
+    });
+    expect(await database.query('select count(*)::int as count from search_private.card')).toEqual([
+      { count: recordCount + 1 },
+    ]);
+  });
+
+  it('rejects a provider that repeats a page instead of completing its publication', async () => {
+    catalog = createCatalogPublicationFixture({
+      revision: revision('revision-1'),
+      position: '10',
+      records: [boltCard, boltName, m11Printing],
+      changes: [catalogCardChange('11', 'revision-2', counterspellCard)],
+      repeatFirstChangePage: 'forever',
+    });
+    indexer = createSearchIndexer({
+      sql: database.sql,
+      catalog: catalog.publication,
+      userCards: alice.publication,
+    });
+
+    await expect(indexer.index({ accounts: [accountId], pageSize: 1 })).rejects.toThrow(
+      SearchError,
+    );
+
+    // The batch is bounded by delivery that never advances, and nothing of it was applied.
+    expect(catalog.reads.filter((position) => position === '11')).toHaveLength(
+      SEARCH_INDEXING_LIMITS.maxStalledPagesPerBatch + 1,
+    );
+    expect(await database.query('select position from search_private.catalog_checkpoint')).toEqual([
+      { position: '10' },
+    ]);
+    expect(
+      await database.query(
+        `select count(*)::int as count from search_private.card
+          where card_id = 'oracle-counterspell'`,
+      ),
+    ).toEqual([{ count: 0 }]);
   });
 
   it('rejects an indexing request outside the declared bounds', async () => {

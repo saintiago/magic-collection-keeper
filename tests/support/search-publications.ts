@@ -37,8 +37,11 @@ export interface CatalogPublicationFixtureOptions {
   readonly changes?: readonly CatalogChange[];
   /** Dropped history: a resume before this position fails like an expired one. */
   readonly expiredBelow?: string;
-  /** Deliver the first change page a second time, as a repeated delivery does. */
-  readonly repeatFirstChangePage?: boolean;
+  /**
+   * Deliver the first change page again, as a repeated delivery does. `"forever"` keeps
+   * repeating it, so the stream never advances the resume position.
+   */
+  readonly repeatFirstChangePage?: boolean | 'forever';
   /**
    * Publish a replacement snapshot right after the first page was handed out, as a catalog that
    * synchronized another revision while a consumer was paging does. The continuation the first
@@ -77,7 +80,9 @@ export function createCatalogPublicationFixture(
   let changes = [...(options.changes ?? [])];
   let expiredBelow = options.expiredBelow ?? null;
   let repeatedPage: readonly CatalogChange[] | null = null;
+  let stalledPage: readonly CatalogChange[] | null = null;
   let firstPageDelivered = false;
+  const repeatForever = options.repeatFirstChangePage === 'forever';
   let pendingReplacement = options.replaceSnapshotAfterFirstPage ?? null;
   const reads: string[] = [];
 
@@ -125,6 +130,9 @@ export function createCatalogPublicationFixture(
           'This position is not part of the retained catalog publication history.',
         );
       }
+      if (stalledPage !== null) {
+        return { changes: stalledPage, position: lastPosition(stalledPage, request.position) };
+      }
       if (repeatedPage !== null) {
         const page = repeatedPage;
         repeatedPage = null;
@@ -141,7 +149,11 @@ export function createCatalogPublicationFixture(
       const page = changes.slice(start, start + (request.pageSize ?? 500));
       if (options.repeatFirstChangePage && !firstPageDelivered && page.length > 0) {
         firstPageDelivered = true;
-        repeatedPage = page;
+        if (repeatForever) {
+          stalledPage = page;
+        } else {
+          repeatedPage = page;
+        }
       }
       return { changes: page, position: lastPosition(page, request.position) };
     },
