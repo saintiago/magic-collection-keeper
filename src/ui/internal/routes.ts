@@ -19,9 +19,26 @@
 // Type-only imports keep the provider barrels out of a browser bundle: a value import would pull
 // the whole Catalog module, including its Node-only synchronization job, into the page.
 import type { Finish } from '../../catalog/index.js';
-import type { SearchResultLevel } from '../../search/index.js';
-
+import {
+  readUiCatalogFinish,
+  readUiCatalogLevel,
+  readUiCollectionLevel,
+  type UiCatalogLevel,
+  type UiCollectionLevel,
+} from '../shared/vocabulary.js';
 import { UI_LIMITS } from '../shared/limits.js';
+
+export {
+  readUiCatalogFinish,
+  readUiCatalogLevel,
+  readUiCollectionLevel,
+  uiCatalogFinishes,
+  uiCatalogLevels,
+  uiCollectionLevels,
+  uiFinishLabel,
+  type UiCatalogLevel,
+  type UiCollectionLevel,
+} from '../shared/vocabulary.js';
 
 export const uiPageNames = [
   'home',
@@ -35,41 +52,6 @@ export const uiPageNames = [
 
 /** One dedicated page of the UserInterface. */
 export type UiPageName = (typeof uiPageNames)[number];
-
-/** Result levels the catalog page presents; a physical copy belongs to the collection views. */
-export const uiCatalogLevels = ['card', 'printing'] as const satisfies readonly SearchResultLevel[];
-export type UiCatalogLevel = (typeof uiCatalogLevels)[number];
-
-/**
- * Result levels the collection views present. The collection exposes the card, printing and
- * physical-copy levels of the account's owned records, so the same Search vocabulary applies and
- * one physical copy is one entry at the copy level.
- */
-export const uiCollectionLevels = [
-  'card',
-  'printing',
-  'copy',
-] as const satisfies readonly SearchResultLevel[];
-export type UiCollectionLevel = (typeof uiCollectionLevels)[number];
-
-/**
- * Finishes the catalog page's finish control offers. The values are the Catalog provider's
- * published vocabulary; the list is declared here because the URL is UserInterface vocabulary and
- * a provider change needs a deliberate decision about the routes it serves.
- */
-export const uiCatalogFinishes = ['nonfoil', 'foil', 'etched'] as const satisfies readonly Finish[];
-
-/** Display name of one printing finish. */
-export function uiFinishLabel(finish: Finish): string {
-  switch (finish) {
-    case 'nonfoil':
-      return 'Nonfoil';
-    case 'foil':
-      return 'Foil';
-    case 'etched':
-      return 'Etched';
-  }
-}
 
 /**
  * One presented view. `printingId` and `copyId` are null above their level, and a copy-level view
@@ -263,24 +245,6 @@ function readView(segments: readonly string[], search: string): UiView | null {
 function readQueryText(value: string | null): string | null {
   const text = value ?? '';
   return text.length <= UI_LIMITS.catalogQuery ? text : null;
-}
-
-/** Result level one catalog URL or control names; an absent or unknown value presents cards. */
-export function readUiCatalogLevel(value: unknown): UiCatalogLevel {
-  return value === 'printing' ? 'printing' : 'card';
-}
-
-/** Result level one collection URL or control names; an absent or unknown value presents cards. */
-export function readUiCollectionLevel(value: unknown): UiCollectionLevel {
-  return value === 'printing' || value === 'copy' ? value : 'card';
-}
-
-/** Finish one catalog URL or control names, or null when it is absent or outside the vocabulary. */
-export function readUiCatalogFinish(value: unknown): Finish | null {
-  if (typeof value !== 'string') {
-    return null;
-  }
-  return (uiCatalogFinishes as readonly string[]).includes(value) ? (value as Finish) : null;
 }
 
 /** Fragment of one URL, or null when it is not a route fragment. */

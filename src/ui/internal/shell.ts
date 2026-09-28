@@ -20,6 +20,7 @@
 import type { UserInterfaceCapabilities } from '../../application/index.js';
 import type { CaptureBrowserDevice } from '../../capture/index.js';
 
+import { createUiPresentationModules, type UiPresentationModules } from './composition.js';
 import { createDialogs, type UiDialogs } from './dialogs.js';
 import { readAccount, type UiAccount, type UiIdentity } from './identity.js';
 import { observeUiInput } from '../shared/interaction.js';
@@ -46,6 +47,12 @@ export interface UserInterfaceOptions {
   readonly device?: CaptureBrowserDevice;
   /** Page implementations; a page without one presents the shell frame alone. */
   readonly pages?: readonly UiPageDefinition[];
+  /**
+   * Presentation modules of this build; the defaults compose the CardViews, Editors and
+   * CaptureControls implementations of the browser application
+   * (docs/ui/architecture.md#modules-and-composition).
+   */
+  readonly modules?: UiPresentationModules;
 }
 
 export interface UserInterface {
@@ -81,6 +88,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   const identity = readIdentity(options?.identity);
   const device = readDevice(options?.device);
   const pages = readPages(options?.pages);
+  const modules = options?.modules ?? createUiPresentationModules();
   const document = root.ownerDocument;
   const candidates = document.defaultView;
   if (candidates === null) {
@@ -359,6 +367,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     pageController = controller;
     const context: UiPageContext = {
       view: target,
+      modules,
       account: current,
       capabilities,
       device: pageDevice(currentGeneration),

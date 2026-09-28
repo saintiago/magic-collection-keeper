@@ -77,3 +77,22 @@ export {
   type UiOperation,
 } from './internal/failure.js';
 export { createEditors, type Editors, type EditorsOptions } from './internal/editors.js';
+export {
+  createCatalogQueryEditor,
+  createCollectionQueryEditor,
+  createSearchEntryEditor,
+  type UiCatalogQueryEditorOptions,
+  type UiCatalogQueryDraft,
+  type UiCollectionQueryEditorOptions,
+  type UiCollectionQueryDraft,
+  type UiQueryEditor,
+  type UiSearchEntryEditor,
+  type UiSearchEntryDraft,
+  type UiSearchEntryEditorOptions,
+} from './internal/query.js';
+export {
+  createCopyBulkEditor,
+  type UiCopyBulkDraft,
+  type UiCopyBulkEditor,
+  type UiCopyBulkEditorOptions,
+} from './internal/copy.js';

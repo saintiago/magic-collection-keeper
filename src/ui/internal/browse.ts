@@ -19,28 +19,10 @@
 
 import type { CardListCatalogQuery } from '../../card-list/index.js';
 
-import { createCardListView } from '../card-views/index.js';
 import { UI_LIMITS } from '../shared/limits.js';
 import type { UiPageDefinition } from './pages.js';
-import {
-  controlLabel,
-  openEntryPresentation,
-  pageHandle,
-  readListState,
-  readPageState,
-  searchForm,
-  searchInput,
-  selectControl,
-} from './page-support.js';
-import {
-  readUiCatalogFinish,
-  readUiCatalogLevel,
-  uiCatalogFinishes,
-  uiCatalogLevels,
-  uiFinishLabel,
-  uiHref,
-  type UiView,
-} from './routes.js';
+import { cardViewOf, pageHandle, readListState, readPageState } from './page-support.js';
+import { uiHref, type UiView } from './routes.js';
 
 /**
  * The browsing pages Application's capabilities present: Home and the catalog/search page. They
@@ -61,26 +43,21 @@ function homePage(): UiPageDefinition {
       const bindings = context.capabilities.cardList.account(accountId);
       const recent = bindings.recent();
       const restored = readPageState(context.restored?.state);
-      const input = searchInput(document, 'home-search');
-      const form = searchForm(document, input);
+      const editor = context.modules.editors.searchEntry({
+        document,
+        applied: '',
+        restored,
+        onSubmit: (query) => {
+          context.navigate(catalogView({ text: query, level: 'card', owned: false, finish: null }));
+        },
+      });
       const heading = document.createElement('h2');
       heading.textContent = 'Recent cards';
       const listHost = document.createElement('div');
       listHost.id = 'home-results';
-      container.append(form, heading, listHost);
-      form.addEventListener('submit', (event) => {
-        event.preventDefault();
-        context.navigate(
-          catalogView({
-            text: input.value.trim(),
-            level: 'card',
-            owned: false,
-            finish: null,
-          }),
-        );
-      });
+      container.append(editor.element, heading, listHost);
 
-      const list = createCardListView({
+      const list = context.modules.cardViews.list({
         container: listHost,
         create: context.capabilities.cardList.create,
         source: recent.source,
@@ -88,16 +65,16 @@ function homePage(): UiPageDefinition {
         accountId,
         pageSize: UI_LIMITS.recentCards,
         restored: readListState<string>(restored),
-        presentation: openEntryPresentation(document, 'home-result', (entry) =>
-          recent.record(entry),
-        ),
+        presentation: context.modules.cardViews.openEntries({
+          document,
+          idPrefix: 'home-result',
+          href: (entry) => openableHref(entry),
+          onOpen: (entry) => recent.record(entry),
+        }),
         signal: context.signal,
       });
 
-      if (typeof restored?.query === 'string') {
-        input.value = restored.query;
-      }
-      return pageHandle(list, () => ({ query: input.value, list: list.capture() }));
+      return pageHandle(list, () => ({ ...editor.capture(), list: list.capture() }));
     },
   };
 }
@@ -113,23 +90,6 @@ function catalogPage(): UiPageDefinition {
       }
       const document = container.ownerDocument;
       const restored = readPageState(context.restored?.state);
-      const input = searchInput(document, 'catalog-search');
-      input.value = view.query;
-      const level = catalogLevelSelect(document);
-      level.id = 'catalog-level';
-      level.value = view.level;
-      const owned = document.createElement('input');
-      owned.type = 'checkbox';
-      owned.id = 'catalog-owned';
-      owned.checked = view.owned;
-      const finish = finishSelect(document);
-      finish.id = 'catalog-finish';
-      finish.value = view.finish ?? '';
-      const form = searchForm(document, input, [
-        controlLabel(document, 'Result level', level),
-        controlLabel(document, 'Owned only', owned),
-        controlLabel(document, 'Finish', finish),
-      ]);
       const refresh = document.createElement('button');
       refresh.type = 'button';
       refresh.id = 'catalog-refresh';
@@ -138,11 +98,11 @@ function catalogPage(): UiPageDefinition {
       heading.textContent = 'Results';
       const listHost = document.createElement('div');
       listHost.id = 'catalog-results';
-      container.append(form, heading, refresh, listHost);
+      container.append(heading, refresh, listHost);
 
       const bindings = context.capabilities.cardList.account(context.account.accountId);
       const recent = bindings.recent();
-      const list = createCardListView<CardListCatalogQuery>({
+      const list = context.modules.cardViews.list<CardListCatalogQuery>({
         container: listHost,
         create: context.capabilities.cardList.create,
         source: bindings.catalogQuery(),
@@ -154,49 +114,34 @@ function catalogPage(): UiPageDefinition {
         pageSize: UI_LIMITS.catalogPage,
         restored: readListState<CardListCatalogQuery>(restored),
         ...(view.level === 'printing' ? { fragments: { images: bindings.printingImages() } } : {}),
-        presentation: openEntryPresentation(document, 'catalog-result', (entry) =>
-          recent.record(entry),
-        ),
+        presentation: context.modules.cardViews.openEntries({
+          document,
+          idPrefix: 'catalog-result',
+          href: (entry) => openableHref(entry),
+          onOpen: (entry) => recent.record(entry),
+        }),
         signal: context.signal,
       });
-      form.addEventListener('submit', (event) => {
-        event.preventDefault();
-        const next = catalogView({
-          text: input.value.trim(),
-          level: readUiCatalogLevel(level.value),
-          owned: owned.checked,
-          finish: readUiCatalogFinish(finish.value),
-        });
-        if (uiHref(next) === uiHref(view)) {
-          // The same view is already presented: restart its result instead of adding an entry.
-          list.refresh();
-          return;
-        }
-        context.navigate(next);
+      const editor = context.modules.editors.catalogQuery({
+        document,
+        applied: catalogQueryOf(view),
+        restored,
+        onSubmit: (criteria) => {
+          const next = catalogView(criteria);
+          if (uiHref(next) === uiHref(view)) {
+            // The same view is already presented: restart its result instead of adding an entry.
+            list.refresh();
+            return;
+          }
+          context.navigate(next);
+        },
       });
+      container.prepend(editor.element);
       refresh.addEventListener('click', () => {
         list.refresh();
       });
 
-      if (typeof restored?.query === 'string') {
-        input.value = restored.query;
-      }
-      if (typeof restored?.level === 'string') {
-        level.value = readUiCatalogLevel(restored.level);
-      }
-      if (typeof restored?.owned === 'boolean') {
-        owned.checked = restored.owned;
-      }
-      if (restored?.finish !== undefined) {
-        finish.value = readUiCatalogFinish(restored.finish) ?? '';
-      }
-      return pageHandle(list, () => ({
-        query: input.value,
-        level: level.value,
-        owned: owned.checked,
-        finish: finish.value === '' ? null : finish.value,
-        list: list.capture(),
-      }));
+      return pageHandle(list, () => ({ ...editor.capture(), list: list.capture() }));
     },
   };
 }
@@ -224,30 +169,8 @@ function catalogView(query: CardListCatalogQuery): UiView {
   };
 }
 
-/** Result level control of the catalog page. */
-function catalogLevelSelect(document: Document): HTMLSelectElement {
-  return selectControl(
-    document,
-    uiCatalogLevels.map((level) => ({
-      value: level,
-      label: level === 'card' ? 'Cards' : 'Printings',
-    })),
-    'card',
-  );
-}
-
-/** Finish control of the catalog page; the empty value means the query constrains no finish. */
-function finishSelect(document: Document): HTMLSelectElement {
-  const select = document.createElement('select');
-  const any = document.createElement('option');
-  any.value = '';
-  any.textContent = 'Any finish';
-  select.append(any);
-  for (const finish of uiCatalogFinishes) {
-    const option = document.createElement('option');
-    option.value = finish;
-    option.textContent = uiFinishLabel(finish);
-    select.append(option);
-  }
-  return select;
+/** Location one presented entry opens, or null when it carries no openable identity. */
+function openableHref(entry: Parameters<typeof cardViewOf>[0]): string | null {
+  const target = cardViewOf(entry);
+  return target === null ? null : uiHref(target);
 }

@@ -29,7 +29,7 @@ import type {
 import { readFailureCode } from '../../card-list/index.js';
 import type { PhysicalCopy } from '../../usercards/index.js';
 
-import { createCardListView, type UiCardList } from '../card-views/index.js';
+import type { UiCardList } from '../card-views/index.js';
 import {
   correctCopy,
   createCopyAccess,
@@ -39,7 +39,7 @@ import {
 import { UI_LIMITS } from '../shared/limits.js';
 import {
   controlLabel,
-  openEntryPresentation,
+  cardViewOf,
   readListState,
   readPageState,
   restoredPresentation,
@@ -266,7 +266,7 @@ export function createCardDetailsPage(): UiPageDefinition {
         const host = document.createElement('div');
         host.id = 'card-printings';
         const bindings = context.capabilities.cardList.account(context.account.accountId);
-        const list = createCardListView({
+        const list = context.modules.cardViews.list({
           container: host,
           create: context.capabilities.cardList.create,
           source: bindings.cardPrintings(card),
@@ -274,7 +274,14 @@ export function createCardDetailsPage(): UiPageDefinition {
           accountId: context.account.accountId,
           pageSize: UI_LIMITS.printingPage,
           restored: readListState<string>(restored),
-          presentation: openEntryPresentation(document, 'card-printing'),
+          presentation: context.modules.cardViews.openEntries({
+            document,
+            idPrefix: 'card-printing',
+            href: (entry) => {
+              const target = cardViewOf(entry);
+              return target === null ? null : uiHref(target);
+            },
+          }),
           signal: context.signal,
         });
         printings = list;

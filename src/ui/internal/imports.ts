@@ -50,7 +50,6 @@ import type {
   SourceImportRow,
 } from '../../usercards/index.js';
 
-import { createCaptureControls } from '../capture-controls/index.js';
 import {
   cardListEntryKey,
   readableSearchPage,
@@ -63,7 +62,7 @@ import {
   type CardListRetained,
   type CardListTarget,
 } from '../../card-list/index.js';
-import { cardListBasicContent, createCardListView, type UiCardList } from '../card-views/index.js';
+import { cardListBasicContent, type UiCardList } from '../card-views/index.js';
 import { uiCopyConditions } from '../editors/index.js';
 import {
   beginSourceImport,
@@ -328,7 +327,7 @@ function importPage(): UiPageDefinition {
       // one Capture session to this account and one pending import, presents its controls and
       // disposes it with the view, releasing the camera and the Recognition session
       // (docs/ui/capture-controls.md, docs/capture.md#interface).
-      const capture = createCaptureControls({
+      const capture = context.modules.captureControls({
         document,
         capture: context.capabilities.capture,
         accountId: context.account.accountId,
@@ -711,7 +710,7 @@ function importPage(): UiPageDefinition {
         const bindings = context.capabilities.cardList.account(context.account.accountId);
         const entries = bindings.pendingEntries();
         pendingEntries = entries;
-        pending = createCardListView({
+        pending = context.modules.cardViews.list({
           container: pendingHost,
           create: context.capabilities.cardList.create,
           source: entries.source,
@@ -784,7 +783,7 @@ function importPage(): UiPageDefinition {
       function composeResults(
         restoredState: CardListRetained<CardListCatalogQuery> | undefined,
       ): void {
-        results = createCardListView<CardListCatalogQuery>({
+        results = context.modules.cardViews.list<CardListCatalogQuery>({
           container: resultsHost,
           create: context.capabilities.cardList.create,
           source: context.capabilities.cardList.account(context.account.accountId).catalogQuery(),

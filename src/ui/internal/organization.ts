@@ -30,7 +30,6 @@ import {
 
 import {
   cardListBasicContent,
-  createCardListView,
   type UiCardList,
   type UiEntryOwnership,
 } from '../card-views/index.js';
@@ -737,7 +736,7 @@ function tagViewPage(): UiPageDefinition {
         const bindings = context.capabilities.cardList.account(context.account.accountId);
         const associationBinding = bindings.tagAssociations(tagId);
         associationRecords = associationBinding;
-        const list = createCardListView({
+        const list = context.modules.cardViews.list({
           container: associationsHost,
           create: context.capabilities.cardList.create,
           source: associationBinding.source,
@@ -949,7 +948,7 @@ function tagViewPage(): UiPageDefinition {
         if (addList !== null) {
           return;
         }
-        addList = createCardListView<CardListPickerQuery>({
+        addList = context.modules.cardViews.list<CardListPickerQuery>({
           container: addHost,
           create: context.capabilities.cardList.create,
           source: context.capabilities.cardList.account(context.account.accountId).pickerQuery(),

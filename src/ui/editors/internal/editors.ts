@@ -11,6 +11,25 @@
 
 import type { CardViews } from '../../card-views/index.js';
 
+import {
+  createCatalogQueryEditor,
+  createCollectionQueryEditor,
+  createSearchEntryEditor,
+  type UiCatalogQueryEditorOptions,
+  type UiCollectionQueryEditorOptions,
+  type UiQueryEditor,
+  type UiSearchEntryEditor,
+  type UiSearchEntryEditorOptions,
+  type UiCatalogQueryDraft,
+  type UiCollectionQueryDraft,
+} from './query.js';
+import {
+  createCopyBulkEditor,
+  type UiCopyBulkEditor,
+  type UiCopyBulkEditorOptions,
+} from './copy.js';
+import type { CardListCatalogQuery, CardListCollectionQuery } from '../../../card-list/index.js';
+
 export interface EditorsOptions {
   /**
    * CardViews factory the editors use for card and printing choices; the editors never select a
@@ -22,6 +41,18 @@ export interface EditorsOptions {
 /** The presentation module of the UI composition. */
 export interface Editors {
   readonly cardViews: CardViews;
+  /** Home's single-field search entry. */
+  searchEntry(options: UiSearchEntryEditorOptions): UiSearchEntryEditor;
+  /** The catalog query criteria editor. */
+  catalogQuery(
+    options: UiCatalogQueryEditorOptions,
+  ): UiQueryEditor<CardListCatalogQuery, UiCatalogQueryDraft>;
+  /** The collection query criteria editor. */
+  collectionQuery(
+    options: UiCollectionQueryEditorOptions,
+  ): UiQueryEditor<CardListCollectionQuery, UiCollectionQueryDraft>;
+  /** The collection's bulk copy change editor. */
+  copyBulk(options: UiCopyBulkEditorOptions): UiCopyBulkEditor;
 }
 
 /** The default Editors module of the browser application. */
@@ -29,5 +60,11 @@ export function createEditors(options: EditorsOptions): Editors {
   if (options?.cardViews === undefined) {
     throw new TypeError('The editors render card choices through the supplied CardViews module.');
   }
-  return { cardViews: options.cardViews };
+  return {
+    cardViews: options.cardViews,
+    searchEntry: (editorOptions) => createSearchEntryEditor(editorOptions),
+    catalogQuery: (editorOptions) => createCatalogQueryEditor(editorOptions),
+    collectionQuery: (editorOptions) => createCollectionQueryEditor(editorOptions),
+    copyBulk: (editorOptions) => createCopyBulkEditor(editorOptions),
+  };
 }

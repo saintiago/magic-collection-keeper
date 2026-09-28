@@ -19,6 +19,7 @@
 import type { UserInterfaceCapabilities } from '../../application/index.js';
 import type { CaptureBrowserDevice } from '../../capture/index.js';
 
+import type { UiPresentationModules } from './composition.js';
 import type { UiDialogs } from './dialogs.js';
 import type { UiAccount } from './identity.js';
 import type { UiViewSnapshot } from './restoration.js';
@@ -27,6 +28,12 @@ import type { UiPageName, UiView } from './routes.js';
 /** What one page receives when the shell presents its view. */
 export interface UiPageContext {
   readonly view: UiView;
+  /**
+   * Presentation modules UI composition supplies: the page composes CardViews, Editors and
+   * CaptureControls through the interfaces it receives and never selects a concrete
+   * implementation (docs/ui/architecture.md#modules-and-composition).
+   */
+  readonly modules: UiPresentationModules;
   /** Verified account the view presents; pages render nothing private without one. */
   readonly account: UiAccount;
   /** Public configuration, authenticated transport and component access from Application. */

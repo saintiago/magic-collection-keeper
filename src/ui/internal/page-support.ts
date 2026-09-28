@@ -12,16 +12,19 @@
 
 import type { CardListEntry, CardListRetained } from '../../card-list/index.js';
 
-import { cardListBasicContent, type UiCardList } from '../card-views/index.js';
+import type { UiCardList } from '../card-views/index.js';
 import type { UiPageHandle } from './pages.js';
-import { UI_LIMITS } from '../shared/limits.js';
-import { uiHref, type UiView } from './routes.js';
+import type { UiView } from './routes.js';
 
-/** One option of a select control the pages present. */
-export interface UiSelectOption {
-  readonly value: string;
-  readonly label: string;
-}
+// The field controls live with the shared presentation code; pages keep importing them from the
+// page support they already use.
+export {
+  controlLabel,
+  searchForm,
+  searchInput,
+  selectControl,
+  type UiSelectOption,
+} from '../shared/controls.js';
 
 /**
  * One page's handle: the page keeps its own form state beside the state its list retains, and it
@@ -60,35 +63,6 @@ export function restoredPresentation<Context>(list: UiCardList<Context>): Promis
   return restoration === null ? null : restoration.presented.then(() => undefined);
 }
 
-/**
- * Presentation that opens one entry's card details. The link carries a stable identity of the
- * entry it opens, so the list and the shell restore the focused and visible result of a history
- * entry by that identity; an entry without resolved basic information has no details to open and
- * keeps the default rendering.
- */
-export function openEntryPresentation(
-  document: Document,
-  idPrefix: string,
-  onOpen: (entry: CardListEntry) => void = () => {},
-): { renderEntry(entry: CardListEntry): Node | null } {
-  return {
-    renderEntry(entry) {
-      const content = cardListBasicContent(document, entry);
-      const view = cardViewOf(entry);
-      if (view === null) {
-        return content;
-      }
-      const link = document.createElement('a');
-      link.id = `${idPrefix}-${encodeURIComponent(entry.key)}`;
-      link.href = uiHref(view);
-      link.dataset.uiOpen = entry.key;
-      link.append(content);
-      link.addEventListener('click', () => onOpen(entry));
-      return link;
-    },
-  };
-}
-
 /** Card details view of one entry, or null when the entry carries no identity to open. */
 export function cardViewOf(entry: CardListEntry): UiView | null {
   const basic = entry.basic;
@@ -120,67 +94,6 @@ export function cardViewOf(entry: CardListEntry): UiView | null {
       // A pending import entry has no catalog record to open before its confirmation.
       return null;
   }
-}
-
-/**
- * The search expression field the browsing and collection pages present. The field carries an id,
- * so the shell restores this page's focus to it when the user returns to the view
- * (docs/user-interface.md#pages-and-navigation).
- */
-export function searchInput(document: Document, id: string): HTMLInputElement {
-  const input = document.createElement('input');
-  input.id = id;
-  input.type = 'search';
-  input.name = 'query';
-  // The page bounds the draft it keeps and the URL of a query it links, so the captured input
-  // always fits the state the page retains.
-  input.maxLength = UI_LIMITS.catalogQuery;
-  return input;
-}
-
-/** One search form: the expression, the query controls and the control that submits them. */
-export function searchForm(
-  document: Document,
-  input: HTMLInputElement,
-  controls: readonly HTMLElement[] = [],
-  caption = 'Search cards',
-): HTMLFormElement {
-  const form = document.createElement('form');
-  const submit = document.createElement('button');
-  submit.type = 'submit';
-  submit.textContent = 'Search';
-  form.append(controlLabel(document, caption, input), ...controls, submit);
-  return form;
-}
-
-/** One select control with the supplied options and an initial value. */
-export function selectControl(
-  document: Document,
-  options: readonly UiSelectOption[],
-  value: string,
-): HTMLSelectElement {
-  const select = document.createElement('select');
-  for (const option of options) {
-    const element = document.createElement('option');
-    element.value = option.value;
-    element.textContent = option.label;
-    select.append(element);
-  }
-  select.value = value;
-  return select;
-}
-
-/** One control beside its caption; the label names the control it contains. */
-export function controlLabel(
-  document: Document,
-  text: string,
-  control: HTMLElement,
-): HTMLLabelElement {
-  const label = document.createElement('label');
-  const caption = document.createElement('span');
-  caption.textContent = text;
-  label.append(caption, control);
-  return label;
 }
 
 /**
