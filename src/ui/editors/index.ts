@@ -92,7 +92,11 @@ export {
 } from './internal/query.js';
 export {
   createCopyBulkEditor,
+  createCopyEditor,
   type UiCopyBulkDraft,
   type UiCopyBulkEditor,
   type UiCopyBulkEditorOptions,
+  type UiCopyDraft,
+  type UiCopyEditor,
+  type UiCopyEditorOptions,
 } from './internal/copy.js';

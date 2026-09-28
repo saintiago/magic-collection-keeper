@@ -25,6 +25,9 @@ import {
 } from './query.js';
 import {
   createCopyBulkEditor,
+  createCopyEditor,
+  type UiCopyEditor,
+  type UiCopyEditorOptions,
   type UiCopyBulkEditor,
   type UiCopyBulkEditorOptions,
 } from './copy.js';
@@ -53,6 +56,8 @@ export interface Editors {
   ): UiQueryEditor<CardListCollectionQuery, UiCollectionQueryDraft>;
   /** The collection's bulk copy change editor. */
   copyBulk(options: UiCopyBulkEditorOptions): UiCopyBulkEditor;
+  /** The attribute editor of one physical copy. */
+  copy(options: UiCopyEditorOptions): UiCopyEditor;
 }
 
 /** The default Editors module of the browser application. */
@@ -66,5 +71,6 @@ export function createEditors(options: EditorsOptions): Editors {
     catalogQuery: (editorOptions) => createCatalogQueryEditor(editorOptions),
     collectionQuery: (editorOptions) => createCollectionQueryEditor(editorOptions),
     copyBulk: (editorOptions) => createCopyBulkEditor(editorOptions),
+    copy: (editorOptions) => createCopyEditor(editorOptions),
   };
 }
