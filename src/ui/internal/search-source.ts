@@ -310,6 +310,20 @@ export function createCollectionSearchAccess(
 }
 
 /**
+ * One Search result a consumer may present, or a retryable failure when the index has no complete
+ * answer to present yet. A page that reports updating without a total count has no usable result:
+ * presenting its absent entries would claim the account's search holds no match, so the read fails
+ * and the consumer can retry it instead (docs/search.md#freshness,
+ * docs/data-architecture.md#freshness-and-user-visible-behavior).
+ */
+export function readableSearchPage(page: SearchPage): SearchPage {
+  if (page.status === 'updating' && page.totalCount === null) {
+    throw new Error('The search results are still being indexed.');
+  }
+  return page;
+}
+
+/**
  * One Search-backed list source: the adapter builds the request of its own presentation contract
  * and keeps the provider's answer, so the list presents the membership, ordering and continuation
  * Search evaluated rather than reconstructing them.
@@ -322,10 +336,12 @@ function createSearchSource<Context>(
     async load(request) {
       let page: SearchPage;
       try {
-        page = readSearchPage(
-          await search.execute(
-            build(request.context, request.pageSize, request.continuation),
-            request.signal,
+        page = readableSearchPage(
+          readSearchPage(
+            await search.execute(
+              build(request.context, request.pageSize, request.continuation),
+              request.signal,
+            ),
           ),
         );
       } catch (cause) {
@@ -336,13 +352,6 @@ function createSearchSource<Context>(
           return { status: 'invalidated' };
         }
         throw cause;
-      }
-      if (page.status === 'updating' && page.totalCount === null) {
-        // The index has no complete result to present yet. Showing the empty result would turn a
-        // delayed projection into an empty collection, so the read stays a failure the list can
-        // retry; CardList's own updating state carries usable results until then
-        // (docs/card-list.md#loading-and-recovery, docs/search.md#freshness).
-        throw new Error('The search results are still being indexed.');
       }
       return {
         status: 'page',

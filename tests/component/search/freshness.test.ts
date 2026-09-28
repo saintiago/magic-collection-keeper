@@ -3,7 +3,8 @@
  * (docs/search.md#freshness). The SQL executor is the dependency outside the component, so these
  * cases substitute it and control the indexed state each round reports: a required position is
  * incorporated when the published generation reaches it, a bound that expires reports delayed, a
- * withdrawn observation reports unavailable and a missing generation is never incorporated.
+ * bound that expires while a read stalls reports delayed just the same, a withdrawn observation
+ * reports unavailable instead of completing, and a missing generation is never incorporated.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -39,6 +40,30 @@ function searchOver(rows: () => readonly SearchSqlRow[]): Search {
     sql: { query: async () => rows() },
     withAccountScope: async (_accountId, work) => work({ query: async () => rows() }),
   });
+}
+
+/** Search whose indexed-state read only answers when a case settles it. */
+function stallingSearch(): {
+  readonly search: Search;
+  readonly answer: (rows: readonly SearchSqlRow[]) => void;
+  readonly reads: () => number;
+} {
+  let settle: (rows: readonly SearchSqlRow[]) => void = () => undefined;
+  let reads = 0;
+  const query = () => {
+    reads += 1;
+    return new Promise<readonly SearchSqlRow[]>((resolve) => {
+      settle = resolve;
+    });
+  };
+  return {
+    search: createSearch({
+      sql: { query },
+      withAccountScope: async (_accountId, work) => work({ query }),
+    }),
+    answer: (rows) => settle(rows),
+    reads: () => reads,
+  };
 }
 
 afterEach(() => {
@@ -145,6 +170,58 @@ describe('search freshness observation', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     await rejected;
+  });
+
+  it('reports delayed when a stalled read outlasts the observation bound', async () => {
+    vi.useFakeTimers();
+    const stalled = stallingSearch();
+
+    const pending = stalled.search.observe({ positions: ['9'] }, account, { timeoutMs: 250 });
+    await vi.advanceTimersByTimeAsync(250);
+    const expired = await pending;
+
+    expect(expired).toEqual({ state: 'delayed', revisions: null });
+    // A read that answers after the bound was withdrawn never turns the settled observation into
+    // an incorporated one.
+    stalled.answer([progressRow({ privateRevision: '9' })]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stalled.reads()).toBe(1);
+  });
+
+  it('fails a withdrawn observation while its read is outstanding', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const stalled = stallingSearch();
+
+    const pending = stalled.search.observe({ positions: ['9'] }, account, {
+      timeoutMs: 1_000,
+      signal: controller.signal,
+    });
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'unavailable' });
+    controller.abort();
+    await rejected;
+
+    stalled.answer([progressRow({ privateRevision: '9' })]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stalled.reads()).toBe(1);
+  });
+
+  it('never reads the indexed state of an already withdrawn observation', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const read = vi.fn(async () => [progressRow({})] as readonly SearchSqlRow[]);
+    const search = createSearch({
+      sql: { query: read },
+      withAccountScope: async (_accountId, work) => work({ query: read }),
+    });
+
+    await expect(
+      search.observe({ positions: ['9'] }, account, {
+        timeoutMs: 1_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ code: 'unavailable' });
+    expect(read).not.toHaveBeenCalled();
   });
 
   it('rejects an observation bound outside the declared limit', async () => {

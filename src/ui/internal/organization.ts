@@ -40,6 +40,7 @@ import { readUiCollectionLevel, uiHref } from './routes.js';
 import {
   createEntryOwnershipReader,
   createSearchCounts,
+  readableSearchPage,
   searchListEntry,
   uiEntryKey,
 } from './search-source.js';
@@ -1990,9 +1991,11 @@ function addSource(search: SearchClient): UiListSource<UiTagAddQuery> {
     async load(request) {
       let page: SearchPage;
       try {
-        page = await search.execute(
-          addSearchRequest(request.context, request.pageSize, request.continuation),
-          request.signal,
+        page = readableSearchPage(
+          await search.execute(
+            addSearchRequest(request.context, request.pageSize, request.continuation),
+            request.signal,
+          ),
         );
       } catch (cause) {
         if (request.continuation !== null && isUiInvalidatedContinuation(cause)) {

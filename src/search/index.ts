@@ -22,8 +22,9 @@
  * incorporated a required committed position or published catalog revision and stays usable while
  * indexing catches up; observe reads that progress with a bounded, cancellable wait, and
  * createSearchProgress tracks one account's committed positions for the browser's indexing notice
- * (docs/search.md#freshness). Other components import Search through this module only; its
- * internal modules stay private to the component (docs/architecture.md, .dependency-cruiser.mjs).
+ * (docs/search.md#freshness). Other components import Search through this module or its
+ * browser-safe entry point (src/search/browser.ts) only; its internal modules stay private to the
+ * component (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
 export type {

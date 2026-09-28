@@ -517,6 +517,36 @@ test('resolves an unresolved pending entry before confirming it', async ({ page 
   expect(errors).toEqual([]);
 });
 
+test('reports an indexing printing search instead of offering no printing', async ({ page }) => {
+  const errors = await openPendingReview(page, [
+    entry({
+      entryId: 'entry-capture',
+      printingId: null,
+      finish: null,
+      candidates: [{ printingId: m10.printingId, provider: 'visual', evidence: 'art-match' }],
+    }),
+  ]);
+  await page.fill('#import-printing-query-entry-capture', 'Lightning Bolt');
+  await page.click('#import-printing-find-entry-capture');
+  const search = await requested<Record<string, unknown>>(page, 'searches');
+  // The index has no complete answer yet: mapping the empty page to no printing would tell the
+  // account that the catalog publishes none for the search (docs/search.md#freshness).
+  await settle(page, 'settleSearch', search.id, {
+    status: 'updating',
+    entries: [],
+    totalCount: null,
+    continuation: null,
+    revisions: null,
+  });
+
+  const status = page.locator('#import-entry-status-entry-capture');
+  await expect(status).toHaveText(
+    'The printings could not be read: The search results are still being indexed.',
+  );
+  await expect(status).not.toContainText('published no printing');
+  expect(errors).toEqual([]);
+});
+
 test('recovers a lost confirmation through its recorded operation outcome', async ({ page }) => {
   const errors = await openPendingReview(page, [entry()]);
   const row = page.locator('#import-pending [data-ui-entry="pending:entry-1"]');

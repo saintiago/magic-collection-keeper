@@ -1,5 +1,6 @@
 import type { SearchProgress, SearchProgressRequest } from './freshness.js';
-import { SEARCH_LIMITS, type SearchRevisions } from './model.js';
+import { SEARCH_LIMITS } from './limits.js';
+import type { SearchRevisions } from './model.js';
 
 /**
  * Account-scoped browser progress of committed changes awaiting indexing
@@ -7,12 +8,15 @@ import { SEARCH_LIMITS, type SearchRevisions } from './model.js';
  *
  * Application connects the account's known committed publication positions to this tracker; the
  * shell observes the status it publishes and presents it, and never compares positions or polls
- * itself. One observation window covers every outstanding position: a check that reports
- * incorporation releases exactly the positions it observed, a window that expires reports delayed,
- * a failed read reports unavailable — never completion — and `recheck` observes again. A tracker
- * belongs to one account: replacing the account disposes it, which releases the private positions
- * and stops late results from reaching a later status. Observing never writes anything, so checking
- * a status can never resubmit the mutation that produced the position.
+ * itself. One observation window covers every outstanding position: it requires the highest one,
+ * because an indexed position that reaches it incorporates every position below it, so the request
+ * stays within Search's declared bound however many commits accumulate; the window is measured in
+ * elapsed time, so a check whose read stalls expires it instead of holding the status at indexing.
+ * A check that reports incorporation releases the positions it observed, a window that expires
+ * reports delayed, a failed read reports unavailable — never completion — and `recheck` observes
+ * again. A tracker belongs to one account: replacing the account disposes it, which releases the
+ * private positions and stops late results from reaching a later status. Observing never writes
+ * anything, so checking a status can never resubmit the mutation that produced the position.
  */
 
 /** Status of one account's committed changes awaiting indexing. */
@@ -66,7 +70,10 @@ export interface SearchIndexingProgressDependencies {
   readonly intervalMs?: number;
   /** Window one observation waits for incorporation before it reports delayed. */
   readonly windowMs?: number;
-  /** Schedules one check; defaults to a real timer. */
+  /**
+   * Schedules one delayed observation callback — a check or the end of the window — and returns
+   * the withdrawal of that callback; defaults to a real timer.
+   */
   readonly schedule?: (delayMs: number, run: () => void) => () => void;
 }
 
@@ -89,7 +96,6 @@ export function createSearchProgress(
     'interval',
   );
   const windowMs = readBound(dependencies.windowMs, SEARCH_PROGRESS_DEFAULT_WINDOW_MS, 'window');
-  const checksPerWindow = Math.max(1, Math.ceil(windowMs / intervalMs));
   const schedule =
     dependencies.schedule ??
     ((delayMs: number, run: () => void) => {
@@ -148,32 +154,47 @@ export function createSearchProgress(
     nextObservationId += 1;
     const id = nextObservationId;
     const positions = [...status.outstanding];
+    // Search bounds one observation request; an indexed position at or beyond the highest known
+    // commit incorporates every lower one, so the request names that position alone while the
+    // status keeps reporting every outstanding position (docs/search.md#freshness).
+    const required = highestPosition(positions);
     const controller = new AbortController();
     let cancelScheduled: (() => void) | null = null;
+    let cancelWindow: (() => void) | null = null;
     observation = {
       id,
       positions,
       stop: () => {
         cancelScheduled?.();
         cancelScheduled = null;
+        cancelWindow?.();
+        cancelWindow = null;
         controller.abort();
       },
     };
     publish({ ...status, state: 'indexing' });
 
-    let checks = 0;
+    // The window is a deadline over the whole observation rather than a count of completed checks,
+    // so time spent inside a read counts against it and a stalled read reports delayed instead of
+    // leaving the status indexing (docs/search.md#freshness).
+    cancelWindow = schedule(windowMs, () => {
+      finish(id, { ...status, state: 'delayed' });
+    });
+
     const check = (): void => {
       cancelScheduled = null;
       dependencies
-        .read({ positions }, { signal: controller.signal })
+        .read({ positions: [required] }, { signal: controller.signal })
         .then((result) => {
           if (disposed || observation?.id !== id) {
             return;
           }
           const observed: SearchIndexingStatus = { ...status, revisions: result.revisions };
           if (result.state === 'incorporated') {
+            // Incorporation grows with the indexed position, so everything up to the observed
+            // position is incorporated; a commit reported meanwhile stays outstanding.
             const outstanding = status.outstanding.filter(
-              (position) => !positions.includes(position),
+              (position) => BigInt(position) > BigInt(required),
             );
             if (outstanding.length === 0) {
               finish(id, { ...observed, state: 'incorporated', outstanding });
@@ -190,11 +211,6 @@ export function createSearchProgress(
             return;
           }
           publish(observed);
-          checks += 1;
-          if (checks >= checksPerWindow) {
-            finish(id, { ...observed, state: 'delayed' });
-            return;
-          }
           cancelScheduled = schedule(intervalMs, check);
         })
         .catch(() => {
@@ -268,6 +284,20 @@ function readBound(value: number | undefined, fallback: number, name: string): n
     );
   }
   return value;
+}
+
+/** The greatest of the known committed positions; the tracker never observes an empty set. */
+function highestPosition(positions: readonly string[]): string {
+  let highest = positions[0];
+  if (highest === undefined) {
+    throw new TypeError('An observation needs at least one committed position.');
+  }
+  for (const position of positions) {
+    if (BigInt(position) > BigInt(highest)) {
+      highest = position;
+    }
+  }
+  return highest;
 }
 
 function sameStatus(left: SearchIndexingStatus, right: SearchIndexingStatus): boolean {

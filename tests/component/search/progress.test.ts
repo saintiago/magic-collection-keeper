@@ -2,14 +2,16 @@
  * Component scope: the account-scoped browser indexing progress
  * (docs/search.md#freshness). The status read and the check schedule are the dependencies outside
  * the component, so these cases script them: known committed positions accumulate across page
- * changes, a window that expires reports delayed, a failed check reports unavailable — never
- * completion — a known indexing failure is reported as failed, and disposing a replaced account's
- * tracker releases its private positions and drops late results.
+ * changes and stay within one observation request however many commits accumulate, a window
+ * measured in elapsed time expires even while a read stalls, a failed check reports unavailable —
+ * never completion — a known indexing failure is reported as failed, and disposing a replaced
+ * account's tracker releases its private positions and drops late results.
  */
 
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  SEARCH_LIMITS,
   createSearchProgress,
   type SearchIndexingProgress,
   type SearchProgress,
@@ -42,30 +44,41 @@ const indexing = (position: string | null): SearchProgress => ({
         },
 });
 
-/** One scheduled check, which a case runs when it decides the observation window advances. */
+/** One scheduled callback, which a case runs when it decides the observation window advances. */
 interface ScheduledCheck {
   readonly delayMs: number;
+  /** Virtual time the callback is due at, counted from the start of the case. */
+  readonly dueAt: number;
   readonly run: () => void;
   cancelled: boolean;
 }
 
+/**
+ * The observation's own scheduler over a virtual clock: a case runs the earliest scheduled
+ * callback, so an elapsed window deadline and the checks inside it keep the order real timers give
+ * them even when the checks depend on how long a read takes.
+ */
 function createScheduler() {
   const checks: ScheduledCheck[] = [];
+  let now = 0;
   return {
     checks,
     schedule(delayMs: number, run: () => void): () => void {
-      const check: ScheduledCheck = { delayMs, run, cancelled: false };
+      const check: ScheduledCheck = { delayMs, dueAt: now + delayMs, run, cancelled: false };
       checks.push(check);
       return () => {
         check.cancelled = true;
       };
     },
-    /** Runs the next scheduled check and settles the promise callbacks it starts. */
+    /** Advances to the earliest scheduled callback and settles the promise callbacks it starts. */
     async runNext(): Promise<void> {
-      const check = checks.find((candidate) => !candidate.cancelled);
+      const check = checks
+        .filter((candidate) => !candidate.cancelled)
+        .sort((left, right) => left.dueAt - right.dueAt)[0];
       if (check === undefined) {
         throw new Error('No check was scheduled.');
       }
+      now = check.dueAt;
       check.cancelled = true;
       check.run();
       await flush();
@@ -85,6 +98,16 @@ type ProgressRead = (
   request: SearchProgressRequest,
   options: { readonly signal: AbortSignal },
 ) => Promise<SearchProgress>;
+
+/** One scripted status read, whose calls a case inspects. */
+type ProgressReadMock = ReturnType<typeof vi.fn<ProgressRead>>;
+
+/** The positions each check required, oldest first. */
+function positionRequests(
+  read: ProgressReadMock,
+): readonly (readonly string[] | null | undefined)[] {
+  return read.mock.calls.map(([request]) => request.positions);
+}
 
 function progressOver(
   read: ProgressRead,
@@ -166,6 +189,8 @@ describe('account indexing progress', () => {
 
     progress.committed(['9']);
     await flush();
+    // Checks at 100 ms and 200 ms stay inside the 300 ms window, whose deadline then ends it.
+    await scheduler.runNext();
     await scheduler.runNext();
     await scheduler.runNext();
 
@@ -175,6 +200,25 @@ describe('account indexing progress', () => {
       state: 'delayed',
       outstanding: ['9'],
       revisions: indexing('4').revisions,
+    });
+  });
+
+  it('reports delayed when a check’s read stalls past the observation window', async () => {
+    const scheduler = createScheduler();
+    // The read never answers, so only the elapsed window can end the observation.
+    const read = vi.fn<ProgressRead>(() => new Promise<SearchProgress>(() => undefined));
+    const progress = progressOver(read, scheduler);
+
+    progress.committed(['9']);
+    await flush();
+    await scheduler.runNext();
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(progress.status()).toEqual({
+      accountId: alice,
+      state: 'delayed',
+      outstanding: ['9'],
+      revisions: null,
     });
   });
 
@@ -223,6 +267,7 @@ describe('account indexing progress', () => {
     await flush();
     await scheduler.runNext();
     await scheduler.runNext();
+    await scheduler.runNext();
     expect(progress.status().state).toBe('delayed');
 
     progress.recheck();
@@ -243,6 +288,54 @@ describe('account indexing progress', () => {
       'status',
       'subscribe',
     ]);
+  });
+
+  it('keeps accumulated commits within one observation request and releases them together', async () => {
+    const scheduler = createScheduler();
+    const read = vi.fn<ProgressRead>(async () => indexed('100'));
+    const progress = progressOver(read, scheduler);
+    const positions = Array.from({ length: 51 }, (_, index) => String(index + 1));
+
+    progress.committed(positions);
+    await flush();
+
+    // Incorporation grows with the indexed position, so the highest committed position answers
+    // for every lower one and the request respects the contract's declared bound.
+    expect(positionRequests(read)).toEqual([['51']]);
+    expect(read.mock.calls[0]?.[0]?.positions?.length).toBeLessThanOrEqual(
+      SEARCH_LIMITS.maxRequiredPositions,
+    );
+    expect(progress.status()).toEqual({
+      accountId: alice,
+      state: 'incorporated',
+      outstanding: [],
+      revisions: indexed('100').revisions,
+    });
+  });
+
+  it('recovers more accumulated commits than one request may carry', async () => {
+    const scheduler = createScheduler();
+    const read = vi
+      .fn<ProgressRead>()
+      .mockRejectedValueOnce(new Error('the status read is unavailable'))
+      .mockResolvedValue(indexed('51'));
+    const progress = progressOver(read, scheduler);
+    const positions = Array.from({ length: 51 }, (_, index) => String(index + 1));
+
+    progress.committed(positions);
+    await flush();
+    expect(progress.status().state).toBe('unavailable');
+    expect(progress.status().outstanding).toEqual(positions);
+
+    progress.recheck();
+    await flush();
+    expect(positionRequests(read)).toEqual([['51'], ['51']]);
+    expect(progress.status()).toEqual({
+      accountId: alice,
+      state: 'incorporated',
+      outstanding: [],
+      revisions: indexed('51').revisions,
+    });
   });
 
   it('releases private positions on disposal and drops late results', async () => {

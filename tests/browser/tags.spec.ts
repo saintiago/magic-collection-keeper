@@ -1219,6 +1219,63 @@ test('searches the catalog and adds a card to the wishlist with its intended qua
   expect(errors).toEqual([]);
 });
 
+test('reports an indexing add search instead of an empty result', async ({ page }) => {
+  const errors = await openTags(page, '#/tags/tag-wish');
+  await scriptCounts(page, []);
+  const read = await requested<readonly string[]>(page, 'readTags');
+  await settle(page, 'settleReadTags', read.id, [
+    tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
+  ]);
+  const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
+  await settle(page, 'settleListAssociations', listing.id, { associations: [] });
+
+  await page.fill('#tag-add-query', 'bolt');
+  await page.click('#tag-add-submit');
+  const search = await requested<{ readonly request: Record<string, unknown> }>(page, 'searches');
+  const results = page.locator('#tag-add-results');
+  // The index has no complete answer yet: presenting the empty page would tell the account that
+  // no catalog entry matches (docs/search.md#freshness).
+  await settle(page, 'settleSearch', search.id, {
+    status: 'updating',
+    entries: [],
+    totalCount: null,
+    continuation: null,
+    revisions: null,
+  });
+  await expect(results.locator('[data-ui-status]')).toHaveText(
+    'The search results are still being indexed.',
+  );
+  await expect(results).not.toContainText('No entries');
+
+  // The retry repeats the same query rather than resubmitting any mutation, and presents the
+  // entries the index has since produced.
+  await results.locator('[data-ui-retry]').click();
+  const retry = await requested<{ readonly request: Record<string, unknown> }>(page, 'searches', 1);
+  expect(retry.arguments.request).toEqual(search.arguments.request);
+  await settle(page, 'settleSearch', retry.id, {
+    status: 'ready',
+    entries: [
+      {
+        entryKey: 'card:card-bolt',
+        target: { kind: 'card', cardId: 'card-bolt' },
+        card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
+        printing: null,
+        quantity: null,
+      },
+    ],
+    totalCount: 1,
+    continuation: null,
+    revisions: {
+      generation: 'tags-generation',
+      catalogRevision: 'tags-revision',
+      catalogPosition: '1',
+      privateRevision: 'private-1',
+    },
+  });
+  await expect(results.locator('[data-ui-entry="card:card-bolt"]')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 /** A resolved card association, with its optional counts deliberately still pending. */
 async function openCardAssociation(page: Page, continuation: string | null = null): Promise<void> {
   await openTags(page, '#/tags/tag-wish');

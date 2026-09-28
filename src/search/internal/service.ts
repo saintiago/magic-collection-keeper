@@ -234,8 +234,11 @@ export function createSearch(dependencies: SearchDependencies): Search {
     /**
      * Observes one bounded wait for incorporation. Each round reads the indexed state again, so a
      * wait that expires reports delayed while a wait that sees the required progress reports
-     * incorporated; the read never starts indexing work and an unusable read fails as unavailable
-     * rather than reporting completion (docs/search.md#freshness).
+     * incorporated; the bound covers the whole wait, including the time a read spends answering,
+     * so a stalled storage read cannot keep it open past its deadline. The read never starts
+     * indexing work, an unusable read fails as unavailable rather than reporting completion, and a
+     * withdrawn observation fails as unavailable instead of completing after the withdrawal
+     * (docs/search.md#freshness).
      */
     async observe(
       request: SearchProgressRequest,
@@ -251,19 +254,33 @@ export function createSearch(dependencies: SearchDependencies): Search {
         );
       }
       const timeoutMs = readObservationTimeout(options?.timeoutMs);
-      const signal = options?.signal;
-      let remaining = timeoutMs;
+      const signal = options?.signal ?? null;
+      // The bound is a deadline over the whole observation rather than a sum of its sleeps: time
+      // spent inside a read counts against it, so a stalled read reports delayed instead of
+      // leaving the wait pending indefinitely (docs/search.md#freshness).
+      const deadline = timeoutMs === 0 ? null : Date.now() + timeoutMs;
+      /** The indexed state the observation read last; null while no read has answered yet. */
+      let revisions: SearchRevisions | null = null;
       for (;;) {
-        const revisions = await readIndexedState(accountId);
-        if (incorporatedProgress(revisions, required)) {
-          return { state: 'incorporated', revisions };
+        requireNotCancelled(signal);
+        const read = await readWithinDeadline(() => readIndexedState(accountId), deadline, signal);
+        // A withdrawal that happened while the read was outstanding wins over its result.
+        requireNotCancelled(signal);
+        if (read === observationExpired) {
+          return { state: 'delayed', revisions };
         }
+        revisions = read;
+        if (incorporatedProgress(read, required)) {
+          return { state: 'incorporated', revisions: read };
+        }
+        if (deadline === null) {
+          return { state: 'indexing', revisions: read };
+        }
+        const remaining = deadline - Date.now();
         if (remaining <= 0) {
-          return { state: timeoutMs === 0 ? 'indexing' : 'delayed', revisions };
+          return { state: 'delayed', revisions: read };
         }
-        const delay = Math.min(SEARCH_LIMITS.observationIntervalMs, remaining);
-        await waitForInterval(delay, signal);
-        remaining -= delay;
+        await waitForInterval(Math.min(SEARCH_LIMITS.observationIntervalMs, remaining), signal);
       }
     },
   };
@@ -296,11 +313,94 @@ function readObservationTimeout(timeoutMs: number | undefined): number {
   return timeoutMs;
 }
 
+/** The bound of one observation expired while its indexed-state read was still outstanding. */
+const observationExpired = Symbol('search-observation-expired');
+
+/** One read of the observation's indexed state, or the report that its bound expired first. */
+type ObservationRead = SearchRevisions | null | typeof observationExpired;
+
+/**
+ * Awaits one indexed-state read inside the observation's bound. The remaining wait and the
+ * caller's withdrawal are enforced while the read is outstanding, so a stalled read cannot keep
+ * the observation pending past its deadline and a cancelled observation does not wait for a read
+ * it already withdrew; a read that answers later is no longer awaited and its outcome never
+ * reaches the caller (docs/search.md#freshness).
+ */
+function readWithinDeadline(
+  read: () => Promise<SearchRevisions | null>,
+  deadline: number | null,
+  signal: AbortSignal | null,
+): Promise<ObservationRead> {
+  if (deadline === null && signal === null) {
+    return read();
+  }
+  return new Promise<ObservationRead>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (): void => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      signal?.removeEventListener('abort', onAbort);
+    };
+    function onAbort(): void {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      finish();
+      reject(cancelled());
+    }
+    function onDeadline(): void {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      finish();
+      resolve(observationExpired);
+    }
+    if (signal?.aborted === true) {
+      reject(cancelled());
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (deadline !== null) {
+      timer = setTimeout(onDeadline, Math.max(0, deadline - Date.now()));
+    }
+    read().then(
+      (revisions) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        finish();
+        resolve(revisions);
+      },
+      (cause: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        finish();
+        reject(cause);
+      },
+    );
+  });
+}
+
+/** Fails a withdrawn observation as unavailable: cancellation never reports completion. */
+function requireNotCancelled(signal: AbortSignal | null): void {
+  if (signal?.aborted === true) {
+    throw cancelled();
+  }
+}
+
 /**
  * Waits one observation interval. Cancelling the observation stops the wait instead of leaving it
  * pending, and a withdrawn wait fails as unavailable: it never reports that progress completed.
  */
-function waitForInterval(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
+function waitForInterval(delayMs: number, signal: AbortSignal | null): Promise<void> {
   if (signal?.aborted === true) {
     return Promise.reject(cancelled());
   }
