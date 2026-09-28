@@ -179,10 +179,9 @@ describe('usercards publication over real storage', () => {
     const bobSnapshot = await publication.readSnapshot({ accountId: bob.accountId });
     expect(aliceSnapshot.position).toBe(await publishedPosition(alice.accountId));
     expect(bobSnapshot.position).toBe(await publishedPosition(bob.accountId));
-    expect(copyIds(aliceSnapshot.records)).toEqual([
-      aliceFirst.copies[0]?.copyId,
-      aliceSecond.copies[0]?.copyId,
-    ]);
+    expect(copyIds(aliceSnapshot.records)).toEqual(
+      [aliceFirst.copies[0]?.copyId, aliceSecond.copies[0]?.copyId].sort(),
+    );
     expect(copyIds(bobSnapshot.records)).toEqual([bobCopy.copies[0]?.copyId]);
 
     // The same connection reads Alice again after Bob's snapshot: nothing of either read leaks
