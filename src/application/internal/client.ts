@@ -801,7 +801,7 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
   // UserCards owns the browser operation lifecycle: its facade composes the transport adapter,
   // retains unfinished attempts in the account's browsing session and publishes the constraints
   // and invalidations its consumers present (docs/user-cards.md#browser-operation-lifecycle).
-  const userCards = createUserCardsOperations({
+  const operations = createUserCardsOperations({
     client: createUserCardsClient(request),
     storage: options.attemptStorage ?? browserAttemptStorage(),
     ...(settings.capabilities.sourceImports
@@ -812,6 +812,21 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
           ),
         }),
   });
+  // A retained factory must not recreate a departed account's scope over the current account's
+  // transport. Keep this check in the shared public capability supplied to Capture, CardList and
+  // UserInterface, before any consumer constructs private work or acquires device resources.
+  const userCards: UserCardsOperations = {
+    account(id) {
+      if (authentication.identity.current()?.accountId !== id) {
+        throw new ApplicationError(
+          'unauthorized',
+          'Private operations require the authenticated account.',
+        );
+      }
+      return operations.account(id);
+    },
+    release: (id) => operations.release(id),
+  };
   // Application selects the CardList implementation and hands the UserInterface its factory with
   // the provider bindings of the authenticated clients, so pages describe their lists instead of
   // naming the component or constructing Search, Catalog or UserCards bindings

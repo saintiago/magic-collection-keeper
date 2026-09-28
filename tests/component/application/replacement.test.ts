@@ -13,6 +13,7 @@ import {
   createSearchSpy,
   createUserCardsSpy,
   createSourceImportsSpy,
+  signedInStorage,
   testAccount,
   testConfiguration,
   testIdentityVerifier,
@@ -150,13 +151,14 @@ describe('component replacement at Application', () => {
     const application = createBrowserApplication({
       settings: readPublicSettings(resolveApplicationConfiguration(testConfiguration())),
       prompt: testPrompt(),
+      storage: signedInStorage(),
       fetch,
       createRecognition: () => recognition,
       // The replacement is supplied behind the Capture capability the UserInterface receives:
       // a session Application composes over it prepares through the replacement, not the engines.
       createUserInterface: (capabilities) =>
         capabilities.capture.create({
-          accountId: 'alice',
+          accountId: capabilities.identity.current()!.accountId,
           importId: capabilities.capture.createImportId(),
           device: {
             openCamera: () =>
