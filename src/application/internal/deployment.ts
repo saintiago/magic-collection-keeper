@@ -704,6 +704,8 @@ export function createInteractiveDeployment(
       }),
       // The interactive runtime holds no Catalog writer credential and runs no synchronization.
       catalogSynchronization: null,
+      // It holds no Search projection writer credential and runs no background indexing either.
+      searchIndexing: null,
       deckSource: null,
     },
   });

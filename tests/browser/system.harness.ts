@@ -155,6 +155,7 @@ export async function startSystemJourney(): Promise<SystemJourney> {
           default_cards: { sourceVersion, records: systemCatalogRecords },
         }),
       },
+      searchIndexing: null,
       deckSource: null,
     },
   });

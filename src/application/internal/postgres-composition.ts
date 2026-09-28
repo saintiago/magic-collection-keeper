@@ -1,15 +1,23 @@
 /** Default deployment composition. Only this module selects backend implementations. */
 import {
   createCatalog,
+  createCatalogPublication,
   createCatalogSynchronizer,
+  type CatalogSqlExecutor,
   type CatalogSnapshotSource,
   type CatalogSqlTransactor,
 } from '../../catalog/index.js';
-import { createSearch, type SearchSqlExecutor } from '../../search/index.js';
+import {
+  createSearch,
+  createSearchIndexer,
+  type SearchSqlExecutor,
+  type SearchSqlTransactor,
+} from '../../search/index.js';
 import {
   USERCARDS_ACCOUNT_SCOPE_SQL,
   createSourceImports,
   createUserCards,
+  createUserCardsPublication,
   type MoxfieldDeckSource,
   type UserCardsSqlTransactor,
 } from '../../usercards/index.js';
@@ -34,6 +42,17 @@ export interface ApplicationResources {
     readonly sql: CatalogSqlTransactor;
     readonly snapshots: CatalogSnapshotSource;
   } | null;
+  /**
+   * Search indexing resources of a runtime that runs background indexing, or null for a runtime
+   * that holds none of the credentials. `sql` maintains Search's own projection with the indexing
+   * role; the other two carry trusted publication access to Catalog and UserCards, never a
+   * provider's writer credential (docs/data-architecture.md#access-and-deployment).
+   */
+  readonly searchIndexing: {
+    readonly sql: SearchSqlTransactor;
+    readonly catalogPublicationSql: CatalogSqlExecutor;
+    readonly userCardsPublicationSql: UserCardsSqlTransactor;
+  } | null;
   readonly deckSource?: MoxfieldDeckSource | null;
 }
 
@@ -52,6 +71,7 @@ export function createPostgresApplication(
   const sql = resources?.writeSql;
   const readSql = resources?.readSql;
   const synchronization = resources?.catalogSynchronization;
+  const searchIndexing = resources?.searchIndexing;
   if (
     typeof readSql?.query !== 'function' ||
     typeof readSql?.transaction !== 'function' ||
@@ -67,6 +87,17 @@ export function createPostgresApplication(
   ) {
     throw new TypeError(
       'A supplied catalog synchronization requires its executor and snapshot source.',
+    );
+  }
+  if (
+    searchIndexing !== null &&
+    (typeof searchIndexing?.sql?.transaction !== 'function' ||
+      typeof searchIndexing?.catalogPublicationSql?.query !== 'function' ||
+      typeof searchIndexing?.userCardsPublicationSql?.query !== 'function' ||
+      typeof searchIndexing?.userCardsPublicationSql?.transaction !== 'function')
+  ) {
+    throw new TypeError(
+      'Supplied Search indexing requires its projection writer and both publication readers.',
     );
   }
   const catalog = createCatalog({ sql: readSql });
@@ -100,6 +131,16 @@ export function createPostgresApplication(
           : createCatalogSynchronizer({
               sql: synchronization.sql,
               snapshots: synchronization.snapshots,
+            }),
+      indexer:
+        searchIndexing === null
+          ? null
+          : createSearchIndexer({
+              sql: searchIndexing.sql,
+              catalog: createCatalogPublication({ sql: searchIndexing.catalogPublicationSql }),
+              userCards: createUserCardsPublication({
+                sql: searchIndexing.userCardsPublicationSql,
+              }),
             }),
     },
   });

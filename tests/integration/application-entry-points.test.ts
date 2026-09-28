@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createPostgresApplication, type Application } from '../../src/application/backend.js';
 import { catalogSchemaSql } from '../../src/catalog/index.js';
+import { SEARCH_ACCOUNT_SCOPE_SQL, searchSchemaSql } from '../../src/search/index.js';
 import { usercardsSchemaSql } from '../../src/usercards/index.js';
 import { claimsFor, testConfiguration, testIdentityVerifier } from '../support/application.js';
 import { createSnapshotSource } from '../support/catalog-snapshot.js';
@@ -81,7 +82,9 @@ describe('application entry points', () => {
   let application: Application;
 
   beforeEach(async () => {
-    database = await createTestDatabase(`${catalogSchemaSql}\n\n${usercardsSchemaSql}`);
+    database = await createTestDatabase(
+      `${catalogSchemaSql}\n\n${usercardsSchemaSql}\n\n${searchSchemaSql}`,
+    );
     application = createPostgresApplication({
       configuration: testConfiguration(),
       identity: testIdentityVerifier(),
@@ -93,6 +96,11 @@ describe('application entry points', () => {
           snapshots: createSnapshotSource({
             default_cards: { sourceVersion, records: [bolt, translatedBolt, counterspell] },
           }),
+        },
+        searchIndexing: {
+          sql: database.sql,
+          catalogPublicationSql: database.sql,
+          userCardsPublicationSql: database.sql,
         },
         deckSource: null,
       },
@@ -312,6 +320,43 @@ describe('application entry points', () => {
 
     const anonymous = await call({ method: 'POST', path: '/api/search', body: ownedQuery });
     expect(anonymous.status).toBe(401);
+  });
+
+  it('indexes Search through its job entry point over the published component contracts', async () => {
+    await publishCatalog();
+    await call({
+      method: 'POST',
+      path: '/api/collection/copies',
+      accountId: 'cognito-alice',
+      body: {
+        printingId: 'printing-tle-32-en',
+        finish: 'nonfoil',
+        condition: 'NM',
+        quantity: 2,
+      },
+    });
+
+    const result = await application.indexSearch({ accounts: ['cognito-alice'] });
+
+    expect(result).toMatchObject({
+      published: true,
+      rebuilt: true,
+      caughtUp: true,
+      unresolvedReferences: 0,
+    });
+    expect(await database.query('select card_id from search.cards order by card_id')).toEqual([
+      { card_id: 'oracle-counterspell' },
+      { card_id: 'oracle-lightning-bolt' },
+    ]);
+    expect(
+      await database.query('select account_id, position from search_private.account_checkpoint'),
+    ).toEqual([{ account_id: 'cognito-alice', position: expect.any(String) }]);
+    // The private projection is bound to the account, as the query surface is.
+    const copies = await database.sql.transaction(async (statements) => {
+      await statements.query(SEARCH_ACCOUNT_SCOPE_SQL, { account_id: 'cognito-alice' });
+      return await statements.query('select copy_id from search.copies');
+    });
+    expect(copies).toHaveLength(2);
   });
 
   it('rejects an identity of another environment before any private write', async () => {

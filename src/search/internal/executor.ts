@@ -15,3 +15,12 @@ export interface SearchSqlExecutor {
     parameters?: Readonly<Record<string, SearchSqlValue>>,
   ): Promise<readonly SearchSqlRow[]>;
 }
+
+/**
+ * Transaction-capable executor over Search's own projection storage. Application supplies it for
+ * background indexing only, with the indexing role's maintenance access; the query boundary keeps
+ * using the read-only {@link SearchSqlExecutor}.
+ */
+export interface SearchSqlTransactor extends SearchSqlExecutor {
+  transaction<T>(work: (statements: SearchSqlExecutor) => Promise<T>): Promise<T>;
+}

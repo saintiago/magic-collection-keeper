@@ -8,7 +8,8 @@ UserCards provides physical-copy storage, tags, associations and physical locati
 account-scoped read surface and its durable snapshot/change publication; Search provides its
 normalized query model, the supported Scryfall
 subset, the request and continuation contract and its evaluation over both published query
-surfaces; Recognition provides its session lifecycle, its catalog-validated candidate readings and
+surfaces, plus its rebuildable projection and the resumable background indexing that maintains it
+from the provider publications; Recognition provides its session lifecycle, its catalog-validated candidate readings and
 the execution bounds around the preserved engines; Application assembles those components behind
 validated configuration and authenticated transports, and UserInterface provides the shell the
 dedicated pages, CardList and the card tools are built on, with Home's recent card activity, the
@@ -147,6 +148,24 @@ UserCards' account-scoped views inside the scope Application binds, so a missing
 of reading another account's rows. A continuation resumes only the same criteria, ordering, user and
 revisions; anything else is a stale continuation that restarts the result.
 
+Search also owns its rebuildable projection and the background indexing that maintains it
+(docs/search.md#internal-design, docs/data-architecture.md#asynchronous-synchronization). Indexing
+consumes the Catalog and UserCards snapshot/change publications and maintains Search's own schema —
+the shared catalog facts, each account's copies, tags and associations, and the checkpoint of every
+source it applied — without reading or writing a provider's relations, and Application exposes one
+bounded, resumable run through its Search indexing job entry point with credentials separate from
+its query read. A batch applies whole publications in the order they were published, commits their
+rows together with the checkpoint they describe, and resumes there, so repeated or already-applied
+delivery changes nothing and a failed batch advances neither. A generation is bootstrapped from
+consistent snapshots and caught up through the durable streams; a replacement generation is built
+beside the published one and becomes queryable only once every source in its scope is caught up and
+no reference to a catalog fact is unresolved, so reads continue over the complete previous
+generation during a rebuild. An expired change position is never resumed or skipped: the run
+rebuilds from fresh snapshots instead, and an obsolete snapshot page restarts the snapshot rather
+than mixing revisions. The private projection is account-scoped at its storage boundary: its
+published views are read-only for Search's query role, private rows answer only inside the account
+bound to the read, and the projection tables themselves stay unreachable.
+
 Recognition prepares a session for its enabled engines on demand, runs one capture attempt at a time
 per session and releases that session's local work on disposal (docs/recognition.md#interface).
 Requests, capture/attempt identities and frame bounds are validated before inference. A reading
@@ -169,7 +188,8 @@ engines' catalog-hydration envelopes from the published Catalog, maps validation
 missing, conflict, stale-continuation, busy and unavailable outcomes to distinct failures without
 exposing storage details or credentials, and reports a deadline as an unknown outcome whose
 replayable operation names the receipt to recover. Catalog synchronization stays a separate job
-entry point and recognition inference a separate compute runtime reached through the authenticated
+entry point, Search indexing separate resumable background work over the provider publications, and
+recognition inference a separate compute runtime reached through the authenticated
 client; the browser composition supplies UserInterface with the public settings, the authenticated
 transport, the Catalog, Search and private-copy contracts and the Recognition contract over the
 preserved engines (docs/application.md#interface, docs/application.md#configuration-and-lifecycle).

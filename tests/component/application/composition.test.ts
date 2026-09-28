@@ -67,6 +67,7 @@ function resources(): ApplicationResources {
         },
       },
     },
+    searchIndexing: null,
     deckSource: null,
   };
 }
@@ -179,6 +180,21 @@ describe('application composition', () => {
     expect(response.status).toBe(503);
     await expect(application.synchronizeCatalog({ dataset: 'default_cards' })).rejects.toThrow(
       /does not run catalog synchronization/,
+    );
+  });
+
+  it('serves a runtime that holds no Search writer credential and reports indexing as unavailable', async () => {
+    // The interactive deployment composes no Search indexing, because it never receives the
+    // projection writer secret or the provider publication credentials
+    // (docs/application.md#interface, docs/data-architecture.md#access-and-deployment).
+    const application = createPostgresApplication({
+      configuration: testConfiguration(),
+      identity: testIdentityVerifier(),
+      resources: { ...resources(), searchIndexing: null },
+    });
+
+    await expect(application.indexSearch({ accounts: [] })).rejects.toThrow(
+      /does not run Search indexing/,
     );
   });
 

@@ -12,12 +12,23 @@
  * the provider-owned read contracts in one read-only statement: membership and grouping run over
  * the complete result before ordering and pagination, translated names keep the matched name for
  * display, and copy counts and intended quantities stay distinct
- * (docs/search.md#required-query-contracts, docs/search.md#evaluation-and-grouping). Other
+ * (docs/search.md#required-query-contracts, docs/search.md#evaluation-and-grouping).
+ *
+ * Search also owns its rebuildable projection: createSearchIndexer consumes the Catalog and
+ * UserCards publication contracts as resumable background work, maintains Search's own storage
+ * (searchSchemaSql) and publishes a replacement generation only once every source in its scope is
+ * caught up and no reference is unresolved (docs/search.md#internal-design,
+ * docs/data-architecture.md#asynchronous-synchronization). Other
  * components import Search through this module only; its internal modules stay private to the
  * component (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
-export type { SearchSqlExecutor, SearchSqlRow, SearchSqlValue } from './internal/executor.js';
+export type {
+  SearchSqlExecutor,
+  SearchSqlRow,
+  SearchSqlTransactor,
+  SearchSqlValue,
+} from './internal/executor.js';
 export { SearchError, type SearchFailureCode } from './internal/errors.js';
 export { createSearch, type Search, type SearchDependencies } from './internal/service.js';
 export {
@@ -81,3 +92,25 @@ export {
   type SearchEntryTarget,
   type SearchPage,
 } from './internal/results.js';
+export {
+  SEARCH_INDEXING_LIMITS,
+  createSearchIndexer,
+  type SearchAccountProgress,
+  type SearchCatalogProgress,
+  type SearchIndexer,
+  type SearchIndexerDependencies,
+  type SearchIndexingRequest,
+  type SearchIndexingResult,
+} from './internal/indexing.js';
+export {
+  SEARCH_ACCOUNT_SCOPE_SQL,
+  SEARCH_ACCOUNT_SETTING,
+  SEARCH_PROJECTION_SURFACE,
+  searchIndexingGrants,
+  searchReaderGrants,
+  searchSchemaSql,
+  type SearchColumnType,
+  type SearchProjectionRelation,
+  type SearchProjectionSurface,
+  type SearchRelationColumn,
+} from './internal/schema.js';

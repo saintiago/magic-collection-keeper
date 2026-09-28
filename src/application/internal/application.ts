@@ -6,7 +6,12 @@ import type {
   CatalogRevision,
   CatalogSynchronizationRequest,
 } from '../../catalog/index.js';
-import type { Search } from '../../search/index.js';
+import type {
+  Search,
+  SearchIndexer,
+  SearchIndexingRequest,
+  SearchIndexingResult,
+} from '../../search/index.js';
 import type { UserCards, SourceImportOperations } from '../../usercards/index.js';
 
 import {
@@ -36,6 +41,13 @@ export interface ApplicationComponents {
    * unavailable instead of running it with another component's privileges.
    */
   readonly synchronizer: CatalogSynchronizer | null;
+  /**
+   * Search indexing the runtime composes, or null when this runtime runs no background indexing.
+   * The indexing runtime holds the projection writer credential and trusted read access to both
+   * provider publications; the interactive deployment holds neither
+   * (docs/application.md#interface, docs/data-architecture.md#access-and-deployment).
+   */
+  readonly indexer: SearchIndexer | null;
 }
 
 export interface ApplicationDependencies {
@@ -53,6 +65,8 @@ export interface Application {
   handle(request: TransportRequest): Promise<TransportResponse>;
   /** Finite catalog synchronization job entry point. */
   synchronizeCatalog(request: CatalogSynchronizationRequest): Promise<CatalogRevision>;
+  /** Resumable background Search indexing entry point. */
+  indexSearch(request?: SearchIndexingRequest): Promise<SearchIndexingResult>;
   /** Stops accepting work; supplied executors stay owned by the runtime that created them. */
   dispose(): void;
 }
@@ -91,6 +105,9 @@ export function createApplication(dependencies: ApplicationDependencies): Applic
   ) {
     throw new TypeError('A supplied catalog synchronizer requires its synchronize operation.');
   }
+  if (components.indexer !== null && typeof components.indexer?.index !== 'function') {
+    throw new TypeError('A supplied Search indexer requires its index operation.');
+  }
   for (const operation of [
     'readCopies',
     'createCopies',
@@ -127,6 +144,7 @@ export function createApplication(dependencies: ApplicationDependencies): Applic
     throw new TypeError('Enabled source imports require their component contract.');
   }
   const { synchronizer } = components;
+  const { indexer } = components;
   const routes = createRoutes({
     ...components,
     sourceImports: configuration.capabilities.sourceImports ? components.sourceImports : null,
@@ -189,6 +207,45 @@ export function createApplication(dependencies: ApplicationDependencies): Applic
       return handle(request);
     },
     synchronizeCatalog,
+    async indexSearch(request: SearchIndexingRequest = {}): Promise<SearchIndexingResult> {
+      assertServing(disposed);
+      const startedAt = Date.now();
+      if (indexer === null) {
+        const failure = new ApplicationError(
+          'unavailable',
+          'This runtime does not run Search indexing.',
+        );
+        recordDiagnostic(diagnostics, {
+          operation: 'search.index',
+          requestId: null,
+          outcome: 'failed',
+          failureCode: failure.code,
+          durationMs: Date.now() - startedAt,
+        });
+        throw failure;
+      }
+      try {
+        const result = await indexer.index(request);
+        recordDiagnostic(diagnostics, {
+          operation: 'search.index',
+          requestId: null,
+          outcome: 'ok',
+          failureCode: null,
+          durationMs: Date.now() - startedAt,
+        });
+        return result;
+      } catch (cause) {
+        const failure = translateFailure(cause);
+        recordDiagnostic(diagnostics, {
+          operation: 'search.index',
+          requestId: null,
+          outcome: 'failed',
+          failureCode: failure.code,
+          durationMs: Date.now() - startedAt,
+        });
+        throw failure;
+      }
+    },
     dispose() {
       disposed = true;
     },

@@ -6,13 +6,26 @@
  * rather than hand-written substitutes.
  */
 
-import { catalogSchemaSql, createCatalog } from '../../src/catalog/index.js';
-import { createSearch, type Search } from '../../src/search/index.js';
+import {
+  catalogSchemaSql,
+  createCatalog,
+  createCatalogPublication,
+  type CatalogPublication,
+} from '../../src/catalog/index.js';
+import {
+  createSearch,
+  createSearchIndexer,
+  searchSchemaSql,
+  type Search,
+  type SearchIndexer,
+} from '../../src/search/index.js';
 import {
   USERCARDS_ACCOUNT_SCOPE_SQL,
   createUserCards,
+  createUserCardsPublication,
   usercardsSchemaSql,
   type UserCards,
+  type UserCardsPublication,
   type UserCardsSqlTransactor,
 } from '../../src/usercards/index.js';
 import { createTestDatabase, type TestDatabase } from './postgres-database.js';
@@ -24,10 +37,18 @@ export interface SearchTestDatabase extends TestDatabase {
   readonly search: Search;
   /** UserCards writing the private fixtures through its own contract. */
   readonly userCards: UserCards;
+  /** Catalog's durable snapshot/change publication over the published catalog. */
+  readonly catalogPublication: CatalogPublication;
+  /** UserCards' account-scoped snapshot/change publication. */
+  readonly userCardsPublication: UserCardsPublication;
+  /** Search's background indexing job over both publications and its own projection storage. */
+  readonly indexer: SearchIndexer;
 }
 
 export async function createSearchTestDatabase(): Promise<SearchTestDatabase> {
-  const database = await createTestDatabase(`${catalogSchemaSql}\n\n${usercardsSchemaSql}`);
+  const database = await createTestDatabase(
+    `${catalogSchemaSql}\n\n${usercardsSchemaSql}\n\n${searchSchemaSql}`,
+  );
   const search = createSearch({
     sql: database.sql,
     withAccountScope: (accountId, work) =>
@@ -40,5 +61,12 @@ export async function createSearchTestDatabase(): Promise<SearchTestDatabase> {
     sql: database.sql,
     catalog: createCatalog({ sql: database.sql }),
   });
-  return { ...database, search, userCards };
+  const catalogPublication = createCatalogPublication({ sql: database.sql });
+  const userCardsPublication = createUserCardsPublication({ sql: database.sql });
+  const indexer = createSearchIndexer({
+    sql: database.sql,
+    catalog: catalogPublication,
+    userCards: userCardsPublication,
+  });
+  return { ...database, search, userCards, catalogPublication, userCardsPublication, indexer };
 }
