@@ -263,6 +263,7 @@ describe('usercards import confirmation', () => {
         sessionId: replay.sessionId,
         sourceId: replay.sourceId,
         sourceKind: replay.sourceKind,
+        publicationPosition: original.publicationPosition,
         copies: original.copies,
       },
     });
@@ -809,6 +810,7 @@ describe('usercards import confirmation', () => {
         sessionId: confirmed.sessionId,
         sourceKind: confirmed.sourceKind,
         sourceId: confirmed.sourceId,
+        publicationPosition: confirmed.publicationPosition,
         copies: confirmed.copies,
       },
     });

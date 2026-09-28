@@ -97,7 +97,11 @@ export function createCopyOperations(dependencies: {
         condition,
       }));
       const data = await store.insertCopies(accountId, copies);
-      return { privateRevision: data.privateRevision, copies: data.copies };
+      return {
+        privateRevision: data.privateRevision,
+        publicationPosition: data.publicationPosition,
+        copies: data.copies,
+      };
     },
     async correctCopy(
       context: TrustedUserContext,
@@ -131,7 +135,11 @@ export function createCopyOperations(dependencies: {
           'The copy changed after this revision; reload it before correcting it.',
         );
       }
-      return { privateRevision: outcome.privateRevision, copies: [outcome.copy] };
+      return {
+        privateRevision: outcome.privateRevision,
+        publicationPosition: outcome.publicationPosition,
+        copies: [outcome.copy],
+      };
     },
   };
 }

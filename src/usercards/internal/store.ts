@@ -36,8 +36,23 @@ export interface CopiesData {
   readonly copies: readonly PhysicalCopy[];
 }
 
+/**
+ * Copies one write committed, the revision it published and the durable publication position a
+ * consumer resumes from (docs/user-cards.md#query-surface).
+ */
+export interface CopyChangeData {
+  readonly privateRevision: string;
+  readonly publicationPosition: string;
+  readonly copies: readonly PhysicalCopy[];
+}
+
 export type CopyCorrectionOutcome =
-  | { readonly outcome: 'updated'; readonly privateRevision: string; readonly copy: PhysicalCopy }
+  | {
+      readonly outcome: 'updated';
+      readonly privateRevision: string;
+      readonly publicationPosition: string;
+      readonly copy: PhysicalCopy;
+    }
   | { readonly outcome: 'missing' }
   | { readonly outcome: 'conflict' };
 
@@ -51,9 +66,10 @@ export interface CopyStore {
   readCopies(accountId: string, copyIds: readonly string[]): Promise<CopiesData>;
   /**
    * Stores `copies` for `accountId`, associates each stored copy with the account's owned tag and
-   * advances that account's private revision, all in one transaction.
+   * publishes the stored records with that account's advanced private revision, all in one
+   * transaction.
    */
-  insertCopies(accountId: string, copies: readonly NewCopy[]): Promise<CopiesData>;
+  insertCopies(accountId: string, copies: readonly NewCopy[]): Promise<CopyChangeData>;
   /** Applies `correction` when the stored copy still carries `expectedRevision`. */
   correctCopy(accountId: string, correction: CopyCorrection): Promise<CopyCorrectionOutcome>;
 }
@@ -81,11 +97,18 @@ export interface TagsData {
 /** One committed tag together with the private-data revision the change published. */
 export interface TagChangeData {
   readonly privateRevision: string;
+  /** Position of the revision that completes this change. */
+  readonly publicationPosition: string;
   readonly tag: Tag;
 }
 
 export type TagCorrectionOutcome =
-  | { readonly outcome: 'updated'; readonly privateRevision: string; readonly tag: Tag }
+  | {
+      readonly outcome: 'updated';
+      readonly privateRevision: string;
+      readonly publicationPosition: string;
+      readonly tag: Tag;
+    }
   | { readonly outcome: 'missing' }
   | { readonly outcome: 'conflict' }
   /** The tag is system-managed; its lifecycle is not driven by the tag operations. */
@@ -120,6 +143,7 @@ export type AssociationInsertOutcome =
   | {
       readonly outcome: 'inserted';
       readonly privateRevision: string;
+      readonly publicationPosition: string;
       readonly association: Association;
     }
   /** The tag already associates this exact target; the existing association must be changed. */
@@ -129,6 +153,7 @@ export type AssociationCorrectionOutcome =
   | {
       readonly outcome: 'updated';
       readonly privateRevision: string;
+      readonly publicationPosition: string;
       readonly association: Association;
     }
   | { readonly outcome: 'missing' }
@@ -140,6 +165,7 @@ export type AssociationRemovalOutcome =
   | {
       readonly outcome: 'removed';
       readonly privateRevision: string;
+      readonly publicationPosition: string;
       readonly associationId: string;
     }
   | { readonly outcome: 'missing' }
@@ -160,6 +186,7 @@ export type CopyLocationOutcome =
   | {
       readonly outcome: 'moved';
       readonly privateRevision: string;
+      readonly publicationPosition: string;
       readonly copy: PhysicalCopy;
       /** The copy's location membership after the move, or `null` when it has none. */
       readonly location: Association | null;
@@ -401,6 +428,11 @@ export interface ImportReceiptData {
   readonly sessionId: string;
   readonly sourceKind: string;
   readonly sourceId: string;
+  /**
+   * Position of the publication that made the recorded copies visible, or of the recorded
+   * operations whose acquisitions this outcome replayed (docs/user-cards.md#query-surface).
+   */
+  readonly publicationPosition: string;
   /** Copies the acquisition created, ordered by copy identity. */
   readonly copies: readonly PhysicalCopy[];
 }

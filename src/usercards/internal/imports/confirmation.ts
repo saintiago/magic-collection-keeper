@@ -1,6 +1,6 @@
 /** confirmation persistence for private imports. See docs/user-cards.md#internal-design. */
 import { randomUUID } from 'node:crypto';
-import { ensureOwnedTag, storeCopiesWithOwnedTag } from '../copies.js';
+import { ensureOwnedTag, storeCopiesWithOwnedTag, type OwnedTag } from '../copies.js';
 import { UserCardsError } from '../errors.js';
 import type {
   UserCardsSqlExecutor,
@@ -9,8 +9,9 @@ import type {
   UserCardsSqlValue,
 } from '../executor.js';
 import { USERCARDS_LIMITS, type PhysicalCopy } from '../model.js';
+import { publishMutation } from '../publication.js';
 import { copiesFromRows, copyFromRow } from '../rows.js';
-import { inTransaction, placeholdersFor, readRows } from '../sql.js';
+import { batches, inTransaction, placeholdersFor, readRows } from '../sql.js';
 import type {
   ConfirmationOutcome,
   ConfirmationPlan,
@@ -20,7 +21,6 @@ import type {
 } from '../store.js';
 import {
   advanceRevision,
-  batches,
   bumpSessionStatement,
   currentRevision,
   integerValue,
@@ -56,6 +56,7 @@ function readReceiptStatement(accountId: string, operationId: string): Statement
   return {
     statement: `select receipt.session_id,
               receipt.input_fingerprint,
+              receipt.publication_position::text as publication_position,
               session.source_kind,
               session.source_id
      from usercards_private.import_receipt as receipt
@@ -275,6 +276,48 @@ function confirmEntriesStatement(
   };
 }
 
+/** Records the position of the publication that made this outcome's copies visible. */
+function recordedPositionStatement(
+  accountId: string,
+  operationId: string,
+  position: string,
+): Statement {
+  return {
+    statement: `update usercards_private.import_receipt
+     set publication_position = cast(:position as bigint)
+    where account_id = :account_id and operation_id = :operation_id`,
+    parameters: { account_id: accountId, operation_id: operationId, position },
+  };
+}
+
+/**
+ * The position of an outcome that replayed already acquired source entries: the newest position
+ * among the recorded operations whose acquisitions this outcome covers, so recovery returns the
+ * position the copies were published at rather than the account's current one.
+ */
+function inheritedPositionStatement(accountId: string, operationId: string): Statement {
+  return {
+    statement: `update usercards_private.import_receipt as receipt
+     set publication_position = recorded.position
+    from (
+      select max(source.publication_position) as position
+        from usercards_private.import_receipt_acquisition as binding
+        join usercards_private.import_receipt as source
+          on source.account_id = binding.account_id
+         and source.operation_id = binding.operation_id
+       where binding.account_id = :account_id
+         and binding.operation_id <> :operation_id
+         and binding.acquisition_id in (
+           select covered.acquisition_id
+             from usercards_private.import_receipt_acquisition as covered
+            where covered.account_id = :account_id
+              and covered.operation_id = :operation_id)
+    ) as recorded
+    where receipt.account_id = :account_id and receipt.operation_id = :operation_id`,
+    parameters: { account_id: accountId, operation_id: operationId },
+  };
+}
+
 /**
  * One bounded page of the copies a recorded operation covered, as the immutable provenance of
  * their own acquisition recorded them when they were created. A later correction of a physical
@@ -351,8 +394,24 @@ async function readReceipt(
     sessionId: textValue(recorded.session_id),
     sourceKind: textValue(recorded.source_kind),
     sourceId: textValue(recorded.source_id),
+    publicationPosition: receiptPosition(recorded.publication_position),
     copies: copiesFromRows(copies),
   };
+}
+
+/**
+ * The recorded publication position of one outcome. Every recorded outcome covers an acquisition
+ * a publication made visible, so a stored outcome without a position is unreadable state rather
+ * than an outcome a consumer could resume from.
+ */
+function receiptPosition(value: UserCardsSqlValue | undefined): string {
+  if (typeof value === 'string' && /^[1-9][0-9]*$/.test(value)) {
+    return value;
+  }
+  throw new UserCardsError(
+    'unavailable',
+    'UserCards did not report the recorded publication position.',
+  );
 }
 
 /** The recorded outcome of one operation that must exist, because this transaction recorded it. */
@@ -617,6 +676,14 @@ export function createImportConfirmation(
               },
               'The replay outcome could not be stored.',
             );
+            // The replayed outcome reports the position its acquisitions were published at.
+            const inherited = inheritedPositionStatement(accountId, plan.operationId);
+            await readRows(
+              statements,
+              inherited.statement,
+              inherited.parameters,
+              'The recorded publication position could not be inherited.',
+            );
             return {
               outcome: 'confirmed' as const,
               replayed: true,
@@ -638,7 +705,12 @@ export function createImportConfirmation(
           );
           const bindings = new Map<string, string>();
           const covered = new Set<string>();
-          let ownedTagId: string | null = null;
+          const created: {
+            copies: string[];
+            associations: string[];
+            tags: string[];
+          } = { copies: [], associations: [], tags: [] };
+          let ownedTag: OwnedTag | null = null;
           let acquired = false;
           for (const { entry, occurrence, key } of keys) {
             const alreadyAcquired = recorded.get(key);
@@ -665,7 +737,12 @@ export function createImportConfirmation(
             const acquisitionId = textValue(claimed.acquisition_id);
             covered.add(acquisitionId);
             bindings.set(entry.entryId, acquisitionId);
-            ownedTagId ??= await ensureOwnedTag(statements, accountId);
+            if (ownedTag === null) {
+              ownedTag = await ensureOwnedTag(statements, accountId);
+              if (ownedTag.created) {
+                created.tags.push(ownedTag.tagId);
+              }
+            }
             const { printingId, finish } = entry.copy;
             if (printingId === null || finish === null) {
               throw new UserCardsError(
@@ -686,13 +763,15 @@ export function createImportConfirmation(
               const stored = await storeCopiesWithOwnedTag(
                 statements,
                 accountId,
-                ownedTagId,
+                ownedTag.tagId,
                 batch,
               );
+              created.copies.push(...stored.rows.map((row) => textValue(row.copy_id)));
+              created.associations.push(...stored.ownedMemberships);
               const provenance = provenanceStatement(
                 accountId,
                 acquisitionId,
-                stored.map((row) => ({ ...copyFromRow(row), entryId: entry.entryId })),
+                stored.rows.map((row) => ({ ...copyFromRow(row), entryId: entry.entryId })),
               );
               await readRows(
                 statements,
@@ -742,7 +821,34 @@ export function createImportConfirmation(
               'The recorded outcome could not be stored.',
             );
           }
-          const privateRevision = await advanceRevision(statements, accountId);
+          // The copies this confirmation created and the revision that completes them commit
+          // together; a confirmation that only replayed already acquired source entries publishes
+          // no record and reports the position its acquisitions were recorded at.
+          let privateRevision: string;
+          if (acquired) {
+            const publication = await publishMutation(statements, accountId, created);
+            privateRevision = publication.revision;
+            const recorded = recordedPositionStatement(
+              accountId,
+              plan.operationId,
+              publication.position,
+            );
+            await readRows(
+              statements,
+              recorded.statement,
+              recorded.parameters,
+              'The recorded publication position could not be stored.',
+            );
+          } else {
+            privateRevision = await advanceRevision(statements, accountId);
+            const inherited = inheritedPositionStatement(accountId, plan.operationId);
+            await readRows(
+              statements,
+              inherited.statement,
+              inherited.parameters,
+              'The recorded publication position could not be inherited.',
+            );
+          }
           return {
             outcome: 'confirmed' as const,
             // A confirmation whose source entries are all already acquired returned their recorded

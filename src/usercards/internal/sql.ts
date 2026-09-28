@@ -7,6 +7,7 @@ import type {
   UserCardsSqlTransactor,
   UserCardsSqlValue,
 } from './executor.js';
+import { USERCARDS_LIMITS } from './model.js';
 
 /**
  * Statements and row helpers shared by the private UserCards stores. Private reads return one
@@ -28,6 +29,18 @@ export function placeholdersFor(values: readonly string[], prefix: string): Name
     return `:${prefix}_${index}`;
   });
   return { list: names.join(', '), parameters };
+}
+
+/**
+ * Splits one change into the bounded batches the deployed write transport accepts. Every batch
+ * commits inside the caller's single transaction, so the change stays atomic.
+ */
+export function batches<T>(records: readonly T[]): readonly (readonly T[])[] {
+  const grouped: T[][] = [];
+  for (let start = 0; start < records.length; start += USERCARDS_LIMITS.maxRecordsPerStatement) {
+    grouped.push(records.slice(start, start + USERCARDS_LIMITS.maxRecordsPerStatement));
+  }
+  return grouped;
 }
 
 export async function readRows(

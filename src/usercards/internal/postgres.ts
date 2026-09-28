@@ -1,6 +1,7 @@
 import { storeCopies } from './copies.js';
 import { UserCardsError } from './errors.js';
 import type { UserCardsSqlTransactor, UserCardsSqlValue } from './executor.js';
+import { publishMutation } from './publication.js';
 import { copyFromRow, copyPayloadSql, copiesFromRows } from './rows.js';
 import {
   groupRows,
@@ -9,10 +10,14 @@ import {
   readRows,
   revisionBranchSql,
   revisionFromPayload,
-  revisionFromRow,
-  revisionStatement,
 } from './sql.js';
-import type { CopiesData, CopyCorrection, CopyCorrectionOutcome, CopyStore } from './store.js';
+import type {
+  CopiesData,
+  CopyChangeData,
+  CopyCorrection,
+  CopyCorrectionOutcome,
+  CopyStore,
+} from './store.js';
 
 function readCopiesStatement(
   accountId: string,
@@ -93,21 +98,20 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
       };
     },
 
-    async insertCopies(accountId, copies): Promise<CopiesData> {
+    async insertCopies(accountId, copies): Promise<CopyChangeData> {
       return inTransaction(
         sql,
         async (statements) => {
-          const rows = await storeCopies(statements, accountId, copies);
-          const publication = revisionStatement(accountId);
-          const revisionRow = await readRows(
-            statements,
-            publication.statement,
-            publication.parameters,
-            'The private-data revision could not be advanced.',
-          );
+          const stored = await storeCopies(statements, accountId, copies);
+          const publication = await publishMutation(statements, accountId, {
+            copies: copies.map((copy) => copy.copyId),
+            tags: stored.ownedTag.created ? [stored.ownedTag.tagId] : [],
+            associations: stored.ownedMemberships,
+          });
           return {
-            privateRevision: revisionFromRow(revisionRow[0]),
-            copies: copiesFromRows(rows),
+            privateRevision: publication.revision,
+            publicationPosition: publication.position,
+            copies: copiesFromRows(stored.rows),
           };
         },
         'The copies could not be committed.',
@@ -127,16 +131,13 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
           );
           const row = rows[0];
           if (row !== undefined) {
-            const publication = revisionStatement(accountId);
-            const revisionRow = await readRows(
-              statements,
-              publication.statement,
-              publication.parameters,
-              'The private-data revision could not be advanced.',
-            );
+            const publication = await publishMutation(statements, accountId, {
+              copies: [correction.copyId],
+            });
             return {
               outcome: 'updated',
-              privateRevision: revisionFromRow(revisionRow[0]),
+              privateRevision: publication.revision,
+              publicationPosition: publication.position,
               copy: copyFromRow(row),
             };
           }

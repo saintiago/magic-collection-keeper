@@ -168,22 +168,47 @@ export function createUserCardsSpy(): UserCardsSpy {
   }));
   const operations = {
     readCopies,
-    createCopies: vi.fn(async () => ({ privateRevision: 'r1', copies: [] })),
-    correctCopy: vi.fn(async () => ({ privateRevision: 'r1', copies: [] })),
-    setCopyLocation: vi.fn(async () => ({ privateRevision: 'r1', copy: null, location: null })),
+    createCopies: vi.fn(async () => ({
+      privateRevision: 'r1',
+      publicationPosition: '1',
+      copies: [],
+    })),
+    correctCopy: vi.fn(async () => ({
+      privateRevision: 'r1',
+      publicationPosition: '1',
+      copies: [],
+    })),
+    setCopyLocation: vi.fn(async () => ({
+      privateRevision: 'r1',
+      publicationPosition: '1',
+      copy: null,
+      location: null,
+    })),
     listTags: vi.fn(async () => ({ privateRevision: 'r1', tags: [], continuation: null })),
     readTags,
-    createTag: vi.fn(async () => ({ privateRevision: 'r1', tag: null })),
-    renameTag: vi.fn(async () => ({ privateRevision: 'r1', tag: null })),
+    createTag: vi.fn(async () => ({ privateRevision: 'r1', publicationPosition: '1', tag: null })),
+    renameTag: vi.fn(async () => ({ privateRevision: 'r1', publicationPosition: '1', tag: null })),
     listAssociations: vi.fn(async () => ({
       privateRevision: 'r1',
       associations: [],
       continuation: null,
     })),
     readAssociations,
-    createAssociation: vi.fn(async () => ({ privateRevision: 'r1', association: null })),
-    changeAssociation: vi.fn(async () => ({ privateRevision: 'r1', association: null })),
-    removeAssociation: vi.fn(async () => ({ privateRevision: 'r1', associationId: 'a1' })),
+    createAssociation: vi.fn(async () => ({
+      privateRevision: 'r1',
+      publicationPosition: '1',
+      association: null,
+    })),
+    changeAssociation: vi.fn(async () => ({
+      privateRevision: 'r1',
+      publicationPosition: '1',
+      association: null,
+    })),
+    removeAssociation: vi.fn(async () => ({
+      privateRevision: 'r1',
+      publicationPosition: '1',
+      associationId: 'a1',
+    })),
     listImportSessions: vi.fn(async () => ({
       privateRevision: 'r1',
       sessions: [],
@@ -222,6 +247,7 @@ export function createUserCardsSpy(): UserCardsSpy {
       sessionId: 'session-1',
       sourceKind: 'scan',
       sourceId: 'scan',
+      publicationPosition: '1',
       copies: [],
       replayed: false,
       privateRevision: 'r1',

@@ -1,16 +1,19 @@
 /**
  * The published query surface of UserCards (docs/user-cards.md#query-surface).
  *
- * Private tables live in `usercards_private`; consumers read only the views in `usercards`. Both
- * published relations are account-scoped at the database boundary: they select the account bound
- * to the connection with `USERCARDS_ACCOUNT_SCOPE_SQL` and return no rows when no account is
- * bound, so a missing or cleared context fails closed and one account's scope cannot leak into
- * another transaction on a reused connection. Every private view is a security-barrier view, so a
- * consumer's own predicate is evaluated after the account filter instead of on foreign rows.
- * `tests/integration/usercards-query-surface.test.ts` verifies the views against this declaration,
- * so a replacement storage maps its data to exactly these relations and passes the same tests.
- * Pending import state has no published relation: it is read through the component's own pending
- * reads and stays outside the ownership relations (docs/user-cards.md#import-and-capture-state).
+ * Private tables live in `usercards_private`. An end-user consumer reads only the views in
+ * `usercards`; a trusted indexing role additionally reads the durable publication stream through
+ * `usercardsPublicationGrants`. Both published relations are account-scoped at the database
+ * boundary: they select the account bound to the connection with `USERCARDS_ACCOUNT_SCOPE_SQL` and
+ * return no rows when no account is bound, so a missing or cleared context fails closed and one
+ * account's scope cannot leak into another transaction on a reused connection. Every private view
+ * is a security-barrier view, so a consumer's own predicate is evaluated after the account filter
+ * instead of on foreign rows. `tests/integration/usercards-query-surface.test.ts` verifies the
+ * views against this declaration, so a replacement storage maps its data to exactly these
+ * relations and passes the same tests; the publication stream writes the record of a change from
+ * the same relations, so a change carries exactly the published record. Pending import state has
+ * no published relation: it is read through the component's own pending reads and stays outside
+ * the ownership relations (docs/user-cards.md#import-and-capture-state).
  */
 
 import { finishes } from '../../catalog/index.js';
@@ -229,7 +232,10 @@ create schema if not exists ${usercardsQuerySchema};
 
 create table if not exists ${usercardsPrivateSchema}.account_state (
   account_id text primary key check (length(account_id) between 1 and ${identifierLength}),
-  revision integer not null default 0 check (revision >= 0)
+  revision integer not null default 0 check (revision >= 0),
+  -- Lowest publication position still readable for this account. Retention advances it when it
+  -- drops older publications, so a resume from before it fails explicitly instead of skipping.
+  expired_below bigint not null default 0 check (expired_below >= 0)
 );
 
 create table if not exists ${usercardsPrivateSchema}.copy (
@@ -407,6 +413,10 @@ create table if not exists ${usercardsPrivateSchema}.import_receipt (
   account_id text not null check (length(account_id) between 1 and ${identifierLength}),
   session_id text not null check (length(session_id) between 1 and ${identifierLength}),
   input_fingerprint text not null check (length(input_fingerprint) between 1 and ${fingerprintLength}),
+  -- Position of the publication that made this outcome's copies visible. A recovered outcome
+  -- reports it long after the account published later revisions, so the recorded value stays
+  -- permanent with the receipt rather than following the account's current position.
+  publication_position bigint check (publication_position is null or publication_position > 0),
   created_at timestamptz not null default now(),
   primary key (account_id, operation_id),
   foreign key (account_id, session_id)
@@ -446,6 +456,34 @@ create table if not exists ${usercardsPrivateSchema}.copy_provenance (
 
 create index if not exists copy_provenance_acquisition_index
   on ${usercardsPrivateSchema}.copy_provenance (account_id, acquisition_id);
+
+-- The durable publication stream (docs/user-cards.md#query-surface). Every query-visible mutation
+-- writes the changes of the records it touched and the revision that completes them in its own
+-- transaction, so a consumer observes a logical mutation completely or not at all. Positions
+-- only grow; the revision names the account-scoped private-data revision the change belongs to,
+-- and a record change carries the stable identity and the upsert or removal meaning a consumer
+-- applies. Pending import state has no record here.
+create table if not exists ${usercardsPrivateSchema}.publication (
+  position bigint not null generated always as identity primary key,
+  account_id text not null check (length(account_id) between 1 and ${identifierLength}),
+  revision integer not null check (revision >= 1),
+  kind text not null check (kind in ('revision', 'copy', 'tag', 'association')),
+  record_identity text check (record_identity is null
+    or length(record_identity) between 1 and ${identifierLength}),
+  removed boolean not null default false,
+  record jsonb,
+  check (kind <> 'revision' or (record_identity is null and record is null and not removed)),
+  check (kind = 'revision' or (record_identity is not null and (removed or record is not null))),
+  check (not removed or record is null),
+  unique (account_id, revision, kind, record_identity)
+);
+
+-- One completion marker per publication; the snapshot reports the newest one's position.
+create unique index if not exists publication_revision_index
+  on ${usercardsPrivateSchema}.publication (account_id, revision) where kind = 'revision';
+
+create index if not exists publication_account_position_index
+  on ${usercardsPrivateSchema}.publication (account_id, position);
 
 create or replace view ${usercardsQuerySchema}.copies with (security_barrier) as
   select copy.copy_id,
@@ -494,11 +532,7 @@ const readerRolePattern = /^[a-z_][a-z0-9_]{0,62}$/;
  * owner applies this after `usercardsSchemaSql`; base tables stay unreachable for the reader.
  */
 export function usercardsReaderGrants(readerRole: string): string {
-  if (!readerRolePattern.test(readerRole)) {
-    throw new TypeError(
-      `UserCards reader role must be a lowercase PostgreSQL identifier, received "${readerRole}".`,
-    );
-  }
+  assertRole(readerRole);
   const relations = Object.values(USERCARDS_QUERY_SURFACE.relations).map(
     (relation) => relation.name,
   );
@@ -506,4 +540,29 @@ export function usercardsReaderGrants(readerRole: string): string {
     `grant usage on schema ${usercardsQuerySchema} to "${readerRole}";`,
     `grant select on ${relations.join(', ')} to "${readerRole}";`,
   ].join('\n');
+}
+
+/**
+ * Grants trusted indexing access to the publication contract: the account-scoped published
+ * relations, the durable change stream and the recorded retention floor, and no mutation.
+ * Application supplies this credential to an indexing runtime separately from an end-user read
+ * role (docs/data-architecture.md#access-and-deployment); an end-user read role never reaches the
+ * private schema and an indexer never reaches the private records behind the publication.
+ */
+export function usercardsPublicationGrants(role: string): string {
+  assertRole(role);
+  return [
+    usercardsReaderGrants(role),
+    `grant usage on schema ${usercardsPrivateSchema} to "${role}";`,
+    `grant select on ${usercardsPrivateSchema}.publication to "${role}";`,
+    `grant select on ${usercardsPrivateSchema}.account_state to "${role}";`,
+  ].join('\n');
+}
+
+function assertRole(role: string): void {
+  if (!readerRolePattern.test(role)) {
+    throw new TypeError(
+      `UserCards role must be a lowercase PostgreSQL identifier, received "${role}".`,
+    );
+  }
 }

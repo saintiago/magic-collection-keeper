@@ -365,6 +365,7 @@ describe('import confirmation', () => {
       ],
       replayed: false,
       privateRevision: 'r5',
+      publicationPosition: '5',
     };
     const outcome = await confirmImport(access({ confirm: async () => receipt }), {
       operationId: 'operation-1',
@@ -387,6 +388,7 @@ describe('import confirmation', () => {
             sessionId: 'manual',
             sourceKind: 'manual',
             sourceId: 'manual',
+            publicationPosition: '5',
             copies: [
               {
                 copyId: 'copy-1',
@@ -470,6 +472,7 @@ describe('import confirmation', () => {
       sessionId: 'manual',
       sourceKind: 'manual',
       sourceId: 'manual',
+      publicationPosition: '5',
       copies: [
         {
           copyId: 'copy-1',

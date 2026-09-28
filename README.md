@@ -5,7 +5,8 @@ on. The previous application implementation has been removed. Product components
 docs/architecture.md are rebuilt task by task: Catalog already provides its read contract, its
 atomic bulk synchronization and its durable snapshot/change publication with their contract tests, and
 UserCards provides physical-copy storage, tags, associations and physical locations with their
-account-scoped read surface; Search provides its normalized query model, the supported Scryfall
+account-scoped read surface and its durable snapshot/change publication; Search provides its
+normalized query model, the supported Scryfall
 subset, the request and continuation contract and its evaluation over both published query
 surfaces; Recognition provides its session lifecycle, its catalog-validated candidate readings and
 the execution bounds around the preserved engines; Application assembles those components behind
@@ -124,8 +125,12 @@ commits atomically behind the revision the caller read. Tags keep stable identit
 labels; card and printing associations carry the intended quantity, while copy membership identifies
 one physical copy and carries none. Copies, tags, associations and the private-data revision are read
 through the published views (docs/user-cards.md#query-surface), which filter on the account bound to
-the connection inside a read transaction and return nothing without that scope. UserCards also owns
-the pending imports behind that surface: a capture observation or parsed source line is staged once
+the connection inside a read transaction and return nothing without that scope. Every query-visible
+mutation also publishes its records durably: the account-scoped snapshot/change contract Search
+consumes carries each change's stable identity, upsert or removal meaning and account-scoped
+revision, the mutation reports its publication position and a recovered outcome reports the position
+its copies were published at. UserCards also owns the pending imports behind that surface: a capture
+observation or parsed source line is staged once
 (consecutive accepted capture identities collapse into one entry, unresolved readings advance
 nothing), review quotes the entry revision and keeps late recognition alternatives beside the
 reviewed values, and confirmation under an account-scoped operation identity creates the individual

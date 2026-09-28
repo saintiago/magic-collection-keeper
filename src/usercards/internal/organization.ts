@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { UserCardsSqlTransactor, UserCardsSqlValue } from './executor.js';
+import { publishMutation } from './publication.js';
 import {
   associationFromRow,
   associationPayloadSql,
@@ -18,8 +19,6 @@ import {
   readRows,
   revisionBranchSql,
   revisionFromPayload,
-  revisionFromRow,
-  revisionStatement,
 } from './sql.js';
 import type {
   AssociationCorrection,
@@ -325,7 +324,7 @@ function assignLocationStatement(
      do update set tag_id = excluded.tag_id,
                    revision = stored.revision + 1,
                    updated_at = now()
-     returning ${associationPayloadSql} as payload`,
+     returning association_id, ${associationPayloadSql} as payload`,
     parameters: {
       association_id: randomUUID(),
       account_id: accountId,
@@ -344,7 +343,8 @@ function clearLocationStatement(
  where account_id = :account_id
    and tag_kind = 'location'
    and target_level = 'copy'
-   and target_id = :copy_id`,
+   and target_id = :copy_id
+ returning association_id`,
     parameters: { account_id: accountId, copy_id: copyId },
   };
 }
@@ -397,15 +397,12 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
             insert.parameters,
             'The tag could not be stored.',
           );
-          const publication = revisionStatement(accountId);
-          const revisionRow = await readRows(
-            statements,
-            publication.statement,
-            publication.parameters,
-            'The private-data revision could not be advanced.',
-          );
+          const publication = await publishMutation(statements, accountId, {
+            tags: [tag.tagId],
+          });
           return {
-            privateRevision: revisionFromRow(revisionRow[0]),
+            privateRevision: publication.revision,
+            publicationPosition: publication.position,
             tag: tagFromRow(rows[0]),
           };
         },
@@ -426,16 +423,13 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
           );
           const row = rows[0];
           if (row !== undefined) {
-            const publication = revisionStatement(accountId);
-            const revisionRow = await readRows(
-              statements,
-              publication.statement,
-              publication.parameters,
-              'The private-data revision could not be advanced.',
-            );
+            const publication = await publishMutation(statements, accountId, {
+              tags: [correction.tagId],
+            });
             return {
               outcome: 'updated' as const,
-              privateRevision: revisionFromRow(revisionRow[0]),
+              privateRevision: publication.revision,
+              publicationPosition: publication.position,
               tag: tagFromRow(row),
             };
           }
@@ -514,16 +508,13 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
           if (row === undefined) {
             return { outcome: 'conflict' as const };
           }
-          const publication = revisionStatement(accountId);
-          const revisionRow = await readRows(
-            statements,
-            publication.statement,
-            publication.parameters,
-            'The private-data revision could not be advanced.',
-          );
+          const publication = await publishMutation(statements, accountId, {
+            associations: [association.associationId],
+          });
           return {
             outcome: 'inserted' as const,
-            privateRevision: revisionFromRow(revisionRow[0]),
+            privateRevision: publication.revision,
+            publicationPosition: publication.position,
             association: associationFromRow(row),
           };
         },
@@ -551,16 +542,13 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
           );
           const row = rows[0];
           if (row !== undefined) {
-            const publication = revisionStatement(accountId);
-            const revisionRow = await readRows(
-              statements,
-              publication.statement,
-              publication.parameters,
-              'The private-data revision could not be advanced.',
-            );
+            const publication = await publishMutation(statements, accountId, {
+              associations: [correction.associationId],
+            });
             return {
               outcome: 'updated' as const,
-              privateRevision: revisionFromRow(revisionRow[0]),
+              privateRevision: publication.revision,
+              publicationPosition: publication.position,
               association: associationFromRow(row),
             };
           }
@@ -601,16 +589,13 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
             'The association could not be removed.',
           );
           if (rows[0] !== undefined) {
-            const publication = revisionStatement(accountId);
-            const revisionRow = await readRows(
-              statements,
-              publication.statement,
-              publication.parameters,
-              'The private-data revision could not be advanced.',
-            );
+            const publication = await publishMutation(statements, accountId, {
+              removedAssociations: [associationId],
+            });
             return {
               outcome: 'removed' as const,
-              privateRevision: revisionFromRow(revisionRow[0]),
+              privateRevision: publication.revision,
+              publicationPosition: publication.position,
               associationId,
             };
           }
@@ -653,28 +638,49 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
               ? { outcome: 'missing-copy' as const }
               : { outcome: 'conflict' as const };
           }
-          const location =
-            change.locationTagId === null
-              ? clearLocationStatement(accountId, change.copyId)
-              : assignLocationStatement(accountId, change.copyId, change.locationTagId);
+          if (change.locationTagId === null) {
+            const clear = clearLocationStatement(accountId, change.copyId);
+            const cleared = await readRows(
+              statements,
+              clear.statement,
+              clear.parameters,
+              'The copy location could not be cleared.',
+            );
+            const removed = cleared[0]?.association_id;
+            const publication = await publishMutation(statements, accountId, {
+              copies: [change.copyId],
+              removedAssociations: typeof removed === 'string' ? [removed] : [],
+            });
+            return {
+              outcome: 'moved' as const,
+              privateRevision: publication.revision,
+              publicationPosition: publication.position,
+              copy: copyFromRow(copyRow),
+              location: null,
+            };
+          }
+          const assignment = assignLocationStatement(
+            accountId,
+            change.copyId,
+            change.locationTagId,
+          );
           const locationRows = await readRows(
             statements,
-            location.statement,
-            location.parameters,
+            assignment.statement,
+            assignment.parameters,
             'The copy location could not be stored.',
           );
-          const publication = revisionStatement(accountId);
-          const revisionRow = await readRows(
-            statements,
-            publication.statement,
-            publication.parameters,
-            'The private-data revision could not be advanced.',
-          );
+          const location = associationFromRow(locationRows[0]);
+          const publication = await publishMutation(statements, accountId, {
+            copies: [change.copyId],
+            associations: [location.associationId],
+          });
           return {
             outcome: 'moved' as const,
-            privateRevision: revisionFromRow(revisionRow[0]),
+            privateRevision: publication.revision,
+            publicationPosition: publication.position,
             copy: copyFromRow(copyRow),
-            location: locationRows[0] === undefined ? null : associationFromRow(locationRows[0]),
+            location,
           };
         },
         'The location move could not be committed.',
