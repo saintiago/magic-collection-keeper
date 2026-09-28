@@ -8,6 +8,8 @@
  * without a backend or a production account.
  */
 
+import { idleProgress } from './card-list-progress.js';
+
 import {
   createCardList,
   createCardListBrowser,
@@ -145,7 +147,12 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     catalog,
     search,
     userCards: unusedUserCards,
-    cardList: createCardListBrowser({ search, catalog, userCards: unusedUserCards }),
+    cardList: createCardListBrowser({
+      progress: idleProgress,
+      search,
+      catalog,
+      userCards: unusedUserCards,
+    }),
     createRecognition: () => {
       throw new Error('The shell journey does not run recognition.');
     },

@@ -9,7 +9,7 @@
  * invalidation while the journeys observe the published snapshots.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   CARD_LIST_LIMITS,
@@ -20,11 +20,9 @@ import {
   type CardListEntry,
   type CardListFragmentKind,
   type CardListFragmentReader,
-  type CardListOperationOutcome,
   type CardListPage,
   type CardListSource,
   type CardListSourceRequest,
-  type CardListTarget,
 } from '../../../src/card-list/index.js';
 
 /** One source request a controlled list issued. */
@@ -302,15 +300,13 @@ describe('CardList construction', () => {
     }
   });
 
-  it('rejects fragment kinds and tools that do not read or invoke', () => {
+  it('rejects invalid fragment readers and action descriptors', () => {
     const source = controlledSource().source;
     expect(() => createCardList(options(source, { fragments: { images: {} as never } }))).toThrow(
       TypeError,
     );
     expect(() =>
-      createCardList(
-        options(source, { tools: [{ id: 'wishlist', label: 'Wishlist', tool: {} as never }] }),
-      ),
+      createCardList(options(source, { tools: [{ id: '', label: 'Wishlist' }] })),
     ).toThrow(TypeError);
     expect(() =>
       createCardList(
@@ -319,12 +315,10 @@ describe('CardList construction', () => {
             {
               id: 'wishlist',
               label: 'Wishlist',
-              tool: { invoke: () => Promise.resolve({ status: 'committed', message: null }) },
             },
             {
               id: 'wishlist',
               label: 'Other',
-              tool: { invoke: () => Promise.resolve({ status: 'committed', message: null }) },
             },
           ],
         }),
@@ -588,7 +582,6 @@ describe('selection and tools', () => {
         );
       },
     };
-    const invoked: CardListTarget[][] = [];
     const list = createCardList(
       options(controlled.source, {
         fragments: { tools: availability },
@@ -596,12 +589,6 @@ describe('selection and tools', () => {
           {
             id: 'wishlist',
             label: 'Add to wishlist',
-            tool: {
-              invoke(request) {
-                invoked.push([...request.targets]);
-                return Promise.resolve({ status: 'committed', message: null });
-              },
-            },
           },
         ],
       }),
@@ -615,33 +602,12 @@ describe('selection and tools', () => {
     list.setSelected('card:2', true);
     await settle();
     expect(list.snapshot().tools[0]).toMatchObject({ available: false });
-    await expect(list.invoke('wishlist')).resolves.toBeNull();
+    expect(list.snapshot().tools[0]?.available).toBe(false);
 
     list.setSelected('card:2', false);
     await settle();
-    await expect(list.invoke('wishlist')).resolves.toEqual({ status: 'committed', message: null });
-    expect(invoked).toEqual([[{ kind: 'card', cardId: '1' }]]);
-    list.dispose();
-  });
-
-  it('reports an invocation without a receipt as unknown instead of a failure', async () => {
-    const controlled = controlledSource();
-    const list = createCardList(
-      options(controlled.source, {
-        tools: [
-          {
-            id: 'wishlist',
-            label: 'Add to wishlist',
-            tool: { invoke: () => Promise.reject(new Error('The response was lost.')) },
-          },
-        ],
-      }),
-    );
-    controlled.settle(1, { entries: [card('1')], continuation: null });
-    await settle();
-    list.setSelected('card:1', true);
-
-    await expect(list.invoke('wishlist')).resolves.toEqual({ status: 'unknown', message: null });
+    expect(list.snapshot().tools[0]?.available).toBe(true);
+    expect(list.actionContext().targets).toEqual([{ kind: 'card', cardId: '1' }]);
     list.dispose();
   });
 });
@@ -864,7 +830,8 @@ describe('local committed changes and freshness', () => {
     // position stays awaited.
     controlled.settleObservation(1, 'incorporated');
     await settle();
-    expect(controlled.requests[2]).toMatchObject({ required: [] });
+    expect(controlled.requests[2]).toMatchObject({ required: ['7'] });
+    expect(list.snapshot().freshness).toBe('indexing');
     expect(controlled.requests[2]!.aborted()).toBe(false);
     controlled.settle(3, { entries: [card('1'), card('2')], continuation: null });
     await settle();
@@ -890,8 +857,8 @@ describe('local committed changes and freshness', () => {
     list.changed({ scope: 'copies', records: [], imports: [], position: '10' });
     controlled.settleObservation(1, 'incorporated');
     await settle();
-    expect(list.snapshot().awaiting).toEqual(['10']);
-    expect(controlled.requests.at(-1)).toMatchObject({ required: ['10'] });
+    expect(list.snapshot().awaiting).toEqual(['20', '10']);
+    expect(controlled.requests.at(-1)).toMatchObject({ required: ['20', '10'] });
     list.dispose();
   });
 
@@ -925,8 +892,11 @@ describe('local committed changes and freshness', () => {
     list.retry();
     controlled.settleObservation(4, 'incorporated');
     await settle();
+    expect(list.snapshot().awaiting).toEqual(['7']);
+    expect(controlled.requests.at(-1)).toMatchObject({ required: ['7'] });
+    controlled.settle(controlled.requests.length, { entries: [card('1')] });
+    await settle();
     expect(list.snapshot().awaiting).toEqual([]);
-    expect(controlled.requests.at(-1)).toMatchObject({ required: [] });
     list.dispose();
   });
 
@@ -1017,9 +987,6 @@ describe('viewport demand and explicit selection', () => {
 
   it('keeps explicit identities outside a replacement window and marks a changed one unavailable', async () => {
     const controlled = controlledSource();
-    const invoke = vi.fn((): Promise<CardListOperationOutcome> =>
-      Promise.resolve({ status: 'committed', message: null }),
-    );
     const list = createCardList(
       options(controlled.source, {
         fragments: {
@@ -1035,7 +1002,7 @@ describe('viewport demand and explicit selection', () => {
             },
           },
         },
-        tools: [{ id: 'move', label: 'Move', tool: { invoke } }],
+        tools: [{ id: 'move', label: 'Move' }],
       }),
     );
     controlled.settle(1, { entries: [card('1'), card('2')], continuation: null });
@@ -1084,8 +1051,6 @@ describe('viewport demand and explicit selection', () => {
         { kind: 'card', cardId: '1' },
       ],
     });
-    await expect(list.invoke('move')).resolves.toBeNull();
-    expect(invoke).not.toHaveBeenCalled();
 
     // Reselecting the presented entry adopts its identity explicitly.
     list.setSelected('card:1', false);
@@ -1093,8 +1058,7 @@ describe('viewport demand and explicit selection', () => {
     await settle();
     expect(list.snapshot().selection.unavailable).toEqual([]);
     expect(list.snapshot().tools[0]?.available).toBe(true);
-    await expect(list.invoke('move')).resolves.toMatchObject({ status: 'committed' });
-    expect(invoke).toHaveBeenCalledTimes(1);
+
     list.dispose();
   });
 });
@@ -1114,23 +1078,138 @@ describe('outcomes the contract keeps distinct', () => {
     list.dispose();
   });
 
-  it('never invokes a tool for an empty or partial selection', async () => {
+  it('never offers a tool for an empty or partial selection', async () => {
     const controlled = controlledSource();
-    const invoke = vi.fn((): Promise<CardListOperationOutcome> =>
-      Promise.resolve({ status: 'committed', message: null }),
-    );
     const list = createCardList(
-      options(controlled.source, { tools: [{ id: 'tool', label: 'Tool', tool: { invoke } }] }),
+      options(controlled.source, { tools: [{ id: 'tool', label: 'Tool' }] }),
     );
     controlled.settle(1, { entries: [card('1')], continuation: null });
     await settle();
 
-    await expect(list.invoke('tool')).resolves.toBeNull();
+    expect(list.snapshot().tools[0]?.available).toBe(false);
     // A selection naming an entry that has not arrived yet cannot act on a subset.
     list.setSelected('card:2', true);
     list.setSelected('card:1', true);
-    await expect(list.invoke('tool')).resolves.toBeNull();
-    expect(invoke).not.toHaveBeenCalled();
+    expect(list.snapshot().tools[0]?.available).toBe(false);
+    list.dispose();
+  });
+});
+
+describe('review regressions', () => {
+  it('keeps every outstanding identity across notifications and retention', async () => {
+    const controlled = controlledSource();
+    const list = createCardList(options(controlled.source));
+    const positions = Array.from({ length: 101 }, (_, i) => `opaque-${i}`);
+    for (const position of positions)
+      list.changed({ scope: 'copies', records: [], imports: [], position });
+    expect(controlled.requests.at(-1)?.required).toEqual(positions);
+    const retained = list.retain();
+    list.dispose();
+    const next = controlledSource();
+    const reopened = createCardList(options(next.source, { restored: retained }));
+    expect(next.requests[0]?.required).toEqual(positions);
+    next.settle(1, { entries: [] });
+    await settle();
+    expect(reopened.snapshot().awaiting).toEqual([]);
+    reopened.dispose();
+  });
+
+  it.each(['refine', 'refresh', 'change'] as const)(
+    'drops obsolete first-page demand on %s but keeps replacement demand',
+    async (action) => {
+      const controlled = controlledSource();
+      const list = createCardList(options(controlled.source, { pageSize: 1 }));
+      list.demand({ entries: 100 });
+      if (action === 'refine') list.refine('replacement');
+      else if (action === 'refresh') list.refresh();
+      else list.changed({ scope: 'copies', records: [], imports: [], position: null });
+      list.demand({ entries: 1 });
+      controlled.settle(2, { entries: [card('2')], continuation: 'next' });
+      controlled.settle(1, { entries: [card('1')], continuation: 'obsolete' });
+      await settle();
+      expect(controlled.requests).toHaveLength(2);
+      expect(list.snapshot().entries[0]?.entry.key).toBe('card:2');
+      list.demand({ entries: 2 });
+      expect(controlled.requests[2]?.continuation).toBe('next');
+      list.dispose();
+    },
+  );
+
+  it('preserves demand reported synchronously when the replacement description is published', async () => {
+    const controlled = controlledSource();
+    const list = createCardList(options(controlled.source, { pageSize: 1 }));
+    list.demand({ entries: 100 });
+    let demanded = false;
+    list.subscribe((snapshot) => {
+      if (snapshot.context === 'replacement' && !demanded) {
+        demanded = true;
+        list.demand({ entries: 2 });
+      }
+    });
+    list.refine('replacement');
+    controlled.settle(2, { entries: [card('2')], continuation: 'next' });
+    await settle();
+    expect(controlled.requests).toHaveLength(3);
+    expect(controlled.requests[2]?.continuation).toBe('next');
+    list.dispose();
+  });
+
+  it('keeps a disappeared selected identity unavailable after a complete replacement', async () => {
+    const controlled = controlledSource();
+    const list = createCardList(
+      options(controlled.source, { tools: [{ id: 'edit', label: 'Edit' }] }),
+    );
+    controlled.settle(1, { entries: [card('1')] });
+    await settle();
+    list.setSelected('card:1', true);
+    list.refresh();
+    controlled.settle(2, { entries: [] });
+    await settle();
+    expect(list.actionContext().targets).toEqual([{ kind: 'card', cardId: '1' }]);
+    expect(list.snapshot().selection.unavailable).toEqual(['card:1']);
+    expect(list.snapshot().tools[0]?.available).toBe(false);
+    list.dispose();
+  });
+
+  it('rereads derived fragments on incorporation and fences pre-index responses', async () => {
+    const controlled = observedSource();
+    const reads: { resolve: (value: readonly unknown[]) => void; signal: AbortSignal }[] = [];
+    const list = createCardList(
+      options(controlled.source, {
+        fragments: {
+          ownership: {
+            read: (request) =>
+              new Promise((resolve) =>
+                reads.push({ resolve: resolve as never, signal: request.signal }),
+              ),
+          },
+        },
+      }),
+    );
+    const ownership = (owned: number) => [
+      { key: 'card:1', status: 'ready', values: { owned, locations: 1, intended: null } },
+    ];
+    controlled.settle(1, { entries: [card('1')] });
+    await settle();
+    reads[0]!.resolve(ownership(1));
+    await settle();
+    list.changed({ scope: 'copies', records: [], imports: [], position: '20' });
+    controlled.settle(2, { entries: [card('1')], current: false });
+    await settle();
+    controlled.settleObservation(1, 'incorporated');
+    await settle();
+    expect(list.snapshot().freshness).toBe('indexing');
+    expect(reads[1]!.signal.aborted).toBe(true);
+    controlled.settle(3, { entries: [card('1')], current: true });
+    await settle();
+    reads[2]!.resolve(ownership(2));
+    await settle();
+    reads[1]!.resolve(ownership(1));
+    await settle();
+    expect(list.snapshot().freshness).toBe('current');
+    expect(list.snapshot().entries[0]?.fragments.get('ownership')).toMatchObject({
+      values: { owned: 2 },
+    });
     list.dispose();
   });
 });

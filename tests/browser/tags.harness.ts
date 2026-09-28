@@ -11,6 +11,8 @@
  * contracts.
  */
 
+import { idleProgress } from './card-list-progress.js';
+
 import {
   ApplicationError,
   type ApplicationFailureCode,
@@ -396,7 +398,7 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
     catalog,
     search,
     userCards,
-    cardList: createCardListBrowser({ search, catalog, userCards }),
+    cardList: createCardListBrowser({ progress: idleProgress, search, catalog, userCards }),
     createRecognition: () => {
       throw new Error('The organization journeys do not run recognition.');
     },

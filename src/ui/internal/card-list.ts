@@ -15,6 +15,9 @@
  * result back through the same contract.
  */
 
+import { runAction } from './actions.js';
+import type { UiOperationOutcome, UiListAction } from './actions.js';
+
 import {
   cardListFragmentKinds,
   type CardList,
@@ -28,11 +31,9 @@ import {
   type CardListFragmentKind,
   type CardListFragmentReaders,
   type CardListFragmentState,
-  type CardListOperationOutcome,
   type CardListOptions,
   type CardListRetained,
   type CardListSnapshot,
-  type CardListTool,
 } from '../../card-list/index.js';
 
 import { observeUiInput } from './interaction.js';
@@ -74,7 +75,7 @@ export interface UiCardListOptions<Context = unknown> {
   /** Fragment readers; kinds without one are not presented. */
   readonly fragments?: CardListFragmentReaders;
   /** Tools presented for the explicit selection, in order. */
-  readonly tools?: readonly CardListTool[];
+  readonly tools?: readonly UiListAction[];
   /** Committed-change notifications of the account; the list reacquires affected content. */
   readonly changes?: CardListChangeSource;
   /** Presentation adjustments over the default rendering. */
@@ -123,7 +124,7 @@ export interface UiCardList<Context = unknown> {
   /** Unselects every entry. */
   clearSelection(): void;
   /** Invokes one tool for the explicit selection; null when nothing was invoked. */
-  invoke(toolId: string): Promise<CardListOperationOutcome | null>;
+  invoke(toolId: string): Promise<UiOperationOutcome | null>;
   /** Observes the list's own snapshots; the returned call stops delivery. */
   subscribe(listener: (snapshot: CardListSnapshot<Context>) => void): () => void;
   /** Releases the view and the list behind it. */
@@ -150,7 +151,7 @@ export function createCardListView<Context>(
   const presentation = readPresentation(options?.presentation);
   const pageSize = readPageSize(options?.pageSize);
   const document = container.ownerDocument;
-  const tools = new Map<string, CardListTool>();
+  const tools = new Map<string, UiListAction>();
   for (const tool of options?.tools ?? []) {
     tools.set(tool.id, tool);
   }
@@ -197,7 +198,9 @@ export function createCardListView<Context>(
     pageSize: options?.pageSize,
     ...(options?.restored === undefined ? {} : { restored: options.restored }),
     ...(options?.fragments === undefined ? {} : { fragments: options.fragments }),
-    ...(options?.tools === undefined ? {} : { tools: options.tools }),
+    ...(options?.tools === undefined
+      ? {}
+      : { tools: options.tools.map(({ id, label }) => ({ id, label })) }),
     ...(options?.changes === undefined ? {} : { changes: options.changes }),
     ...(options?.signal === undefined ? {} : { signal: options.signal }),
   });
@@ -208,7 +211,7 @@ export function createCardListView<Context>(
   let renderedGeneration = -1;
   let renderedEntries = new Map<string, string>();
   let renderedFragments = new Map<string, CardListFragmentState>();
-  let invocation: Promise<CardListOperationOutcome | null> | null = null;
+  let invocation: AbortController | null = null;
   let disposed = false;
 
   section.addEventListener('click', onClick);
@@ -292,17 +295,31 @@ export function createCardListView<Context>(
   }
 
   /** Invokes one tool for the explicit selection and presents the outcome it reports. */
-  async function invoke(toolId: string): Promise<CardListOperationOutcome | null> {
+  async function invoke(toolId: string): Promise<UiOperationOutcome | null> {
     if (disposed || invocation !== null) {
       return null;
     }
-    const running = list.invoke(toolId);
-    invocation = running;
-    const outcome = await running;
-    if (disposed || invocation !== running) {
+    const action = tools.get(toolId);
+    if (
+      action === undefined ||
+      !list.snapshot().tools.some((tool) => tool.id === toolId && tool.available)
+    ) {
+      return null;
+    }
+    const controller = new AbortController();
+    invocation = controller;
+    renderTools(list.snapshot());
+    const selection = list.actionContext();
+    const outcome = await runAction(action, {
+      targets: selection.targets,
+      selection,
+      signal: controller.signal,
+    });
+    if (disposed || invocation !== controller) {
       return null;
     }
     invocation = null;
+    renderTools(list.snapshot());
     renderOutcome(outcome);
     return outcome;
   }
@@ -312,6 +329,7 @@ export function createCardListView<Context>(
     if (disposed) {
       return;
     }
+    const restoreFocus = preserveEditorFocus();
     const structure = structureOf(snapshot);
     const generationChanged = snapshot.generation !== renderedGeneration;
     renderedGeneration = snapshot.generation;
@@ -347,6 +365,7 @@ export function createCardListView<Context>(
     renderSelection(snapshot);
     renderTools(snapshot);
     renderStatus(snapshot);
+    restoreFocus();
   }
 
   /** Identity of the rendered window and its grouping; entry content is not part of it. */
@@ -379,7 +398,6 @@ export function createCardListView<Context>(
     if (previous === undefined) {
       return;
     }
-    const focus = readEntryFocus();
     const replacement = renderRow(entrySnapshot);
     previous.row.replaceWith(replacement);
     for (const kind of cardListFragmentKinds) {
@@ -388,11 +406,9 @@ export function createCardListView<Context>(
     }
     // The replaced checkbox carries no checked state; the selection is drawn again with it.
     renderedSelection = '';
-    restoreEntryFocus(focus);
   }
 
   function renderWindow(snapshot: CardListSnapshot<Context>): void {
-    const focus = readEntryFocus();
     rows.clear();
     groupHeaders.clear();
     entriesHost.replaceChildren();
@@ -409,7 +425,6 @@ export function createCardListView<Context>(
         members.length === 1 ? renderRow(members[0]!) : renderGroup(group, members),
       );
     }
-    restoreEntryFocus(focus);
   }
 
   function renderGroup(
@@ -516,14 +531,9 @@ export function createCardListView<Context>(
       return;
     }
     // Replacing the slot's content must not drop keyboard focus from the entry it belongs to.
-    const focused = slot.contains(document.activeElement);
     slot.replaceChildren();
     slot.dataset.uiState = state.status;
     paintFragmentSlot(entry, kind, state, slot);
-    if (focused) {
-      // A state that offers a retry keeps that control focused; another state keeps the slot.
-      (slot.querySelector<HTMLElement>('[data-ui-fragment-retry]') ?? slot).focus();
-    }
   }
 
   /** Draws one fragment state into its own slot, which the caller has already cleared. */
@@ -623,7 +633,7 @@ export function createCardListView<Context>(
     for (const state of snapshot.tools) {
       const button = toolbar.querySelector<HTMLButtonElement>(`[data-ui-tool="${state.id}"]`);
       if (button !== null) {
-        button.disabled = disposed || state.running || !state.available;
+        button.disabled = disposed || invocation !== null || !state.available;
       }
     }
   }
@@ -674,7 +684,7 @@ export function createCardListView<Context>(
     statusLine.textContent = parts.join(' ');
   }
 
-  function renderOutcome(outcome: CardListOperationOutcome | null): void {
+  function renderOutcome(outcome: UiOperationOutcome | null): void {
     if (outcome === null) {
       outcomeLine.textContent = '';
       outcomeLine.removeAttribute('data-ui-outcome-status');
@@ -697,6 +707,48 @@ export function createCardListView<Context>(
     return printing === null
       ? entry.basic.card.name
       : `${entry.basic.card.name} (${printing.edition} ${printing.collectorNumber})`;
+  }
+
+  /** Preserve the actual editor field after all replacement fragments have mounted. */
+  function preserveEditorFocus(): () => void {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !entriesHost.contains(active)) return () => {};
+    const focus = readEntryFocus();
+    const row = active.closest<HTMLElement>('[data-ui-entry]');
+    const path: number[] = [];
+    let child: Element = active;
+    while (row !== null && child !== row && child.parentElement !== null) {
+      path.unshift([...child.parentElement.children].indexOf(child));
+      child = child.parentElement;
+    }
+    const key = row?.dataset.uiEntry;
+    const field = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+    const value = field ? active.value : null;
+    const start = field ? active.selectionStart : null;
+    const end = field ? active.selectionEnd : null;
+    const direction = field ? active.selectionDirection : null;
+    return () => {
+      if (document.activeElement === active) return;
+      let replacement: Element | null = active.id ? document.getElementById(active.id) : null;
+      if (replacement === null && active.id.length === 0 && key !== undefined) {
+        replacement = rows.get(key)?.row ?? null;
+        for (const index of path) replacement = replacement?.children.item(index) ?? null;
+        if (replacement?.tagName !== active.tagName) replacement = null;
+      }
+      if (replacement instanceof HTMLElement && entriesHost.contains(replacement)) {
+        if (
+          value !== null &&
+          (replacement instanceof HTMLInputElement || replacement instanceof HTMLTextAreaElement)
+        ) {
+          replacement.value = value;
+          if (start !== null && end !== null)
+            replacement.setSelectionRange(start, end, direction ?? undefined);
+        }
+        replacement.focus({ preventScroll: true });
+      } else {
+        restoreEntryFocus(focus);
+      }
+    };
   }
 
   /** The control of one entry that holds keyboard focus, so a re-rendering of the window keeps it. */
@@ -842,6 +894,8 @@ export function createCardListView<Context>(
       return;
     }
     disposed = true;
+    invocation?.abort();
+    invocation = null;
     unsubscribe();
     interaction.abort();
     section.removeEventListener('click', onClick);
@@ -924,7 +978,7 @@ function fragmentAbsent(kind: CardListFragmentKind): string {
 }
 
 /** Human text of one operation outcome, used when the outcome carries no message of its own. */
-function outcomeText(status: CardListOperationOutcome['status']): string {
+function outcomeText(status: UiOperationOutcome['status']): string {
   switch (status) {
     case 'committed':
       return 'Saved.';

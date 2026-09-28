@@ -14,6 +14,8 @@
  * committed (docs/user-interface.md#browsing-and-organization).
  */
 
+import type { UiOperationOutcome, UiActionRequest } from './actions.js';
+
 import type {
   UserCardsAccountOperations,
   UserCardsConstraints,
@@ -44,11 +46,7 @@ import type {
 } from '../../usercards/index.js';
 
 import { commitUiOperation, readUiFailureMessage, type UiChangeCommit } from './failure.js';
-import type {
-  CardListOperationOutcome,
-  CardListTarget,
-  CardListToolRequest,
-} from '../../card-list/index.js';
+import type { CardListTarget } from '../../card-list/index.js';
 
 /**
  * Tag kinds the organization views create and edit. The values are the UserCards provider's
@@ -357,7 +355,7 @@ export interface UiAddToTagTool {
   readonly id: string;
   readonly label: string;
   readonly tool: {
-    invoke(request: CardListToolRequest): Promise<UiAddOutcome>;
+    invoke(request: UiActionRequest): Promise<UiAddOutcome>;
   };
 }
 
@@ -367,7 +365,7 @@ export interface UiAddToTagTool {
  * is visible instead of presented as an unchanged result, and only a committed change is reported
  * as saved (docs/user-interface.md#browsing-and-organization).
  */
-export interface UiAddOutcome extends CardListOperationOutcome {
+export interface UiAddOutcome extends UiOperationOutcome {
   /** Targets whose change committed. */
   readonly committed: number;
   /** Targets whose outcome stays unknown. */
@@ -388,7 +386,7 @@ export function addToTagTool(options: {
     id: options.id,
     label: options.label,
     tool: {
-      invoke(request: CardListToolRequest): Promise<UiAddOutcome> {
+      invoke(request: UiActionRequest): Promise<UiAddOutcome> {
         return addSelection(options, request);
       },
     },
@@ -397,7 +395,7 @@ export function addToTagTool(options: {
 
 async function addSelection(
   options: Parameters<typeof addToTagTool>[0],
-  request: CardListToolRequest,
+  request: UiActionRequest,
 ): Promise<UiAddOutcome> {
   const tag = options.tag();
   if (tag === null) {

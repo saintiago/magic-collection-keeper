@@ -12,6 +12,8 @@
  * component contracts.
  */
 
+import { idleProgress } from './card-list-progress.js';
+
 import {
   ApplicationError,
   inspectCanvasFrame,
@@ -402,7 +404,7 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
     catalog,
     search,
     userCards,
-    cardList: createCardListBrowser({ search, catalog, userCards }),
+    cardList: createCardListBrowser({ progress: idleProgress, search, catalog, userCards }),
     createRecognition: () => {
       const recognition = createRecognition<HTMLCanvasElement>({
         createEnginePipeline: () => scriptedPipeline(),

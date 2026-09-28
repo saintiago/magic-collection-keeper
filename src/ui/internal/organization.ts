@@ -942,7 +942,6 @@ function tagViewPage(): UiPageDefinition {
         // ownership and intentions may have moved since the result was presented, and the counts
         // are not part of the query generation that decides membership
         // (docs/user-interface.md#browsing-and-organization).
-        refreshCounts();
         addList.refine(next);
       }
 
@@ -1430,12 +1429,6 @@ function tagViewPage(): UiPageDefinition {
         if (closed) {
           return;
         }
-        if (outcome.status === 'unknown') {
-          // The commit is not established, so no change notification reacquires the presented
-          // records: the page reads the private state again for its own review
-          // (docs/user-cards.md#persistence-and-recovery).
-          refreshCounts();
-        }
         if (outcome.status === 'committed') {
           const draft = drafts.get(association.associationId);
           if (field === undefined) {
@@ -1463,7 +1456,6 @@ function tagViewPage(): UiPageDefinition {
             return;
           }
           const reviewed = reread === null ? null : adoptAssociation(reread);
-          refreshCounts();
           report(
             reviewed === null
               ? (outcome.message ?? 'The association changed. Reload the view before retrying.')
@@ -1493,12 +1485,6 @@ function tagViewPage(): UiPageDefinition {
           const current = editors.get(associationKey(association))?.status ?? status;
           if (current !== null) current.textContent = message;
         }
-      }
-
-      /** Counts depend on related intentions and locations, even when entry basics are unchanged. */
-      function refreshCounts(): void {
-        associations?.reloadFragments('ownership');
-        addList?.reloadFragments('ownership');
       }
 
       /** Reads one association record the page presents, or null when the read did not answer. */
@@ -1643,21 +1629,26 @@ function tagViewPage(): UiPageDefinition {
 
       /** Whether each presented entry offers the add tool for the presented tag. */
       function addToolsReader(): CardListFragmentReader<readonly string[]> {
+        const copies = context.capabilities.cardList
+          .account(context.account.accountId)
+          .copyTools(['add-to-tag']);
         return {
-          read(request) {
+          async read(request) {
             const current = tag;
             const levels =
               current === null ? [] : uiAssociationLevelsByTagKind[kindOf(current.kind)];
-            return Promise.resolve(
-              request.keys.map((key) => {
-                const target = targetOfKey(key);
-                return {
-                  key,
-                  status: 'ready' as const,
-                  values: target !== null && levels.includes(target.kind) ? ['add-to-tag'] : [],
-                };
-              }),
+            const available = new Map(
+              (await copies.read(request)).map((result) => [result.key, result]),
             );
+            return request.keys.map((key) => {
+              const target = targetOfKey(key);
+              if (target?.kind === 'copy' && levels.includes('copy')) return available.get(key)!;
+              return {
+                key,
+                status: 'ready' as const,
+                values: target !== null && levels.includes(target.kind) ? ['add-to-tag'] : [],
+              };
+            });
           },
         };
       }
@@ -1690,14 +1681,6 @@ function tagViewPage(): UiPageDefinition {
             }
           }
           boundDrafts(drafts);
-        });
-        // A read that begins the association sequence again adopts current private state: even
-        // unchanged rows and the search candidates can carry other counts than the sequence it
-        // replaces (docs/user-interface.md#browsing-and-organization).
-        associationRecords?.subscribe((read) => {
-          if (read.replaced) {
-            refreshCounts();
-          }
         });
       }
 

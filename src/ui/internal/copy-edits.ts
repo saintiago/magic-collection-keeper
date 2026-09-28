@@ -14,6 +14,8 @@
  * (docs/user-interface.md#browsing-and-organization, docs/application.md#interface).
  */
 
+import type { UiOperationOutcome, UiActionRequest, UiListAction } from './actions.js';
+
 import type { Finish } from '../../catalog/index.js';
 import type {
   UserCardsAccountOperations,
@@ -22,11 +24,7 @@ import type {
 } from '../../usercards/browser.js';
 import type { CopyChangeResult, CopyCondition, PhysicalCopy } from '../../usercards/index.js';
 
-import type {
-  CardListOperationOutcome,
-  CardListTool,
-  CardListToolRequest,
-} from '../../card-list/index.js';
+import type {} from '../../card-list/index.js';
 import { readUiFailureMessage } from './failure.js';
 
 /**
@@ -194,12 +192,12 @@ export function copyChangeTool(options: {
   change(): UiCopyChange | null;
   /** What the user must choose before the tool can act, reported when `change` names none. */
   readonly guidance: string;
-}): CardListTool {
+}): UiListAction {
   return {
     id: options.id,
     label: options.label,
     tool: {
-      invoke(request: CardListToolRequest): Promise<CardListOperationOutcome> {
+      invoke(request: UiActionRequest): Promise<UiOperationOutcome> {
         return applyCopyChange(options.access, request, options.change(), options.guidance);
       },
     },
@@ -208,10 +206,10 @@ export function copyChangeTool(options: {
 
 async function applyCopyChange(
   access: UiCopyAccess,
-  request: CardListToolRequest,
+  request: UiActionRequest,
   change: UiCopyChange | null,
   guidance: string,
-): Promise<CardListOperationOutcome> {
+): Promise<UiOperationOutcome> {
   if (change === null) {
     return { status: 'failed', message: guidance };
   }
@@ -274,7 +272,7 @@ function changeOf(
 function copyChangeOutcome(
   counts: { committed: number; conflict: number; failed: number; unknown: number },
   total: number,
-): CardListOperationOutcome {
+): UiOperationOutcome {
   if (counts.unknown > 0) {
     return {
       status: 'unknown',

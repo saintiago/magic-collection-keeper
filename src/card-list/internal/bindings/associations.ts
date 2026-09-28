@@ -33,6 +33,8 @@ import type {
 } from '../contract.js';
 import {
   cardListEntryKey,
+  observeSearchProgress,
+  type CardListSearchRead,
   isInvalidatedContinuation,
   type CardListCountsAccess,
 } from './search.js';
@@ -70,11 +72,6 @@ export interface CardListTagAssociations {
    * the record the editors review, and an older one never regresses the presented state.
    */
   adopt(association: Association): void;
-  /**
-   * Observes the binding's own reads; `replaced` is true when the read began the sequence again
-   * instead of extending it, so a page can adopt current private state for the rows it presents.
-   */
-  subscribe(listener: (read: { readonly replaced: boolean }) => void): () => void;
 }
 
 /**
@@ -86,6 +83,7 @@ export function tagAssociationsBinding(options: {
   readonly read: CardListTagAssociationsRead;
   readonly catalog: Catalog;
   readonly counts: CardListCountsAccess;
+  readonly search?: CardListSearchRead;
 }): CardListTagAssociations {
   const tagId = options?.tagId;
   if (typeof tagId !== 'string' || tagId.length === 0) {
@@ -108,16 +106,34 @@ export function tagAssociationsBinding(options: {
     throw new TypeError('The associations read their private counts through Search.');
   }
   const records = new Map<string, Association>();
+  // Proof established before the next authoritative read; it covers derived counts only.
+  let incorporated: ReadonlySet<string> = new Set();
   /** Keys of the window the list presents, bounded like the list's own working set. */
   const presented: string[] = [];
-  const listeners = new Set<(read: { readonly replaced: boolean }) => void>();
 
   return {
     source: {
+      ...(options.search === undefined
+        ? {}
+        : {
+            async observe(request) {
+              const state = await observeSearchProgress(
+                options.search!,
+                request.positions,
+                request.signal,
+              );
+              request.signal.throwIfAborted();
+              if (state === 'incorporated') incorporated = new Set(request.positions);
+              return state;
+            },
+          }),
       // A committed change of the account's associations, tags or copies may change this sequence,
       // so the list reacquires it through this same read.
       affects: () => true,
       async load(request: CardListSourceRequest<string>) {
+        // Never gate authoritative membership on Search availability. A read begun after the
+        // observation established its requirements also refreshes the derived fragments.
+        const current = request.required.positions.every((position) => incorporated.has(position));
         let page: AssociationListResult;
         try {
           page = await read.associations(
@@ -179,11 +195,9 @@ export function tagAssociationsBinding(options: {
             records.delete(key);
           }
         }
-        for (const listener of [...listeners]) {
-          listener({ replaced: request.continuation === null });
-        }
+        if (request.continuation === null) counts.invalidate?.();
         // The provider's own read is authoritative for the associations it returns.
-        return { status: 'page', entries, continuation: page.continuation, current: true };
+        return { status: 'page', entries, continuation: page.continuation, current };
       },
     },
     record(key) {
@@ -197,16 +211,8 @@ export function tagAssociationsBinding(options: {
       const key = associationKey(association);
       if ((records.get(key)?.revision ?? 0) <= association.revision) {
         records.set(key, association);
+        counts.invalidate?.();
       }
-    },
-    subscribe(listener) {
-      if (typeof listener !== 'function') {
-        throw new TypeError('An association binding subscriber is a function.');
-      }
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
     },
   };
 }
@@ -221,6 +227,7 @@ function entryOwnershipOfAssociations(
   records: ReadonlyMap<string, Association>,
 ): CardListFragmentReader<CardListEntryOwnership> {
   return {
+    ...(counts.subscribe === undefined ? {} : { subscribe: counts.subscribe }),
     async read(request) {
       const references = new Map<string, CardListTarget>();
       for (const key of request.keys) {

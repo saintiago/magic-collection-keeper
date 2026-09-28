@@ -202,6 +202,13 @@ function createSearchSource<Context>(
   const observe = search.observe;
   return {
     async load(request: CardListSourceRequest<Context>) {
+      // Establish every opaque identity before acquiring the page. A later observation cannot
+      // certify an earlier query result from a different indexed generation.
+      const incorporated = await requiredIncorporated(
+        search,
+        request.required.positions,
+        request.signal,
+      );
       let page: SearchPage;
       try {
         page = readableSearchPage(
@@ -230,9 +237,7 @@ function createSearchSource<Context>(
       // committed position is established through Search's own bounded observation, so a page that
       // incorporated an older position never clears a newer one that is still indexing
       // (docs/search.md#freshness).
-      const current =
-        page.status === 'ready' &&
-        (await requiredIncorporated(search, request.required.positions, request.signal));
+      const current = page.status === 'ready' && incorporated;
       return {
         status: 'page',
         entries: page.entries.map((entry) => searchEntryOf(entry)),
@@ -277,7 +282,7 @@ async function requiredIncorporated(
   positions: readonly string[],
   signal: AbortSignal,
 ): Promise<boolean> {
-  if (positions.length === 0 || positions.length === 1) {
+  if (positions.length <= 1) {
     return true;
   }
   if (typeof search.observe !== 'function') {
@@ -423,6 +428,9 @@ export interface CardListEntryCounts {
 
 /** Reads the private counts of explicit presented entries through the Search contract. */
 export interface CardListCountsAccess {
+  /** Private-record replacement invalidates derived counts across account-local bindings. */
+  invalidate?(): void;
+  subscribe?(listener: () => void): () => void;
   /** Counts of the requested entries keyed by entry key; a failed read rejects as one batch. */
   ofBatch(
     targets: readonly CardListTarget[],
@@ -436,7 +444,17 @@ export function searchCounts(search: CardListCountsRead): CardListCountsAccess {
   if (typeof search?.counts !== 'function') {
     throw new TypeError('The ownership fragment reads private counts through Search.');
   }
+  const listeners = new Set<() => void>();
   return {
+    invalidate: () => {
+      for (const listener of [...listeners]) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     async ofBatch(targets, tagId, signal) {
       if (targets.length === 0) {
         return new Map();
@@ -483,6 +501,7 @@ export function entryOwnershipReader(
   tagId: () => string | null = () => null,
 ): CardListFragmentReader<CardListEntryOwnership> {
   return {
+    ...(counts.subscribe === undefined ? {} : { subscribe: counts.subscribe }),
     async read(request) {
       const references = new Map<string, CardListTarget>();
       for (const key of request.keys) {

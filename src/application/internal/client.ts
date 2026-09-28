@@ -25,6 +25,7 @@ import type {
   ListCardPrintingsOptions,
   PrintingRecord,
 } from '../../catalog/index.js';
+import { createSearchProgress, type SearchIndexingProgress } from '../../search/browser.js';
 import { createCardListBrowser, type CardListBrowser } from '../../card-list/index.js';
 import {
   createRecognition,
@@ -808,23 +809,51 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
   // the provider bindings of the authenticated clients, so pages describe their lists instead of
   // naming the component or constructing Search, Catalog or UserCards bindings
   // (docs/architecture.md#composition-and-replacement).
-  const cardList = createCardListBrowser({ search, catalog, userCards });
+  let progress: SearchIndexingProgress | null = null;
+  let unsubscribeProgress: (() => void) | null = null;
+  function bindProgress(id: string): void {
+    progress = createSearchProgress({
+      accountId: id,
+      read: (input, options) => search.observe(input, { ...options, timeoutMs: 0 }),
+    });
+    const tracker = progress;
+    unsubscribeProgress = userCards.account(id).subscribe((change) => {
+      if (change.position !== null) tracker.committed([change.position]);
+    });
+  }
+  const cardList = createCardListBrowser({
+    search,
+    catalog,
+    userCards,
+    progress: (id) => {
+      if (progress === null || progress.status().accountId !== id) {
+        throw new Error('CardList progress requires the authenticated account.');
+      }
+      return progress;
+    },
+  });
   // Account isolation belongs to Application even when no UserInterface is constructed. A token
   // refresh for the same account keeps its requests valid, including the one awaiting that token;
   // leaving an account ends its UserCards scope before another account can bind, so no read or
   // operation handle of the departed account reaches the transport the next one serves
   // (docs/architecture.md#runtime-boundaries).
   let accountId = authentication.identity.current()?.accountId ?? null;
+  if (accountId !== null) bindProgress(accountId);
   authentication.identity.subscribe((account) => {
     const nextAccountId = account?.accountId ?? null;
     if (nextAccountId !== accountId) {
       const ended = accountId;
       accountId = nextAccountId;
+      unsubscribeProgress?.();
+      unsubscribeProgress = null;
+      progress?.dispose();
+      progress = null;
       if (ended !== null) {
         cardList.endAccount(ended);
         userCards.release(ended);
       }
       request.endSession();
+      if (nextAccountId !== null) bindProgress(nextAccountId);
     }
   });
   const createRecognitionContract = () =>

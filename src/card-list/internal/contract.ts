@@ -110,6 +110,8 @@ export type CardListFragmentResult<Value = unknown> =
 
 /** Reads the requested information for explicit entry keys. */
 export interface CardListFragmentReader<Value = unknown> {
+  /** Binding-owned invalidation, independent of page subscriptions. */
+  subscribe?(listener: () => void): () => void;
   read(request: CardListFragmentRequest): Promise<readonly CardListFragmentResult<Value>[]>;
 }
 
@@ -137,37 +139,10 @@ export interface CardListToolSelection {
   readonly targets: readonly CardListTarget[];
 }
 
-/** One user action over explicit targets through the owning component's operation. */
-export interface CardListToolRequest {
-  readonly targets: readonly CardListTarget[];
-  readonly selection: CardListToolSelection;
-  readonly signal: AbortSignal;
-}
-
-/**
- * Result of one tool invocation. Consumers present a saved outcome only for `committed`, keep
- * unsaved input after `conflict` and `failed`, and recover the recorded outcome of an `unknown`
- * one (docs/application.md#construction-and-request-boundary).
- */
-export interface CardListOperationOutcome {
-  readonly status: 'committed' | 'conflict' | 'failed' | 'unknown';
-  /** User-facing explanation, or null when no further explanation helps. */
-  readonly message: string | null;
-}
-
-/** One tool a list presents for its explicit selection. */
+/** Advisory action descriptor; execution belongs to the consumer's editor. */
 export interface CardListTool {
-  /** Stable id the entry's tool availability fragment reports. */
   readonly id: string;
-  /** Label of the tool's control. */
   readonly label: string;
-  /**
-   * The owning component's operation. A rejection carries no receipt, so the list reports its
-   * outcome as unknown; a definite failure is the operation's own `failed` outcome.
-   */
-  readonly tool: {
-    invoke(request: CardListToolRequest): Promise<CardListOperationOutcome>;
-  };
 }
 
 /** Query context one source evaluates; the binding owns its concrete shape. */
@@ -358,8 +333,6 @@ export interface CardListToolState {
   readonly label: string;
   /** Every selected entry reports the tool available, so no invocation acts on a subset. */
   readonly available: boolean;
-  /** Whether one invocation of this list is still awaiting its outcome. */
-  readonly running: boolean;
 }
 
 /**
@@ -540,8 +513,6 @@ export interface CardList<Context = unknown> {
   clearSelection(): void;
   /** Explicit action context of the current selection, including entries beyond the window. */
   actionContext(): CardListToolSelection;
-  /** Invokes one tool for the explicit selection; null when nothing was invoked. */
-  invoke(toolId: string): Promise<CardListOperationOutcome | null>;
   /** Applies a committed-change notification; affected content is reacquired through its source. */
   changed(change: CardListChange): void;
   /** Retains the logical position the presentation reports; updates what `retain` captures. */

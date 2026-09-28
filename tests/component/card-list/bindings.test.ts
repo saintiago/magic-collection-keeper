@@ -1,3 +1,4 @@
+import { createSearchProgress } from '../../../src/search/browser.js';
 /**
  * Component scope: the source bindings of CardList (docs/card-list.md#interface,
  * docs/card-list.md#required-interfaces-and-source-bindings, docs/search.md#scryfall-compatibility).
@@ -221,6 +222,37 @@ describe('catalog list entries', () => {
     ).resolves.toMatchObject({ current: true });
   });
 
+  it('acquires the presented page after establishing every opaque required identity', async () => {
+    let indexed = false;
+    const order: string[] = [];
+    const source = catalogQuerySource({
+      observe: async () => {
+        order.push('observe');
+        indexed = true;
+        return { state: 'incorporated', revisions: null };
+      },
+      execute: async () => {
+        order.push('query');
+        return {
+          status: 'ready',
+          entries: [],
+          totalCount: indexed ? 1 : 0,
+          continuation: indexed ? 'new-generation' : null,
+          revisions: null,
+        } as never;
+      },
+    });
+    const result = await source.load({
+      context: query(),
+      pageSize: 1,
+      continuation: null,
+      required: { positions: Array.from({ length: 101 }, (_, i) => String(101 - i)) },
+      signal: new AbortController().signal,
+    });
+    expect(order).toEqual(['observe', 'observe', 'observe', 'query']);
+    expect(result).toMatchObject({ current: true, continuation: 'new-generation' });
+  });
+
   it('observes the awaited positions in bounded batches within the declared window', async () => {
     const observed: { readonly positions: readonly string[]; readonly timeoutMs?: number }[] = [];
     const access = createCatalogSearchAccess(
@@ -368,14 +400,19 @@ describe('browser composition of CardList', () => {
         },
       }),
     };
+    const progress = createSearchProgress({ accountId: 'alice', read: search.observe });
+    userCards.account().subscribe((value) => {
+      progress.committed([(value as { position: string }).position]);
+    });
     const cardList = createCardListBrowser({
+      progress: () => progress,
       search: search as never,
       catalog: catalog as never,
       userCards: userCards as never,
     });
 
     const first: CardListChange[] = [];
-    cardList
+    const unsubscribe = cardList
       .account('alice')
       .changes()
       .subscribe((change) => first.push(change));
@@ -383,6 +420,9 @@ describe('browser composition of CardList', () => {
       listener({ scope: 'copies', records: [], imports: [], position: '7' });
     }
     expect(first).toEqual([{ scope: 'copies', records: [], imports: [], position: '7' }]);
+    unsubscribe();
+    for (const listener of listeners)
+      listener({ scope: 'copies', records: [], imports: [], position: '8' });
 
     // A list composed later is told to await the position the account still holds, so leaving and
     // reopening a page never turns a known committed change into an apparently current result.
@@ -391,14 +431,14 @@ describe('browser composition of CardList', () => {
       .account('alice')
       .changes()
       .subscribe((change) => second.push(change));
-    expect(second).toEqual([{ scope: 'copies', records: [], imports: [], position: '7' }]);
+    expect(second.map((change) => change.position)).toEqual(['7', '8']);
 
     // The composition checks the positions through Search's own bounded observation, so a list
     // composed after their incorporation is not made to await them.
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
-    expect(observed).toEqual([{ positions: ['7'] }]);
+    expect(observed.flatMap((read) => read.positions)).toContain('7');
     const third: CardListChange[] = [];
     cardList
       .account('alice')
@@ -406,7 +446,60 @@ describe('browser composition of CardList', () => {
       .subscribe((change) => third.push(change));
     expect(third).toEqual([]);
     cardList.endAccount('alice');
+    progress.dispose();
   });
+});
+
+it('checks copy existence in provider-sized batches before offering tools', async () => {
+  const requests: readonly string[][] = [];
+  const calls = requests as string[][];
+  const browser = createCardListBrowser({
+    search: {
+      execute: async () => {
+        throw new Error('No query');
+      },
+      counts: async () => {
+        throw new Error('No counts');
+      },
+    },
+    catalog: {
+      resolve: async () => {
+        throw new Error('No lookup');
+      },
+      listCardPrintings: async () => {
+        throw new Error('No printings');
+      },
+    } as never,
+    progress: () => ({
+      status: () => ({ accountId: 'alice', state: 'idle', outstanding: [], revisions: null }),
+    }),
+    userCards: {
+      account: () =>
+        ({
+          constraints: { batch: { references: 1 } },
+          readCopies: async (ids: readonly string[]) => {
+            calls.push([...ids]);
+            return {
+              copies: new Map(ids.filter((id) => id !== 'deleted').map((id) => [id, {}])),
+              missing: [],
+            };
+          },
+        }) as never,
+    },
+  });
+  const reader = browser.account('alice').copyTools(['edit']);
+  const results = await reader.read({
+    keys: ['copy:present', 'copy:deleted', 'card:card-1'],
+    information: ['tools'],
+    signal: new AbortController().signal,
+  });
+  expect(calls).toEqual([['present'], ['deleted']]);
+  expect(results).toEqual([
+    { key: 'copy:present', status: 'ready', values: ['edit'] },
+    { key: 'copy:deleted', status: 'ready', values: [] },
+    { key: 'card:card-1', status: 'ready', values: [] },
+  ]);
+  browser.endAccount('alice');
 });
 
 describe('pending-import and tag-association bindings', () => {
@@ -552,8 +645,12 @@ describe('pending-import and tag-association bindings', () => {
   });
 
   it('translates one tag’s associations with their records, ownership and sequence reads', async () => {
-    const reads: { readonly replaced: boolean }[] = [];
+    const progress = Promise.withResolvers<{ state: 'incorporated'; revisions: null }>();
     const binding = tagAssociationsBinding({
+      search: {
+        execute: () => Promise.reject(new Error('No query')),
+        observe: () => progress.promise,
+      },
       tagId: 'tag-wish',
       read: {
         constraints: { batch: { references: 50 } },
@@ -600,7 +697,6 @@ describe('pending-import and tag-association bindings', () => {
           ),
       },
     });
-    binding.subscribe((read) => reads.push(read));
 
     const page = await binding.source.load({
       context: 'tag-wish',
@@ -624,7 +720,23 @@ describe('pending-import and tag-association bindings', () => {
       associationId: 'association-1',
       quantity: 4,
     });
-    expect(reads).toEqual([{ replaced: true }]);
+
+    const request = {
+      context: 'tag-wish',
+      pageSize: 50,
+      continuation: null,
+      signal: new AbortController().signal,
+      required: { positions: ['20'] },
+    };
+    const observing = binding.source.observe!({ positions: ['20'], signal: request.signal });
+    // Private membership is usable even while Search cannot yet answer the progress read.
+    await expect(binding.source.load(request)).resolves.toMatchObject({
+      current: false,
+      entries: [{ key: 'association:association-1' }],
+    });
+    progress.resolve({ state: 'incorporated', revisions: null });
+    await observing;
+    await expect(binding.source.load(request)).resolves.toMatchObject({ current: true });
 
     // The ownership fragment reads the association's own typed target and the presented tag's
     // intended quantity, so a copy-level association is not mistaken for a card.

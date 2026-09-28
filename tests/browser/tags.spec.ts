@@ -1743,7 +1743,8 @@ for (const newer of ['Next draft', ''] as const) {
   });
 }
 
-async function showBoltSearch(page: Page, index = 0): Promise<void> {
+async function showBoltSearch(page: Page): Promise<void> {
+  const index = (await control<readonly unknown[]>(page, 'searches')).length;
   await page.click('#tag-add-submit');
   const search = await requested(page, 'searches', index);
   await settle(page, 'settleSearch', search.id, {
@@ -1905,7 +1906,7 @@ test('addition and repeated search refresh unchanged candidate counts without lo
   await settleCatalog(page, 0, { cards: [boltCard] });
   await expect(result.locator('[data-ui-intended]')).toHaveText(' Intended: 4');
   await scriptCounts(page, [['card:card-bolt', { owned: 3, intended: 4, locations: 2 }]]);
-  await showBoltSearch(page, 1);
+  await showBoltSearch(page);
   await expect(result.locator('[data-ui-copies]')).toHaveText(' Copies: 3');
   await expect(result.locator('[data-ui-locations]')).toHaveText(' Locations: 2');
   await expect(result.locator('[data-ui-select]')).toBeChecked();

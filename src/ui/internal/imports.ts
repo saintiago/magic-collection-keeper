@@ -31,6 +31,8 @@
  * UserCards scope Application composed (docs/architecture.md#runtime-boundaries).
  */
 
+import type { UiOperationOutcome, UiActionRequest, UiListAction } from './actions.js';
+
 import type { SearchClient } from '../../application/index.js';
 import type { Catalog, Finish, PrintingRecord } from '../../catalog/index.js';
 import { recognitionEngineNames } from '../../recognition/index.js';
@@ -56,13 +58,10 @@ import {
   type CardListCatalogQuery,
   type CardListEntry,
   type CardListFragmentReader,
-  type CardListOperationOutcome,
   type CardListPendingEntries,
   type CardListPendingRecord,
   type CardListRetained,
   type CardListTarget,
-  type CardListTool,
-  type CardListToolRequest,
 } from '../../card-list/index.js';
 import { cardListBasicContent, createCardListView, type UiCardList } from './card-list.js';
 import { uiCopyConditions } from './copy-edits.js';
@@ -1077,7 +1076,7 @@ function importPage(): UiPageDefinition {
        * never staged twice under two identities
        * (docs/user-cards.md#import-and-capture-state).
        */
-      async function addSelection(request: CardListToolRequest): Promise<CardListOperationOutcome> {
+      async function addSelection(request: UiActionRequest): Promise<UiOperationOutcome> {
         const waiting = retainedStagingAttempts();
         if (waiting.length > 0) {
           // The provider keeps an earlier staging whose outcome is not established: retrying it is
@@ -1120,7 +1119,7 @@ function importPage(): UiPageDefinition {
         // carrying the identity UserCards retains while its outcome is not established
         // (docs/user-cards.md#interface).
         let inReview = 0;
-        let reported: CardListOperationOutcome | null = null;
+        let reported: UiOperationOutcome | null = null;
         for (const batch of inBatches(lines, constraints.batch.stageEntries)) {
           const keys = batch.map((line) => cardListEntryKey(stagedLineTarget(line)));
           const outcome = await stageImportLines(
@@ -1153,7 +1152,7 @@ function importPage(): UiPageDefinition {
         }
         // Reading the pending entries shows whether a staging committed even though its response
         // was lost (docs/user-interface.md#capture-and-review).
-        void reconcileImport(reported === null);
+        void reconcileImport(reported?.status === 'unknown');
         paintManualRecovery();
         return reported ?? { status: 'committed', message: stagedMessage(inReview) };
       }
@@ -1701,9 +1700,7 @@ function importPage(): UiPageDefinition {
       }
 
       /** Confirms the selected entries and presents the copies its receipt names. */
-      async function confirmSelection(
-        request: CardListToolRequest,
-      ): Promise<CardListOperationOutcome> {
+      async function confirmSelection(request: UiActionRequest): Promise<UiOperationOutcome> {
         if (confirming || recovering || confirmation !== null) {
           return {
             status: 'failed',
@@ -1742,7 +1739,7 @@ function importPage(): UiPageDefinition {
         paintConfirmation();
         let copies = 0;
         let note: string | null = null;
-        let reported: CardListOperationOutcome | null = null;
+        let reported: UiOperationOutcome | null = null;
         try {
           for (const entries of inBatches(chosen, constraints.batch.confirmEntries)) {
             // The provider owns the operation identity; the page presents the attempt while its
@@ -1994,24 +1991,24 @@ function importPage(): UiPageDefinition {
       }
 
       /** The tool that stages the explicit selected printings as manual pending lines. */
-      function addTool(): CardListTool {
+      function addTool(): UiListAction {
         return {
           id: 'add-to-review',
           label: 'Add to review',
           tool: {
-            invoke: (request: CardListToolRequest): Promise<CardListOperationOutcome> =>
+            invoke: (request: UiActionRequest): Promise<UiOperationOutcome> =>
               addSelection(request),
           },
         };
       }
 
       /** The tool that confirms the explicit selected pending entries. */
-      function confirmTool(): CardListTool {
+      function confirmTool(): UiListAction {
         return {
           id: 'confirm-import',
           label: 'Confirm selected',
           tool: {
-            invoke: (request: CardListToolRequest): Promise<CardListOperationOutcome> =>
+            invoke: (request: UiActionRequest): Promise<UiOperationOutcome> =>
               confirmSelection(request),
           },
         };
@@ -2426,7 +2423,7 @@ function stagedMessage(lines: number): string {
 function stagingOutcome(
   inReview: number,
   outcome: UiChangeCommit<ImportStageResult>,
-): CardListOperationOutcome {
+): UiOperationOutcome {
   if (inReview === 0) {
     return { status: outcome.status, message: outcome.message };
   }

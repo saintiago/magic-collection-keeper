@@ -10,12 +10,12 @@
  * parts (committed-change subscriptions and local recent activity) follow the supplied account.
  */
 
+import type { SearchIndexingProgress } from '../../search/browser.js';
 import type { CardRecord, Catalog } from '../../catalog/index.js';
 import type { UserCardsAccountOperations, UserCardsChange } from '../../usercards/browser.js';
 
 import type {
   CardList,
-  CardListChange,
   CardListChangeSource,
   CardListEntry,
   CardListEntryImage,
@@ -29,12 +29,12 @@ import {
   catalogQuerySource,
   collectionQuerySource,
   entryOwnershipReader,
-  observeSearchProgress,
   pickerQuerySource,
   searchCounts,
   type CardListCatalogQuery,
   type CardListCollectionQuery,
   type CardListCountsRead,
+  type CardListCountsAccess,
   type CardListPickerQuery,
   type CardListSearchRead,
 } from './bindings/search.js';
@@ -50,6 +50,8 @@ export interface CardListBrowserOptions {
   readonly search: CardListSearchRead & CardListCountsRead;
   /** Catalog's resolution and printing capabilities. */
   readonly catalog: Catalog;
+  /** Account-lifetime progress supplied by Application from Search. */
+  readonly progress: (accountId: string) => Pick<SearchIndexingProgress, 'status'>;
   /** UserCards' account-scoped browser operations, pending imports and associations. */
   readonly userCards: {
     account(accountId: string): UserCardsAccountOperations;
@@ -83,6 +85,8 @@ export interface CardListAccountBindings {
   printingImages(): CardListFragmentReader<readonly CardListEntryImage[]>;
   /** Ownership counts of explicit entries, optionally with one tag's intended quantity. */
   ownership(tagId: string | null): CardListFragmentReader<CardListEntryOwnership>;
+  /** Advisory tools for copies whose continued existence the provider establishes. */
+  copyTools(ids: readonly string[]): CardListFragmentReader<readonly string[]>;
   /** The pending entries of one import, with the provider records its page reviews. */
   pendingEntries(): CardListPendingEntries;
   /** The associations of one tag, with the provider records its editors review. */
@@ -98,20 +102,14 @@ export interface CardListBrowser {
   create<Context>(options: CardListOptions<Context>): CardList<Context>;
   /** Provider bindings of one presented account; each account gets its own scope. */
   account(accountId: string): CardListAccountBindings;
-  /** Releases one account's local activity and remembered progress when the account ends. */
+  /** Releases one account's local bindings and activity when the account ends. */
   endAccount(accountId: string): void;
 }
 
-/** One account's remembered state: its activity store and the positions still awaiting indexing. */
+/** Account-local history and derived-count invalidation; Search owns indexing progress. */
 interface AccountScope {
   readonly recent: CardListRecentActivity;
-  /** Positions known committed and not yet established as incorporated, oldest first. */
-  outstanding: readonly string[];
-  /** Subscribers of the account's committed changes; the facade subscription lives while any does. */
-  readonly listeners: Set<(change: CardListChange) => void>;
-  unsubscribe: (() => void) | null;
-  /** Withdraws the composition's own bounded observation of the outstanding positions. */
-  observation: AbortController | null;
+  readonly counts: CardListCountsAccess;
 }
 
 /**
@@ -143,94 +141,23 @@ export function createCardListBrowser(options: CardListBrowserOptions): CardList
     if (account === undefined) {
       account = {
         recent: createRecentActivity(),
-        outstanding: [],
-        listeners: new Set(),
-        unsubscribe: null,
-        observation: null,
+        counts: searchCounts(search),
       };
       scopes.set(accountId, account);
     }
     return account;
   }
 
-  /**
-   * Checks the positions the composition remembers against Search's own bounded observation and
-   * forgets the ones it established, so a list composed later is not told to await progress the
-   * index already holds. A delayed, failed or unavailable check keeps the positions: an unknown
-   * status is never treated as incorporation.
-   */
-  function checkOutstanding(account: AccountScope, accountId: string): void {
-    if (account.observation !== null || account.outstanding.length === 0) {
-      return;
-    }
-    if (typeof search.observe !== 'function') {
-      return;
-    }
-    const positions = [...account.outstanding];
-    const controller = new AbortController();
-    account.observation = controller;
-    observeSearchProgress(search, positions, controller.signal).then(
-      (observed) => {
-        if (account.observation !== controller) {
-          return;
-        }
-        account.observation = null;
-        if (observed !== 'incorporated') {
-          return;
-        }
-        const established = new Set(positions);
-        account.outstanding = account.outstanding.filter((position) => !established.has(position));
-        checkOutstanding(account, accountId);
-      },
-      () => {
-        if (account.observation === controller) {
-          account.observation = null;
-        }
-      },
-    );
-  }
-
-  /**
-   * The account's committed-change source. It subscribes to the account's own UserCards facade
-   * once, remembers every publication position the notifications named and replays the positions
-   * still outstanding to a list that subscribes later, so reopening or newly composing a list never
-   * turns a known committed change into an apparently current result. A list whose own read or
-   * observation establishes the positions keeps its requirement private to itself, but the
-   * composition keeps the account's outstanding set until it observes incorporation.
-   */
   function changesOf(accountId: string): CardListChangeSource {
-    const account = scope(accountId);
-    const facade = userCards.account(accountId);
+    const progress = options.progress(accountId);
+    const changes = usercardsChanges(userCards.account(accountId));
     return {
       subscribe(listener) {
-        if (typeof listener !== 'function') {
-          throw new TypeError('A CardList change subscriber is a function.');
-        }
-        if (account.listeners.size === 0) {
-          const upstream = usercardsChanges(facade).subscribe((change) => {
-            if (change.position !== null && !account.outstanding.includes(change.position)) {
-              account.outstanding = [...account.outstanding, change.position];
-              checkOutstanding(account, accountId);
-            }
-            for (const subscriber of [...account.listeners]) {
-              subscriber(change);
-            }
-          });
-          account.unsubscribe = upstream;
-        }
-        account.listeners.add(listener);
-        // The new list reacquires every position the account still awaits. The notifications carry
-        // no records, so only the query lists that re-read through Search treat them as affected.
-        for (const position of [...account.outstanding]) {
+        const unsubscribe = changes.subscribe(listener);
+        for (const position of progress.status().outstanding) {
           listener({ scope: 'copies', records: [], imports: [], position });
         }
-        return () => {
-          account.listeners.delete(listener);
-          if (account.listeners.size === 0) {
-            account.unsubscribe?.();
-            account.unsubscribe = null;
-          }
-        };
+        return unsubscribe;
       },
     };
   }
@@ -243,7 +170,7 @@ export function createCardListBrowser(options: CardListBrowserOptions): CardList
       }
       const account = scope(accountId);
       const facade = () => userCards.account(accountId);
-      const counts = searchCounts(search);
+      const counts = account.counts;
       return {
         accountId,
         changes: () => changesOf(accountId),
@@ -257,6 +184,27 @@ export function createCardListBrowser(options: CardListBrowserOptions): CardList
         cardPrintings: (card) => cardPrintingsSource(catalog, card),
         printingImages: () => printingImagesReader(catalog),
         ownership: (tagId) => entryOwnershipReader(counts, undefined, () => tagId),
+        copyTools: (ids) => ({
+          async read(request) {
+            const copyIds = request.keys
+              .filter((key) => key.startsWith('copy:'))
+              .map((key) => key.slice(5));
+            const present = new Set<string>();
+            const bound = facade().constraints.batch.references;
+            for (let index = 0; index < copyIds.length; index += bound) {
+              const result = await facade().readCopies(
+                copyIds.slice(index, index + bound),
+                request.signal,
+              );
+              for (const id of result.copies.keys()) present.add(id);
+            }
+            return request.keys.map((key) => ({
+              key,
+              status: 'ready' as const,
+              values: key.startsWith('copy:') && present.has(key.slice(5)) ? ids : [],
+            }));
+          },
+        }),
         pendingEntries: () =>
           pendingEntriesBinding({
             entries: {
@@ -275,6 +223,7 @@ export function createCardListBrowser(options: CardListBrowserOptions): CardList
             },
             catalog,
             counts,
+            search,
           }),
       };
     },
@@ -283,13 +232,7 @@ export function createCardListBrowser(options: CardListBrowserOptions): CardList
       if (account === undefined) {
         return;
       }
-      account.observation?.abort();
-      account.observation = null;
-      account.unsubscribe?.();
-      account.unsubscribe = null;
-      account.listeners.clear();
       account.recent.clear(accountId);
-      account.outstanding = [];
       scopes.delete(accountId);
     },
   };

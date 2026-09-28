@@ -1112,6 +1112,54 @@ describe('browser application', () => {
     expect(application.userInterface).toEqual({ constructed: true });
   });
 
+  it('remembers commits made with no mounted list for the authenticated account lifetime', async () => {
+    const received: UserInterfaceCapabilities[] = [];
+    const progressSignals: AbortSignal[] = [];
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      if (String(input).endsWith('/api/search/progress')) {
+        progressSignals.push(init!.signal!);
+        return new Promise<Response>(() => {});
+      }
+      return new Response(
+        JSON.stringify({
+          privateRevision: '2',
+          publicationPosition: '20',
+          tag: { tagId: 'deck', kind: 'deck', label: 'Deck', system: false, revision: 1 },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    };
+    const app = createBrowserApplication({
+      settings: publicSettings(),
+      prompt: testPrompt(),
+      storage: signedInStorage(),
+      attemptStorage: null,
+      fetch,
+      createUserInterface: (value) => received.push(value),
+    });
+    const capabilities = received[0]!;
+    const id = app.identity.current()!.accountId;
+    const change = capabilities.userCards.account(id).createTag({ kind: 'deck', label: 'Deck' });
+    expect(await change.observe()).toMatchObject({ state: 'committed' });
+    const positions: (string | null)[] = [];
+    const unsubscribe = capabilities.cardList
+      .account(id)
+      .changes()
+      .subscribe((value) => positions.push(value.position));
+    expect(positions).toEqual(['20']);
+    unsubscribe();
+    expect(progressSignals).toHaveLength(1);
+    expect(progressSignals[0]!.aborted).toBe(false);
+    app.endSession();
+    expect(progressSignals[0]!.aborted).toBe(true);
+    expect(() =>
+      capabilities.cardList
+        .account(id)
+        .changes()
+        .subscribe(() => {}),
+    ).toThrow();
+  });
+
   it('ends the UserCards scope of the account it leaves and composes a fresh one on return', async () => {
     const { fetch } = jsonFetch({ error: 'The service is unavailable.' }, { status: 503 });
     const received: UserInterfaceCapabilities[] = [];

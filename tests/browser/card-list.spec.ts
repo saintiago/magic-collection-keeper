@@ -12,6 +12,8 @@
  * contract.
  */
 
+import type { UiOperationOutcome } from '../../src/ui/internal/actions.js';
+
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,7 +33,6 @@ import type {
   CardListFragmentKind as UiFragmentKind,
   CardListFragmentResult as UiFragmentResult,
   CardListEntry as UiListEntry,
-  CardListOperationOutcome as UiOperationOutcome,
 } from '../../src/card-list/index.js';
 import { CARD_LIST_LIMITS } from '../../src/card-list/index.js';
 
@@ -712,7 +713,7 @@ test('keeps the selection through enrichment and refinement and acts through a t
     page.locator('#list-a [data-ui-entry="copy:5"] [data-ui-fragment="images"]'),
   ).toHaveText('Loading images…');
   const enriched = (await fragmentRequests(page)).at(-1)!;
-  expect(enriched.keys).toEqual(['copy:5']);
+  expect(enriched.keys).toEqual(['copy:1', 'copy:5', 'card:1']);
 });
 
 test('renders refreshed quantities and the consumer’s own content for the fresh snapshot', async ({
@@ -806,7 +807,7 @@ test('observes awaited indexing, exposes a delay and recovers it through retry',
   expect(retry.positions).toEqual(['5']);
   await settleObservation(page, retry.id, 'incorporated');
   const refreshed = (await pageRequests(page)).at(-1)!;
-  expect(refreshed.required).toEqual([]);
+  expect(refreshed.required).toEqual(['5']);
   await settlePage(page, refreshed.id, [card('1'), card('2')]);
   await expect(status).toHaveAttribute('data-ui-freshness', 'current');
   await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(2);
@@ -2524,4 +2525,40 @@ for (const context of [null, undefined]) {
     expect(await restoration(page, 'a')).toMatchObject({ status: 'presented' });
     expect(errors).toEqual([]);
   });
+}
+
+for (const reuseEditor of [false, true]) {
+  for (const changedQuantity of [false, true]) {
+    test(`preserves the active fragment editor and text selection across refresh (quantity change: ${changedQuantity}, reuse: ${reuseEditor})`, async ({
+      page,
+    }) => {
+      const errors = await openLists(page);
+      await install(page, 'a', { fragments: ['ownership'], editorFragment: true, reuseEditor });
+      const initial = await onlyRequest(page, 'a');
+      await settlePage(page, initial.id, [card('1')]);
+      const fragment = (await fragmentRequests(page)).at(-1)!;
+      await settleFragment(page, fragment.id, [
+        { key: 'card:1', status: 'ready', values: { owned: 1, locations: 1, intended: null } },
+      ]);
+      const field = page.locator('#entry-editor');
+      await field.fill('unsaved draft');
+      await field.evaluate((node: HTMLInputElement) => node.setSelectionRange(2, 6));
+      await refresh(page, 'a');
+      const replacement = (await pageRequests(page)).at(-1)!;
+      await settlePage(page, replacement.id, [
+        { ...card('1'), quantity: changedQuantity ? { copies: 7, intended: null } : null },
+      ]);
+      await expect(field).toBeFocused();
+      const reread = (await fragmentRequests(page)).at(-1)!;
+      await settleFragment(page, reread.id, [
+        { key: 'card:1', status: 'ready', values: { owned: 2, locations: 1, intended: null } },
+      ]);
+      await expect(field).toBeFocused();
+      await expect(field).toHaveValue('unsaved draft');
+      expect(
+        await field.evaluate((node: HTMLInputElement) => [node.selectionStart, node.selectionEnd]),
+      ).toEqual([2, 6]);
+      expect(errors).toEqual([]);
+    });
+  }
 }

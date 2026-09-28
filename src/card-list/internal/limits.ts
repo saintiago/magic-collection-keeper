@@ -23,12 +23,6 @@ export const CARD_LIST_LIMITS = {
   resolveBatch: 100,
   /** Characters one committed publication position may carry while it awaits incorporation. */
   position: 100,
-  /**
-   * Committed positions one list tracks while they await incorporation. A longer backlog keeps
-   * the newest, so observation work and retained state stay bounded; the provider establishes
-   * every position a read or observation is given.
-   */
-  awaitingPositions: 50,
   /** Recent card entries one account's activity keeps, most recent first. */
   recentCards: 24,
 } as const;

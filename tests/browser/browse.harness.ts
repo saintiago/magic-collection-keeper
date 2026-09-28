@@ -14,6 +14,8 @@
  * account transitions the private browsing state follows.
  */
 
+import { idleProgress } from './card-list-progress.js';
+
 import {
   ApplicationError,
   type ApplicationFailureCode,
@@ -182,7 +184,12 @@ export function installBrowseHarness(
   };
   // Application's own account lifecycle: leaving an account releases its local activity before
   // another account can present it (docs/architecture.md#runtime-boundaries).
-  const cardList = createCardListBrowser({ search, catalog, userCards: unusedUserCards });
+  const cardList = createCardListBrowser({
+    progress: idleProgress,
+    search,
+    catalog,
+    userCards: unusedUserCards,
+  });
   let presentedAccount: string | null = account?.accountId ?? null;
   identity.subscribe((next) => {
     const nextAccountId = next?.accountId ?? null;

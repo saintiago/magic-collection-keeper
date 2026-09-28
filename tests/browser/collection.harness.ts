@@ -11,6 +11,8 @@
  * crossed the component contracts.
  */
 
+import { idleProgress } from './card-list-progress.js';
+
 import {
   ApplicationError,
   type ApplicationFailureCode,
@@ -263,7 +265,7 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
     client: scriptedUserCards,
     storage: browserAttemptStorage(),
   });
-  const cardList = createCardListBrowser({ search, catalog, userCards });
+  const cardList = createCardListBrowser({ progress: idleProgress, search, catalog, userCards });
   const capabilities: UserInterfaceCapabilities = {
     settings: {
       environment: 'test',

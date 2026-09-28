@@ -17,7 +17,6 @@ import {
   type CardListFragmentReader,
   type CardListFragmentState,
   type CardListObservation,
-  type CardListOperationOutcome,
   type CardListPage,
   type CardListPosition,
   type CardListRetained,
@@ -371,32 +370,6 @@ function readItems(values: readonly unknown[]): readonly unknown[] | null {
   return values.length <= CARD_LIST_LIMITS.fragmentItems ? values : null;
 }
 
-/** Reading of one tool's outcome; an unreadable outcome is never presented as committed. */
-export function readOutcome(value: unknown): CardListOperationOutcome {
-  const outcome = readObject(value);
-  const status = readOutcomeStatus(outcome?.status);
-  if (outcome === null || status === null) {
-    return { status: 'unknown', message: null };
-  }
-  const message = outcome.message;
-  return {
-    status,
-    message: typeof message === 'string' && message.length > 0 ? message : null,
-  };
-}
-
-function readOutcomeStatus(value: unknown): CardListOperationOutcome['status'] | null {
-  switch (value) {
-    case 'committed':
-    case 'conflict':
-    case 'failed':
-    case 'unknown':
-      return value;
-    default:
-      return null;
-  }
-}
-
 /** Human label of one fragment kind; used by the default messages of a failed read. */
 export function fragmentLabel(kind: CardListFragmentKind): string {
   switch (kind) {
@@ -551,7 +524,7 @@ function readRetainedAwaiting(value: unknown): readonly string[] {
   if (value === undefined || value === null) {
     return [];
   }
-  if (!Array.isArray(value) || value.length > CARD_LIST_LIMITS.awaitingPositions) {
+  if (!Array.isArray(value)) {
     throw new TypeError('A retained list names the committed positions it awaited.');
   }
   const positions: string[] = [];
@@ -706,17 +679,14 @@ export function readTools(value: unknown): ReadonlyMap<string, CardListTool> {
     const definition = readObject(entry);
     const id = definition?.id;
     const label = definition?.label;
-    const tool = readObject(definition?.tool);
     if (
       definition === null ||
       typeof id !== 'string' ||
       id.length === 0 ||
       typeof label !== 'string' ||
-      label.length === 0 ||
-      tool === null ||
-      typeof tool.invoke !== 'function'
+      label.length === 0
     ) {
-      throw new TypeError('A CardList tool names one id and label and invokes one operation.');
+      throw new TypeError('A CardList tool names one id and label.');
     }
     if (tools.has(id)) {
       throw new TypeError('A CardList tool id is used once.');

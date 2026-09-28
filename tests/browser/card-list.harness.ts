@@ -12,18 +12,21 @@
  * restoration, as the page composing the list does.
  */
 
+import type {
+  UiOperationOutcome,
+  UiListAction as UiCardListTool,
+} from '../../src/ui/internal/actions.js';
+
 import {
   createCardList,
   type CardListFragmentKind as UiFragmentKind,
   type CardListFragmentReader as UiFragmentReader,
   type CardListFragmentReaders as UiCardListFragments,
   type CardListFragmentResult as UiFragmentResult,
-  type CardListOperationOutcome as UiOperationOutcome,
   type CardListRetained,
   type CardListSource as UiListSource,
   type CardListRead as UiListRead,
   type CardListTarget as UiListTarget,
-  type CardListTool as UiCardListTool,
   type CardListEntry as UiListEntry,
   type CardListFocus as UiListFocus,
   type CardListChange as UiListChange,
@@ -74,6 +77,8 @@ export interface UiCardListInstall {
    * carries, so a journey observes that a refreshed entry reaches the consumer's renderer.
    */
   readonly customEntry?: boolean;
+  readonly editorFragment?: boolean;
+  readonly reuseEditor?: boolean;
   /** Query context the list evaluates. */
   readonly context?: string;
   /** Fragment kinds the list reads; the others are not presented. */
@@ -257,6 +262,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       if (listeners !== null) {
         changeSources.set(id, listeners);
       }
+      let editor: HTMLInputElement | null = null;
       const installed = createCardListView<string | null | undefined>({
         container,
         // The journey installs the component's own default implementation behind the factory the
@@ -283,15 +289,28 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
                 },
               },
             }),
-        ...(options.openEntry === true
-          ? { presentation: { renderEntry: (entry: UiListEntry) => openLink(document, entry) } }
-          : options.customEntry === true
-            ? {
-                presentation: {
-                  renderEntry: (entry: UiListEntry) => customEntry(document, entry),
+        ...(options.editorFragment === true
+          ? {
+              presentation: {
+                renderFragment() {
+                  if (options.reuseEditor === true && editor !== null) return editor;
+                  const field = document.createElement('input');
+                  field.id = 'entry-editor';
+                  field.value = 'provider value';
+                  editor = field;
+                  return field;
                 },
-              }
-            : {}),
+              },
+            }
+          : options.openEntry === true
+            ? { presentation: { renderEntry: (entry: UiListEntry) => openLink(document, entry) } }
+            : options.customEntry === true
+              ? {
+                  presentation: {
+                    renderEntry: (entry: UiListEntry) => customEntry(document, entry),
+                  },
+                }
+              : {}),
         signal: controller.signal,
       });
       lists.set(id, installed);

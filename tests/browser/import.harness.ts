@@ -9,6 +9,8 @@
  * controls and confirmation handling while observing exactly what crossed the component contracts.
  */
 
+import { idleProgress } from './card-list-progress.js';
+
 import {
   ApplicationError,
   type ApplicationFailureCode,
@@ -347,7 +349,7 @@ export function installImportHarness(
   });
   // Application ends the UserCards scope of the account it leaves, so no retained attempt or read
   // of that account reaches the account that signs in next (docs/architecture.md#runtime-boundaries).
-  const cardList = createCardListBrowser({ search, catalog, userCards });
+  const cardList = createCardListBrowser({ progress: idleProgress, search, catalog, userCards });
   let scopedAccountId: string | null = account?.accountId ?? null;
   listeners.add((next) => {
     const nextAccountId = next?.accountId ?? null;

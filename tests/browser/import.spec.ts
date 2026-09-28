@@ -602,6 +602,28 @@ test('recovers a lost confirmation through its recorded operation outcome', asyn
   expect(errors).toEqual([]);
 });
 
+test('rereads an already open import after an unknown staging outcome', async ({ page }) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.fill('#import-manual-query', 'Lightning Bolt');
+  await page.click('#import-manual-submit');
+  const search = await requested<Record<string, unknown>>(page, 'searches');
+  await settle(page, 'settleSearch', search.id, searchPage([m11]));
+  await page.locator('#import-results [data-ui-select]').check();
+  await page.click('#import-results [data-ui-tool="add-to-review"]');
+  const staged = await requested<Record<string, unknown>>(page, 'stage');
+  await control(page, 'fail', staged.id, { code: 'busy', message: 'Response lost after commit.' });
+  const sessions = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', sessions.id, [session()]);
+  const reread = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  await settle(page, 'settleEntries', reread.id, {
+    session: session(),
+    entries: [entry(), { ...entry(), entryId: 'new-entry' }],
+  });
+  await expect(page.locator('#import-pending [data-ui-entry="pending:new-entry"]')).toBeVisible();
+  expect(await control<unknown[]>(page, 'stage')).toHaveLength(1);
+  expect(errors).toEqual([]);
+});
+
 test('keeps one line identity when a staging response is lost and retries it explicitly', async ({
   page,
 }) => {

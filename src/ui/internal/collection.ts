@@ -18,11 +18,7 @@
  * (docs/user-interface.md#state-ownership-and-restoration). Every provider value renders as text.
  */
 
-import {
-  type CardListCollectionQuery,
-  type CardListFragmentReader,
-  type CardListFragmentResult,
-} from '../../card-list/index.js';
+import { type CardListCollectionQuery } from '../../card-list/index.js';
 
 import { createCardListView } from './card-list.js';
 import {
@@ -111,7 +107,9 @@ function collectionPage(): UiPageDefinition {
           // A printing entry names the printing its image belongs to; a physical copy is presented
           // with the printing of its group, so only the printing level loads images.
           ...(view.level === 'printing' ? { images: bindings.printingImages() } : {}),
-          tools: copyToolsReader(),
+          tools: context.capabilities.cardList
+            .account(context.account.accountId)
+            .copyTools(['apply-finish', 'apply-condition']),
         },
         tools: [
           copyChangeTool({
@@ -257,21 +255,6 @@ function readConditionChange(select: HTMLSelectElement): UiCopyChange | null {
 }
 
 /** Whether the presented entries offer the bulk copy changes; only copies can be changed. */
-function copyToolsReader(): CardListFragmentReader<readonly string[]> {
-  const available: readonly string[] = ['apply-finish', 'apply-condition'];
-  return {
-    read(request) {
-      return Promise.resolve(
-        request.keys.map((key): CardListFragmentResult<readonly string[]> => ({
-          key,
-          status: 'ready',
-          values: key.startsWith('copy:') ? available : [],
-        })),
-      );
-    },
-  };
-}
-
 function placeholderOption(document: Document, label: string): HTMLOptionElement {
   return valueOption(document, '', label);
 }
