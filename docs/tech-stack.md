@@ -19,9 +19,14 @@ supported source and documentation formatting.
 
 ## Component boundaries
 
-Use Dependency Cruiser to enforce TypeScript component import boundaries. Cross-component imports
-use provider-owned public interfaces. Application assembles concrete implementations. Recognition's
-Python implementation is accessed through its public contract.
+Use Dependency Cruiser to enforce TypeScript component and UI module import boundaries. Imports
+between owners use provider-owned public entry points, including types. Only composition may import
+concrete factories; reject cycles and private-path imports. Application assembles concrete
+implementations. Recognition's Python implementation is accessed through its public contract.
+
+CardList and Capture run in the browser without a rendering dependency. UserInterface modules consume
+them through public capabilities. Their separation adds no AWS service. Domain client operation code
+belongs to its provider; authentication and transport remain application infrastructure.
 
 ## Validation
 
@@ -58,6 +63,11 @@ small; introduce a dependency when it reduces total implementation and maintenan
 ## AWS stack
 
 Deploy in `us-east-1`.
+
+Follow the [data architecture](data-architecture.md) for storage ownership. Catalog, UserCards and
+Search initially use separate private schemas and roles in the same Aurora deployment. Search owns
+its projection tables and indexes. Node.js background indexing work consumes provider publication
+capabilities in bounded, resumable batches; its writer role is separate from the query role.
 
 | Area                       | Technology                                                                            |
 | -------------------------- | ------------------------------------------------------------------------------------- |

@@ -7,9 +7,11 @@ quantity, confirmation and account-isolation rules for all changes.
 
 ## Interface
 
-- Provide UserInterface with private reads, pending entries and operations for editing copies,
-  tags, associations and imports. Return the affected records or operation outcome.
-- Provide Search with an authorized read contract for private membership, quantities and attributes.
+- Provide UserInterface editors with private reads and operations for editing copies, tags,
+  associations and imports. Provide CardList with pending lists, private fragments and operation
+  availability. Provide Capture with staging and candidate attachment. Return affected records or
+  operation outcomes; no consumer reconstructs an import's authoritative state.
+- Provide Search with authorized snapshots and durable changes for searchable private facts.
 - Use Catalog to resolve card/printing references and validate physical-printing attributes.
 - Receive trusted user context from Application. Scope every referenced private record and operation
   to that user, including reads and retries.
@@ -32,17 +34,49 @@ mutation is reported as success.
 
 ### Query surface
 
-Expose read-only copies, tags and associations scoped to trusted user context. Copy rows contain
+Publish copies, tags and associations through an authorized, versioned data interface. Copy records contain
 copy ID, printing ID, finish, condition and derived ownership/location membership. Association rows
 contain association ID, tag ID, target level, target ID and optional intended quantity. Copy-targeted
 associations have no quantity. Pending entries are available only through import reads, excluded
 from ordinary query results and ownership totals according to the
 [import lifecycle](#import-and-capture-state). Consumers do not add their own pending-entry filters.
 
-Search reads these relations through the public query contract. The PostgreSQL implementation uses
-protected views with account scoping enforced at the database boundary. Missing context fails
-closed; account context cannot leak between reused connections. Private base tables are inaccessible
-through this read contract. Publish a private-data revision for continuation validation.
+Provide a consistent, paginated snapshot per account and a resumable change position. Changes carry
+account, stable change identity, account-scoped revision and explicit upserts/removals. A logical
+mutation's publication is complete, including coupled ownership/location changes. Snapshot and change
+handoff leaves no gap; expired positions require a new snapshot. Foreign or missing authorization
+fails closed. Trusted indexing access is granted separately from an end-user's read access.
+
+Commit the authoritative change and durable publication atomically. Search consumes this contract
+and owns its resulting projection; it has no access to private tables or SQL views. Source replacement
+preserves publication semantics rather than a database layout. Query-visible mutations return their
+publication position with their committed outcome, including recovery of that outcome. Operations
+affecting only pending review need not publish ordinary searchable ownership data.
+
+### Browser operation lifecycle
+
+The client facade is part of this component. Provide UserInterface and Capture with begin/resume,
+observe, recover and supported retry capabilities for a user operation. An operation handle exposes
+pending, committed, rejected or unknown outcome and relevant authoritative records/errors. Closing
+an observer is not cancellation of a server commit. Resume retains the original account, import and
+operation identity; it never infers a new import from matching contents or source URLs.
+
+Own the minimum account-scoped attempt state needed for the existing import/recovery guarantees,
+including reload. Receipts and pending records remain server-authoritative. Confirmation uses its
+recorded receipt; other operations use their documented identity/revision semantics. Do not turn all
+writes into blind automatic retries or introduce a general persistent offline command queue. An
+unrecoverable outcome stays explicit until authoritative reads or user reconciliation resolve it.
+
+Expose local committed-change invalidations to CardList: affected record/import/tag references and
+the scope whose membership or quantities may have changed and its publication position when indexing
+is affected. An invalidation requests a read; it is
+not a second copy of authoritative data. A lost response emits no speculative committed event.
+Recovered commits produce the same invalidation as acknowledged commits. Subscribers may coalesce
+or repeat hints safely. No cross-device push or distributed event infrastructure is required.
+
+Operation availability and input constraints belong to this public contract. They may guide controls
+but never replace server validation. Distinguish request batch bounds from a product quantity or
+selection limit; consumers must not invent or duplicate limits to match incidental storage choices.
 
 ## Internal design
 
@@ -59,7 +93,8 @@ intent and interpret outcomes; stores own SQL, locking, atomic changes and persi
 | Review                    | Explicit corrections, late candidate attachment and discard.                 | Revision checks preserve user edits; late evidence cannot rewrite reviewed fields.                                                 |
 | Confirmation and recovery | Validate reviewed entries, recognize replay and report the recorded outcome. | One transaction binds acquisition identities, creates copies/owned memberships/provenance, closes entries and records the receipt. |
 | Source conversion         | Fetch and parse supported source formats into staging input.                 | Provider data is input to staging; never writes owned copies directly.                                                             |
-| Query publication         | Read-only projections and private-data revision.                             | Base storage stays private; scope is transaction-local and missing scope returns no private data.                                  |
+| Query publication         | Account-scoped snapshots and durable searchable changes.                     | Authoritative changes and publication commit together; private storage remains inaccessible to consumers.                          |
+| Client operations         | Account-scoped attempt handles, recovery and local committed-change signals. | Retain only client attempt context; authoritative writes and receipts remain behind server operations.                             |
 
 The import service composes pending reads, staging, review and confirmation. Its persistence layer has
 the same divisions. Shared session access owns session locks, revision reads/advances and bounded entry

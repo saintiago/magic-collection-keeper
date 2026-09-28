@@ -33,10 +33,11 @@ on both sides that agree with each other but differ from the implementation.
 Contract and workflow describe what a test proves, not additional test layers. Keep cross-component
 scenarios in integration or system tests according to their scope.
 
-For database query contracts, verify each provider's published views against its real writes.
-Test combined queries with small contract-conforming view fixtures, then run a focused integration
-case against the real providers. Include same-printing/copy filtering, duplicate associations,
-account isolation and continuation invalidation. A private table rename must not require Search changes.
+For publication contracts, verify each provider's snapshots and changes against its real writes.
+Test Search with supplied publication fixtures and its own real projection storage, then exercise
+actual publication-to-indexing integration. Include same-printing/copy filtering, duplicate
+associations, account isolation and continuation invalidation. Changing a provider's private tables
+or database implementation must not require Search changes.
 
 For supported Scryfall syntax, keep compatibility cases over a fixed catalog fixture. Verify that
 text expressions and equivalent UI criteria select the same entries, preserve supported operator
@@ -52,7 +53,9 @@ authorization, cancellation and retry behavior where the interface promises them
 | Catalog       | Card-to-printing resolution, complete basic information and reads independent of live provider requests.                                                                                                  |
 | UserCards     | Stable copy identities; one physical location per copy; distinction between desired quantities and physical counts; card/printing refinement; pending entries excluded from ownership until confirmation. |
 | Search        | Mixed catalog and private filters, ordering and pagination over the complete result, without duplicate counts or another user's entries. Use real database queries.                                       |
-| UserInterface | Basic information before optional fragments, partial failures, empty versus unavailable results, stale responses after query/navigation/account changes, and preserved interaction context.               |
+| UserInterface | Replaceable screen modules, accessible presentation, retained drafts, opaque history and correct intent routing.                                                                                          |
+| CardList      | Basic information before optional fragments, independent failure/recovery, bounded loading, stable selection and restoration.                                                                             |
+| Capture       | Frame-correlated admission, bounded device work, authoritative staging outcomes and feedback.                                                                                                             |
 | Recognition   | Candidate interpretation, ambiguity and failure handling; recognition output cannot grant ownership.                                                                                                      |
 | Application   | Correct component wiring, rejection of invalid identity and enforcement of private access through every applicable backend entry point.                                                                   |
 
@@ -72,15 +75,15 @@ scenarios at the smallest useful scope; they are not a requirement to rerun ever
 
 Verify exact card/printing resolution, multilingual names, allowed finishes, missing members in
 batch responses and unavailable lookup errors. Reads must succeed without a live provider.
-Exercise the published views and grants on real PostgreSQL and verify that consumers cannot read
-private tables. For synchronization, use small deterministic snapshots: malformed or interrupted
-ingestion preserves the previous revision, retries do not duplicate identities, and concurrent
-readers see a coherent published revision.
+Exercise publication and grants on real PostgreSQL; consumers must not read private tables or views.
+Use small deterministic snapshots: malformed/interrupted ingestion preserves the previous revision,
+retries do not duplicate identities, and concurrent readers see a coherent revision. Verify complete
+bulk publication, removals and gap-free snapshot/change handoff.
 
 ### UserCards
 
 - **Copies and authorization:** use two synthetic accounts and real PostgreSQL to cover foreign
-  references, missing context, protected views, base-table grants and connection reuse. Verify
+  references, missing context, publication authorization, storage grants and connection reuse. Verify
   identity-preserving printing/finish/condition corrections, rollback and revision conflicts.
 - **Tags and associations:** verify rename invariance, card/printing intended quantities, counts of
   distinct copies, specificity changes and atomic location moves, including concurrent moves.
@@ -98,6 +101,10 @@ readers see a coherent published revision.
   lists and can each create their confirmed copies. Retry, reopen and reconciliation within one
   import preserve its identity and do not duplicate its acquisitions. Cover lost responses and
   reload for pasted lists, Moxfield and reviewed Wizards sources.
+- **Publication:** a write and its durable change record commit or roll back together. Cover complete
+  confirmation/location changes, account-scoped revisions, deletion, repeated delivery and snapshot
+  handoff. Pending-only state is absent from ordinary searchable records. Recovered commits return
+  the original publication position.
 
 ### Search
 
@@ -107,8 +114,19 @@ Do not infer support for an operator merely because it exists in Scryfall.
 
 Use real PostgreSQL for same-printing/copy predicates, multiple matching associations, translated
 names, stable tie breakers, grouping before pagination, absent account context and changes between
-pages. Verify a changed query, account or provider revision invalidates continuation. Inspect query
+pages. Verify a changed query, account or indexed generation invalidates continuation; another account's
+writes must not. Inspect query
 plans when assessing performance; do not replace correctness assertions with timing thresholds.
+
+Exercise projection bootstrap, incremental updates, duplicate/obsolete delivery, crash before and
+after checkpoint commit, expired source positions, deletion and rebuild while reads continue. Check
+that incomplete changes or unresolved references cannot be published as a complete indexed revision.
+Prove storage isolation: the query/indexing implementation cannot read provider-owned SQL relations.
+
+Use controlled indexing progress to separate committed writes from visible search results. Cover a
+required publication position, an updating result with and without usable data, bounded wait timeout,
+failure and recovery. A delayed projection must not imply an empty collection or failed domain write.
+Test account-scoped browser progress with several commits, page departure and account replacement.
 
 ### Recognition
 
@@ -125,38 +143,57 @@ accounts, malformed input and unavailable providers. Invalid identity must not r
 operations. Supply alternative providers to verify composition and lifecycle behavior; check that
 public settings and diagnostic failures contain no secrets or private record contents.
 
+### CardList
+
+Exercise the [list contract](card-list.md#interface) without DOM or page code. Control response order
+and fragment failures. Use a large source to establish bounded acquisition, selection beyond the
+loaded window and independent instances. Cover retry versus sequence restart, failed restarts,
+obsolete reads and account isolation. Use actual provider output to verify source/error translation.
+
+Exercise retain/restore with available and delayed content, repeated interruption and user changes.
+Selecting more than 100 entries must not be restricted by history storage. Verify explicit absent
+targets, grouped-to-individual selection and local change invalidation without page repair callbacks.
+Test basic-content availability independently of optional fragments.
+
+### Capture
+
+Exercise [capture admission and lifecycle](capture.md#admission-and-lifecycle) without screen code.
+Use controlled devices and actual recognition output for local-only and hybrid paths. Cover geometry
+and candidate frame correlation, permission/preparation failure, accepted-identity sequence, late
+readings, lost staging responses, feedback identity and resource release. Preserve engine regression
+outcomes. Record physical mobile-camera acceptance separately.
+
 ### UserInterface
 
-- **Navigation:** cover deep links, reload, nested Back, focus/scroll/selection restoration,
-  delayed responses and sign-out/account changes through observable browser behavior.
-- **CardList:** control response ordering and independent fragment failure/retry. Use a large
-  source to verify bounded requests/rendering, stable selection during enrichment and refinement,
-  empty versus failed results, and independent state in two lists.
-- **List read recovery:** verify temporary failures retry the same position, while invalidated
-  continuations restart the sequence through CardList. Cover failed restarts, retained-state
-  restoration, late responses and preservation of selection and drafts. Exercise source bindings
-  against actual provider failure semantics; a page must not need its own restart callback.
-- **State ownership:** exercise navigation with page-owned state without depending on its shape,
-  and list capture/restoration through its public contract with available and delayed source data.
-  Cover repeated interruption during initial and subsequent loading, edits during restoration,
-  selection outside the loaded window and later user interaction. Selecting more than 100 entries
-  must not lose selection or unrelated form state because of history storage. Verify history
-  eviction and account changes release retained state without altering active-list behavior.
-- **Browsing and organization:** cover filters, unsupported search expressions, recent cards,
-  set browsing, all three detail levels, grouped-to-individual selection, tag rename, wishlist
-  specificity, intended versus owned counts and physical-location changes.
-- **Import and capture:** cover saved review reload, manual corrections, repeated confirmation,
-  lost responses and actual copy counts. Test camera permission failure, cancellation, geometry,
-  accepted-identity sequence, feedback and resource cleanup using supplied device capabilities.
-  Record real mobile-camera acceptance separately.
-- **Capture admission:** exercise actual Recognition output for browser-only and hybrid operation.
-  A candidate with missing, unknown, unavailable, no-card, multiple-card or ambiguous geometry must
-  not stage an entry or receive a success cue. Affirmative single-card geometry permits a usable
-  candidate to enter pending review; image stability alone does not. Preserve recognition engine
-  regression outcomes.
-- **Edit recovery and source UI:** verify unsaved corrections survive conflicts/failures, bulk tools
-  retain explicit copy selection, import progress and row errors are visible, and source replay
-  outcomes remain understandable after reload and confirmation recovery.
+Test each [UI module](ui/architecture.md#modules-and-composition) through its provided interface with
+supplied capabilities. Module documents define replacement evidence. Focus browser tests on:
+
+- **Navigation/Pages:** direct links, reload, nested Back, opaque retention, child lifetime and
+  account changes. Test late factory results and interrupted restoration without decoding child state.
+- **Indexing notice:** exercise the [toast contract](ui/navigation.md#indexing-notice) with supplied
+  progress. Check cross-page persistence, combined pending changes, spinner/text, completion removal,
+  delayed/failed state, status retry, keyboard access and account cleanup. UI never polls or resubmits
+  a write to drive this notice.
+- **CardViews:** safe and accessible rendering, partial/empty/failed states, viewport demand,
+  bounded DOM, input mapping and focus/scroll application. No backend is needed to test a renderer.
+- **Editors:** exact target context, unsaved drafts during submission or refresh, conflict feedback,
+  unknown operation outcomes, source progress and reattachment through supplied handles.
+- **CaptureControls:** preview, start/stop, provisional evidence and once-per-event cues; no staging
+  decision or geometry rule is implemented by a presentation test fixture.
+
+Keep integration journeys for cooperation: filters and unsupported expressions, recent cards, set
+browsing, all detail levels, tag rename, wishlist refinement, distinct intended/owned counts and
+physical-location changes. Import journeys cover saved review reload, source reconciliation,
+confirmation/recovery and actual copy counts. Confirm that provider change invalidations refresh
+affected lists while preserving drafts. Navigation away during a write must not invent a failure or
+another import. These journeys do not replace individual provider contract tests.
+
+### Client operation lifecycle
+
+Verify UserCards attempt retention and recovery independently of UI: lost responses, reattachment
+after reload, identical contents in distinct imports, account switching and revision conflicts.
+Committed and recovered outcomes emit compatible local invalidations; unknown writes do not emit
+speculative success. Tests of the transport alone cannot establish these domain guarantees.
 
 ### Migration
 
@@ -174,9 +211,9 @@ Test the PostgreSQL composition separately with real storage. Supply a replaceme
 factory and verify that UI access and disposal still use its contract.
 
 Run the same provider behavior assertions against a proposed replacement. A substitute that merely
-returns canned values proves a consumer seam, not provider equivalence. Verify published database
-views, permissions, revision consistency and account scoping separately when those are part of the
-contract. Boundary fixtures must reject private imports, forbidden dependency directions, cycles and
+returns canned values proves a consumer seam, not provider equivalence. Verify snapshot/change
+continuity, publication authorization, revision consistency and account scoping against real storage.
+Boundary fixtures must reject private imports, forbidden dependency directions, cycles and
 backend imports from browser presentation code, including type-only dependencies.
 
 ## Integrated acceptance
