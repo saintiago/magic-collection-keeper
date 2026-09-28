@@ -31,6 +31,10 @@ npm ci
 npm run install:browsers
 ```
 
+Preparing the deployable recognition assets (`npm run prepare:recognition`) additionally needs the
+pinned build requirements of the retained engine and access to the public model and catalog sources
+(`infra/README.md#recognition-packaging`); the checks below never need the prepared bytes.
+
 ## Checks
 
 ```sh
@@ -46,6 +50,7 @@ npm run test:python         # Python unittest recognition suite (src/recognition
 npm run test:recognition    # Retained browser recognition regressions (tests/recognition)
 npm run build               # compile the component public entry points into build/
 npm run package             # build the deployable backend, browser and catalog artifacts
+npm run package:recognition # verify and package the recognition image context (needs preparation)
 ```
 
 Focus a scope with a path filter, for example `npm run test:component -- public-contracts`. Component
@@ -79,6 +84,16 @@ the service stack's public outputs (`npm run package -- --from-outputs infra/ser
 --environment test` projects the captured service stack, `--public-settings <file>` publishes a
 prepared file), and only the settings the browser may receive are accepted. Publishing, deployment,
 rollback and the live checks are recorded in `infra/README.md`.
+
+`npm run prepare:recognition` and `npm run package:recognition` package the retained recognition
+engine for both runtimes (docs/operations.md#recognition-packaging): preparation fetches the pinned
+public model, catalog, OCR and title-name bytes through the retained scripts and copies the browser
+ONNX runtime of the locked dependency, and packaging verifies every pinned manifest and hash — the
+content of the pinned upstream checkout, the cached offline catalog feed, the browser manifest's
+engine identity and the complete corresponding-source download of the checkout — before it
+assembles the recognition image context and records its manifest beside the other artifacts. The
+prepared bytes stay out of git and the checks never need them; preparation, the built image,
+measurement and rollback are recorded in `infra/README.md#recognition-packaging`.
 
 Synchronization is the finite catalog job of the deployed stack (docs/tech-stack.md#aws-stack): the
 configured source streams one provider snapshot from the private data bucket, and Catalog upserts it

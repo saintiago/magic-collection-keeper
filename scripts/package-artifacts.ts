@@ -16,10 +16,8 @@
  * verifies by rebuilding.
  */
 
-import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -27,27 +25,14 @@ import { build } from 'esbuild';
 import JSZip from 'jszip';
 
 import { resolvePublicSettings, type PublicApplicationSettings } from '../src/application/index.js';
-
-/**
- * Repository root of the running checkout. The command runs from its esbuild bundle (Node.js
- * cannot follow the repository's TypeScript module specifiers), so the root is found from the
- * working directory instead of the module location.
- */
-const repoRoot = findRepoRoot();
-
-function findRepoRoot(): string {
-  let current = path.resolve(process.cwd());
-  while (true) {
-    if (existsSync(path.join(current, 'src', 'application', 'lambda.ts'))) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      throw new Error('Run the packaging command from inside the repository checkout.');
-    }
-    current = parent;
-  }
-}
+import {
+  describeFile,
+  readPackageVersion,
+  readRevision,
+  readWorkingTree,
+  repoRoot,
+  type ArtifactFile,
+} from './packaging-support.js';
 
 /** Fixed timestamp of every archive entry, so a rebuilt package keeps the same bytes. */
 const archiveDate = new Date('2000-01-01T00:00:00.000Z');
@@ -69,12 +54,6 @@ export const artifactLayout = {
   catalogDockerfile: 'catalog/Dockerfile',
   manifest: 'manifest.json',
 } as const;
-
-export interface ArtifactFile {
-  readonly file: string;
-  readonly bytes: number;
-  readonly sha256: string;
-}
 
 export interface ArtifactManifest {
   readonly schema: 1;
@@ -98,7 +77,11 @@ export interface ArtifactManifest {
 }
 
 export interface PackageArtifactsOptions {
-  /** Directory the artifacts are written to; it is replaced, never merged. */
+  /**
+   * Directory the artifacts are written to. Every artifact this command owns is replaced, never
+   * merged; another packaging command's artifact beside them, such as the recognition image
+   * context, is left alone.
+   */
   readonly outDir: string;
   /** Source revision of the artifacts; defaults to the checked-out commit. */
   readonly revision?: string;
@@ -124,7 +107,21 @@ export async function packageArtifacts(
   }
   const publicSettings =
     options?.publicSettings === undefined ? null : resolvePublicSettings(options.publicSettings);
-  await rm(outDir, { recursive: true, force: true });
+  // Only the artifacts of this command are replaced: the recognition packaging command writes its
+  // image context into the same directory (docs/operations.md#recognition-packaging).
+  const ownedPaths = [
+    ...new Set(
+      [
+        artifactLayout.backendArchive,
+        artifactLayout.browserDirectory,
+        artifactLayout.catalogEntry,
+        artifactLayout.manifest,
+      ].map((file) => file.split('/')[0] ?? file),
+    ),
+  ];
+  for (const owned of ownedPaths) {
+    await rm(path.join(outDir, owned), { recursive: true, force: true });
+  }
   await mkdir(outDir, { recursive: true });
 
   await buildBackend(root, outDir);
@@ -330,15 +327,6 @@ function catalogDockerfile(): string {
   ].join('\n');
 }
 
-async function describeFile(outDir: string, file: string): Promise<ArtifactFile> {
-  const content = await readFile(path.join(outDir, file));
-  return {
-    file,
-    bytes: content.byteLength,
-    sha256: createHash('sha256').update(content).digest('hex'),
-  };
-}
-
 async function describeDirectory(
   outDir: string,
   directory: string,
@@ -366,32 +354,6 @@ function readOutDir(options: PackageArtifactsOptions): string {
     throw new Error('Packaging requires the directory the artifacts are written to.');
   }
   return options.outDir;
-}
-
-/** The checked-out revision; packaging without one produces artifacts nothing can restore. */
-export function readRevision(root: string = repoRoot): string {
-  const revision = execFileSync('git', ['rev-parse', 'HEAD'], {
-    cwd: root,
-    encoding: 'utf8',
-  }).trim();
-  if (!/^[0-9a-f]{40}$/.test(revision)) {
-    throw new Error('The repository does not report the revision of this checkout.');
-  }
-  return revision;
-}
-
-function readWorkingTree(root: string): 'clean' | 'dirty' {
-  const status = execFileSync('git', ['status', '--porcelain'], {
-    cwd: root,
-    encoding: 'utf8',
-  });
-  return status.trim() === '' ? 'clean' : 'dirty';
-}
-
-function readPackageVersion(root: string): string {
-  const text = readFileSync(path.join(root, 'package.json'), 'utf8');
-  const version = JSON.parse(text).version;
-  return typeof version === 'string' && version.length > 0 ? version : '0.0.0';
 }
 
 /**

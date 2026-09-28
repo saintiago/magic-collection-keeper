@@ -66,11 +66,12 @@ that the HTTP API stage needs for its access log.
 `npm run package` builds the three artifacts one deployment publishes
 (docs/operations.md#packaging-and-deployment) from the committed lockfile:
 
-| Artifact             | Contents                                                                                                           | Published to                                          |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- |
-| `artifacts/backend/` | `api.zip` with `index.mjs`, the interactive entry point and every dependency it reaches.                           | The exported artifact bucket, then the service stack. |
-| `artifacts/browser/` | `index.html`, `app.js`, the preserved browser recognition modules and the runtime assets a prepared build carries. | The exported browser bucket, then CloudFront.         |
-| `artifacts/catalog/` | `job.mjs`, the finite job, and the Dockerfile that packages it.                                                    | The exported catalog repository, pinned by digest.    |
+| Artifact                 | Contents                                                                                                                     | Published to                                           |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `artifacts/backend/`     | `api.zip` with `index.mjs`, the interactive entry point and every dependency it reaches.                                     | The exported artifact bucket, then the service stack.  |
+| `artifacts/browser/`     | `index.html`, `app.js`, the preserved browser recognition modules and the runtime assets a prepared build carries.           | The exported browser bucket, then CloudFront.          |
+| `artifacts/catalog/`     | `job.mjs`, the finite job, and the Dockerfile that packages it.                                                              | The exported catalog repository, pinned by digest.     |
+| `artifacts/recognition/` | The image build context: `Dockerfile`, the retained engine, the verified model/catalog/OCR assets, notices and `source.zip`. | The exported recognition repository, pinned by digest. |
 
 `artifacts/manifest.json` records the source revision, whether that revision was the whole working
 tree, the version label (`<package version>-<short revision>`, a Docker-compatible image tag) and
@@ -79,7 +80,9 @@ exact artifact of one revision restored. Packaging is deterministic: the same re
 produce the same bytes, and `tests/integration/packaging.test.ts` rebuilds the artifacts and
 compares them. The backend package carries its dependencies, so the Lambda runtime supplies only
 Node.js; the catalog image starts from the Node.js base image the deployment pins by digest, because
-image tags are not reproducible.
+image tags are not reproducible. The recognition image context is a fourth artifact, packaged
+separately after its preparation and verified against the pinned manifests (see Recognition
+packaging below); it therefore lives beside them without being part of this command's output.
 
 The browser artifact carries no environment-specific file. Its `config.json` is written when the
 deployment publishes it, from the service stack's public outputs only: `--from-outputs` projects the
@@ -102,13 +105,17 @@ configured browser bundle (see Create below).
 ```sh
 # 1. Build the artifacts of this revision; record artifacts/manifest.json beside the release.
 npm run package -- --out artifacts
+#    Then verify and package the recognition image context (see Recognition packaging below).
+npm run package:recognition -- --out artifacts
 
 # 2. Publish the interactive package; keep the object version the function will name.
 aws s3api put-object --region us-east-1 \
   --bucket <artifact-bucket> --key releases/<version>/api.zip \
   --body artifacts/backend/api.zip --query VersionId --output text
 
-# 3. Build and push the finite job image, then read the digest the stack pins.
+# 3. Build and push the finite job image, then read the digest the stack pins. The recognition
+#    image is built and pushed the same way; its context is described in Recognition packaging
+#    below.
 docker pull node:24-slim
 docker inspect --format '{{index .RepoDigests 0}}' node:24-slim     # the base digest to pass in
 docker build --build-arg NODE_BASE_IMAGE=node@sha256:<digest> \
@@ -135,9 +142,91 @@ service or a schedule (see Catalog synchronization below).
 
 Keep the previous release directory — `api.zip`'s object version, the image digests, the packaged
 `browser/` directory, `manifest.json` and the release record Create writes beside them — before
-packaging a replacement, because that is what a rollback restores. Each artifact is immutable: the
-repositories accept no tag overwrite, the artifact bucket keeps every object version, and the
-browser bucket keeps replaced versions for 30 days.
+packaging a replacement; the recognition context and its manifest belong to that record as well,
+because that is what a rollback restores. Each artifact is immutable: the repositories accept no tag
+overwrite, the artifact bucket keeps every object version, and the browser bucket keeps replaced
+versions for 30 days.
+
+## Recognition packaging
+
+Recognition is one retained engine prepared once and delivered twice: the container image the
+recognition Lambda runs, and the browser assets the preserved ONNX modules resolve beside
+themselves (docs/operations.md#recognition-packaging, docs/recognition.md#engines-and-assets).
+`artifacts/recognition/manifest.json` records the engine identities both halves share — the pinned
+upstream revision, the model, catalog, OCR and title-name digests, the browser runtime and asset
+digests, the revision and the corresponding-source download — so a deployed combination can be
+inspected and restored. No matching policy, threshold or preprocessing step changes here, and the
+model-provider settings and credentials stay with the deployed function (`RecognitionFunction` of
+`infra/service.json`), never with the image.
+
+Preparation is an explicit build step. It fetches only public, frozen bytes through the retained
+preparation scripts; it is never part of publishing a revision and never runs inside the packaged
+image:
+
+```sh
+# 1. Prepare the retained engine: pinned public models, catalog, OCR and title names, the converted
+#    ONNX text weights, the browser catalog/model assets, the browser ONNX runtime of the locked
+#    dependency and the corresponding-source download. Needs Python 3.12 with the pinned build
+#    requirements and access to the public model/catalog sources
+#    (docs/operations.md#recognition-packaging). The retained bundler reads the committed sources,
+#    so commit the revision before preparing; packaging then verifies the download against it.
+python3 -m venv .recognition-build/runtime
+.recognition-build/runtime/bin/pip install -r src/recognition/python/requirements-visual.txt
+python3 -m venv .recognition-build/converter
+.recognition-build/converter/bin/pip install -r src/recognition/python/requirements-converter.txt
+npm run prepare:recognition -- --python .recognition-build/runtime/bin/python \
+  --converter-python .recognition-build/converter/bin/python
+
+# 2. Package the deployable artifacts and the verified recognition image context.
+npm run package -- --out artifacts
+npm run package:recognition -- --out artifacts
+
+# 3. Build and push the image, then read the digest the service stack pins.
+docker build -t <recognition-repository>:<version> artifacts/recognition
+docker push <recognition-repository>:<version>
+aws ecr describe-images --region us-east-1 --repository-name keeper-<environment>-recognition \
+  --image-ids imageTag=<version> --query 'imageDetails[0].imageDigest' --output text
+```
+
+`npm run package:recognition` verifies every pinned manifest and hash before it writes anything: the
+retained baseline digests of the engine sources it ships, the model, catalog, OCR and title-name
+digests, the pinned upstream CollectorVision revision with the content of every file it ships
+(generated build output is excluded rather than packaged), the cached catalog feed offline loading
+reads, the browser runtime and asset digests with the engine identity the browser manifest reports,
+and the membership and bytes of the corresponding-source download of this checkout. The Dockerfile
+builds from the digest-pinned AWS Lambda Python runtime of the retained engine, so the context plus
+the tag name the whole image. The browser half carries the prepared `browser/vendor/` assets in
+`artifacts/browser/`; the recognition manifest records their digests, so the container and browser
+halves of one release can be matched. Packaging the context costs no model download and is safe to
+repeat after `npm run package`, which replaces only the artifacts it builds itself.
+
+Packaged regressions and resource measurement run the built image locally, not in AWS:
+
+```sh
+# The packaged engine regression and its measurement: no network, read-only root, bounded /tmp.
+docker run --rm --network none --read-only --tmpfs /tmp:rw,size=512m \
+  --entrypoint python <recognition-repository>@sha256:<digest> /var/task/smoke.py
+npm run test:python        # retained Python engine regressions
+npm run test:recognition   # retained browser recognition regressions
+```
+
+The smoke run reports the import and model initialization, per-frame inference timings and peak RSS
+of the packaged image, and prints `physicalDeviceVerified: false`; record cold (first run) and warm
+(repeated run) figures with the image digest, host and dataset, and keep them separate from
+accuracy (docs/testing.md#live-boundaries-and-performance). The corresponding-source download of
+exactly this revision ships in the image and is served by `GET /api/recognition/source`, which
+reports the digest and function version it served; its digest is also in the recognition manifest
+beside the notices and `LICENSE`.
+
+Live Lambda invocations, real Bedrock model calls and physical-camera acceptance are separate
+evidence: a valid local package and a passing smoke run do not establish deployed authorization,
+latency or camera accuracy.
+
+Rollback restores the previous release: images are immutable tags with the newest ten kept, so the
+previous `RecognitionImageUri` digest — and the previous `artifacts/browser/` directory when the
+browser bundle changed — remain the restore source. Rebuild the image from the recorded context
+only if its tag was pruned; the context and the corresponding source of that revision are the
+restorable inputs.
 
 ## Create
 
@@ -354,6 +443,7 @@ Local checks prove template validity and the documented shape, nothing more:
 ```sh
 npm run package                                        # every artifact of this revision
 npm run test:integration -- packaging                  # artifact contents, digests and settings
+npm run test:integration -- recognition-packaging      # recognition context, pinned assets, source download
 npm run lint:infrastructure                             # cfn-lint over every template
 npm run test:integration -- infrastructure-templates    # documented boundary cases
 ```
@@ -361,7 +451,12 @@ npm run test:integration -- infrastructure-templates    # documented boundary ca
 Packaging is verified locally: the same revision is rebuilt and compared byte for byte, the
 interactive package is loaded the way the Lambda loads it, the finite job is executed the way the
 task runs it, and only public settings are accepted beside the browser bundle. That is artifact
-evidence, not deployed evidence.
+evidence, not deployed evidence. The recognition packaging command is exercised against a prepared
+engine package — its pinned manifest and hash verification, the image context it assembles, the
+notices and the corresponding-source download it ships — and the pinned browser ONNX runtime is
+checked against the locked dependency. The prepared model bytes themselves are a build-time input:
+`npm run prepare:recognition` fetches and verifies them, and the deployment checks below cover what
+only a deployed environment can show.
 
 A valid template does not prove deployed authorization. Before cutover, check the changed
 boundaries in an isolated environment and record the results separately from these local checks:
@@ -370,7 +465,8 @@ boundaries in an isolated environment and record the results separately from the
 - Artifacts: the deployed function's code object version and the task definition's image digest
   match the release record `artifacts/release.json` beside the release's `manifest.json`, and the
   published `config.json` carries exactly the public settings the deployment projected from the
-  stack's outputs.
+  stack's outputs; the recognition function runs the digest `RecognitionImageUri` names and the
+  served source digest and function version match the recognition manifest of that release.
 - Identity and routing: the API rejects a request without a token (401) and with a token of another
   pool, another app client or an expired session; a fresh token from this environment's app client
   reaches the documented route; and `POST /api/recognize`, `POST /api/recognize-independent` and
