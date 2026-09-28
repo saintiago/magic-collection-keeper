@@ -5,14 +5,15 @@
  * The retained engine is prepared at build time and pinned by committed manifests. This module owns
  * the single reading of those promises: the retained baseline digests of the shipped engine
  * sources, the model, catalog, OCR and title-name bytes, the pinned upstream CollectorVision
- * revision, the browser runtime pin and the prepared browser assets, and the corresponding-source
- * download of the checkout. Packaging commands import it; it holds no command-line behavior of its
- * own, so an import never runs a packaging step.
+ * revision and its content, the browser runtime pin and the prepared browser assets including their
+ * upstream identity, and the complete corresponding-source download of the checkout. Packaging
+ * commands import it; it holds no command-line behavior of its own, so an import never runs a
+ * packaging step.
  */
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { gunzipSync } from 'node:zlib';
@@ -23,6 +24,20 @@ import { describeFile, repoRoot, type ArtifactFile } from './packaging-support.j
 
 /** Upper bound of the corresponding-source download the API returns. */
 const sourceBundleLimit = 4_000_000;
+
+/** Prefixes of the checkout `python/scripts/source_bundle.py` never copies into the download. */
+const sourceBundleExcluded = [
+  'data/',
+  '.local-secrets/',
+  'test-results/',
+  'public/vendor/',
+] as const;
+
+/** Public artwork fixtures the download ships even though image bytes are otherwise excluded. */
+const sourceBundleFixtures = ['adaptive.jpg', 'bolt.jpg', 'ring.jpg'] as const;
+
+/** Generated upstream entries neither the download nor the image context ever carries. */
+const generatedUpstreamEntries = new Set(['.git', '__pycache__', 'build', 'dist']);
 
 /** Path of the retained Python package inside a checkout. */
 export function preparedRecognitionRoot(root: string): string {
@@ -94,12 +109,12 @@ export async function verifyPreparedRecognition(root: string): Promise<VerifiedR
     path.join(pythonRoot, 'artifact-manifest.json'),
   );
   const models = await verifyModels(preparedRoot, pinned.models);
-  const catalog = await verifyCatalog(preparedRoot, pinned.catalog);
+  const catalog = await verifyCatalog(pythonRoot, preparedRoot, pinned.catalog);
   const ocr = await verifyOcr(pythonRoot, preparedRoot, pinned.ocr);
   const titleNames = await verifyTitleNames(pythonRoot, preparedRoot);
   await verifyCollectorVision(pythonRoot, pinned.code);
-  const source = await verifySourceBundle(root, pythonRoot);
-  const browser = await verifyBrowserVendor(root, {
+  const source = await verifySourceBundle(pythonRoot, pinned.code);
+  const browser = await verifyBrowserVendor(root, pinned, {
     rows: pinned.catalog.rows,
     dimensions: catalog.dimensions,
     models,
@@ -222,12 +237,15 @@ interface VerifiedCatalog {
 
 /**
  * The catalog the engines search offline: the snapshot descriptor has to be the pinned version
- * and embedding, and its embeddings/records bytes have to match their declared digests.
+ * and embedding, its embeddings/records bytes have to match their declared digests, and the cached
+ * feed the retained loader reads in offline mode has to be the pinned one.
  */
 async function verifyCatalog(
+  pythonRoot: string,
   preparedRoot: string,
   pinned: PinnedEngine['catalog'],
 ): Promise<VerifiedCatalog> {
+  await verifyCatalogFeed(pythonRoot, preparedRoot);
   const snapshot = path.join(
     preparedRoot,
     'catalog',
@@ -267,6 +285,28 @@ async function verifyCatalog(
     throw new Error('The catalog snapshot does not name its embeddings and records assets.');
   }
   return { dimensions, directory: path.dirname(snapshot), embeddings, records };
+}
+
+/**
+ * The runtime dependency of offline catalog loading: the retained adapter loads the snapshot with
+ * `offline=True`, which reads the feed the preparation step cached from the committed feed pin. A
+ * prepared catalog without it fails at engine initialization.
+ */
+async function verifyCatalogFeed(pythonRoot: string, preparedRoot: string): Promise<void> {
+  const cached = path.join(preparedRoot, 'catalog', 'catalog-v2', 'feed.json');
+  if (!existsSync(cached)) {
+    throw new Error(
+      'The prepared catalog does not cache feed.json for offline loading: the retained loader ' +
+        'needs the feed of `npm run prepare:recognition` ' +
+        '(docs/operations.md#recognition-packaging).',
+    );
+  }
+  const pinned = await readFile(path.join(pythonRoot, 'catalog-feed.json'));
+  if (!(await readFile(cached)).equals(pinned)) {
+    throw new Error(
+      'The prepared catalog caches a different feed.json than the committed catalog-feed.json.',
+    );
+  }
 }
 
 /**
@@ -322,7 +362,13 @@ async function verifyTitleNames(pythonRoot: string, preparedRoot: string): Promi
   return describeFile(preparedRoot, 'title-names.json.gz');
 }
 
-/** The upstream CollectorVision revision the visual pipeline and the source bundle come from. */
+/**
+ * The upstream CollectorVision revision the visual pipeline and the source bundle come from: the
+ * prepared checkout stands at the pinned revision, every file it carries is that revision's own
+ * content, and it carries no additional package file. Generated build output is skipped instead of
+ * shipped, so the image context and the corresponding-source download hold exactly pinned upstream
+ * code (docs/recognition.md#engines-and-assets).
+ */
 async function verifyCollectorVision(pythonRoot: string, code: string): Promise<void> {
   const vendor = path.join(pythonRoot, 'vendor', 'CollectorVision');
   if (!existsSync(path.join(vendor, '.git'))) {
@@ -342,14 +388,111 @@ async function verifyCollectorVision(pythonRoot: string, code: string): Promise<
       `The prepared CollectorVision source is at ${head} instead of the pinned ${code}.`,
     );
   }
+  const pinned = readPinnedTree(vendor, code);
+  for (const [file, object] of pinned) {
+    const source = path.join(vendor, file);
+    if (!existsSync(source)) {
+      throw new Error(`The prepared CollectorVision source is missing the pinned ${file}.`);
+    }
+    if (gitBlobId(await readFile(source)) !== object) {
+      throw new Error(
+        `The prepared CollectorVision source carries a modified ${file} instead of the pinned ` +
+          `${code} content.`,
+      );
+    }
+  }
+  for (const file of await upstreamFiles(vendor)) {
+    if (!pinned.has(file)) {
+      throw new Error(
+        `The prepared CollectorVision source carries ${file}, which the pinned revision ${code} ` +
+          'does not contain.',
+      );
+    }
+  }
+}
+
+/** The blob object id of every file of `revision`, by repository-relative path. */
+function readPinnedTree(repository: string, revision: string): Map<string, string> {
+  let listing: string;
+  try {
+    listing = execFileSync('git', ['ls-tree', '-r', '-z', revision], {
+      cwd: repository,
+      encoding: 'utf8',
+    });
+  } catch {
+    throw new Error(`The pinned CollectorVision revision ${revision} is not a readable git tree.`);
+  }
+  const files = new Map<string, string>();
+  for (const record of listing.split('\0')) {
+    if (record === '') {
+      continue;
+    }
+    const separator = record.indexOf('\t');
+    if (separator < 0) {
+      throw new Error(
+        `The pinned CollectorVision revision ${revision} is not a readable git tree.`,
+      );
+    }
+    const [mode, type, object] = record.slice(0, separator).split(' ');
+    const file = record.slice(separator + 1);
+    if (type !== 'blob' || object === undefined || (mode !== '100644' && mode !== '100755')) {
+      throw new Error(
+        `The pinned CollectorVision revision ${revision} carries the non-file entry ${file}.`,
+      );
+    }
+    files.set(file, object);
+  }
+  if (files.size === 0) {
+    throw new Error(`The pinned CollectorVision revision ${revision} carries no file.`);
+  }
+  return files;
+}
+
+/** The git object id of one file's bytes, so working-tree content compares to a tree entry. */
+function gitBlobId(content: Uint8Array): string {
+  return createHash('sha1').update(`blob ${content.byteLength}\0`).update(content).digest('hex');
+}
+
+/**
+ * Every upstream file the retained bundler and the image context carry, by path relative to the
+ * checkout. The skipped entries are exactly the generated ones the bundler never packages.
+ */
+async function upstreamFiles(vendor: string): Promise<string[]> {
+  const files: string[] = [];
+  async function walk(relative: string): Promise<void> {
+    for (const entry of await readdir(path.join(vendor, relative), { withFileTypes: true })) {
+      if (isGeneratedUpstreamEntry(entry.name)) {
+        continue;
+      }
+      const next = relative === '' ? entry.name : `${relative}/${entry.name}`;
+      if (entry.isDirectory()) {
+        await walk(next);
+        continue;
+      }
+      files.push(next);
+    }
+  }
+  await walk('');
+  return files.sort();
+}
+
+function isGeneratedUpstreamEntry(name: string): boolean {
+  return generatedUpstreamEntries.has(name) || name.endsWith('.egg-info');
+}
+
+/** One entry the retained source bundler writes: exact bytes, or a generated index value. */
+interface ExpectedSourceEntry {
+  readonly bytes?: Buffer;
+  readonly value?: unknown;
 }
 
 /**
  * The corresponding-source download of exactly this revision: the retained source bundler writes
- * it beside the engine, it stays inside the API download bound, and every recognition source file
- * it carries has to match the checkout the image is built from.
+ * it beside the engine, it stays inside the API download bound, and both its membership and its
+ * bytes are the ones the bundling contract derives from this checkout — including the pinned
+ * upstream source and the preparation inputs outside `src/recognition`.
  */
-async function verifySourceBundle(root: string, pythonRoot: string): Promise<ArtifactFile> {
+async function verifySourceBundle(pythonRoot: string, code: string): Promise<ArtifactFile> {
   const file = path.join(pythonRoot, 'source.zip');
   const bytes = (await stat(file)).size;
   if (bytes > sourceBundleLimit) {
@@ -357,46 +500,167 @@ async function verifySourceBundle(root: string, pythonRoot: string): Promise<Art
       `The corresponding-source download is ${bytes} bytes and exceeds the ${sourceBundleLimit}-byte API bound.`,
     );
   }
+  const expected = await expectedSourceBundle(pythonRoot, code);
   const archive = await JSZip.loadAsync(await readFile(file));
-  for (const required of [
-    'COPYING',
-    'keeper/SOURCE_FILES.json',
-    'keeper/src/recognition/python/handler.py',
-    'keeper/src/recognition/python/lambda_entry.py',
-    'CollectorVision/DOCUMENTATION_MEDIA.json',
-  ]) {
-    if (archive.file(required) === null) {
-      throw new Error(`The corresponding-source download does not carry ${required}.`);
-    }
-  }
-  for (const name of Object.keys(archive.files).sort()) {
-    if (!name.startsWith('keeper/src/recognition/')) {
-      continue;
-    }
-    const source = name.slice('keeper/'.length);
-    const content = await archive.file(name)?.async('nodebuffer');
-    if (content === undefined) {
-      continue;
-    }
-    // The bundler copies the checkout and adds the verified conversion manifest under its own
-    // name; every other recognition entry has to be the file this checkout carries.
-    const expectedFile =
-      name === 'keeper/src/recognition/python-verified-ocr-onnx.json'
-        ? path.join(pythonRoot, 'artifacts', 'ocr-onnx.json')
-        : path.join(root, source);
-    if (!existsSync(expectedFile)) {
+  for (const [name, entry] of Object.entries(archive.files)) {
+    if (!entry.dir && !expected.has(name)) {
       throw new Error(
-        `The corresponding-source download carries ${name}, which this checkout does not have.`,
+        `The corresponding-source download carries ${name}, which the retained bundler does not ` +
+          'assemble from this checkout.',
       );
     }
-    const expected = readFileSync(expectedFile);
-    if (!content.equals(expected)) {
+  }
+  for (const [name, entry] of expected) {
+    const content = await archive.file(name)?.async('nodebuffer');
+    if (content === undefined) {
+      throw new Error(`The corresponding-source download does not carry ${name}.`);
+    }
+    if (entry.bytes !== undefined) {
+      if (!content.equals(entry.bytes)) {
+        throw new Error(
+          `The corresponding-source download carries different ${name} bytes than this checkout.`,
+        );
+      }
+      continue;
+    }
+    let actual: unknown;
+    try {
+      actual = JSON.parse(content.toString('utf8')) as unknown;
+    } catch {
+      throw new Error(`The corresponding-source download carries an unreadable ${name}.`);
+    }
+    if (indexKey(actual) !== indexKey(entry.value)) {
       throw new Error(
-        `The corresponding-source download carries a different ${source} than this checkout.`,
+        `The corresponding-source download carries a stale ${name} for this checkout.`,
       );
     }
   }
   return describeFile(pythonRoot, 'source.zip');
+}
+
+/**
+ * The exact contents the retained bundler writes for this checkout: every file it covers copied
+ * under `keeper/`, the pinned upstream checkout under `CollectorVision/`, and the two generated
+ * indexes it writes from both. The names and the bytes come from the same contracts the bundler
+ * reads, so a download that omits, adds or rewrites an entry is a different download.
+ */
+async function expectedSourceBundle(
+  pythonRoot: string,
+  code: string,
+): Promise<Map<string, ExpectedSourceEntry>> {
+  const sources = readBundledSources(pythonRoot);
+  const fixtures = new Set(
+    sourceBundleFixtures.map((name) => `${sources.prefix}/fixtures/${name}`),
+  );
+  const entries = new Map<string, ExpectedSourceEntry>();
+  const keeper: string[] = [];
+  for (const name of sources.names) {
+    if (name === '' || sourceBundleExcluded.some((excluded) => name.startsWith(excluded))) {
+      continue;
+    }
+    keeper.push(name);
+    if (isExcludedSourceFile(name) && !fixtures.has(name)) {
+      continue;
+    }
+    const source = path.join(sources.root, name);
+    if (!existsSync(source) || !statSync(source).isFile()) {
+      continue;
+    }
+    entries.set(`keeper/${name}`, { bytes: readFileSync(source) });
+  }
+  entries.set('keeper/SOURCE_FILES.json', { value: keeper });
+  entries.set(`keeper/${sources.prefix}-verified-ocr-onnx.json`, {
+    bytes: await readFile(path.join(pythonRoot, 'artifacts', 'ocr-onnx.json')),
+  });
+  entries.set('COPYING', { bytes: await readFile(path.join(pythonRoot, 'LICENSE')) });
+  const upstream = path.join(pythonRoot, 'vendor', 'CollectorVision');
+  const media: Array<{ path: string; url: string; sha256: string }> = [];
+  for (const file of await upstreamFiles(upstream)) {
+    if (file.endsWith('.onnx')) {
+      continue;
+    }
+    const content = await readFile(path.join(upstream, file));
+    if (isDocumentationMedia(file)) {
+      media.push({
+        path: file,
+        url: `https://raw.githubusercontent.com/HanClinto/CollectorVision/${code}/${file}`,
+        sha256: sha256(content),
+      });
+      continue;
+    }
+    entries.set(`CollectorVision/${file}`, { bytes: content });
+  }
+  entries.set('CollectorVision/DOCUMENTATION_MEDIA.json', { value: media });
+  return entries;
+}
+
+interface BundledSources {
+  /** Checkout the download covers, discovered as the retained bundler discovers it. */
+  readonly root: string;
+  /** Package prefix the download writes the verified conversion manifest under. */
+  readonly prefix: string;
+  /** The names the bundler considers, from git or the checked-in source file list. */
+  readonly names: readonly string[];
+}
+
+/**
+ * The file list the retained bundler reads: the tracked files of the nearest checkout root, or the
+ * checked-in source list of a checkout without git metadata. Both are read exactly as the bundler
+ * reads them so the download can be verified against the same coverage.
+ */
+function readBundledSources(pythonRoot: string): BundledSources {
+  let root = path.dirname(pythonRoot);
+  for (let current = path.dirname(pythonRoot); ;) {
+    if (
+      existsSync(path.join(current, '.git')) ||
+      existsSync(path.join(current, 'SOURCE_FILES.json'))
+    ) {
+      root = current;
+      break;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  const prefix = path.relative(root, pythonRoot).split(path.sep).join('/');
+  if (existsSync(path.join(root, '.git'))) {
+    const listing = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' });
+    return { root, prefix, names: listing.split('\0') };
+  }
+  if (!existsSync(path.join(root, 'SOURCE_FILES.json'))) {
+    throw new Error(
+      'The corresponding-source download cannot be verified: the checkout carries neither git ' +
+        'metadata nor a source file list.',
+    );
+  }
+  const listed = JSON.parse(readFileSync(path.join(root, 'SOURCE_FILES.json'), 'utf8')) as unknown;
+  if (!Array.isArray(listed) || listed.some((name) => typeof name !== 'string')) {
+    throw new Error('The corresponding-source file list does not name the checkout files.');
+  }
+  return { root, prefix, names: listed as string[] };
+}
+
+/** Binary fixtures the bundler keeps out of the download unless they are public artwork. */
+function isExcludedSourceFile(name: string): boolean {
+  return ['.png', '.jpg', '.jpeg', '.zip'].some((suffix) => name.endsWith(suffix));
+}
+
+/** Documentation media of the pinned upstream checkout, listed by URL and digest instead of bytes. */
+function isDocumentationMedia(file: string): boolean {
+  return (
+    file.startsWith('docs/') &&
+    ['.png', '.jpg', '.jpeg', '.webp', '.gif'].includes(path.posix.extname(file).toLowerCase())
+  );
+}
+
+/**
+ * The generated indexes compare by content: each entry has to be present exactly once, while the
+ * bundler's own traversal order is not part of the promise.
+ */
+function indexKey(value: unknown): string {
+  return Array.isArray(value) ? JSON.stringify(value.map(canonical).sort()) : canonical(value);
 }
 
 /**
@@ -405,6 +669,7 @@ async function verifySourceBundle(root: string, pythonRoot: string): Promise<Art
  */
 async function verifyBrowserVendor(
   root: string,
+  pinned: PinnedEngine,
   catalog: {
     readonly rows: number;
     readonly dimensions: number;
@@ -433,6 +698,7 @@ async function verifyBrowserVendor(
       'The browser visual manifest does not carry the pinned catalog rows and width.',
     );
   }
+  verifyBrowserUpstream(manifest, pinned);
   const declared = readRecord(manifest['assets'], 'browser visual assets');
   const expected: Readonly<Record<string, string>> = {
     cornelius: 'cornelius.onnx',
@@ -502,6 +768,27 @@ async function verifyBrowserVendor(
       .map((asset) => ({ ...asset, file: `browser/vendor/${asset.file}` }))
       .sort((left, right) => left.file.localeCompare(right.file)),
   };
+}
+
+/**
+ * The upstream identity the browser worker reports with every reading: it reads the revision and
+ * catalog from the manifest, so a missing or substituted identity either breaks inference or
+ * attributes the reading to a different engine than the packaged one.
+ */
+function verifyBrowserUpstream(
+  manifest: Readonly<Record<string, unknown>>,
+  pinned: PinnedEngine,
+): void {
+  const upstream = readRecord(manifest['upstream'], 'browser visual manifest upstream');
+  if (readDigest(upstream, 'code', 'browser visual manifest upstream code') !== pinned.code) {
+    throw new Error('The browser visual manifest does not name the pinned upstream revision.');
+  }
+  if (canonical(upstream['models']) !== canonical(pinned.models)) {
+    throw new Error('The browser visual manifest does not name the pinned recognition models.');
+  }
+  if (canonical(upstream['catalog']) !== canonical(pinned.catalog)) {
+    throw new Error('The browser visual manifest does not name the pinned catalog.');
+  }
 }
 
 /**

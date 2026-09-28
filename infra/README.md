@@ -190,13 +190,15 @@ aws ecr describe-images --region us-east-1 --repository-name keeper-<environment
 
 `npm run package:recognition` verifies every pinned manifest and hash before it writes anything: the
 retained baseline digests of the engine sources it ships, the model, catalog, OCR and title-name
-digests, the pinned upstream CollectorVision revision, the browser runtime and asset digests, and
-the corresponding-source download of this checkout. The Dockerfile builds from the digest-pinned AWS
-Lambda Python runtime of the retained engine, so the context plus the tag name the whole image. The
-browser half carries the prepared `browser/vendor/` assets in `artifacts/browser/`; the recognition
-manifest records their digests, so the container and browser halves of one release can be matched.
-Packaging the context costs no model download and is safe to repeat after `npm run package`, which
-replaces only the artifacts it builds itself.
+digests, the pinned upstream CollectorVision revision with the content of every file it ships
+(generated build output is excluded rather than packaged), the cached catalog feed offline loading
+reads, the browser runtime and asset digests with the engine identity the browser manifest reports,
+and the membership and bytes of the corresponding-source download of this checkout. The Dockerfile
+builds from the digest-pinned AWS Lambda Python runtime of the retained engine, so the context plus
+the tag name the whole image. The browser half carries the prepared `browser/vendor/` assets in
+`artifacts/browser/`; the recognition manifest records their digests, so the container and browser
+halves of one release can be matched. Packaging the context costs no model download and is safe to
+repeat after `npm run package`, which replaces only the artifacts it builds itself.
 
 Packaged regressions and resource measurement run the built image locally, not in AWS:
 

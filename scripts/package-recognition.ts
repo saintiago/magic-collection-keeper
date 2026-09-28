@@ -132,9 +132,10 @@ async function assembleContext(root: string, contextDirectory: string): Promise<
   const preparedRoot = path.join(pythonRoot, 'artifacts');
   for (const module of await engineModules(pythonRoot)) {
     const target = module === 'scripts/smoke.py' ? 'smoke.py' : module;
-    await cp(path.join(pythonRoot, module), path.join(contextDirectory, target));
+    const file = path.join(contextDirectory, target);
+    await mkdir(path.dirname(file), { recursive: true });
+    await cp(path.join(pythonRoot, module), file);
   }
-  await copyTree(path.join(pythonRoot, 'adapters'), path.join(contextDirectory, 'adapters'));
   await copyTree(path.join(pythonRoot, 'notices'), path.join(contextDirectory, 'notices'));
   await mkdir(path.join(contextDirectory, 'artifacts'), { recursive: true });
   for (const name of imageArtifactFiles) {
@@ -229,7 +230,8 @@ async function copyTree(from: string, to: string): Promise<void> {
   }
 }
 
-const excludedNames = new Set(['.git', '__pycache__', '.pytest_cache']);
+/** Generated or cached content of a prepared tree; only the pinned inputs reach the context. */
+const excludedNames = new Set(['.git', '__pycache__', '.pytest_cache', 'build', 'dist']);
 
 function includePrepared(name: string): boolean {
   return !excludedNames.has(name) && !name.endsWith('.egg-info') && !name.endsWith('.pyc');

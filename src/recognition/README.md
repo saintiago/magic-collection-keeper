@@ -99,12 +99,17 @@ dependency provides, verified against `browser-runtime.json`. The delivery build
 `npm run prepare:recognition` and `npm run package:recognition` implement the recognition packaging
 step (docs/operations.md#recognition-packaging, infra/README.md#recognition-packaging): preparation
 runs the retained fetch/convert/export scripts and the corresponding-source bundler, and packaging
-verifies every pinned manifest and hash — the retained baseline digests of the shipped engine
-modules, the model, catalog, OCR and title-name digests, the pinned upstream CollectorVision
-revision, the browser runtime and asset digests, and the source download of this checkout — before
-assembling the image build context. `tests/integration/recognition-packaging.test.ts` exercises the
-packaging command against a prepared engine package and checks the pinned browser runtime against
-the locked dependency; the prepared model bytes themselves are a build-time input.
+verifies every pinned manifest and hash before assembling the image build context: the retained
+baseline digests of the shipped engine modules, the model, catalog, OCR and title-name digests, the
+pinned upstream CollectorVision revision with the content of every file it ships (generated build
+output is excluded, not packaged), the cached catalog feed offline loading reads, the browser
+runtime and asset digests with the engine identity the browser manifest reports, and the
+corresponding-source download's membership and bytes against the checkout the bundler covers.
+`tests/integration/recognition-packaging.test.ts` exercises the packaging command against a
+prepared engine package, refusing modified or additional upstream files, incomplete or stale
+downloads, a catalog without its cached feed and a browser manifest without the pinned identity,
+and checks the pinned browser runtime against the locked dependency; the prepared model bytes
+themselves are a build-time input.
 
 `tests/component/recognition` covers the public lifecycle and candidate contract with a controlled
 pipeline and Catalog substitute: demand-driven and shared preparation, preparation failure and

@@ -88,8 +88,10 @@ rollback and the live checks are recorded in `infra/README.md`.
 `npm run prepare:recognition` and `npm run package:recognition` package the retained recognition
 engine for both runtimes (docs/operations.md#recognition-packaging): preparation fetches the pinned
 public model, catalog, OCR and title-name bytes through the retained scripts and copies the browser
-ONNX runtime of the locked dependency, and packaging verifies every pinned manifest and hash before
-it assembles the recognition image context and records its manifest beside the other artifacts. The
+ONNX runtime of the locked dependency, and packaging verifies every pinned manifest and hash — the
+content of the pinned upstream checkout, the cached offline catalog feed, the browser manifest's
+engine identity and the complete corresponding-source download of the checkout — before it
+assembles the recognition image context and records its manifest beside the other artifacts. The
 prepared bytes stay out of git and the checks never need them; preparation, the built image,
 measurement and rollback are recorded in `infra/README.md#recognition-packaging`.
 

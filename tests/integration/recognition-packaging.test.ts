@@ -19,6 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
+import JSZip from 'jszip';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { packageArtifacts } from '../../scripts/package-artifacts.js';
@@ -235,6 +236,12 @@ async function createPreparedCheckout(workspace: string): Promise<PreparedChecko
       2,
     )}\n`,
   );
+  // The committed catalog pin and the feed the preparation caches for offline loading.
+  const feed = Buffer.from(
+    `${JSON.stringify({ checked_at: '2026-09-08T12:11:38Z', families: { milo1: {} } }, null, 2)}\n`,
+  );
+  await write(root, 'src/recognition/python/catalog-feed.json', feed);
+  await write(root, 'src/recognition/python/artifacts/catalog/catalog-v2/feed.json', feed);
 
   // The pinned original text weights and the converted ONNX files the runtime loads.
   const origins: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -345,7 +352,11 @@ async function createPreparedCheckout(workspace: string): Promise<PreparedChecko
   await write(
     root,
     'src/recognition/browser/vendor/visual/manifest.json',
-    `${JSON.stringify({ schema: 1, rows: 4, dims: 128, assets: visualAssets }, null, 2)}\n`,
+    `${JSON.stringify(
+      { schema: 1, upstream: artifactManifest, rows: 4, dims: 128, assets: visualAssets },
+      null,
+      2,
+    )}\n`,
   );
 
   // The pinned browser ONNX runtime, as the preparation step copies it from the dependency.
@@ -474,6 +485,7 @@ describe('packaging the retained recognition assets', () => {
       'requirements-linux.txt',
       'artifacts/weights/cornelius.onnx',
       'artifacts/ocr-onnx/det.onnx',
+      'artifacts/catalog/catalog-v2/feed.json',
       'artifacts/title-names.json.gz',
       'vendor/CollectorVision/setup.py',
     ]) {
@@ -527,16 +539,167 @@ describe('packaging the retained recognition assets', () => {
     ).rejects.toThrow(/milo\.onnx/);
   });
 
-  it('refuses a corresponding-source download that does not match the packaged sources', async () => {
+  it('refuses an upstream checkout whose content differs from its pinned revision', async () => {
+    const tampered = await cloneCheckout(prepared, workspace, 'tampered-upstream');
+    await write(
+      tampered,
+      'src/recognition/python/vendor/CollectorVision/collector_vision/__init__.py',
+      '# pinned upstream fixture\nraise RuntimeError("changed upstream engine")\n',
+    );
+    await expect(
+      packageRecognition({
+        outDir: path.join(workspace, 'tampered-upstream-artifacts'),
+        repoRoot: tampered,
+        revision,
+      }),
+    ).rejects.toThrow(/collector_vision\/__init__\.py/);
+  });
+
+  it('refuses an additional file in the upstream package', async () => {
+    const tampered = await cloneCheckout(prepared, workspace, 'extra-upstream');
+    await write(
+      tampered,
+      'src/recognition/python/vendor/CollectorVision/collector_vision/extra.py',
+      '"""not part of the pinned revision"""\n',
+    );
+    await expect(
+      packageRecognition({
+        outDir: path.join(workspace, 'extra-upstream-artifacts'),
+        repoRoot: tampered,
+        revision,
+      }),
+    ).rejects.toThrow(/collector_vision\/extra\.py/);
+  });
+
+  it('packages the pinned upstream tree without its generated build output', async () => {
+    const generated = await cloneCheckout(prepared, workspace, 'generated-upstream');
+    await write(
+      generated,
+      'src/recognition/python/vendor/CollectorVision/build/lib/collector_vision/__init__.py',
+      '# generated build output\n',
+    );
+    const packagedGenerated = await packageRecognition({
+      outDir: path.join(workspace, 'generated-upstream-artifacts'),
+      repoRoot: generated,
+      revision,
+    });
+    const names = packagedGenerated.manifest.context.map((file) => file.file);
+    expect(names).toContain('vendor/CollectorVision/setup.py');
+    expect(names.some((name) => name.includes('build/'))).toBe(false);
+  });
+
+  it('refuses a corresponding-source download that omits a packaged source', async () => {
+    const tampered = await cloneCheckout(prepared, workspace, 'omitted-source');
+    await rewriteSourceArchive(tampered, (archive) => {
+      archive.remove('keeper/package.json');
+    });
+    await expect(
+      packageRecognition({
+        outDir: path.join(workspace, 'omitted-source-artifacts'),
+        repoRoot: tampered,
+        revision,
+      }),
+    ).rejects.toThrow(/does not carry keeper\/package\.json/);
+  });
+
+  it('refuses a corresponding-source download carrying stale bytes', async () => {
     const tampered = await cloneCheckout(prepared, workspace, 'tampered-source');
-    await write(tampered, 'src/recognition/python/handler.py', '"""changed after bundling"""\n');
+    await rewriteSourceArchive(tampered, (archive) => {
+      archive.file('keeper/package.json', '{"name":"stale bundle"}\n');
+    });
     await expect(
       packageRecognition({
         outDir: path.join(workspace, 'tampered-source-artifacts'),
         repoRoot: tampered,
         revision,
       }),
-    ).rejects.toThrow(/handler\.py/);
+    ).rejects.toThrow(/different keeper\/package\.json bytes/);
+  });
+
+  it('refuses a corresponding-source download carrying stale upstream source', async () => {
+    const tampered = await cloneCheckout(prepared, workspace, 'stale-upstream-source');
+    await rewriteSourceArchive(tampered, (archive) => {
+      archive.file('CollectorVision/collector_vision/__init__.py', '# stale upstream\n');
+    });
+    await expect(
+      packageRecognition({
+        outDir: path.join(workspace, 'stale-upstream-source-artifacts'),
+        repoRoot: tampered,
+        revision,
+      }),
+    ).rejects.toThrow(/different CollectorVision\/collector_vision\/__init__\.py bytes/);
+  });
+
+  it('refuses a corresponding-source download with an additional entry', async () => {
+    const tampered = await cloneCheckout(prepared, workspace, 'extra-source');
+    await rewriteSourceArchive(tampered, (archive) => {
+      archive.file('keeper/src/recognition/python/extra.py', '"""not bundled"""\n');
+    });
+    await expect(
+      packageRecognition({
+        outDir: path.join(workspace, 'extra-source-artifacts'),
+        repoRoot: tampered,
+        revision,
+      }),
+    ).rejects.toThrow(/does not assemble from this checkout/);
+  });
+
+  it('refuses a prepared catalog without the cached offline feed', async () => {
+    const tampered = await cloneCheckout(prepared, workspace, 'missing-feed');
+    await rm(path.join(tampered, 'src/recognition/python/artifacts/catalog/catalog-v2/feed.json'));
+    await expect(
+      packageRecognition({
+        outDir: path.join(workspace, 'missing-feed-artifacts'),
+        repoRoot: tampered,
+        revision,
+      }),
+    ).rejects.toThrow(/feed\.json/);
+  });
+
+  it('refuses a cached feed that is not the committed one', async () => {
+    const tampered = await cloneCheckout(prepared, workspace, 'stale-feed');
+    await write(
+      tampered,
+      'src/recognition/python/artifacts/catalog/catalog-v2/feed.json',
+      '{"checked_at":"2026-01-01T00:00:00Z","families":{}}\n',
+    );
+    await expect(
+      packageRecognition({
+        outDir: path.join(workspace, 'stale-feed-artifacts'),
+        repoRoot: tampered,
+        revision,
+      }),
+    ).rejects.toThrow(/catalog-feed\.json/);
+  });
+
+  it('refuses a browser manifest without the pinned upstream identity', async () => {
+    const tampered = await cloneCheckout(prepared, workspace, 'missing-upstream');
+    await rewriteVisualManifest(tampered, (manifest) => {
+      delete manifest['upstream'];
+    });
+    await expect(
+      packageRecognition({
+        outDir: path.join(workspace, 'missing-upstream-artifacts'),
+        repoRoot: tampered,
+        revision,
+      }),
+    ).rejects.toThrow(/upstream/);
+  });
+
+  it('refuses a browser manifest naming a different upstream identity', async () => {
+    const tampered = await cloneCheckout(prepared, workspace, 'substituted-upstream');
+    await rewriteVisualManifest(tampered, (manifest) => {
+      const upstream = manifest['upstream'] as { code: string; catalog: { rows: number } };
+      upstream.code = '1'.repeat(40);
+      upstream.catalog.rows = 5;
+    });
+    await expect(
+      packageRecognition({
+        outDir: path.join(workspace, 'substituted-upstream-artifacts'),
+        repoRoot: tampered,
+        revision,
+      }),
+    ).rejects.toThrow(/pinned upstream revision/);
   });
 
   it('refuses browser assets that fail their integrity check', async () => {
@@ -621,4 +784,34 @@ async function cloneCheckout(
   const target = path.join(workspace, name);
   await cp(prepared.root, target, { recursive: true });
   return target;
+}
+
+/** Rewrites the prepared corresponding-source download, as a stale or tampered bundle would be. */
+async function rewriteSourceArchive(root: string, change: (archive: JSZip) => void): Promise<void> {
+  const file = path.join(root, 'src', 'recognition', 'python', 'source.zip');
+  const archive = await JSZip.loadAsync(await readFile(file));
+  change(archive);
+  await writeFile(
+    file,
+    await archive.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }),
+  );
+}
+
+/** Rewrites the prepared browser visual manifest, as substituted packaging metadata would be. */
+async function rewriteVisualManifest(
+  root: string,
+  change: (manifest: Record<string, unknown>) => void,
+): Promise<void> {
+  const file = path.join(
+    root,
+    'src',
+    'recognition',
+    'browser',
+    'vendor',
+    'visual',
+    'manifest.json',
+  );
+  const manifest = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+  change(manifest);
+  await writeFile(file, `${JSON.stringify(manifest, null, 2)}\n`);
 }
