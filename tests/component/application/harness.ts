@@ -359,6 +359,7 @@ export function createTestApplication(
         sql: sql.sql,
         snapshots: options.snapshots ?? createSnapshotSource({}),
       },
+      searchIndexing: null,
       deckSource: null,
     },
     diagnostics: { record: diagnostics } satisfies Diagnostics,

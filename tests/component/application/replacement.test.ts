@@ -36,6 +36,7 @@ function replacement() {
       userCards: userCards.contract,
       sourceImports: sourceImports.contract,
       synchronizer: { synchronize },
+      indexer: null,
     },
   });
   return { application, catalog, search, userCards, synchronize };
