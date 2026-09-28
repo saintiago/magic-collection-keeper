@@ -216,4 +216,59 @@ describe('catalog publication stream', () => {
     });
     expect(removal?.position).toMatch(/^[1-9][0-9]*$/);
   });
+
+  it('reads a large change page in position order with the completion marker last', async () => {
+    // A page whose sort does not fit its memory keeps position order: the selection takes the
+    // lowest positions first, the result carries them in that order, and the revision change that
+    // completes a revision stays after every record change it completes. Every position below has
+    // the same digit length, so ordering the text the transport carries coincides with the numeric
+    // order and only the result's own ordering can scramble the page.
+    await database.exec("set work_mem = '64kB'");
+    await database.exec(
+      'alter table catalog_private.publication alter column position restart with 101',
+    );
+    await database.query(
+      `insert into catalog_private.publication
+         (revision_id, source_name, source_version, published_at, kind, record_identity,
+          removed, record)
+       select 'revision-bulk', 'scryfall', 'snapshot-1', now(), 'card',
+              'oracle-bulk-' || series, false,
+              jsonb_build_object(
+                'card_id', 'oracle-bulk-' || series,
+                'name', 'Bulk card ' || series,
+                'rules_text', repeat('Bulk card rules text. ', 40),
+                'type_line', 'Instant',
+                'colors', jsonb_build_array('R'),
+                'color_identity', jsonb_build_array('R'),
+                'mana_value', 1)
+       from generate_series(1, 600) as series`,
+    );
+    await database.query(
+      `insert into catalog_private.publication
+         (revision_id, source_name, source_version, published_at, kind, record_identity,
+          removed, record)
+       values ('revision-bulk', 'scryfall', 'snapshot-1', now(), 'revision', null, false, null)`,
+    );
+
+    // One page carries the whole stream: positions 102 to 701 in order, the last completing the
+    // revision.
+    const page = await publication().readChanges({ position: '101', pageSize: 1000 });
+    const expected = Array.from({ length: 600 }, (_, index) => String(index + 102));
+    expect(page.changes.map((change) => change.position)).toEqual(expected);
+    expect(page.changes.at(-1)?.kind).toBe('revision');
+    expect(page.position).toBe(expected.at(-1));
+
+    // Paging the same stream keeps the order and reaches the same completion marker.
+    const paged: string[] = [];
+    let checkpoint = '101';
+    for (;;) {
+      const next = await publication().readChanges({ position: checkpoint, pageSize: 250 });
+      if (next.changes.length === 0) {
+        break;
+      }
+      paged.push(...next.changes.map((change) => change.position));
+      checkpoint = next.position;
+    }
+    expect(paged).toEqual(expected);
+  });
 });

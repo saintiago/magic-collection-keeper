@@ -82,6 +82,20 @@ const solRing = providerCard({
   collectorNumber: '3',
   oracleText: '{T}: Add {C}{C}.',
 });
+const counterspell = providerCard({
+  printingId: 'printing-counterspell-en',
+  cardId: 'oracle-counterspell',
+  name: 'Counterspell',
+  collectorNumber: '4',
+  oracleText: 'Counter target spell.',
+});
+const darkRitual = providerCard({
+  printingId: 'printing-dark-ritual-en',
+  cardId: 'oracle-dark-ritual',
+  name: 'Dark Ritual',
+  collectorNumber: '5',
+  oracleText: 'Add {B}{B}{B}.',
+});
 
 /** A provider source whose next snapshot one test names, so revisions follow each other. */
 function providerSource(): {
@@ -300,6 +314,40 @@ describe('catalog query publication', () => {
     const advanced = await publication().readChanges({ position: page.position, pageSize: 100 });
     expect(advanced.changes).toEqual([]);
     expect(advanced.position).toBe(page.position);
+  });
+
+  it('delivers every change in position order across a decimal digit boundary', async () => {
+    await publish('snapshot-1', [bolt]);
+    const before = await readWholeSnapshot(publication(), 100);
+    expect(Number(before.position)).toBeLessThan(10);
+
+    // Three cards publish nine record changes plus the revision that completes them, so a consumer
+    // paging one change at a time crosses from one-digit to two-digit positions.
+    await publish('snapshot-2', [bolt, solRing, counterspell, darkRitual]);
+
+    const delivered: string[] = [];
+    let lastKind: CatalogChange['kind'] | null = null;
+    let checkpoint = before.position;
+    for (;;) {
+      const page = await publication().readChanges({ position: checkpoint, pageSize: 1 });
+      if (page.changes.length === 0) {
+        expect(page.position).toBe(checkpoint);
+        break;
+      }
+      expect(page.changes).toHaveLength(1);
+      const change = page.changes[0];
+      // The page always advances to the change it delivered last, never past it.
+      expect(page.position).toBe(change?.position);
+      delivered.push(change?.position ?? '');
+      lastKind = change?.kind ?? null;
+      checkpoint = page.position;
+    }
+
+    const expected = Array.from({ length: 10 }, (_, index) =>
+      String(Number(before.position) + 1 + index),
+    );
+    expect(delivered).toEqual(expected);
+    expect(lastKind).toBe('revision');
   });
 
   it('completes a revision that changed no record with its revision change', async () => {

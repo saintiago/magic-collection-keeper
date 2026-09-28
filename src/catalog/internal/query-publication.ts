@@ -247,26 +247,31 @@ order by row_kind, row_position`;
 /**
  * One change page plus the retained bounds of the stream, so expiry is decided against the same
  * state the changes were read from. The bounds row also tells the reader when the catalog has no
- * published revision at all.
+ * published revision at all. The page takes the lowest durable positions — ordered by the stored
+ * bigint, not the text the transport carries — and the result order repeats that numeric key, so
+ * positions stay in order across a decimal digit boundary and across a sort that does not fit
+ * memory, and the revision change that completes a revision follows the records it completes.
  */
 const changesPageStatement = `with bounds as (
   select min(position)::text as oldest_position, max(position)::text as newest_position
   from catalog_private.publication
 ),
 page as (
-  select position::text as position, revision_id, source_name, source_version, published_at,
+  select publication.position::text as position,
+         publication.position as change_position,
+         revision_id, source_name, source_version, published_at,
          kind, record_identity, removed, record::text as record
-  from catalog_private.publication
-  where position > cast(:after_position as bigint)
-  order by position
+  from catalog_private.publication as publication
+  where publication.position > cast(:after_position as bigint)
+  order by publication.position
   limit :page_limit
 )
-select 'bounds' as row_kind, to_jsonb(bounds)::text as payload
+select 'bounds' as row_kind, null::bigint as row_position, to_jsonb(bounds)::text as payload
 from bounds
 union all
-select 'change' as row_kind, to_jsonb(page)::text as payload
+select 'change' as row_kind, page.change_position, (to_jsonb(page) - 'change_position')::text
 from page
-order by row_kind`;
+order by row_kind, row_position`;
 
 const snapshotRowSchema = z.object({
   row_kind: z.enum(['revision', 'record']),
