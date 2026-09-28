@@ -34,11 +34,17 @@ Run from a fresh Linux/WSL checkout of the release revision
 | Infrastructure definitions | [Infrastructure](operations.md#infrastructure)                                           | `npm run lint:infrastructure`; `tests/integration/infrastructure-templates.test.ts`                                     |
 | Acceptance evidence        | This checklist                                                                           | `npm run release:evidence -- --out artifacts` re-verifies every recorded byte and writes the stages beside the manifest |
 
-The release revision is the manifest's `revision` and its `workingTree` must be `clean`: artifacts
-built from uncommitted changes cannot be restored. Record the command output with the release.
-`release-evidence.json` records source completion only when every byte the manifest names still
-matches and the recognition image context (when it is packaged) belongs to the same release. The
-deployment record, when one exists, has to name this release as well.
+The release revision is the packaging manifest's `revision`, and the packaging and recognition
+manifests' `workingTree` must both be `clean`: artifacts built from uncommitted changes cannot be
+restored. Record the command output with the release. `release-evidence.json` records source
+completion only when every byte the packaging and recognition manifests name still matches, the
+recognition image context (when it is packaged) belongs to the same release, and its browser assets
+are the ones the packaged browser manifest carries. The deployment record, when one exists, has to
+name this release as well.
+
+Package the browser after `npm run prepare:recognition`, because the browser bundle carries the
+prepared recognition assets; the evidence command rejects a recognition context whose browser
+assets the packaged `browser/` directory does not carry.
 
 ## Deployment in an isolated environment
 
@@ -65,11 +71,15 @@ an isolated test environment with test data. The concrete procedure is
    isolated from the existing production application
    ([contracts and cooperation](testing.md#contracts-and-cooperation)).
 7. Rehearse rollback before calling the rehearsal complete: update the service stack to the previous
-   release's recorded parameters, restore the previous browser bundle, run the catalog job again and
+   release's retained parameters, restore the previous browser bundle, run the catalog job again and
    verify that the test account's identity and data are unchanged
-   ([rollback and recovery](#rollback-and-recovery)).
-8. Record the deployment stage by capturing the release record and re-running the evidence command;
-   the rehearsal is deployment evidence for the `test` environment, not production acceptance.
+   ([rollback and recovery](#rollback-and-recovery)). Keep the candidate's captured
+   `artifacts/release.json`: capturing the stack's parameters again while the previous release runs
+   would replace the candidate's record with the previous release's.
+8. Record the candidate's deployment stage from its preserved release record by re-running the
+   evidence command, and keep the rollback outcome — previous parameters and browser bundle back in
+   place, catalog job re-run, identity and data unchanged — with the rehearsal evidence. The
+   rehearsal is deployment evidence for the `test` environment, not production acceptance.
 
 ## Production acceptance
 
@@ -105,9 +115,13 @@ The artifacts of a release are immutable, so a rollback restores identities inst
 - **Catalog.** The finite job takes effect on its next explicit run, because the task definition
   pins one image digest ([catalog synchronization](../infra/README.md#catalog-synchronization)).
 - **Failed create or update.** CloudFormation rolls back automatically;
-  `aws cloudformation continue-update-rollback` continues an interrupted rollback, and the retained
-  buckets, repositories and secrets survive a failed create
-  ([deletion and rollback](../infra/README.md#deletion-and-rollback)).
+  `aws cloudformation continue-update-rollback` continues an interrupted rollback. A failed create
+  removes the buckets that create made, because the three foundation buckets carry
+  `RetainExceptOnCreate`; the image repositories and the reader/writer secrets instead carry
+  `Retain` and the cluster's deletion protection blocks an accidental drop, so those survive the
+  rollback. Retention on later deletion is separate: the buckets, repositories and reader/writer
+  secrets stay in place when the foundation stack is deleted, and the cluster goes with a final
+  snapshot ([deletion and rollback](../infra/README.md#deletion-and-rollback)).
 - **Data.** Recovery starts from the final cluster snapshot: the restored cluster keeps the
   database roles, the retained reader and writer secrets keep working, a new master credential is
   established, and the schema bootstrap runs again before the service stack points at it

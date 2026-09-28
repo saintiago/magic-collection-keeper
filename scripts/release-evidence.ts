@@ -2,9 +2,10 @@
  * Release acceptance evidence (docs/operations.md#release-acceptance, docs/release-checklist.md).
  *
  * One command prepares the acceptance record of one packaged release beside its manifest. It
- * re-verifies every byte the packaging manifest names, ties the optional recognition manifest and
- * the deployment's release record to the same revision, and keeps source completion, deployment
- * and production acceptance separate. The provider, physical-device and collection-reconciliation
+ * re-verifies every byte the packaging manifest names, requires the packaging and recognition
+ * manifests to come from a clean committed revision, ties the optional recognition manifest and the
+ * deployment's release record to the same release, and keeps source completion, deployment and
+ * production acceptance separate. The provider, physical-device and collection-reconciliation
  * checks the rebuild cannot establish stay recorded as unresolved. Nothing here deploys, migrates
  * or reads owner data.
  */
@@ -48,6 +49,8 @@ export interface RecognitionEvidence {
   /** Corresponding-source download of exactly this revision, as the context carries it. */
   readonly source: ReleaseEvidenceFile;
   readonly contextFiles: number;
+  /** Browser recognition assets the packaged browser manifest carries, byte for byte. */
+  readonly browserAssets: number;
 }
 
 export interface SourceCompletionStage {
@@ -218,12 +221,19 @@ async function readRecognitionEvidence(
   const recognition = readRecognitionManifest(
     await readJsonFile(outDir, recognitionArtifactLayout.manifest),
   );
+  if (recognition.workingTree !== 'clean') {
+    throw new Error(
+      `${recognitionArtifactLayout.manifest} records a dirty working tree; a release needs the ` +
+        'committed revision it was built from (docs/operations.md#packaging-and-deployment).',
+    );
+  }
   if (recognition.revision !== manifest.revision || recognition.version !== manifest.version) {
     throw new Error(
       `${recognitionArtifactLayout.manifest} belongs to another release than ` +
         `${artifactLayout.manifest}.`,
     );
   }
+  const browserAssets = verifyRecognitionBrowserAssets(manifest, recognition.browser);
   const contextDirectory = path.join(outDir, recognitionArtifactLayout.directory);
   for (const file of recognition.context) {
     await verifyRecordedFile(contextDirectory, file);
@@ -243,7 +253,51 @@ async function readRecognitionEvidence(
     baseImage: recognition.baseImage,
     source: { ...source, file: `${recognitionArtifactLayout.directory}/${source.file}` },
     contextFiles: recognition.context.length,
+    browserAssets,
   };
+}
+
+/**
+ * The browser half of the recognition release: `npm run package` copies the prepared browser assets
+ * into the packaged `browser/` directory and records their bytes, and the recognition manifest
+ * publishes the same identities. A context prepared after the browser was packaged would otherwise
+ * be certified with assets the release does not carry, so every asset has to be the one the
+ * packaging manifest already verified.
+ */
+function verifyRecognitionBrowserAssets(
+  manifest: ArtifactManifest,
+  browser: RecognitionArtifactManifest['browser'],
+): number {
+  const packaged = new Map(manifest.artifacts.browser.files.map((file) => [file.file, file]));
+  const runtimeFile = `browser/vendor/ort/${browser.runtime.file}`;
+  const carriesRuntime = browser.assets.some(
+    (asset) =>
+      asset.file === runtimeFile &&
+      asset.bytes === browser.runtime.bytes &&
+      asset.sha256 === browser.runtime.sha256,
+  );
+  if (!carriesRuntime) {
+    throw new Error(
+      `${recognitionArtifactLayout.manifest} records a browser runtime its assets do not carry.`,
+    );
+  }
+  for (const asset of browser.assets) {
+    const carried = packaged.get(asset.file);
+    if (carried === undefined) {
+      throw new Error(
+        `The packaged ${artifactLayout.manifest} carries no browser asset ${asset.file} the ` +
+          `${recognitionArtifactLayout.manifest} records; package the browser from the prepared ` +
+          'recognition assets.',
+      );
+    }
+    if (carried.bytes !== asset.bytes || carried.sha256 !== asset.sha256) {
+      throw new Error(
+        `The packaged browser asset ${asset.file} does not match the identity the ` +
+          `${recognitionArtifactLayout.manifest} records.`,
+      );
+    }
+  }
+  return browser.assets.length;
 }
 
 /**
@@ -416,13 +470,21 @@ function readArtifactManifest(value: unknown): ArtifactManifest {
 function readRecognitionManifest(value: unknown): RecognitionArtifactManifest {
   const manifest = readRecord(value);
   const files = manifest?.['context'];
+  const browser = readRecord(manifest?.['browser']);
+  const runtime = readRecord(browser?.['runtime']);
+  const assets = browser?.['assets'];
   if (
     manifest === null ||
     manifest['schema'] !== 1 ||
     typeof manifest['revision'] !== 'string' ||
     typeof manifest['version'] !== 'string' ||
+    (manifest['workingTree'] !== 'clean' && manifest['workingTree'] !== 'dirty') ||
     typeof manifest['baseImage'] !== 'string' ||
-    !Array.isArray(files)
+    !Array.isArray(files) ||
+    browser === null ||
+    runtime === null ||
+    typeof runtime['version'] !== 'string' ||
+    !Array.isArray(assets)
   ) {
     throw new Error(
       `${recognitionArtifactLayout.manifest} is not the schema 1 recognition manifest this ` +
@@ -430,8 +492,12 @@ function readRecognitionManifest(value: unknown): RecognitionArtifactManifest {
     );
   }
   readArtifactFile(manifest['source']);
+  readArtifactFile(runtime);
   for (const file of files) {
     readArtifactFile(file);
+  }
+  for (const asset of assets) {
+    readArtifactFile(asset);
   }
   return value as RecognitionArtifactManifest;
 }

@@ -53,6 +53,9 @@ interface ReleaseFixtureOptions {
   readonly workingTree?: 'clean' | 'dirty';
   readonly recognition?: boolean;
   readonly recognitionRevision?: string;
+  readonly recognitionWorkingTree?: 'clean' | 'dirty';
+  /** How the packaged browser manifest and the recognition manifest's browser assets relate. */
+  readonly browserAssets?: 'packaged' | 'omitted' | 'mismatched' | 'foreign-runtime';
   readonly deployment?: boolean;
 }
 
@@ -67,6 +70,11 @@ async function createRelease(options: ReleaseFixtureOptions = {}): Promise<strin
   const browserPage = await describeFile(root, 'browser/index.html', '<!doctype html>');
   const catalog = await describeFile(root, 'catalog/job.mjs', 'catalog job');
   await write(root, 'catalog/Dockerfile', 'FROM scratch');
+  const browserFiles: ArtifactFile[] = [browserEntry, browserPage];
+  const recognition =
+    options.recognition === true
+      ? await createRecognitionFixture(root, browserFiles, options, label)
+      : null;
   await write(
     root,
     'manifest.json',
@@ -80,7 +88,7 @@ async function createRelease(options: ReleaseFixtureOptions = {}): Promise<strin
         platform: 'linux-x64',
         artifacts: {
           backend: { ...backend, entry: 'index.mjs' },
-          browser: { directory: 'browser', files: [browserEntry, browserPage], settings: null },
+          browser: { directory: 'browser', files: browserFiles, settings: null },
           catalog: { ...catalog, dockerfile: 'catalog/Dockerfile' },
         },
       },
@@ -88,50 +96,96 @@ async function createRelease(options: ReleaseFixtureOptions = {}): Promise<strin
       2,
     )}\n`,
   );
-  if (options.recognition === true) {
-    // Context files are recorded relative to the recognition context directory, like the
-    // corresponding-source download the prepared engine describes.
-    const contextContent = 'retained engine';
-    await write(root, 'recognition/lambda_entry.py', contextContent);
-    const sourceContent = 'corresponding source';
-    await write(root, 'recognition/source.zip', sourceContent);
-    await write(
-      root,
-      'recognition/manifest.json',
-      `${JSON.stringify(
-        {
-          schema: 1,
-          revision: options.recognitionRevision ?? sourceRevision,
-          workingTree: 'clean',
-          version: label,
-          baseImage: `public.ecr.aws/lambda/python:3.12@sha256:${'0'.repeat(64)}`,
-          source: {
-            file: 'source.zip',
-            bytes: Buffer.byteLength(sourceContent),
-            sha256: digest(sourceContent),
-          },
-          context: [
-            {
-              file: 'lambda_entry.py',
-              bytes: Buffer.byteLength(contextContent),
-              sha256: digest(contextContent),
-            },
-            {
-              file: 'source.zip',
-              bytes: Buffer.byteLength(sourceContent),
-              sha256: digest(sourceContent),
-            },
-          ],
-        },
-        null,
-        2,
-      )}\n`,
-    );
+  if (recognition !== null) {
+    await write(root, 'recognition/manifest.json', `${JSON.stringify(recognition, null, 2)}\n`);
   }
   if (options.deployment === true) {
     await writeReleaseRecord(root, {});
   }
   return root;
+}
+
+/**
+ * The recognition half of the fixture: the image context, its corresponding-source download, the
+ * engine identities and the browser runtime/model assets the recognition manifest publishes. The
+ * packaged browser manifest carries the same assets unless the case omits them.
+ */
+async function createRecognitionFixture(
+  root: string,
+  browserFiles: ArtifactFile[],
+  options: ReleaseFixtureOptions,
+  label: string,
+): Promise<unknown> {
+  const assetsMode = options.browserAssets ?? 'packaged';
+  // Context files are recorded relative to the recognition context directory, like the
+  // corresponding-source download the prepared engine describes.
+  const contextContent = 'retained engine';
+  await write(root, 'recognition/lambda_entry.py', contextContent);
+  const sourceContent = 'corresponding source';
+  await write(root, 'recognition/source.zip', sourceContent);
+  const runtimeContent = 'browser runtime module';
+  const visualContent = 'browser visual model';
+  const runtime: { version: string; file: string; bytes: number; sha256: string } = {
+    version: '1.29.0',
+    file: 'ort-wasm-simd-threaded.mjs',
+    bytes: Buffer.byteLength(runtimeContent),
+    sha256: digest(runtimeContent),
+  };
+  const assets: ArtifactFile[] = [];
+  const runtimeFile = `browser/vendor/ort/${runtime.file}`;
+  const visualFile = `browser/vendor/visual/${digest(visualContent)}.onnx`;
+  const vendorFiles = [
+    { file: runtimeFile, content: runtimeContent },
+    { file: visualFile, content: visualContent },
+  ] as const;
+  for (const vendor of vendorFiles) {
+    if (assetsMode !== 'omitted') {
+      await write(root, vendor.file, vendor.content);
+      browserFiles.push({
+        file: vendor.file,
+        bytes: Buffer.byteLength(vendor.content),
+        sha256: digest(vendor.content),
+      });
+    }
+    const recorded = {
+      file: vendor.file,
+      bytes: Buffer.byteLength(vendor.content),
+      sha256: digest(vendor.content),
+    };
+    assets.push(
+      assetsMode === 'mismatched' && vendor.file === visualFile
+        ? { ...recorded, sha256: 'f'.repeat(64) }
+        : recorded,
+    );
+  }
+  if (assetsMode === 'foreign-runtime') {
+    runtime.sha256 = 'f'.repeat(64);
+  }
+  return {
+    schema: 1,
+    revision: options.recognitionRevision ?? options.revision ?? revision,
+    workingTree: options.recognitionWorkingTree ?? 'clean',
+    version: label,
+    baseImage: `public.ecr.aws/lambda/python:3.12@sha256:${'0'.repeat(64)}`,
+    source: {
+      file: 'source.zip',
+      bytes: Buffer.byteLength(sourceContent),
+      sha256: digest(sourceContent),
+    },
+    browser: { runtime, assets },
+    context: [
+      {
+        file: 'lambda_entry.py',
+        bytes: Buffer.byteLength(contextContent),
+        sha256: digest(contextContent),
+      },
+      {
+        file: 'source.zip',
+        bytes: Buffer.byteLength(sourceContent),
+        sha256: digest(sourceContent),
+      },
+    ],
+  };
 }
 
 /** The captured service-stack parameters a deployment writes beside the release. */
@@ -257,6 +311,7 @@ describe('release acceptance evidence', () => {
     expect(recognition?.baseImage).toMatch(/^public\.ecr\.aws\//);
     expect(recognition?.source.file).toBe('recognition/source.zip');
     expect(recognition?.contextFiles).toBe(2);
+    expect(recognition?.browserAssets).toBe(2);
 
     const tampered = await createRelease({ recognition: true });
     await write(tampered, 'recognition/lambda_entry.py', 'tampered');
@@ -270,6 +325,37 @@ describe('release acceptance evidence', () => {
     });
     await expect(prepareReleaseEvidence({ outDir: mixed, repoRoot })).rejects.toThrow(
       /belongs to another release/,
+    );
+  });
+
+  it('refuses a recognition context built from a dirty working tree', async () => {
+    const dirty = await createRelease({
+      recognition: true,
+      recognitionWorkingTree: 'dirty',
+    });
+
+    await expect(prepareReleaseEvidence({ outDir: dirty, repoRoot })).rejects.toThrow(
+      /dirty working tree/,
+    );
+  });
+
+  it('verifies the browser assets the recognition manifest records', async () => {
+    const omitted = await createRelease({ recognition: true, browserAssets: 'omitted' });
+    await expect(prepareReleaseEvidence({ outDir: omitted, repoRoot })).rejects.toThrow(
+      /carries no browser asset/,
+    );
+
+    const mismatched = await createRelease({ recognition: true, browserAssets: 'mismatched' });
+    await expect(prepareReleaseEvidence({ outDir: mismatched, repoRoot })).rejects.toThrow(
+      /does not match the identity/,
+    );
+
+    const foreignRuntime = await createRelease({
+      recognition: true,
+      browserAssets: 'foreign-runtime',
+    });
+    await expect(prepareReleaseEvidence({ outDir: foreignRuntime, repoRoot })).rejects.toThrow(
+      /browser runtime/,
     );
   });
 
