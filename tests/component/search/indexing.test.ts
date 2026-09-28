@@ -357,6 +357,10 @@ describe('search indexing', () => {
       { count: 0 },
     ]);
 
+    expect(await database.query('select revision_id from search_private.catalog_progress')).toEqual(
+      [],
+    );
+
     // The next run resumes the same generation and publishes it.
     const result = await indexer.index({ accounts: [accountId] });
     expect(result).toMatchObject({ published: true, rebuilt: false, caughtUp: true });
@@ -562,6 +566,10 @@ describe('search indexing', () => {
       { copy_id: 'copy-alice-1' },
     ]);
 
+    expect(await readScoped(accountId, 'select position from search.account_progress')).toEqual([
+      { position: '4' },
+    ]);
+
     // Once the catalog publishes the printing, the pending publication applies completely.
     catalog.publish(
       catalogCardChange('11', 'revision-2', staPrinting),
@@ -572,6 +580,9 @@ describe('search indexing', () => {
 
     expect(applied).toMatchObject({ published: true, caughtUp: true, unresolvedReferences: 0 });
     expect(applied.accounts).toEqual([{ accountId, position: '6', caughtUp: true }]);
+    expect(
+      await readScoped(accountId, 'select position from search.account_progress order by position'),
+    ).toEqual([{ position: '4' }, { position: '6' }]);
     expect(
       await readScoped(accountId, 'select copy_id from search.copies order by copy_id'),
     ).toEqual([{ copy_id: 'copy-alice-1' }, { copy_id: 'copy-alice-2' }]);

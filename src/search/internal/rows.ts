@@ -45,6 +45,7 @@ const entryRowSchema = z.object({
 const stateRowSchema = z.object({
   row_kind: z.literal('state'),
   row_position: z.literal(0),
+  required_incorporated: z.boolean(),
   generation: identifier.nullable(),
   catalog_revision: identifier.nullable(),
   catalog_position: position.nullable(),
@@ -90,6 +91,7 @@ export interface SearchEntryRow {
 }
 
 export interface SearchRowsPage {
+  readonly incorporated: boolean;
   /** Indexed state the page was evaluated against; null while none is published. */
   readonly revisions: SearchRevisions | null;
   /** Exact count of the whole result; null while no complete indexed state answers the query. */
@@ -100,6 +102,7 @@ export interface SearchRowsPage {
 export function readSearchRows(rows: readonly SearchSqlRow[], query: SearchQuery): SearchRowsPage {
   let revisions: SearchRevisions | null = null;
   let totalCount: number | null = null;
+  let incorporated = false;
   let hasState = false;
   const entries: SearchEntryRow[] = [];
   for (const row of rows) {
@@ -120,6 +123,7 @@ export function readSearchRows(rows: readonly SearchSqlRow[], query: SearchQuery
       throw unreadable();
     }
     hasState = true;
+    incorporated = parsed.data.required_incorporated;
     const { generation, catalog_revision, catalog_position } = parsed.data;
     if (requiresTrustedContext(query) && parsed.data.bound_account === null) {
       // A private query must run inside the account scope; rows that merely look empty would
@@ -154,7 +158,7 @@ export function readSearchRows(rows: readonly SearchSqlRow[], query: SearchQuery
     // is an inconsistent read rather than an updating result.
     throw unreadable();
   }
-  return { revisions, totalCount, entries };
+  return { revisions, totalCount, entries, incorporated };
 }
 
 function entryRow(row: z.infer<typeof entryRowSchema>, query: SearchQuery): SearchEntryRow {

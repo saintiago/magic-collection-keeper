@@ -62,6 +62,8 @@ export interface SearchProjectionSurface {
     readonly associations: SearchProjectionRelation;
     readonly indexState: SearchProjectionRelation;
     readonly accountState: SearchProjectionRelation;
+    readonly catalogProgress: SearchProjectionRelation;
+    readonly accountProgress: SearchProjectionRelation;
   };
 }
 
@@ -70,6 +72,30 @@ const identifierLength = 200;
 export const SEARCH_PROJECTION_SURFACE: SearchProjectionSurface = {
   version: 1,
   relations: {
+    catalogProgress: {
+      name: `${searchQuerySchema}.catalog_progress`,
+      accountScoped: false,
+      columns: [
+        {
+          name: 'revision_id',
+          type: 'text',
+          nullable: false,
+          meaning: 'Known incorporated catalog revision.',
+        },
+      ],
+    },
+    accountProgress: {
+      name: `${searchQuerySchema}.account_progress`,
+      accountScoped: true,
+      columns: [
+        {
+          name: 'position',
+          type: 'text',
+          nullable: false,
+          meaning: 'Known incorporated committed position of the bound account.',
+        },
+      ],
+    },
     cards: {
       name: `${searchQuerySchema}.cards`,
       accountScoped: false,
@@ -397,6 +423,18 @@ create table if not exists ${searchPrivateSchema}.account_checkpoint (
   primary key (generation_id, account_id)
 );
 
+create table if not exists ${searchPrivateSchema}.catalog_progress (
+  generation_id bigint not null references ${searchPrivateSchema}.generation on delete cascade,
+  revision_id text not null,
+  primary key (generation_id, revision_id)
+);
+create table if not exists ${searchPrivateSchema}.account_progress (
+  generation_id bigint not null references ${searchPrivateSchema}.generation on delete cascade,
+  account_id text not null,
+  position text not null,
+  primary key (generation_id, account_id, position)
+);
+
 create table if not exists ${searchPrivateSchema}.card (
   generation_id bigint not null
     references ${searchPrivateSchema}.generation (generation_id) on delete cascade,
@@ -536,11 +574,20 @@ create or replace view ${searchQuerySchema}.account_state with (security_barrier
   where checkpoint.generation_id = ${publishedGenerationSql}
     and checkpoint.account_id = ${boundAccountSql};
 
+create or replace view ${searchQuerySchema}.catalog_progress as
+  select revision_id from ${searchPrivateSchema}.catalog_progress
+  where generation_id = ${publishedGenerationSql};
+create or replace view ${searchQuerySchema}.account_progress with (security_barrier) as
+  select position from ${searchPrivateSchema}.account_progress
+  where generation_id = ${publishedGenerationSql} and account_id = ${boundAccountSql};
+
 revoke all on schema ${searchPrivateSchema} from public;
 `.trim();
 
 /** Private tables the indexing role maintains; the read surface is views over the same state. */
 const privateTables = [
+  `${searchPrivateSchema}.catalog_progress`,
+  `${searchPrivateSchema}.account_progress`,
   `${searchPrivateSchema}.generation`,
   `${searchPrivateSchema}.catalog_checkpoint`,
   `${searchPrivateSchema}.account_checkpoint`,

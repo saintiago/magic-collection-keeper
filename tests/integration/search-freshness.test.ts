@@ -155,6 +155,91 @@ describe('search freshness over committed writes', () => {
     expect(ahead.entries.map((entry) => entry.card.name)).toEqual(['Lightning Bolt']);
   });
 
+  it('validates exact account publication membership through snapshots and changes', async () => {
+    const first = await createCopy(m11Bolt.printingId);
+    const bob = { accountId: 'cognito-bob' };
+    const foreign = (
+      await database.userCards.createCopies(bob, {
+        printingId: m11Bolt.printingId,
+        finish: 'nonfoil',
+        condition: 'NM',
+        quantity: 1,
+      })
+    ).publicationPosition;
+    const second = await createCopy(m11Bolt.printingId);
+    await database.index({ accounts: [alice.accountId, bob.accountId] });
+
+    for (const position of [first, second]) {
+      expect((await database.search.observe({ positions: [position] }, alice)).state).toBe(
+        'incorporated',
+      );
+      expect(
+        (await database.search.execute({ resultLevel: 'copy', requiredPosition: position }, alice))
+          .status,
+      ).toBe('ready');
+    }
+    for (const position of [foreign, `00${first}`, '999999']) {
+      expect((await database.search.observe({ positions: [position, second] }, alice)).state).toBe(
+        'indexing',
+      );
+      expect(
+        (await database.search.execute({ resultLevel: 'copy', requiredPosition: position }, alice))
+          .status,
+      ).toBe('updating');
+    }
+    // Incremental publication and then a replacement preserve earlier exact membership.
+    const third = await createCopy(m11Bolt.printingId);
+    await database.index({ accounts: [alice.accountId] });
+    // Carry account evidence even after the provider has expired these early positions.
+    for (let commit = 0; commit < 9; commit += 1) {
+      await createCopy(m11Bolt.printingId);
+      await database.index({ accounts: [alice.accountId] });
+    }
+    await database.index({ rebuild: true });
+    expect(
+      (await database.search.observe({ positions: [first, second, third] }, alice)).state,
+    ).toBe('incorporated');
+    expect((await database.search.observe({ positions: [foreign] }, alice)).state).toBe('indexing');
+  });
+
+  it('keeps incorporated catalog revisions ready after advancement and rebuild', async () => {
+    for (let revision = 2; revision <= 7; revision += 1) {
+      await publishCatalog(database, {
+        revisionId: `revision-${revision}`,
+        cards: [lightningBolt],
+        printings: [m11Bolt, staBolt],
+      });
+      // A published future revision is not ready until applied.
+      expect(
+        (await database.search.observe({ catalogRevision: `revision-${revision}` })).state,
+      ).toBe('indexing');
+      await database.index();
+    }
+    // revision-1 is now outside the provider's retained change history.
+    await database.index({ rebuild: true });
+    for (const revision of ['revision-1', 'revision-2', 'revision-7']) {
+      expect(
+        (await database.search.observe({ catalogRevision: revision }, null, { timeoutMs: 250 }))
+          .state,
+      ).toBe('incorporated');
+      expect(
+        (await database.search.execute({ resultLevel: 'card', requiredCatalogRevision: revision }))
+          .status,
+      ).toBe('ready');
+    }
+    expect((await database.search.observe({ catalogRevision: 'never-published' })).state).toBe(
+      'indexing',
+    );
+    expect(
+      (
+        await database.search.execute({
+          resultLevel: 'card',
+          requiredCatalogRevision: 'revision-8',
+        })
+      ).status,
+    ).toBe('updating');
+  });
+
   it('recovers a lost indexed account position by rebuilding it', async () => {
     const position = await createCopy(m11Bolt.printingId);
     await database.index({ accounts: [alice.accountId] });

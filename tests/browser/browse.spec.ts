@@ -398,6 +398,7 @@ for (const level of ['card', 'printing'] as const) {
         query: async (): Promise<readonly SearchSqlRow[]> => [
           {
             row_kind: 'state',
+            required_incorporated: true,
             row_position: 0,
             generation: 'browse-generation',
             catalog_revision: 'browse-revision',

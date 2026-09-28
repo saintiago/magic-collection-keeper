@@ -187,6 +187,10 @@ describe('a replacement projection implementation', () => {
       `update search_fixture.replacement_account_state set position = '9'
         where account_id = 'search-alice'`,
     );
+    await database.query(
+      `insert into search_fixture.account_evidence values ($1, 'search-alice', '9')`,
+      [generation],
+    );
     const ahead = await search(database).execute(
       { resultLevel: 'copy', requiredPosition: '9' },
       alice,
@@ -204,6 +208,10 @@ describe('a replacement projection implementation', () => {
     await database.query(
       `update search_fixture.replacement_account_state set position = '9'
         where account_id = 'search-alice'`,
+    );
+    await database.query(
+      `insert into search_fixture.account_evidence values ($1, 'search-alice', '9')`,
+      [generation],
     );
     const incorporated = await search(database).observe({ positions: ['9'] }, alice, {
       timeoutMs: 250,

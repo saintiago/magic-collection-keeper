@@ -6,6 +6,8 @@ import { SEARCH_ACCOUNT_SETTING, SEARCH_PROJECTION_SURFACE } from './schema.js';
  * to exactly these (docs/search.md#internal-design).
  */
 export const projectionRelations = {
+  catalogProgress: SEARCH_PROJECTION_SURFACE.relations.catalogProgress.name,
+  accountProgress: SEARCH_PROJECTION_SURFACE.relations.accountProgress.name,
   cards: SEARCH_PROJECTION_SURFACE.relations.cards.name,
   cardNames: SEARCH_PROJECTION_SURFACE.relations.cardNames.name,
   printings: SEARCH_PROJECTION_SURFACE.relations.printings.name,

@@ -2,7 +2,7 @@
  * Component scope: the account-scoped browser indexing progress
  * (docs/search.md#freshness). The status read and the check schedule are the dependencies outside
  * the component, so these cases script them: known committed positions accumulate across page
- * changes and stay within one observation request however many commits accumulate, a window
+ * changes and use bounded observation batches however many commits accumulate, a window
  * measured in elapsed time expires even while a read stalls, a failed check reports unavailable —
  * never completion — a known indexing failure is reported as failed, and disposing a replaced
  * account's tracker releases its private positions and drops late results.
@@ -290,7 +290,7 @@ describe('account indexing progress', () => {
     ]);
   });
 
-  it('keeps accumulated commits within one observation request and releases them together', async () => {
+  it('checks accumulated commits in bounded batches and releases only confirmed positions', async () => {
     const scheduler = createScheduler();
     const read = vi.fn<ProgressRead>(async () => indexed('100'));
     const progress = progressOver(read, scheduler);
@@ -299,9 +299,7 @@ describe('account indexing progress', () => {
     progress.committed(positions);
     await flush();
 
-    // Incorporation grows with the indexed position, so the highest committed position answers
-    // for every lower one and the request respects the contract's declared bound.
-    expect(positionRequests(read)).toEqual([['51']]);
+    expect(positionRequests(read)).toEqual([positions.slice(0, 50), ['51']]);
     expect(read.mock.calls[0]?.[0]?.positions?.length).toBeLessThanOrEqual(
       SEARCH_LIMITS.maxRequiredPositions,
     );
@@ -329,13 +327,57 @@ describe('account indexing progress', () => {
 
     progress.recheck();
     await flush();
-    expect(positionRequests(read)).toEqual([['51'], ['51']]);
+    expect(positionRequests(read)).toEqual([
+      positions.slice(0, 50),
+      positions.slice(0, 50),
+      ['51'],
+    ]);
     expect(progress.status()).toEqual({
       accountId: alice,
       state: 'incorporated',
       outstanding: [],
       revisions: indexed('51').revisions,
     });
+  });
+
+  it('does not clear an unknown or foreign position because a later position is incorporated', async () => {
+    const scheduler = createScheduler();
+    const read = vi.fn<ProgressRead>(async (request) =>
+      request.positions?.some((position) => position === '4' || position === '0002')
+        ? indexing('6')
+        : indexed('6'),
+    );
+    const progress = progressOver(read, scheduler);
+    progress.committed(['4', '0002', '6']);
+    await flush();
+    expect(positionRequests(read)).toEqual([['4', '0002', '6']]);
+    expect(progress.status()).toMatchObject({ state: 'indexing', outstanding: ['4', '0002', '6'] });
+    progress.dispose();
+  });
+
+  it('keeps one deadline across batches and retains an unconfirmed later batch', async () => {
+    const scheduler = createScheduler();
+    let answer: (result: SearchProgress) => void = () => undefined;
+    const read = vi
+      .fn<ProgressRead>()
+      .mockResolvedValueOnce(indexed('100'))
+      .mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+    const progress = progressOver(read, scheduler);
+    progress.committed(Array.from({ length: 51 }, (_, index) => String(index + 1)));
+    await flush();
+    expect(progress.status().outstanding).toEqual(['51']);
+    expect(scheduler.checks.filter((check) => check.delayMs === 300)).toHaveLength(1);
+    await scheduler.runNext();
+    expect(progress.status()).toMatchObject({ state: 'delayed', outstanding: ['51'] });
+    answer(indexed('100'));
+    await flush();
+    expect(progress.status()).toMatchObject({ state: 'delayed', outstanding: ['51'] });
+    progress.dispose();
   });
 
   it('releases private positions on disposal and drops late results', async () => {

@@ -10,7 +10,7 @@ import { SearchError } from './errors.js';
 import { countsStatement, pageStatement, type SearchPageStatement } from './evaluation.js';
 import type { SearchSqlExecutor, SearchSqlRow } from './executor.js';
 import {
-  incorporatedProgress,
+  type IndexedProgress,
   progressStatement,
   readSearchProgressRows,
   type SearchObservationOptions,
@@ -21,6 +21,7 @@ import {
   SEARCH_LIMITS,
   requiresTrustedContext,
   type SearchQuery,
+  type SearchRequiredProgress,
   type SearchRequestInput,
   type SearchRevisions,
 } from './model.js';
@@ -139,12 +140,15 @@ export function createSearch(dependencies: SearchDependencies): Search {
   }
 
   /** Reads the indexed state of one account; without a usable account it stays public. */
-  async function readIndexedState(accountId: string | null): Promise<SearchRevisions | null> {
+  async function readIndexedState(
+    accountId: string | null,
+    required: SearchRequiredProgress,
+  ): Promise<IndexedProgress> {
     if (accountId === null) {
-      return readState(sql);
+      return readState(sql, required);
     }
     try {
-      return await withAccountScope(accountId, (scoped) => readState(scoped));
+      return await withAccountScope(accountId, (scoped) => readState(scoped, required));
     } catch (cause) {
       throw evaluationFailure(cause);
     }
@@ -192,7 +196,7 @@ export function createSearch(dependencies: SearchDependencies): Search {
       const hasMore = page.entries.length > query.pageSize;
       const entries = hasMore ? page.entries.slice(0, query.pageSize) : page.entries;
       return {
-        status: incorporatedProgress(revisions, query.required) ? 'ready' : 'updating',
+        status: page.incorporated ? 'ready' : 'updating',
         entries: entries.map((entry) => searchEntry(entry, query)),
         totalCount: page.totalCount,
         continuation: hasMore
@@ -263,22 +267,26 @@ export function createSearch(dependencies: SearchDependencies): Search {
       let revisions: SearchRevisions | null = null;
       for (;;) {
         requireNotCancelled(signal);
-        const read = await readWithinDeadline(() => readIndexedState(accountId), deadline, signal);
+        const read = await readWithinDeadline(
+          () => readIndexedState(accountId, required),
+          deadline,
+          signal,
+        );
         // A withdrawal that happened while the read was outstanding wins over its result.
         requireNotCancelled(signal);
         if (read === observationExpired) {
           return { state: 'delayed', revisions };
         }
-        revisions = read;
-        if (incorporatedProgress(read, required)) {
-          return { state: 'incorporated', revisions: read };
+        revisions = read.revisions;
+        if (read.incorporated) {
+          return { state: 'incorporated', revisions };
         }
         if (deadline === null) {
-          return { state: 'indexing', revisions: read };
+          return { state: 'indexing', revisions };
         }
         const remaining = deadline - Date.now();
         if (remaining <= 0) {
-          return { state: 'delayed', revisions: read };
+          return { state: 'delayed', revisions };
         }
         await waitForInterval(Math.min(SEARCH_LIMITS.observationIntervalMs, remaining), signal);
       }
@@ -287,9 +295,13 @@ export function createSearch(dependencies: SearchDependencies): Search {
 }
 
 /** Reads the one indexed-state row of a progress statement. */
-async function readState(sql: SearchSqlExecutor): Promise<SearchRevisions | null> {
+async function readState(
+  sql: SearchSqlExecutor,
+  required: SearchRequiredProgress,
+): Promise<IndexedProgress> {
   try {
-    return readSearchProgressRows(await sql.query(progressStatement()));
+    const request = progressStatement(required);
+    return readSearchProgressRows(await sql.query(request.statement, request.parameters));
   } catch (cause) {
     throw evaluationFailure(cause);
   }
@@ -317,7 +329,7 @@ function readObservationTimeout(timeoutMs: number | undefined): number {
 const observationExpired = Symbol('search-observation-expired');
 
 /** One read of the observation's indexed state, or the report that its bound expired first. */
-type ObservationRead = SearchRevisions | null | typeof observationExpired;
+type ObservationRead = IndexedProgress | typeof observationExpired;
 
 /**
  * Awaits one indexed-state read inside the observation's bound. The remaining wait and the
@@ -327,7 +339,7 @@ type ObservationRead = SearchRevisions | null | typeof observationExpired;
  * reaches the caller (docs/search.md#freshness).
  */
 function readWithinDeadline(
-  read: () => Promise<SearchRevisions | null>,
+  read: () => Promise<IndexedProgress>,
   deadline: number | null,
   signal: AbortSignal | null,
 ): Promise<ObservationRead> {

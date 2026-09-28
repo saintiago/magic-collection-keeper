@@ -47,7 +47,10 @@ above and printing-to-card relationships. The contract exposes no SQL, tables or
 Provide a consistent, paginated snapshot of one published revision and a resumable change position.
 Changes carry stable identity, revision and upsert/removal meaning. Publication of a bulk revision is
 complete and atomic from the consumer's perspective. Repeated reads preserve meaning; an expired
-position explicitly requires a new snapshot. Snapshot and change handoff must leave no gap.
+position explicitly requires a new snapshot. Snapshot and change handoff must leave no gap. Snapshot
+pages also identify the completed revisions within retained publication history that the snapshot
+incorporates; this metadata is bounded by the provider's retention window. Revision identities are
+opaque to consumers.
 
 Durably record publication with the authoritative revision. Search can rebuild independently and
 continue after interrupted delivery. A replacement preserves these records and lifecycle guarantees,

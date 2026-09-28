@@ -20,12 +20,18 @@ const account = { accountId: 'account-42' };
 
 /** One indexed-state row of a progress read. */
 function progressRow(options: {
+  readonly incorporated?: boolean;
   readonly generation?: string | null;
   readonly catalogRevision?: string | null;
   readonly privateRevision?: string | null;
 }): SearchSqlRow {
   return {
     row_kind: 'state',
+    required_incorporated:
+      options.incorporated ??
+      (options.privateRevision !== '4' &&
+        options.privateRevision !== null &&
+        options.generation !== null),
     generation: options.generation === undefined ? 'generation-1' : options.generation,
     catalog_revision:
       options.catalogRevision === undefined ? 'revision-1' : options.catalogRevision,
@@ -135,11 +141,13 @@ describe('search freshness observation', () => {
     expect((await pendingPrivate).state).toBe('delayed');
   });
 
-  it('reports a different catalog revision as not incorporated', async () => {
+  it('uses incorporation evidence rather than the current catalog revision', async () => {
     const search = searchOver(() => [progressRow({ catalogRevision: 'revision-7' })]);
 
-    const observation = await search.observe({ catalogRevision: 'revision-1' }, account);
-    const incorporated = await search.observe({ catalogRevision: 'revision-7' }, account);
+    const observation = await searchOver(() => [
+      progressRow({ catalogRevision: 'revision-7', incorporated: false }),
+    ]).observe({ catalogRevision: 'unknown' }, account);
+    const incorporated = await search.observe({ catalogRevision: 'revision-1' }, account);
 
     expect(observation.state).toBe('indexing');
     expect(incorporated.state).toBe('incorporated');

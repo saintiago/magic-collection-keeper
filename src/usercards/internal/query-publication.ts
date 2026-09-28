@@ -142,6 +142,8 @@ export interface UserCardsSnapshotRequest {
 }
 
 export interface UserCardsSnapshotPage {
+  /** Retained completed publications incorporated by this snapshot; identities are opaque. */
+  readonly incorporatedPositions: readonly string[];
   readonly accountId: string;
   /**
    * Change position this snapshot was read at. Changes published after it follow it, so a
@@ -268,6 +270,10 @@ select 'position' as row_kind, 0 as row_position, null::text as record_kind,
        marker.position as payload
   from marker
 union all
+select 'incorporated', 0, null::text, position::text
+from usercards_private.publication
+where account_id = :account_id and kind = 'revision'
+union all
 (select 'record' as row_kind,
         (row_number() over (order by records.kind_rank, records.record_key))::int as row_position,
         records.record_kind,
@@ -316,7 +322,7 @@ select 'change' as row_kind, page.change_position, (to_jsonb(page) - 'change_pos
 order by row_kind, row_position`;
 
 const snapshotRowSchema = z.object({
-  row_kind: z.enum(['position', 'record']),
+  row_kind: z.enum(['position', 'record', 'incorporated']),
   row_position: z.number().int().min(0),
   record_kind: z.enum(['copy', 'tag', 'association']).nullable(),
   payload: z.string(),
@@ -362,6 +368,7 @@ const associationRecordJsonSchema = z.object({
 });
 
 interface SnapshotData {
+  readonly incorporatedPositions: readonly string[];
   readonly position: UserCardsChangePosition;
   readonly records: readonly UserCardsPublishedRecord[];
 }
@@ -408,6 +415,7 @@ export function createUserCardsPublication(
       return {
         accountId,
         position: read.position,
+        incorporatedPositions: read.incorporatedPositions,
         records: hasMore ? read.records.slice(0, pageSize) : read.records,
         continuation: hasMore
           ? encodeContinuation({
@@ -527,12 +535,15 @@ async function bindAccount(statements: UserCardsSqlExecutor, accountId: string):
 function decodeSnapshot(rows: readonly UserCardsSqlRow[]): SnapshotData {
   let position: string | null = null;
   const records: UserCardsPublishedRecord[] = [];
+  const incorporatedPositions: string[] = [];
   for (const row of rows) {
     const parsed = snapshotRowSchema.safeParse(row);
     if (!parsed.success) {
       throw unreadable();
     }
-    if (parsed.data.row_kind === 'position') {
+    if (parsed.data.row_kind === 'incorporated') {
+      incorporatedPositions.push(parsePosition(parsed.data.payload));
+    } else if (parsed.data.row_kind === 'position') {
       position = parsePosition(parsed.data.payload);
     } else {
       records.push(decodeRecord(parsed.data.record_kind, parsed.data.payload));
@@ -544,7 +555,7 @@ function decodeSnapshot(rows: readonly UserCardsSqlRow[]): SnapshotData {
       'UserCards did not report the account’s publication position.',
     );
   }
-  return { position, records };
+  return { position, records, incorporatedPositions };
 }
 
 function decodeChanges(accountId: string, rows: readonly UserCardsSqlRow[]): ChangesData {

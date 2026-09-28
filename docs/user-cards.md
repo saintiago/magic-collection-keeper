@@ -46,6 +46,9 @@ account, stable change identity, account-scoped revision and explicit upserts/re
 mutation's publication is complete, including coupled ownership/location changes. Snapshot and change
 handoff leaves no gap; expired positions require a new snapshot. Foreign or missing authorization
 fails closed. Trusted indexing access is granted separately from an end-user's read access.
+Snapshot pages also identify the account's completed mutation positions within retained publication
+history that the snapshot incorporates. This metadata is bounded by the provider's retention window;
+position identities are opaque and numeric order alone never establishes account membership.
 
 Commit the authoritative change and durable publication atomically. Search consumes this contract
 and owns its resulting projection; it has no access to private tables or SQL views. Source replacement

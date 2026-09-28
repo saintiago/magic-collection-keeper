@@ -1,3 +1,4 @@
+import { incorporatedProgressSql } from './freshness.js';
 import type { SearchSqlValue } from './executor.js';
 import {
   isPrivateCriterion,
@@ -283,6 +284,7 @@ select
   null::text as catalog_position,
   null::text as private_revision,
   null::text as bound_account,
+  null::boolean as required_incorporated,
   null::int as total_count
 from page
 union all
@@ -304,6 +306,7 @@ select
   state.catalog_position as catalog_position,
   ${privateRevision} as private_revision,
   ${boundAccount} as bound_account,
+  ${incorporatedProgressSql(query.required, bind)} as required_incorporated,
   case when state.generation_id is null
        then null::int
        else (select count(*)::int from matched) end as total_count

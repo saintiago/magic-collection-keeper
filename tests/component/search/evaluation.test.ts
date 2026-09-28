@@ -31,6 +31,7 @@ const privateRelations = [
 
 /** One indexed-state row of a page statement, as Search's own projection reports it. */
 function stateRow(options: {
+  readonly incorporated?: boolean;
   readonly generation?: string | null;
   readonly catalogRevision?: string | null;
   readonly catalogPosition?: string | null;
@@ -40,6 +41,7 @@ function stateRow(options: {
 }): SearchSqlRow {
   return {
     row_kind: 'state',
+    required_incorporated: options.incorporated ?? true,
     row_position: 0,
     generation: options.generation === undefined ? 'generation-1' : options.generation,
     catalog_revision:
@@ -198,7 +200,12 @@ describe('search evaluation contract', () => {
         withAccountScope: async (_accountId, work) =>
           work({
             query: async () => [
-              stateRow({ privateRevision, totalCount: 0, boundAccount: 'account-42' }),
+              stateRow({
+                privateRevision,
+                incorporated: privateRevision === '12',
+                totalCount: 0,
+                boundAccount: 'account-42',
+              }),
             ],
           }),
       });
@@ -221,7 +228,15 @@ describe('search evaluation contract', () => {
   it('reports a required catalog revision as updating until the generation holds it', async () => {
     const search = (catalogRevision: string) =>
       createSearch({
-        sql: { query: async () => [stateRow({ catalogRevision, privateRevision: null })] },
+        sql: {
+          query: async () => [
+            stateRow({
+              catalogRevision,
+              incorporated: catalogRevision === 'revision-2',
+              privateRevision: null,
+            }),
+          ],
+        },
         withAccountScope: async (_accountId, work) => work({ query: async () => [] }),
       });
 

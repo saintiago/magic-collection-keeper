@@ -254,6 +254,23 @@ describe('catalog query publication', () => {
     });
   });
 
+  it('publishes retained revision incorporation evidence with every snapshot page', async () => {
+    const first = await publish('snapshot-1', [bolt]);
+    const second = await publish('snapshot-2', [bolt, solRing]);
+    const page = await publication().readSnapshot({ pageSize: 1 });
+    expect(page.incorporatedRevisions).toEqual(
+      expect.arrayContaining([first.revisionId, second.revisionId]),
+    );
+    expect(page.incorporatedRevisions.length).toBeLessThanOrEqual(
+      CATALOG_PUBLICATION_LIMITS.retainedPublications,
+    );
+    const next = await publication().readSnapshot({
+      pageSize: 1,
+      continuation: page.continuation!,
+    });
+    expect(next.incorporatedRevisions).toEqual(page.incorporatedRevisions);
+  });
+
   it('resumes the durable changes from the snapshot position without a gap', async () => {
     await publish('snapshot-1', [bolt]);
     const before = await readWholeSnapshot(publication(), 1);

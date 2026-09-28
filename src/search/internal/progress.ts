@@ -8,10 +8,9 @@ import type { SearchRevisions } from './model.js';
  *
  * Application connects the account's known committed publication positions to this tracker; the
  * shell observes the status it publishes and presents it, and never compares positions or polls
- * itself. One observation window covers every outstanding position: it requires the highest one,
- * because an indexed position that reaches it incorporates every position below it, so the request
- * stays within Search's declared bound however many commits accumulate; the window is measured in
- * elapsed time, so a check whose read stalls expires it instead of holding the status at indexing.
+ * itself. Each request checks a bounded batch of explicit positions: positions are opaque and
+ * an incorporated position does not prove another belongs to this account. Each observation window
+ * is measured in elapsed time, so a stalled read expires instead of holding status at indexing.
  * A check that reports incorporation releases the positions it observed, a window that expires
  * reports delayed, a failed read reports unavailable — never completion — and `recheck` observes
  * again. A tracker belongs to one account: replacing the account disposes it, which releases the
@@ -103,10 +102,9 @@ export function createSearchProgress(
       return () => clearTimeout(timer);
     });
 
-  /** The one open observation: its identity, its positions and how it is withdrawn. */
+  /** The one open observation: its identity and how it is withdrawn. */
   let observation: {
     readonly id: number;
-    readonly positions: readonly string[];
     /** Stops the open observation: the next scheduled check and a running read. */
     readonly stop: () => void;
   } | null = null;
@@ -153,17 +151,11 @@ export function createSearchProgress(
     }
     nextObservationId += 1;
     const id = nextObservationId;
-    const positions = [...status.outstanding];
-    // Search bounds one observation request; an indexed position at or beyond the highest known
-    // commit incorporates every lower one, so the request names that position alone while the
-    // status keeps reporting every outstanding position (docs/search.md#freshness).
-    const required = highestPosition(positions);
     const controller = new AbortController();
     let cancelScheduled: (() => void) | null = null;
     let cancelWindow: (() => void) | null = null;
     observation = {
       id,
-      positions,
       stop: () => {
         cancelScheduled?.();
         cancelScheduled = null;
@@ -182,28 +174,31 @@ export function createSearchProgress(
     });
 
     const check = (): void => {
+      if (disposed || observation?.id !== id) {
+        return;
+      }
+      const positions = status.outstanding.slice(0, SEARCH_LIMITS.maxRequiredPositions);
       cancelScheduled = null;
       dependencies
-        .read({ positions: [required] }, { signal: controller.signal })
+        .read({ positions }, { signal: controller.signal })
         .then((result) => {
           if (disposed || observation?.id !== id) {
             return;
           }
           const observed: SearchIndexingStatus = { ...status, revisions: result.revisions };
           if (result.state === 'incorporated') {
-            // Incorporation grows with the indexed position, so everything up to the observed
-            // position is incorporated; a commit reported meanwhile stays outstanding.
+            // Only the exact positions in this successful request have been established.
+            const observedPositions = new Set(positions);
             const outstanding = status.outstanding.filter(
-              (position) => BigInt(position) > BigInt(required),
+              (position) => !observedPositions.has(position),
             );
             if (outstanding.length === 0) {
               finish(id, { ...observed, state: 'incorporated', outstanding });
               return;
             }
-            // Positions committed while this window was open stay outstanding; observe them too.
-            withdraw(id);
+            // Continue the next batch within this same deadline, including newly reported commits.
             publish({ ...observed, outstanding });
-            start();
+            check();
             return;
           }
           if (result.state === 'failed' || result.state === 'delayed') {
@@ -284,20 +279,6 @@ function readBound(value: number | undefined, fallback: number, name: string): n
     );
   }
   return value;
-}
-
-/** The greatest of the known committed positions; the tracker never observes an empty set. */
-function highestPosition(positions: readonly string[]): string {
-  let highest = positions[0];
-  if (highest === undefined) {
-    throw new TypeError('An observation needs at least one committed position.');
-  }
-  for (const position of positions) {
-    if (BigInt(position) > BigInt(highest)) {
-      highest = position;
-    }
-  }
-  return highest;
 }
 
 function sameStatus(left: SearchIndexingStatus, right: SearchIndexingStatus): boolean {

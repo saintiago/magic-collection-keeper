@@ -12,6 +12,8 @@ import { SEARCH_ACCOUNT_SETTING, SEARCH_PROJECTION_SURFACE } from '../../src/sea
 import { createTestDatabase, type TestDatabase } from './postgres-database.js';
 
 const relations = {
+  catalogProgress: SEARCH_PROJECTION_SURFACE.relations.catalogProgress.name,
+  accountProgress: SEARCH_PROJECTION_SURFACE.relations.accountProgress.name,
   cards: SEARCH_PROJECTION_SURFACE.relations.cards.name,
   cardNames: SEARCH_PROJECTION_SURFACE.relations.cardNames.name,
   printings: SEARCH_PROJECTION_SURFACE.relations.printings.name,
@@ -58,6 +60,13 @@ create table search_fixture.replacement_state (
   generation_id text, catalog_revision text, catalog_position text, published boolean
 );
 create table search_fixture.replacement_account_state (account_id text, position text);
+create table search_fixture.catalog_evidence (generation_id text, revision_id text);
+create table search_fixture.account_evidence (generation_id text, account_id text, position text);
+create view ${relations.catalogProgress} as
+  select revision_id from search_fixture.catalog_evidence where generation_id = ${publishedGeneration};
+create view ${relations.accountProgress} with (security_barrier) as
+  select position from search_fixture.account_evidence
+  where generation_id = ${publishedGeneration} and account_id = ${boundAccount};
 
 -- Decoys of the retired cross-owner relations: a query reading these would answer differently.
 create schema catalog;

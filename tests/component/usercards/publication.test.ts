@@ -423,6 +423,26 @@ describe('usercards publication', () => {
     ).toBe(false);
   });
 
+  it('publishes bounded exact account incorporation evidence in snapshots', async () => {
+    const first = await createCopy(alice);
+    const foreign = await createCopy(bob);
+    const second = await createCopy(alice);
+    const page = await publication.readSnapshot({ accountId: alice.accountId, pageSize: 1 });
+    expect(page.incorporatedPositions).toEqual(
+      expect.arrayContaining([first.publicationPosition, second.publicationPosition]),
+    );
+    expect(page.incorporatedPositions).not.toContain(foreign.publicationPosition);
+    expect(page.incorporatedPositions.length).toBeLessThanOrEqual(
+      USERCARDS_PUBLICATION_LIMITS.retainedRevisions,
+    );
+    const next = await publication.readSnapshot({
+      accountId: alice.accountId,
+      pageSize: 1,
+      continuation: page.continuation!,
+    });
+    expect(next.incorporatedPositions).toEqual(page.incorporatedPositions);
+  });
+
   it('scopes every snapshot and change to its own account and fails closed on foreign positions', async () => {
     const aliceCopy = await createCopy(alice);
     const bobCopy = await createCopy(bob);

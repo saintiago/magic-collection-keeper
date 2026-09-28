@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { SearchError } from './errors.js';
-import type { SearchSqlRow } from './executor.js';
+import type { SearchSqlRow, SearchSqlValue } from './executor.js';
 import { SEARCH_LIMITS, type SearchRequiredProgress, type SearchRevisions } from './model.js';
 import { privateRevisionSql, projectionRelations } from './relations.js';
 
@@ -56,19 +56,31 @@ export interface SearchObservationOptions {
  * the bound account's indexed position. The state row is returned even when nothing is published,
  * so an absent generation is explicit rather than an unreadable answer.
  */
-export function progressStatement(): string {
-  return `select
+export function progressStatement(required: SearchRequiredProgress): {
+  statement: string;
+  parameters: Record<string, SearchSqlValue>;
+} {
+  const parameters: Record<string, SearchSqlValue> = {};
+  const bind = (value: SearchSqlValue): string => {
+    const name = `progress_${Object.keys(parameters).length}`;
+    parameters[name] = value;
+    return `:${name}`;
+  };
+  const statement = `select
   'state' as row_kind,
   state.generation_id as generation,
   state.catalog_revision as catalog_revision,
   state.catalog_position as catalog_position,
-  ${privateRevisionSql} as private_revision
+  ${privateRevisionSql} as private_revision,
+  ${incorporatedProgressSql(required, bind)} as required_incorporated
 from (values (1)) as marker (one)
 left join ${projectionRelations.indexState} as state on true`;
+  return { statement, parameters };
 }
 
 const stateRowSchema = z.object({
   row_kind: z.literal('state'),
+  required_incorporated: z.boolean(),
   generation: z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength).nullable(),
   catalog_revision: z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength).nullable(),
   catalog_position: z
@@ -89,7 +101,11 @@ const stateRowSchema = z.object({
  * Reads the one indexed-state row of a progress read. A missing, repeated or inconsistent row is
  * an unavailable read; no published generation is reported as null, never as an empty generation.
  */
-export function readSearchProgressRows(rows: readonly SearchSqlRow[]): SearchRevisions | null {
+export interface IndexedProgress {
+  readonly revisions: SearchRevisions | null;
+  readonly incorporated: boolean;
+}
+export function readSearchProgressRows(rows: readonly SearchSqlRow[]): IndexedProgress {
   if (rows.length !== 1) {
     throw unreadable();
   }
@@ -102,40 +118,39 @@ export function readSearchProgressRows(rows: readonly SearchSqlRow[]): SearchRev
     if (generation !== null || catalog_revision !== null || catalog_position !== null) {
       throw unreadable();
     }
-    return null;
+    return { revisions: null, incorporated: false };
   }
   return {
-    generation,
-    catalogRevision: catalog_revision,
-    catalogPosition: catalog_position,
-    privateRevision: private_revision,
+    incorporated: parsed.data.required_incorporated,
+    revisions: {
+      generation,
+      catalogRevision: catalog_revision,
+      catalogPosition: catalog_position,
+      privateRevision: private_revision,
+    },
   };
 }
 
-/**
- * Whether one indexed state incorporates every required position and revision
- * (docs/search.md#freshness). A missing generation, an account without an indexed position and a
- * different catalog revision are never incorporated; positions grow, so an indexed position at or
- * beyond a required one incorporates it.
- */
-export function incorporatedProgress(
-  indexed: SearchRevisions | null,
+/** Exact provider-backed incorporation evidence, read in the same snapshot as results. */
+export function incorporatedProgressSql(
   required: SearchRequiredProgress,
-): boolean {
-  if (indexed === null) {
-    return false;
+  bind: (value: SearchSqlValue) => string,
+): string {
+  const conditions = ['state.generation_id is not null'];
+  if (required.catalogRevision !== null) {
+    conditions.push(
+      `exists (select 1 from ${projectionRelations.catalogProgress} where revision_id = ${bind(required.catalogRevision)})`,
+    );
   }
-  if (required.catalogRevision !== null && indexed.catalogRevision !== required.catalogRevision) {
-    return false;
+  if (required.positions.length > 0) {
+    conditions.push(`${privateRevisionSql} is not null`);
+    for (const position of required.positions) {
+      conditions.push(
+        `exists (select 1 from ${projectionRelations.accountProgress} where position = ${bind(position)})`,
+      );
+    }
   }
-  if (required.positions.length === 0) {
-    return true;
-  }
-  if (indexed.privateRevision === null) {
-    return false;
-  }
-  const indexedPosition = BigInt(indexed.privateRevision);
-  return required.positions.every((position) => indexedPosition >= BigInt(position));
+  return conditions.join(' and ');
 }
 
 function unreadable(): SearchError {
