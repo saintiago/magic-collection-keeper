@@ -4,13 +4,16 @@
  * Candidate records are upserted in bounded batches inside a single database transaction, so a
  * failed or interrupted ingestion leaves the previous revision and its records exactly as they
  * were, and readers observe either the complete previous revision or the complete candidate one.
- * Records the provider no longer publishes keep their published row: existing references stay
- * resolvable.
+ * The same transaction appends the durable publication stream the query publication serves: one
+ * change per record this revision inserted or changed, then the revision that completes them, then
+ * the retention of older publications. Records the provider no longer publishes keep their
+ * published row and are not published as removals: existing references stay resolvable.
  */
 
 import { CatalogError } from './errors.js';
 import type { CatalogSqlExecutor, CatalogSqlTransactor } from './executor.js';
 import type { CatalogRevision } from './model.js';
+import { CATALOG_PUBLICATION_LIMITS } from './query-publication.js';
 import { readPublishedRevision } from './postgres.js';
 import type { MappedProviderRecord } from './scryfall.js';
 import { CATALOG_SYNCHRONIZATION_LIMITS } from './snapshot.js';
@@ -55,9 +58,13 @@ const publicationLockStatement = `select case
     else 'false'
   end as locked`;
 
-const cardUpsertStatement = `insert into catalog_private.card (
-    card_id, name, rules_text, type_line, colors, color_identity, mana_value
-  )
+/**
+ * One candidate batch writes its records and the change of every record it inserted or changed.
+ * The change carries the stored record, so a consumer applies the published facts without reading
+ * the catalog's storage; the `where ... is distinct from` clause keeps a repeated record out of
+ * the stream, and the conflict clause keeps one change per identity within a revision.
+ */
+const cardWriteStatement = `with candidate as (
   select card_id, name, rules_text, type_line, colors, color_identity, mana_value
   from jsonb_to_recordset(cast(:card_batch as jsonb)) as entry(
     card_id text,
@@ -68,27 +75,62 @@ const cardUpsertStatement = `insert into catalog_private.card (
     color_identity text[],
     mana_value numeric
   )
+),
+changed as (
+  insert into catalog_private.card as stored (
+    card_id, name, rules_text, type_line, colors, color_identity, mana_value
+  )
+  select card_id, name, rules_text, type_line, colors, color_identity, mana_value
+  from candidate
   on conflict (card_id) do update set
     name = excluded.name,
     rules_text = excluded.rules_text,
     type_line = excluded.type_line,
     colors = excluded.colors,
     color_identity = excluded.color_identity,
-    mana_value = excluded.mana_value`;
+    mana_value = excluded.mana_value
+  where (stored.name, stored.rules_text, stored.type_line, stored.colors, stored.color_identity,
+         stored.mana_value)
+     is distinct from
+        (excluded.name, excluded.rules_text, excluded.type_line, excluded.colors,
+         excluded.color_identity, excluded.mana_value)
+  returning card_id, name, rules_text, type_line, colors, color_identity, mana_value
+)
+insert into catalog_private.publication (
+    revision_id, source_name, source_version, published_at, kind, record_identity, removed, record
+  )
+  select :revision_id, :source_name, :source_version, cast(:published_at as timestamptz),
+         'card', published_record.card_id, false, to_jsonb(published_record)
+  from changed as published_record
+  on conflict (revision_id, kind, record_identity) do update set record = excluded.record`;
 
-const nameUpsertStatement = `insert into catalog_private.card_name (card_id, language, name)
+const nameWriteStatement = `with candidate as (
   select card_id, language, name
   from jsonb_to_recordset(cast(:name_batch as jsonb)) as entry(
     card_id text,
     language text,
     name text
   )
-  on conflict do nothing`;
-
-const printingUpsertStatement = `insert into catalog_private.printing (
-    printing_id, card_id, edition, collector_number, language, finishes, physical,
-    image_small, image_normal, image_large, image_art_crop
+),
+changed as (
+  insert into catalog_private.card_name (card_id, language, name)
+  select card_id, language, name
+  from candidate
+  on conflict do nothing
+  returning card_id, language, name
+)
+insert into catalog_private.publication (
+    revision_id, source_name, source_version, published_at, kind, record_identity, removed, record
   )
+  select :revision_id, :source_name, :source_version, cast(:published_at as timestamptz),
+         'card-name',
+         jsonb_build_array(published_record.card_id, published_record.language,
+                           published_record.name)::text,
+         false, to_jsonb(published_record)
+  from changed as published_record
+  on conflict (revision_id, kind, record_identity) do update set record = excluded.record`;
+
+const printingWriteStatement = `with candidate as (
   select printing_id, card_id, edition, collector_number, language, finishes, physical,
          image_small, image_normal, image_large, image_art_crop
   from jsonb_to_recordset(cast(:printing_batch as jsonb)) as entry(
@@ -104,6 +146,15 @@ const printingUpsertStatement = `insert into catalog_private.printing (
     image_large text,
     image_art_crop text
   )
+),
+changed as (
+  insert into catalog_private.printing as stored (
+    printing_id, card_id, edition, collector_number, language, finishes, physical,
+    image_small, image_normal, image_large, image_art_crop
+  )
+  select printing_id, card_id, edition, collector_number, language, finishes, physical,
+         image_small, image_normal, image_large, image_art_crop
+  from candidate
   on conflict (printing_id) do update set
     card_id = excluded.card_id,
     edition = excluded.edition,
@@ -114,7 +165,49 @@ const printingUpsertStatement = `insert into catalog_private.printing (
     image_small = excluded.image_small,
     image_normal = excluded.image_normal,
     image_large = excluded.image_large,
-    image_art_crop = excluded.image_art_crop`;
+    image_art_crop = excluded.image_art_crop
+  where (stored.card_id, stored.edition, stored.collector_number, stored.language, stored.finishes,
+         stored.physical, stored.image_small, stored.image_normal, stored.image_large,
+         stored.image_art_crop)
+     is distinct from
+        (excluded.card_id, excluded.edition, excluded.collector_number, excluded.language,
+         excluded.finishes, excluded.physical, excluded.image_small, excluded.image_normal,
+         excluded.image_large, excluded.image_art_crop)
+  returning printing_id, card_id, edition, collector_number, language, finishes, physical,
+            image_small, image_normal, image_large, image_art_crop
+)
+insert into catalog_private.publication (
+    revision_id, source_name, source_version, published_at, kind, record_identity, removed, record
+  )
+  select :revision_id, :source_name, :source_version, cast(:published_at as timestamptz),
+         'printing', published_record.printing_id, false, to_jsonb(published_record)
+  from changed as published_record
+  on conflict (revision_id, kind, record_identity) do update set record = excluded.record`;
+
+/**
+ * The revision that completes the candidate. It is written after every record change of the
+ * revision, so its position is the snapshot position and a consumer that applied it holds the
+ * complete revision.
+ */
+const revisionChangeStatement = `insert into catalog_private.publication (
+    revision_id, source_name, source_version, published_at, kind, record_identity, removed, record
+  )
+  values (
+    :revision_id, :source_name, :source_version, cast(:published_at as timestamptz),
+    'revision', null, false, null
+  )`;
+
+/** Retains the declared number of newest publications; older positions expire explicitly. */
+const retentionStatement = `delete from catalog_private.publication
+where position < (
+  select marker.position
+  from (
+    select position, row_number() over (order by position desc) as marker_rank
+    from catalog_private.publication
+    where kind = 'revision'
+  ) as marker
+  where marker.marker_rank = :retained_publications
+)`;
 
 const revisionUpsertStatement = `insert into catalog_private.revision (
     singleton, revision_id, source_name, source_version, published_at
@@ -147,6 +240,12 @@ export async function publishCandidate(
     let buffered: SerializedRecord[] = [];
     let batched = 0;
     let bytes = 0;
+    const revision = {
+      revision_id: candidate.revisionId,
+      source_name: candidate.sourceName,
+      source_version: candidate.sourceVersion,
+      published_at: candidate.publishedAt,
+    };
 
     const flush = async (): Promise<void> => {
       if (buffered.length === 0) {
@@ -158,9 +257,12 @@ export async function publishCandidate(
       bytes = 0;
       // Cards precede the names and printings that reference them, and one batch never exceeds the
       // declared transport bounds (see serializeRecord).
-      await statements.query(cardUpsertStatement, { card_batch: rows.cards });
-      await statements.query(nameUpsertStatement, { name_batch: rows.names });
-      await statements.query(printingUpsertStatement, { printing_batch: rows.printings });
+      await statements.query(cardWriteStatement, { card_batch: rows.cards, ...revision });
+      await statements.query(nameWriteStatement, { name_batch: rows.names, ...revision });
+      await statements.query(printingWriteStatement, {
+        printing_batch: rows.printings,
+        ...revision,
+      });
     };
 
     let ingested = 0;
@@ -193,11 +295,12 @@ export async function publishCandidate(
       );
     }
     await flush();
-    await statements.query(revisionUpsertStatement, {
-      revision_id: candidate.revisionId,
-      source_name: candidate.sourceName,
-      source_version: candidate.sourceVersion,
-      published_at: candidate.publishedAt,
+    // The revision that completes the candidate is the last position of this publication: the
+    // snapshot reports it, and a consumer that applied it holds every record the revision changed.
+    await statements.query(revisionChangeStatement, revision);
+    await statements.query(revisionUpsertStatement, revision);
+    await statements.query(retentionStatement, {
+      retained_publications: CATALOG_PUBLICATION_LIMITS.retainedPublications,
     });
     return { revision: candidate, published: true };
   });

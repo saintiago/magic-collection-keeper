@@ -2,11 +2,12 @@
  * Catalog public entry point (docs/catalog.md#interface).
  *
  * Consumers resolve playable identities and exact printings in bounded batches, list a card's
- * printings, and read the declared query surface (CATALOG_QUERY_SURFACE) that Search joins in the
- * deployed database. Application synchronizes the catalog through its own contract: a configured
- * snapshot source supplies bulk provider text, and one atomic publication replaces the published
- * revision. Other components import Catalog through this module only; its internal modules stay
- * private to the component (docs/architecture.md, .dependency-cruiser.mjs).
+ * printings, and consume the query publication: a consistent snapshot of the published revision
+ * and the durable changes published after a position. Application synchronizes the catalog through
+ * its own contract: a configured snapshot source supplies bulk provider text, and one atomic
+ * publication replaces the published revision and appends its changes together. Other components
+ * import Catalog through this module only; its internal modules stay private to the component
+ * (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
 export { CatalogError, type CatalogFailureCode } from './internal/errors.js';
@@ -24,8 +25,10 @@ export {
   finishes,
   printingReferenceSchema,
   type CardColor,
+  type CardFacts,
   type CardId,
   type CardName,
+  type CardNameRecord,
   type CardRecord,
   type CardReference,
   type CatalogReference,
@@ -40,12 +43,29 @@ export {
 export {
   CATALOG_QUERY_SURFACE,
   catalogReaderGrants,
+  catalogPublicationGrants,
   catalogSchemaSql,
   type CatalogColumnType,
   type CatalogQueryRelation,
   type CatalogQuerySurface,
   type CatalogRelationColumn,
 } from './internal/schema.js';
+export {
+  CATALOG_PUBLICATION_LIMITS,
+  createCatalogPublication,
+  type CatalogChange,
+  type CatalogChangePosition,
+  type CatalogChangesPage,
+  type CatalogChangesRequest,
+  type CatalogPublication,
+  type CatalogPublicationDependencies,
+  type CatalogPublishedRecord,
+  type CatalogRecordChange,
+  type CatalogRecordReference,
+  type CatalogRevisionChange,
+  type CatalogSnapshotPage,
+  type CatalogSnapshotRequest,
+} from './internal/query-publication.js';
 export {
   createCatalog,
   type CardPrintingsPage,
