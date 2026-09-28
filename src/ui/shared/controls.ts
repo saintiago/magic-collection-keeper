@@ -9,6 +9,17 @@
 
 import { UI_LIMITS } from './limits.js';
 
+/** Redraw controls without dropping focus from a child view that survives the replacement. */
+export function replaceChildrenKeepingFocus(
+  container: HTMLElement,
+  ...nodes: (Node | string)[]
+): void {
+  const active = container.ownerDocument.activeElement;
+  const focused = active instanceof HTMLElement && container.contains(active) ? active : null;
+  container.replaceChildren(...nodes);
+  if (focused !== null && container.contains(focused)) focused.focus({ preventScroll: true });
+}
+
 /** One option of a select control the views present. */
 export interface UiSelectOption {
   readonly value: string;

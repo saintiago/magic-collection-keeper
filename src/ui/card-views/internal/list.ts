@@ -705,8 +705,15 @@ export function createCardListView<Context>(
   /** Preserve the actual editor field after all replacement fragments have mounted. */
   function preserveEditorFocus(): (() => boolean) | null {
     const active = document.activeElement;
-    if (!(active instanceof HTMLElement) || !entriesHost.contains(active) || !ownsInput(active))
-      return null;
+    if (!(active instanceof HTMLElement) || !entriesHost.contains(active)) return null;
+    if (!ownsInput(active)) {
+      // Reconciliation can detach a surviving child view with its parent row or fragment.
+      // Restore its actual control only; child keys and input still belong to the child list.
+      return () => {
+        if (entriesHost.contains(active)) active.focus({ preventScroll: true });
+        return true;
+      };
+    }
     const focus = readEntryFocus();
     const row = active.closest<HTMLElement>('[data-ui-entry]');
     const path: number[] = [];

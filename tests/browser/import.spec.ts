@@ -3171,6 +3171,81 @@ test('rejects ambiguous review choices and applies cached choices to the refresh
   expect(errors).toEqual([]);
 });
 
+test('saves the chosen printing while its catalog lookup is pending', async ({ page }) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.fill('#import-printing-query-entry-1', 'Bolt');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchSlice([m10], null),
+  );
+  const reads = (await control<unknown[]>(page, 'catalogRequests')).length;
+  await control(page, 'scriptCatalog', null);
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  const lookup = await requested(page, 'catalogRequests', reads);
+  // Save validates the chosen record separately; leave the earlier enrichment read pending.
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11, m10] });
+  // Submit before Catalog answers, without a row refresh to repaint the form for us.
+  await page.click('#import-review-save-entry-1');
+  expect((await requested<Record<string, unknown>>(page, 'review')).arguments).toMatchObject({
+    printingId: m10.printingId,
+    finish: 'nonfoil',
+  });
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText(
+    `Printing ${m10.printingId}`,
+  );
+  // A reopened picker remains independently usable when the earlier lookup redraws the form.
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches', 1)).id,
+    searchSlice([m10], null),
+  );
+  const choice = page.locator(`[data-ui-select="printing:${m10.printingId}"]`);
+  await choice.focus();
+  await settle(page, 'settleCatalog', lookup.id, { printings: [m10] });
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await expect(choice).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test('keeps nested printing picker focus when a review save refreshes its parent', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.fill('#import-review-quantity-entry-1', '2');
+  await page.click('#import-review-save-entry-1');
+  const review = await requested(page, 'review');
+  await page.fill('#import-printing-query-entry-1', 'Bolt');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchSlice([m10], null),
+  );
+  const choice = page.locator('[data-ui-select="printing:printing-m10-146-en"]');
+  await choice.focus();
+  await settle(page, 'settleReview', review.id, {
+    entry: entry({ quantity: 2, revision: 4 }),
+    session: session({ revision: 5 }),
+  });
+  await expect(choice).toBeFocused();
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session({ revision: 5 }),
+    entries: [entry({ quantity: 2, revision: 4 })],
+  });
+  await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('2');
+  await expect(choice).toBeFocused();
+  await choice.press('Space');
+  await expect(choice).toBeChecked();
+  await expect(page.locator('[data-ui-select="pending:entry-1"]')).not.toBeChecked();
+  expect(errors).toEqual([]);
+});
+
 for (const superseded of [false, true]) {
   test(`resolves a printing choice across row replacement (superseded: ${superseded})`, async ({
     page,

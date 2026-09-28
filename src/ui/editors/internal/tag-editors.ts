@@ -30,7 +30,7 @@ import {
 
 import type { CardViews, UiCardList, UiEntryOwnership } from '../../card-views/index.js';
 import { UI_LIMITS } from '../../shared/limits.js';
-import { controlLabel } from '../../shared/controls.js';
+import { controlLabel, replaceChildrenKeepingFocus } from '../../shared/controls.js';
 import type { UiDialogs } from '../../shared/dialogs.js';
 import { readRetainedList, readState } from '../../shared/state.js';
 import type { UiActionIntent } from '../../shared/actions.js';
@@ -1314,7 +1314,7 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
       });
       controls.push(controlLabel(document, 'Move to', chosen), move);
     }
-    editor.controls.replaceChildren(editor.status, ...controls);
+    replaceChildrenKeepingFocus(editor.controls, editor.status, ...controls);
   }
 
   /** The unsaved input of one association, created when the user first edits it. */

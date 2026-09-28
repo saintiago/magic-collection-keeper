@@ -2175,6 +2175,54 @@ test('keeps association selection and paging independent of its nested printing 
   await expect(parentSelection).toBeChecked();
 });
 
+for (const outcome of ['committed', 'conflict'] as const) {
+  test(`keeps nested printing picker focus when a quantity save is ${outcome}`, async ({
+    page,
+  }) => {
+    await openCardAssociation(page);
+    await page.fill('#tag-quantity-association-1', '4');
+    await page.click('#tag-quantity-save-association-1');
+    const change = await requested(page, 'changeAssociation');
+    await page.click('#tag-refine-choose-association-1');
+    await printingPage(page, 0, [boltPrinting]);
+    const choice = page.locator(`[data-ui-select="printing:${boltPrinting.printingId}"]`);
+    await choice.focus();
+    const saved = association({
+      targetLevel: 'card',
+      targetId: boltCard.cardId,
+      quantity: outcome === 'committed' ? 4 : 3,
+      revision: 2,
+    });
+    if (outcome === 'committed') {
+      await settle(page, 'settleChangeAssociation', change.id, saved);
+    } else {
+      await settle(page, 'fail', change.id, { code: 'conflict', message: 'Changed' });
+      await settle(page, 'settleReadAssociations', (await requested(page, 'readAssociations')).id, [
+        saved,
+      ]);
+    }
+    await expect(choice).toBeFocused();
+    if (outcome === 'committed') {
+      await settle(
+        page,
+        'settleListAssociations',
+        (await requested(page, 'listAssociations', 1)).id,
+        {
+          associations: [saved],
+        },
+      );
+      await settleCatalog(page, 1, { cards: [boltCard] });
+    } else {
+      await expect(page.locator('#tag-association-status-association-1')).toContainText('Changed');
+    }
+    await expect(page.locator('#tag-quantity-association-1')).toHaveValue('4');
+    await expect(choice).toBeFocused();
+    await choice.press('Space');
+    await expect(choice).toBeChecked();
+    await expect(page.locator('[data-ui-select="association:association-1"]')).not.toBeChecked();
+  });
+}
+
 test('rejects ambiguous refinement choices after a rejected first choice', async ({ page }) => {
   await openCardAssociation(page);
   await page.click('#tag-refine-choose-association-1');

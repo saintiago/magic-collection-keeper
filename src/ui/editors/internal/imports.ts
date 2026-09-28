@@ -42,6 +42,7 @@ import {
   readMessage,
   select,
   statusLine,
+  replaceChildrenKeepingFocus,
   submitButton,
   text,
   textArea,
@@ -1191,7 +1192,7 @@ export function createImportReviewEditor(
       save,
       remove,
     );
-    editor.controls.replaceChildren(...content);
+    replaceChildrenKeepingFocus(editor.controls, ...content);
     resumeFocusedControl(editor.controls, focused);
   }
 
@@ -1325,7 +1326,11 @@ export function createImportReviewEditor(
     if (picker !== undefined) {
       picker.host.hidden = true;
     }
-    await learnPrinting(record.entry.entryId, target.printingId);
+    const learning = learnPrinting(record.entry.entryId, target.printingId);
+    // The chosen target must reach the visible form and its Save handler before a catalog
+    // read yields. The lookup enriches that choice; it does not decide which printing to save.
+    paintEditor(editor);
+    await learning;
     const currentEditor = editors.get(entryKey);
     if (
       disposed ||
