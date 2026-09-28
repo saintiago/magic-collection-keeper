@@ -517,6 +517,42 @@ test('returning to a card level re-presents the printing window it held', async 
   expect(errors).toEqual([]);
 });
 
+test('leaving the card level releases the printing list that observed input', async ({ page }) => {
+  const errors = await openCollection(page, '#/cards/card-1');
+  // The window input and document focus observers the printing list installs are invisible to the
+  // page; the DevTools protocol counts them, so a list retained by a closed page is observable.
+  const client = await page.context().newCDPSession(page);
+  const observers = async (): Promise<number> => {
+    const counted = await client.send('Runtime.evaluate', {
+      expression: [
+        "['wheel', 'touchstart', 'pointerdown', 'keydown']",
+        '.reduce((total, type) => total + (getEventListeners(window)[type]?.length ?? 0), 0)',
+        "+ (getEventListeners(document)['focusin']?.length ?? 0)",
+      ].join(''),
+      includeCommandLineAPI: true,
+      returnByValue: true,
+    });
+    return counted.result.value as number;
+  };
+  const before = await observers();
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  const first = await printingsRequest(page);
+  await settlePrintings(page, first!.id, [printingRecord('printing-1')], null);
+  await expect(page.locator('#card-printings a')).toHaveCount(1);
+  // The presented card level's printing list observes explicit input beside the browser's own.
+  expect(await observers()).toBeGreaterThan(before);
+
+  // The card details page is left for a shell page without a list: the departed page's printing
+  // list releases its rendered DOM and the observers it installed with that page's signal, so
+  // nothing of the closed view keeps observing the browser.
+  await page.evaluate(() => {
+    window.location.hash = '#/not-a-page';
+  });
+  await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+  await expect.poll(observers).toBe(before);
+  expect(errors).toEqual([]);
+});
+
 test('an initial printing-list failure is reported and retried from the card level', async ({
   page,
 }) => {
