@@ -52,7 +52,10 @@ regressions. Live Lambda/model-provider checks and physical-camera acceptance ar
 ## Release acceptance
 
 Keep a repository release checklist tied to documented requirements and verification evidence.
-Rehearse deployment, rollback, collection migration and restoration in a separate test environment.
+During the rebuild, prepare release evidence and deployment/rollback procedures using test data.
+Migration design, implementation and rehearsal follow the rebuild; see
+[migration status](requirements.md#collection-migration). They do not block rebuild verification.
+Rehearse deployment and rollback in a separate test environment only when execution is authorized.
 Verify reproducibility from a fresh checkout and preserve existing account identity and production
 storage during the rehearsal.
 
