@@ -65,15 +65,17 @@ export type { UiDialogOptions, UiDialogs } from './internal/dialogs.js';
 export type { UiAccount, UiIdentity } from './internal/identity.js';
 export {
   attachImportCandidates,
+  beginSourceImport,
   confirmImport,
   createImportAccess,
   discardImportEntry,
   discardImportSession,
   recoverConfirmation,
+  reopenSourceImport,
+  retryRetainedAttempt,
   reviewImportEntry,
   stageCaptureObservation,
   stageImportLines,
-  stageSourceImport,
   uiCaptureIdentity,
   uiImportCandidates,
   uiImportIdentity,

@@ -5,21 +5,32 @@
  * The facade is part of this component and owns what a browser operation needs beyond one request:
  * it begins an operation under its account-scoped identity, retains the attempt while the provider
  * has not established its outcome, observes it without cancelling the server commit, recovers the
- * recorded outcome under the operation's documented identity, retries explicitly, and publishes
- * the local committed-change invalidations a consumer reloads from. A revision-bound change has no
- * recorded outcome to read: its recovery is the record read the consumer performs through the
- * published read operations, and the facade keeps its attempt for the explicit retry that quotes
- * the same identity and revision. Confirmation uses its recorded receipt and staging operations use
- * the provider's replay of the identity they carry; no write is turned into a blind automatic
- * retry or an offline command queue (docs/user-cards.md#persistence-and-recovery).
+ * recorded outcome under the operation's documented identity, retries explicitly where the
+ * operation's own semantics make a repeat safe, and publishes the local committed-change
+ * invalidations a consumer reloads from. A revision-bound change has no recorded outcome to read:
+ * its recovery is the record read the consumer performs through the published read operations, and
+ * the facade keeps its attempt for the explicit retry that quotes the same identity and revision.
+ * Confirmation uses its recorded receipt and staging operations use the provider's replay of the
+ * identity they carry; an operation the provider gives a fresh identity per call keeps its
+ * uncertain outcome for the consumer's reconciliation instead. No write is turned into a blind
+ * automatic retry or an offline command queue (docs/user-cards.md#persistence-and-recovery).
  *
  * Attempt state is the minimum the existing import and recovery guarantees need, and it belongs to
  * one account: a scope keeps the unfinished attempts of the account it was created for, releases
  * them when that account ends, and reads back only records it wrote and can validate. An operation
  * that lost its response keeps its identity and input, so resuming never infers a new import from
- * matching contents or source URLs; an established outcome, a recorded absence or an explicitly
- * discarded import releases the attempt. Only a committed outcome — acknowledged or recovered —
- * emits an invalidation, so a lost response never reports speculative success.
+ * matching contents or source URLs, and a submission that reuses a retained attempt's identity with
+ * different input conflicts instead of replaying the older values. An established outcome, a
+ * recorded absence or an explicitly discarded import releases the attempt. Only a committed outcome
+ * — acknowledged or recovered — emits an invalidation, so a lost response never reports speculative
+ * success.
+ *
+ * Ending an account's scope fences everything that scope owned: reads refuse instead of reaching the
+ * transport a replacement account serves, subscriptions end, and no handle of the ended account
+ * dispatches again, whether it is retained or transient, established or still in flight. The scope
+ * is released when the composition that supplies it reports that the account ended
+ * (docs/architecture.md#runtime-boundaries), and a later access composes a fresh scope for the
+ * account.
  */
 
 import type { CopyId, ImportSessionId, TagId } from '../model.js';
@@ -71,7 +82,6 @@ import type {
 } from '../source-imports.js';
 
 import {
-  USERCARDS_BROWSER_LIMITS,
   usercardsBrowserOperations,
   usercardsConstraints,
   type UserCardsBrowserOperation,
@@ -253,6 +263,19 @@ export interface UserCardsConfirmationOutcome extends ImportReceipt {
 type UserCardsRetainedKind =
   'stageImportEntries' | 'stageSourceImport' | 'stageCaptureObservation' | 'confirmImport';
 
+/**
+ * How safely one operation may be dispatched again under its identity
+ * (docs/user-cards.md#browser-operation-lifecycle):
+ *
+ * - `recorded`: the provider records the identity and replays the outcome it recorded for it, so
+ *   repeating the same input returns that outcome instead of applying the operation twice.
+ * - `guarded`: the operation quotes the revision it started from, or only adds what the provider
+ *   does not hold yet, so a repeat cannot double-apply.
+ * - `none`: the provider composes a fresh identity for every call, so an uncertain attempt stays
+ *   explicit for the consumer's own reconciliation instead of composing a second record.
+ */
+type UserCardsRetryPolicy = 'recorded' | 'guarded' | 'none';
+
 /** One user operation the facade tracks, with the capabilities every consumer needs. */
 export interface UserCardsOperation<Kind extends string, Record> {
   /** The operation this attempt belongs to. */
@@ -265,7 +288,12 @@ export interface UserCardsOperation<Kind extends string, Record> {
   observe(): Promise<UserCardsOperationOutcome<Record>>;
   /** Recovers the operation's recorded outcome under its documented identity. */
   recover(signal?: AbortSignal): Promise<UserCardsOperationOutcome<Record>>;
-  /** Dispatches the same input again under the same identity; the caller's explicit retry. */
+  /**
+   * Dispatches the same input again under the same identity, when the operation's documented
+   * semantics make that safe. An established outcome stays what this handle reports, an operation
+   * the provider gives no identity per call keeps its uncertain outcome, and an attempt still in
+   * flight coalesces with the dispatch already running (docs/user-cards.md#browser-operation-lifecycle).
+   */
   retry(signal?: AbortSignal): Promise<UserCardsOperationOutcome<Record>>;
 }
 
@@ -320,6 +348,13 @@ export interface UserCardsOperationsOptions {
 export interface UserCardsOperations {
   /** Account-scoped facade of one presented account; one account keeps one scope. */
   account(accountId: string): UserCardsAccountOperations;
+  /**
+   * Ends one account's scope: its retained attempts, its subscriptions and its outstanding handles
+   * are disposed, so nothing of that account reaches the transport a replacement account serves. A
+   * later access composes a fresh scope for the same account
+   * (docs/architecture.md#runtime-boundaries).
+   */
+  release(accountId: string): void;
 }
 
 /**
@@ -358,10 +393,23 @@ export interface UserCardsAccountOperations {
     signal?: AbortSignal,
   ): UserCardsOperation<'stageImportEntries', ImportStageResult>;
   /**
-   * Parses one source under the identity of the import it composes: an input an unfinished attempt
-   * already keeps resumes that import, and any other input composes one of its own.
+   * Begins one new import: the provider composes a fresh import identity for it, even when another
+   * import of this account holds identical contents or names the same source
+   * (docs/user-cards.md#import-state-and-identity).
    */
-  stageSourceImport(
+  beginSourceImport(
+    input: UserCardsSourceImportRequest,
+    signal?: AbortSignal,
+  ): UserCardsOperation<'stageSourceImport', SourceImportResult>;
+  /**
+   * Reopens the import one provider-owned identity names. An unfinished attempt this account still
+   * retains under that identity is retried with its own input; any other identity reconciles that
+   * import's source again under the same identity instead of beginning another import
+   * (docs/user-cards.md#source-imports). Input that differs from a retained attempt's own input
+   * conflicts instead of reporting the retained input's outcome.
+   */
+  reopenSourceImport(
+    operationId: string,
     input: UserCardsSourceImportRequest,
     signal?: AbortSignal,
   ): UserCardsOperation<'stageSourceImport', SourceImportResult>;
@@ -425,7 +473,10 @@ export interface UserCardsAccountOperations {
   resume(operationId: string): UserCardsRetainedAttempt | null;
   /** Local committed-change invalidations of this account; the returned call unsubscribes. */
   subscribe(listener: (change: UserCardsChange) => void): () => void;
-  /** Releases this account's retained attempts and subscriptions. */
+  /**
+   * Ends this account's scope: its retained attempts, subscriptions and outstanding handles are
+   * disposed and its reads and dispatches refuse; a later access composes a fresh scope.
+   */
   release(): void;
 }
 
@@ -459,11 +510,18 @@ export function createUserCardsOperations(
       accounts.set(id, scope);
       return scope;
     },
+    release(accountId) {
+      // Only an account whose scope this facade composed has anything to release; a later access
+      // composes a fresh scope, so the account stays usable after it signs in again.
+      accounts.get(readIdentityText(accountId))?.release();
+    },
   };
 
   function createAccountScope(accountId: string): UserCardsAccountOperations {
     /** Unfinished attempts of this account, in the order they were begun. */
     const attempts = new Map<string, Attempt<string, unknown>>();
+    /** Every attempt of this scope whose outcome is not established, retained or transient. */
+    const outstanding = new Set<Attempt<string, unknown>>();
     const listeners = new Set<(change: UserCardsChange) => void>();
     let released = false;
 
@@ -474,12 +532,13 @@ export function createUserCardsOperations(
      */
     function tracked<Kind extends string, Record>(
       request: AttemptRequest<Kind, Record>,
-      mode: 'begin' | 'reattach' | 'transient' = 'transient',
+      mode: 'begin' | 'reattach' | 'transient' | 'refused' = 'transient',
     ): Attempt<Kind, Record> {
       const attempt = createAttempt(request, emit, () => {
         // An established outcome is nothing to resume: the attempt leaves the account's scope so a
         // later submission of the same input composes an operation of its own
         // (docs/user-cards.md#import-state-and-identity).
+        outstanding.delete(attempt as unknown as Attempt<string, unknown>);
         if (
           attempts.get(attempt.operationId) === (attempt as unknown as Attempt<string, unknown>)
         ) {
@@ -487,6 +546,11 @@ export function createUserCardsOperations(
           writeStoredAttempts();
         }
       });
+      if (mode === 'refused') {
+        // An attempt this facade refuses before dispatch belongs to no scope state at all.
+        return attempt;
+      }
+      outstanding.add(attempt as unknown as Attempt<string, unknown>);
       if (mode !== 'transient') {
         attempts.set(attempt.operationId, attempt as unknown as Attempt<string, unknown>);
       }
@@ -496,7 +560,7 @@ export function createUserCardsOperations(
         writeStoredAttempts();
       }
       if (mode !== 'reattach') {
-        void attempt.handle.retry(request.signal);
+        void attempt.dispatch(request.signal);
       }
       return attempt;
     }
@@ -505,21 +569,25 @@ export function createUserCardsOperations(
       reattach(record);
     }
 
-    return {
+    const scope: UserCardsAccountOperations = {
       constraints,
-      readCopies: (copyIds, signal) => client.readCopies(copyIds, signal),
-      listTags: (options, signal) => client.listTags(options, signal),
-      readTags: (tagIds, signal) => client.readTags(tagIds, signal),
-      listAssociations: (tagId, options, signal) => client.listAssociations(tagId, options, signal),
-      readAssociations: (associationIds, signal) => client.readAssociations(associationIds, signal),
-      listImportSessions: (options, signal) => client.listImportSessions(options, signal),
-      listImportEntries: (input, signal) => client.listImportEntries(input, signal),
+      readCopies: (copyIds, signal) => guarded(() => client.readCopies(copyIds, signal)),
+      listTags: (options, signal) => guarded(() => client.listTags(options, signal)),
+      readTags: (tagIds, signal) => guarded(() => client.readTags(tagIds, signal)),
+      listAssociations: (tagId, options, signal) =>
+        guarded(() => client.listAssociations(tagId, options, signal)),
+      readAssociations: (associationIds, signal) =>
+        guarded(() => client.readAssociations(associationIds, signal)),
+      listImportSessions: (options, signal) =>
+        guarded(() => client.listImportSessions(options, signal)),
+      listImportEntries: (input, signal) => guarded(() => client.listImportEntries(input, signal)),
 
       stageImportEntries(input, signal) {
         requireAvailable('stageImportEntries');
         return resumeOrBegin<'stageImportEntries', ImportStageResult>({
           kind: 'stageImportEntries',
           identity: entriesIdentity(input),
+          input,
           signal,
           begin: (operationId) => ({
             kind: 'stageImportEntries',
@@ -529,33 +597,43 @@ export function createUserCardsOperations(
             signal,
             run: (callSignal) => client.stageImportEntries(input, callSignal),
             change: (result) => importChange(result.session.sessionId),
-            replay: true,
+            retry: 'recorded',
           }),
         }).handle;
       },
 
-      stageSourceImport(input, signal) {
+      beginSourceImport(input, signal) {
         requireAvailable('stageSourceImport');
-        return resumeOrBegin<'stageSourceImport', SourceImportResult>({
-          kind: 'stageSourceImport',
-          identity: sourceIdentity(input),
-          signal,
-          // The import identity lives with the unfinished attempt: an input that already composes
-          // one resumes it instead of inferring another import from its contents or source URL.
-          begin: (operationId) => {
-            const request = sourceRequest(input, operationId);
-            return {
-              kind: 'stageSourceImport',
-              identity: sourceIdentity(input),
-              operationId,
+        // A new import composes an identity of its own: identical contents or the same source URL
+        // never merge two imports (docs/user-cards.md#import-state-and-identity).
+        return tracked(sourceAttempt(input, identity('attempt'), signal), 'begin').handle;
+      },
+
+      reopenSourceImport(operationId, input, signal) {
+        requireAvailable('stageSourceImport');
+        const id = readIdentityText(operationId);
+        const retained = attempts.get(id);
+        if (retained !== undefined && retained.kind === 'stageSourceImport') {
+          if (!sameInput(retained.input, input)) {
+            // The identity is retained for the input it was begun with: changed input under it
+            // conflicts instead of reporting that input's outcome
+            // (docs/user-cards.md#import-state-and-identity).
+            return refusedAttempt<'stageSourceImport', SourceImportResult>(
+              'stageSourceImport',
+              id,
               input,
-              signal,
-              run: (callSignal) => client.stageSourceImport(request, callSignal),
-              change: (result) => importChange(result.session.sessionId),
-              replay: true,
-            };
-          },
-        }).handle;
+              reuseConflict,
+            ).handle;
+          }
+          void retained.dispatch(signal);
+          return retained.handle as unknown as UserCardsOperation<
+            'stageSourceImport',
+            SourceImportResult
+          >;
+        }
+        // The consumer carries the identity of an existing import, so re-reading that import needs
+        // no retained attempt; a lost response is re-read under the same identity again.
+        return tracked(sourceAttempt(input, id, signal), 'transient').handle;
       },
 
       stageCaptureObservation(input, signal) {
@@ -563,6 +641,7 @@ export function createUserCardsOperations(
         return resumeOrBegin<'stageCaptureObservation', CaptureStageResult>({
           kind: 'stageCaptureObservation',
           identity: captureIdentity(input),
+          input,
           signal,
           begin: () => ({
             kind: 'stageCaptureObservation',
@@ -572,7 +651,7 @@ export function createUserCardsOperations(
             signal,
             run: (callSignal) => client.stageCaptureObservation(input, callSignal),
             change: (result) => importChange(result.session.sessionId),
-            replay: true,
+            retry: 'recorded',
           }),
         }).handle;
       },
@@ -587,6 +666,7 @@ export function createUserCardsOperations(
           signal,
           run: (callSignal) => client.reviewImportEntry(input, callSignal),
           change: (result) => importChange(result.session.sessionId),
+          retry: 'guarded',
         }).handle;
       },
 
@@ -600,6 +680,8 @@ export function createUserCardsOperations(
           signal,
           run: (callSignal) => client.attachImportCandidates(input, callSignal),
           change: (result) => importChange(result.session.sessionId),
+          // Alternatives only add what the entry does not hold yet, so a repeat cannot duplicate.
+          retry: 'guarded',
         }).handle;
       },
 
@@ -613,6 +695,7 @@ export function createUserCardsOperations(
           signal,
           run: (callSignal) => client.discardImportEntry(input, callSignal),
           change: (result) => importChange(result.session.sessionId),
+          retry: 'guarded',
         }).handle;
       },
 
@@ -627,6 +710,7 @@ export function createUserCardsOperations(
           run: (callSignal) => client.discardImportSession(input, callSignal),
           change: (result) => importChange(result.session.sessionId),
           settled: (result) => forgetSourceImport(result.session.sessionId),
+          retry: 'guarded',
         }).handle;
       },
 
@@ -635,6 +719,7 @@ export function createUserCardsOperations(
         return resumeOrBegin<'confirmImport', UserCardsConfirmationOutcome>({
           kind: 'confirmImport',
           identity: confirmationIdentity(input),
+          input,
           signal,
           begin: (operationId) => ({
             kind: 'confirmImport',
@@ -649,6 +734,7 @@ export function createUserCardsOperations(
             recorded: (callSignal) => recordedConfirmation(operationId, callSignal),
             change: (confirmation) => confirmedChange(confirmation),
             settled: (confirmation) => forgetSourceImport(confirmation.sessionId),
+            retry: 'recorded',
           }),
         }).handle;
       },
@@ -668,6 +754,7 @@ export function createUserCardsOperations(
             imports: [],
             position: result.publicationPosition,
           }),
+          retry: 'guarded',
         }).handle;
       },
 
@@ -681,6 +768,10 @@ export function createUserCardsOperations(
           signal,
           run: (callSignal) => client.createTag(input, callSignal),
           change: (result) => tagChange(result),
+          // The provider composes a fresh tag identity per call: an uncertain creation is never
+          // dispatched again, because that would compose a second tag
+          // (docs/user-cards.md#browser-operation-lifecycle).
+          retry: 'none',
         }).handle;
       },
 
@@ -694,6 +785,7 @@ export function createUserCardsOperations(
           signal,
           run: (callSignal) => client.renameTag(input, callSignal),
           change: (result) => tagChange(result),
+          retry: 'guarded',
         }).handle;
       },
 
@@ -707,6 +799,9 @@ export function createUserCardsOperations(
           signal,
           run: (callSignal) => client.createAssociation(input, callSignal),
           change: (result) => associationChange(result),
+          // The provider composes a fresh association identity per call: an uncertain creation is
+          // never dispatched again, because that could associate the target a second time.
+          retry: 'none',
         }).handle;
       },
 
@@ -720,6 +815,7 @@ export function createUserCardsOperations(
           signal,
           run: (callSignal) => client.changeAssociation(input, callSignal),
           change: (result) => associationChange(result),
+          retry: 'guarded',
         }).handle;
       },
 
@@ -738,6 +834,7 @@ export function createUserCardsOperations(
             imports: [],
             position: result.publicationPosition,
           }),
+          retry: 'guarded',
         }).handle;
       },
 
@@ -777,35 +874,56 @@ export function createUserCardsOperations(
         if (typeof listener !== 'function') {
           throw new TypeError('A committed-change subscriber is a function.');
         }
+        requireLive();
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
 
       release() {
         released = true;
-        for (const attempt of attempts.values()) {
+        // Every handle of this account is fenced, not only the retained ones: a transient change
+        // still in flight belongs to this account as well and must not report into the next one.
+        for (const attempt of outstanding) {
           attempt.dispose();
         }
+        outstanding.clear();
         attempts.clear();
         listeners.clear();
         releaseStoredAttempts(storage, accountId);
+        if (accounts.get(accountId) === scope) {
+          // A released scope is not handed out again: signing back in composes a fresh one.
+          accounts.delete(accountId);
+        }
       },
     };
+    return scope;
 
     /**
      * Reattaches to an unfinished attempt of the same operation and input, or begins one. The
      * caller's explicit submission is the retry: a retained attempt is dispatched again under its
-     * own identity instead of composing a second import, capture or confirmation.
+     * own identity instead of composing a second import, capture or confirmation. The same
+     * identity submitted with different input conflicts instead, so the provider never reports an
+     * outcome for values the caller no longer presents
+     * (docs/user-cards.md#import-state-and-identity).
      */
     function resumeOrBegin<Kind extends string, Record>(options: {
       readonly kind: Kind;
       readonly identity: string;
+      readonly input: unknown;
       readonly signal: AbortSignal | undefined;
       begin(operationId: string): AttemptRequest<Kind, Record>;
     }): Attempt<Kind, Record> {
       for (const attempt of attempts.values()) {
         if (attempt.kind === options.kind && attempt.identity === options.identity) {
-          void attempt.handle.retry(options.signal);
+          if (!sameInput(attempt.input, options.input)) {
+            return refusedAttempt<Kind, Record>(
+              options.kind,
+              attempt.operationId,
+              options.input,
+              reuseConflict,
+            );
+          }
+          void attempt.dispatch(options.signal);
           return attempt as unknown as Attempt<Kind, Record>;
         }
       }
@@ -826,7 +944,7 @@ export function createUserCardsOperations(
                 input,
                 run: (callSignal) => client.stageImportEntries(input, callSignal),
                 change: (result) => importChange(result.session.sessionId),
-                replay: true,
+                retry: 'recorded',
                 reattached: true,
               },
               'reattach',
@@ -848,7 +966,7 @@ export function createUserCardsOperations(
               input,
               run: (callSignal) => client.stageSourceImport(request, callSignal),
               change: (result) => importChange(result.session.sessionId),
-              replay: true,
+              retry: 'recorded',
               reattached: true,
             },
             'reattach',
@@ -866,7 +984,7 @@ export function createUserCardsOperations(
                 input,
                 run: (callSignal) => client.stageCaptureObservation(input, callSignal),
                 change: (result) => importChange(result.session.sessionId),
-                replay: true,
+                retry: 'recorded',
                 reattached: true,
               },
               'reattach',
@@ -890,6 +1008,7 @@ export function createUserCardsOperations(
               recorded: (callSignal) => recordedConfirmation(record.operationId, callSignal),
               change: (receipt) => confirmedChange(receipt),
               settled: (receipt) => forgetSourceImport(receipt.sessionId),
+              retry: 'recorded',
               reattached: true,
             },
             'reattach',
@@ -908,6 +1027,47 @@ export function createUserCardsOperations(
       return recovered.outcome === 'recorded'
         ? { state: 'committed', record: { ...recovered.receipt, replayed: true } }
         : { state: 'rejected', failure: confirmationAbsent };
+    }
+
+    /**
+     * The tracked attempt one source input dispatches under its import identity. The identity is
+     * the import's own, so the provider reconciles the source lines with what that import already
+     * holds instead of inferring an import from the contents or the source URL
+     * (docs/user-cards.md#source-imports).
+     */
+    function sourceAttempt(
+      input: UserCardsSourceImportRequest,
+      operationId: string,
+      signal: AbortSignal | undefined,
+    ): AttemptRequest<'stageSourceImport', SourceImportResult> {
+      return {
+        kind: 'stageSourceImport',
+        identity: operationId,
+        operationId,
+        input,
+        signal,
+        run: (callSignal) =>
+          client.stageSourceImport(sourceRequest(input, operationId), callSignal),
+        change: (result) => importChange(result.session.sessionId),
+        retry: 'recorded',
+      };
+    }
+
+    /**
+     * One attempt that never dispatches: the identity it names is retained for different input, so
+     * the facade reports the conflict that reuse establishes instead of the retained input's
+     * outcome or a second record (docs/user-cards.md#import-state-and-identity).
+     */
+    function refusedAttempt<Kind extends string, Record>(
+      kind: Kind,
+      operationId: string,
+      input: unknown,
+      failure: UserCardsOperationFailure,
+    ): Attempt<Kind, Record> {
+      return tracked<Kind, Record>(
+        { kind, identity: operationId, operationId, input, refused: failure },
+        'refused',
+      );
     }
 
     /** Emits one committed change to the account's subscribers. */
@@ -941,19 +1101,20 @@ export function createUserCardsOperations(
       }
     }
 
-    /** Writes the account's unfinished attempts, bounded to the most recent ones. */
+    /**
+     * Writes every unfinished attempt of the account. An unresolved attempt keeps the identity and
+     * input a reload needs, so none of them is silently evicted
+     * (docs/user-cards.md#browser-operation-lifecycle); storage that refuses a record keeps the
+     * attempts in memory only.
+     */
     function writeStoredAttempts(): void {
       if (released) {
         return;
       }
-      const unfinished = [...attempts.values()];
-      const bounded = unfinished.slice(
-        Math.max(0, unfinished.length - USERCARDS_BROWSER_LIMITS.retainedAttempts),
-      );
       keepStoredAttempts(
         storage,
         accountId,
-        bounded.map((attempt) => ({
+        [...attempts.values()].map((attempt) => ({
           kind: attempt.kind as UserCardsRetainedKind,
           identity: attempt.identity,
           operationId: attempt.operationId,
@@ -963,15 +1124,41 @@ export function createUserCardsOperations(
     }
 
     function requireAvailable(operation: UserCardsBrowserOperation): void {
-      if (released) {
-        throw new Error('The account this operation belongs to has ended.');
-      }
+      requireLive();
       if (!operations.includes(operation)) {
         throw new Error(`The ${operation} operation is not enabled in this deployment.`);
       }
     }
+
+    /** Refuses one call of a scope whose account has ended. */
+    function requireLive(): void {
+      if (released) {
+        throw accountEnded();
+      }
+    }
+
+    /** One read of this scope, refused rather than sent once the account has ended. */
+    function guarded<Result>(read: () => Promise<Result>): Promise<Result> {
+      if (released) {
+        return Promise.reject(accountEnded());
+      }
+      return read();
+    }
   }
 }
+
+/** The refusal a released scope reports instead of working for the account that replaced it. */
+function accountEnded(): Error {
+  return new Error('The account this operation belongs to has ended.');
+}
+
+/** The refusal that one retained identity reports for input it was not begun with. */
+const reuseConflict: UserCardsOperationFailure = {
+  code: 'conflict',
+  message:
+    'An unfinished attempt retains this identity for different input. Retry it with its own ' +
+    'values, or resolve it before submitting changed ones.',
+};
 
 /** One tracked operation of one account. */
 interface Attempt<Kind extends string, Record> {
@@ -980,6 +1167,8 @@ interface Attempt<Kind extends string, Record> {
   readonly operationId: string;
   readonly input: unknown;
   readonly handle: UserCardsOperation<Kind, Record>;
+  /** Dispatches the attempt itself, without the retry policy the consumer's explicit retry obeys. */
+  dispatch(signal: AbortSignal | undefined): Promise<UserCardsOperationOutcome<Record>>;
   dispose(): void;
 }
 
@@ -990,13 +1179,16 @@ interface AttemptRequest<Kind extends string, Record> {
   readonly identity: string;
   readonly operationId: string;
   readonly input: unknown;
-  /** Dispatches the operation; the provider's replay semantics make a repeated call safe. */
-  run(signal: AbortSignal | undefined): Promise<Record>;
+  /** Dispatches the operation; absent only for one this facade refuses before dispatch. */
+  run?(signal: AbortSignal | undefined): Promise<Record>;
   /** Reads the operation's recorded outcome, when the contract defines one. */
   recorded?(signal: AbortSignal | undefined): Promise<RecordedOutcome<Record>>;
-  /** True when the provider records this operation's identity, so recovery replays it. */
-  readonly replay?: boolean;
-  readonly change: (record: Record) => UserCardsChange;
+  /** How safely this operation may be dispatched again; see `UserCardsRetryPolicy`. */
+  readonly retry?: UserCardsRetryPolicy;
+  /** The refusal this attempt already establishes, so it never dispatches. */
+  readonly refused?: UserCardsOperationFailure;
+  /** The committed-change invalidation of the operation; absent for a refused attempt. */
+  readonly change?: (record: Record) => UserCardsChange;
   /** Applies a committed record to related retained attempts. */
   readonly settled?: (record: Record) => void;
   /** True for one attempt reattached from storage, which a resume resolves. */
@@ -1016,12 +1208,18 @@ function createAttempt<Kind extends string, Record>(
   established: () => void,
 ): Attempt<Kind, Record> {
   let outcome: UserCardsOperationOutcome<Record> =
-    request.reattached === true ? { state: 'unknown', failure: null } : { state: 'pending' };
+    request.refused !== undefined
+      ? { state: 'rejected', failure: request.refused }
+      : request.reattached === true
+        ? { state: 'unknown', failure: null }
+        : { state: 'pending' };
   let generation = 0;
   // A reattached attempt never reported: what the provider has established for it is unknown.
   let uncertain = request.reattached === true;
   let disposed = false;
   let waiting: PromiseWithResolvers<void> | null = null;
+  /** The dispatch or recorded read already running; a further call observes it instead of racing it. */
+  let running: Promise<UserCardsOperationOutcome<Record>> | null = null;
 
   const handle = {
     kind: request.kind,
@@ -1047,9 +1245,21 @@ function createAttempt<Kind extends string, Record>(
       // A staging operation records the identity it carries, so replaying it recovers the
       // recorded outcome. A revision-bound change has no recorded outcome: only the consumer's
       // read of the record can resolve what stays unknown, and its retry quotes the revision.
-      return request.replay === true ? dispatch(signal) : Promise.resolve(outcome);
+      return request.retry === 'recorded' ? dispatch(signal) : Promise.resolve(outcome);
     },
-    retry: (signal: AbortSignal | undefined) => dispatch(signal),
+    retry: (signal: AbortSignal | undefined) => {
+      if (outcome.state === 'committed' || outcome.state === 'rejected') {
+        // An established outcome is what this handle reports; a later call never replaces it with
+        // another attempt's answer (docs/user-cards.md#browser-operation-lifecycle).
+        return Promise.resolve(outcome);
+      }
+      if (request.retry === 'none') {
+        // The provider composes a fresh identity for every call, so an uncertain creation stays
+        // explicit for the consumer to reconcile by reading the records it may have created.
+        return Promise.resolve(outcome);
+      }
+      return dispatch(signal);
+    },
   } as unknown as UserCardsOperation<Kind, Record>;
   const attempt: Attempt<Kind, Record> = {
     kind: request.kind,
@@ -1057,26 +1267,59 @@ function createAttempt<Kind extends string, Record>(
     operationId: request.operationId,
     input: request.input,
     handle,
+    dispatch,
     dispose() {
       disposed = true;
       generation += 1;
+      if (outcome.state === 'pending') {
+        // A deferred dispatch no longer reports into this attempt: what it may have applied stays
+        // open instead of being presented as established
+        // (docs/user-cards.md#browser-operation-lifecycle).
+        outcome = { state: 'unknown', failure: null };
+      }
       finishWaiting();
     },
   };
   return attempt;
 
   /** Dispatches one call, under the attempt's identity and with the caller's signal. */
-  async function dispatch(
-    signal: AbortSignal | undefined,
-  ): Promise<UserCardsOperationOutcome<Record>> {
-    if (disposed) {
-      return outcome;
+  function dispatch(signal: AbortSignal | undefined): Promise<UserCardsOperationOutcome<Record>> {
+    if (disposed || outcome.state === 'committed' || outcome.state === 'rejected') {
+      // An ended scope disposes its attempts, an established outcome stays what this handle
+      // reports, and a resolved identity is nothing left to dispatch: none of them sends a request.
+      return Promise.resolve(outcome);
     }
+    const run = request.run;
+    if (run === undefined) {
+      return Promise.resolve(outcome);
+    }
+    // One attempt dispatches at most one request at a time: a call made while the attempt is in
+    // flight observes that dispatch instead of racing it with a second one, so an authoritative
+    // result is never discarded by a later refusal (docs/user-cards.md#browser-operation-lifecycle).
+    const open = running;
+    if (open !== null) {
+      return open;
+    }
+    // The slot is filled before the dispatch can finish, so it is released only by the dispatch
+    // that owns it and a later call starts a dispatch of its own.
+    const slot: { promise: Promise<UserCardsOperationOutcome<Record>> | null } = { promise: null };
+    const started = perform(run, signal, slot);
+    slot.promise = started;
+    running = started;
+    return started;
+  }
+
+  /** Runs one dispatch to its outcome and releases the attempt for a later explicit retry. */
+  async function perform(
+    run: (signal: AbortSignal | undefined) => Promise<Record>,
+    signal: AbortSignal | undefined,
+    slot: { promise: Promise<UserCardsOperationOutcome<Record>> | null },
+  ): Promise<UserCardsOperationOutcome<Record>> {
     const current = (generation += 1);
     outcome = { state: 'pending' };
     startWaiting();
     try {
-      const record = await request.run(signal ?? request.signal);
+      const record = await run(signal ?? request.signal);
       if (!disposed && current === generation) {
         commit(record);
       }
@@ -1087,6 +1330,9 @@ function createAttempt<Kind extends string, Record>(
     }
     if (!disposed && current === generation) {
       finishWaiting();
+    }
+    if (running === slot.promise) {
+      running = null;
     }
     return outcome;
   }
@@ -1153,6 +1399,13 @@ function createAttempt<Kind extends string, Record>(
     if (recorded === undefined || disposed || outcome.state === 'committed') {
       return outcome;
     }
+    const open = running;
+    if (open !== null) {
+      // A dispatch of this attempt is still in flight: recovering observes what it establishes
+      // instead of racing it with a read whose answer could predate that dispatch
+      // (docs/user-cards.md#browser-operation-lifecycle).
+      return open;
+    }
     const current = (generation += 1);
     outcome = { state: 'pending' };
     startWaiting();
@@ -1185,7 +1438,10 @@ function createAttempt<Kind extends string, Record>(
     outcome = { state: 'committed', record };
     uncertain = false;
     request.settled?.(record);
-    emit(request.change(record));
+    const change = request.change;
+    if (change !== undefined) {
+      emit(change(record));
+    }
     established();
   }
 
@@ -1248,6 +1504,39 @@ const confirmationAbsent: UserCardsOperationFailure = {
   code: 'not-found',
   message: 'This confirmation is not recorded; no copies were created.',
 };
+
+/**
+ * Whether one submitted input is the same value as another. An identity that does not quote its
+ * input compares it structurally, so changed values conflict instead of replaying the older ones
+ * (docs/user-cards.md#import-state-and-identity).
+ */
+function sameInput(left: unknown, right: unknown): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => sameInput(value, right[index]))
+    );
+  }
+  const leftObject = readObject(left);
+  const rightObject = readObject(right);
+  if (leftObject === null || rightObject === null) {
+    return false;
+  }
+  const keys = Object.keys(leftObject);
+  return (
+    keys.length === Object.keys(rightObject).length &&
+    keys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(rightObject, key) &&
+        sameInput(leftObject[key], rightObject[key]),
+    )
+  );
+}
 
 /** Definite refusals that establish the operation did not apply. */
 function isRejectedCode(code: string): boolean {
@@ -1334,18 +1623,6 @@ function sourceRequest(
 /** The identity one staged batch carries: its session and the entry identities it stages. */
 function entriesIdentity(input: StageImportEntriesInput): string {
   return `entries ${input.sessionId} ${input.entries.map((entry) => entry.entryId).join(' ')}`;
-}
-
-/** The identity of one source input, so a resumed import is found without matching the contents. */
-function sourceIdentity(input: UserCardsSourceImportRequest): string {
-  switch (input.format) {
-    case 'pasted-list':
-      return `pasted-list ${input.text}`;
-    case 'moxfield':
-      return `moxfield ${input.url}`;
-    case 'wizards-precon':
-      return `wizards-precon ${input.sourceId} ${input.reference} ${JSON.stringify(input.entries)}`;
-  }
 }
 
 /** The capture identity of one observation: its session and capture. */

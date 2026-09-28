@@ -17,10 +17,13 @@ import {
   type UserCardsOperationOutcome,
 } from '../../../src/usercards/browser.js';
 import type {
+  CopyChangeResult,
+  ImportConfirmationResult,
   ImportEntry,
   ImportSession,
   ImportStageResult,
   SourceImportResult,
+  TagChangeResult,
 } from '../../../src/usercards/index.js';
 
 function session(overrides: Partial<ImportSession> = {}): ImportSession {
@@ -147,6 +150,29 @@ function outcomeOf<Record>(
   return outcome;
 }
 
+/** One client call a case settles by hand, so it can observe an attempt while it is in flight. */
+function pendingCall<Value>(): {
+  readonly promise: Promise<Value>;
+  resolve(value: Value): void;
+  reject(cause: unknown): void;
+} {
+  let resolve: (value: Value) => void = () => {};
+  let reject: (cause: unknown) => void = () => {};
+  const promise = new Promise<Value>((settle, fail) => {
+    resolve = settle;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+function tag(tagId = 'tag-1'): TagChangeResult {
+  return {
+    privateRevision: 'revision-2',
+    publicationPosition: '3',
+    tag: { tagId, kind: 'deck', label: 'Deck', system: false, revision: 1 },
+  };
+}
+
 describe('UserCards browser operations', () => {
   it('keeps an unfinished import under its identity and resumes it after a reload', async () => {
     const storage = memoryStorage();
@@ -163,7 +189,7 @@ describe('UserCards browser operations', () => {
       identity: identities(),
     }).account('alice');
 
-    const lost = first.stageSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
+    const lost = first.beginSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
     expect(await lost.observe()).toEqual({
       state: 'unknown',
       failure: { code: 'unavailable', message: 'The service could not be reached.' },
@@ -171,8 +197,8 @@ describe('UserCards browser operations', () => {
     expect(requested).toEqual(['identity-1']);
 
     // A reload builds a new facade over the same browsing-session storage: the unfinished import
-    // keeps the identity it composed, and the same input resumes that import instead of staging
-    // another one.
+    // keeps the identity it composed, and reopening that identity reads its recorded rows instead
+    // of staging another import.
     const second = createUserCardsOperations({
       client,
       storage,
@@ -183,7 +209,10 @@ describe('UserCards browser operations', () => {
     expect(retained[0]?.kind).toBe('stageSourceImport');
     expect(retained[0]?.operationId).toBe('identity-1');
 
-    const resumed = second.stageSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
+    const resumed = second.reopenSourceImport('identity-1', {
+      format: 'pasted-list',
+      text: '1 Lightning Bolt',
+    });
     expect(resumed.operationId).toBe('identity-1');
     expect(await resumed.observe()).toEqual({
       state: 'unknown',
@@ -192,7 +221,7 @@ describe('UserCards browser operations', () => {
     expect(requested).toEqual(['identity-1', 'identity-1']);
   });
 
-  it('composes a new import for identical contents when the earlier import was established', async () => {
+  it('begins a distinct import for identical contents, even while the first is unresolved', async () => {
     const requested: string[] = [];
     const client = scriptedClient({
       stageSourceImport: (input) => {
@@ -206,11 +235,11 @@ describe('UserCards browser operations', () => {
       identity: identities(),
     }).account('alice');
 
-    const first = account.stageSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
+    const first = account.beginSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
     expect(await first.observe()).toMatchObject({ state: 'committed' });
     expect(account.retained()).toEqual([]);
 
-    const second = account.stageSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
+    const second = account.beginSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
     expect(second.operationId).not.toBe(first.operationId);
     expect(await second.observe()).toMatchObject({ state: 'committed' });
     expect(requested).toEqual(['identity-1', 'identity-2']);
@@ -341,7 +370,7 @@ describe('UserCards browser operations', () => {
     const alice = operations.account('alice');
     const bob = operations.account('bob');
 
-    alice.stageSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
+    alice.beginSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
     await Promise.resolve();
 
     expect(alice.retained()).toHaveLength(1);
@@ -378,7 +407,7 @@ describe('UserCards browser operations', () => {
     expect(account.constraints.text.sourceText).toBe(128 * 1024);
     expect(account.constraints.pages.imports).toEqual({ default: 50, min: 1, max: 100 });
 
-    expect(() => account.stageSourceImport({ format: 'pasted-list', text: 'x' })).toThrow(
+    expect(() => account.beginSourceImport({ format: 'pasted-list', text: 'x' })).toThrow(
       /stageSourceImport/,
     );
   });
@@ -523,5 +552,348 @@ describe('UserCards browser operations', () => {
     });
     expect(replayed).toEqual(['capture-1', 'capture-1']);
     expect(account.retained()).toEqual([]);
+  });
+
+  it('keeps every unresolved attempt of an account across a reload', async () => {
+    const storage = memoryStorage();
+    const client = scriptedClient({
+      stageSourceImport: () => Promise.reject(unavailable()),
+    });
+    const first = createUserCardsOperations({
+      client,
+      storage,
+      identity: identities(),
+    }).account('alice');
+
+    const begun = Array.from({ length: 40 }, (_, index) =>
+      first.beginSourceImport({ format: 'pasted-list', text: `1 Lightning Bolt ${index}` }),
+    );
+    await Promise.all(begun.map((attempt) => attempt.observe()));
+    expect(first.retained()).toHaveLength(begun.length);
+
+    // A reload reattaches every unfinished attempt: none of them was silently evicted, so no
+    // resubmission can create a second import while the first stays unresolved.
+    const reloaded = createUserCardsOperations({
+      client,
+      storage,
+      identity: identities(),
+    }).account('alice');
+    expect(reloaded.retained().map((attempt) => attempt.operationId)).toEqual(
+      begun.map((attempt) => attempt.operationId),
+    );
+  });
+
+  it('composes a fresh scope when an account signs back in', async () => {
+    const requested: string[] = [];
+    const client = scriptedClient({
+      stageSourceImport: (input) => {
+        requested.push(input.sessionId);
+        return Promise.resolve(sourceResult(input.sessionId));
+      },
+    });
+    const operations = createUserCardsOperations({
+      client,
+      storage: null,
+      identity: identities(),
+    });
+    const alice = operations.account('alice');
+    const lost = alice.beginSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
+    expect(await lost.observe()).toMatchObject({ state: 'committed' });
+
+    operations.release('alice');
+    // The ended scope stays invalid for whoever still holds it.
+    expect(() =>
+      alice.beginSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' }),
+    ).toThrow(/has ended/);
+
+    // Signing back in composes a fresh scope whose mutations work again.
+    const again = operations.account('alice');
+    expect(again).not.toBe(alice);
+    const restored = again.beginSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
+    expect(await restored.observe()).toMatchObject({ state: 'committed' });
+    expect(restored.operationId).not.toBe(lost.operationId);
+    expect(requested).toEqual([lost.operationId, restored.operationId]);
+  });
+
+  it('fences reads, subscriptions and outstanding handles of an ended account', async () => {
+    const reads: string[] = [];
+    const dispatches: string[] = [];
+    const held = pendingCall<CopyChangeResult>();
+    const client = scriptedClient({
+      readCopies: async () => {
+        reads.push('readCopies');
+        return { privateRevision: 'revision-1', copies: new Map(), missing: [] };
+      },
+      correctCopy: () => {
+        dispatches.push('correctCopy');
+        return held.promise;
+      },
+    });
+    const operations = createUserCardsOperations({
+      client,
+      storage: null,
+      identity: identities(),
+    });
+    const alice = operations.account('alice');
+    const change = alice.correctCopy({
+      copyId: 'copy-1',
+      expectedRevision: 1,
+      printingId: 'printing-1',
+      finish: 'foil',
+      condition: null,
+    });
+
+    operations.release('alice');
+
+    await expect(alice.readCopies(['copy-1'])).rejects.toThrow(/has ended/);
+    expect(() => alice.subscribe(() => {})).toThrow(/has ended/);
+    // The attempt that was still in flight keeps its open outcome and dispatches nothing: no
+    // request of the ended account reaches the transport the replacement account serves.
+    expect(await change.retry()).toEqual({ state: 'unknown', failure: null });
+    expect(dispatches).toEqual(['correctCopy']);
+    expect(reads).toEqual([]);
+  });
+
+  it('keeps an established outcome stable and never retries an unidentified creation', async () => {
+    const calls: string[] = [];
+    const client = scriptedClient({
+      createTag: async () => {
+        calls.push('createTag');
+        return tag();
+      },
+    });
+    const account = createUserCardsOperations({
+      client,
+      storage: null,
+      identity: identities(),
+    }).account('alice');
+
+    const committed = account.createTag({ kind: 'deck', label: 'Deck' });
+    const established = await committed.observe();
+    expect(established).toMatchObject({ state: 'committed' });
+    // Retrying an established handle returns that outcome instead of composing a second tag.
+    expect(await committed.retry()).toEqual(established);
+    expect(calls).toEqual(['createTag']);
+
+    // The provider composes a fresh tag identity per call, so an uncertain creation stays explicit
+    // for the consumer's own reconciliation instead of dispatching again.
+    let refused = false;
+    const uncertain = createUserCardsOperations({
+      client: scriptedClient({
+        createTag: async () => {
+          refused = true;
+          throw unavailable();
+        },
+      }),
+      storage: null,
+      identity: identities(),
+    }).account('alice');
+    const lost = uncertain.createTag({ kind: 'deck', label: 'Deck' });
+    expect(await lost.observe()).toMatchObject({ state: 'unknown' });
+    expect(await lost.retry()).toMatchObject({ state: 'unknown' });
+    expect(refused).toBe(true);
+
+    // A change whose repeat quotes the revision it started from stays explicitly retryable.
+    const revisions: number[] = [];
+    const guarded = createUserCardsOperations({
+      client: scriptedClient({
+        correctCopy: async (input) => {
+          revisions.push(input.expectedRevision);
+          throw unavailable();
+        },
+      }),
+      storage: null,
+      identity: identities(),
+    }).account('alice');
+    const correction = guarded.correctCopy({
+      copyId: 'copy-1',
+      expectedRevision: 7,
+      printingId: 'printing-1',
+      finish: 'foil',
+      condition: null,
+    });
+    expect(await correction.observe()).toMatchObject({ state: 'unknown' });
+    await correction.retry();
+    expect(revisions).toEqual([7, 7]);
+  });
+
+  it('coalesces a resubmission with the dispatch already in flight', async () => {
+    const call = pendingCall<SourceImportResult>();
+    let dispatched = 0;
+    const changes: UserCardsChange[] = [];
+    const client = scriptedClient({
+      stageSourceImport: () => {
+        dispatched += 1;
+        return call.promise;
+      },
+    });
+    const account = createUserCardsOperations({
+      client,
+      storage: null,
+      identity: identities(),
+    }).account('alice');
+    account.subscribe((change) => changes.push(change));
+
+    const first = account.beginSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
+    // A resubmission while the first dispatch is unresolved observes that dispatch; it never
+    // dispatches a second request whose refusal could discard the authoritative result.
+    const second = account.reopenSourceImport(first.operationId, {
+      format: 'pasted-list',
+      text: '1 Lightning Bolt',
+    });
+    call.resolve(sourceResult(first.operationId));
+
+    expect(await first.observe()).toMatchObject({ state: 'committed' });
+    expect(await second.observe()).toMatchObject({ state: 'committed' });
+    expect(dispatched).toBe(1);
+    expect(changes).toEqual([
+      { scope: 'imports', records: [], imports: [first.operationId], position: null },
+    ]);
+  });
+
+  it('refuses changed input under a retained staging identity', async () => {
+    const staged: string[] = [];
+    const client = scriptedClient({
+      stageImportEntries: (input) => {
+        staged.push(`${input.entries[0]?.entryId}:${input.entries[0]?.quantity}`);
+        return Promise.reject(unavailable());
+      },
+    });
+    const account = createUserCardsOperations({
+      client,
+      storage: null,
+      identity: identities(),
+    }).account('alice');
+    const source = { kind: 'manual', id: 'manual' } as const;
+    const line = (quantity: number) => ({
+      sessionId: 'manual',
+      source,
+      entries: [{ entryId: 'line-1', printingId: 'printing-1', quantity }],
+    });
+
+    const first = account.stageImportEntries(line(1));
+    expect(await first.observe()).toMatchObject({ state: 'unknown' });
+
+    // The identity was begun with quantity 1: presenting quantity 2 conflicts instead of reporting
+    // the retained attempt's outcome for values the caller no longer presents.
+    const changed = account.stageImportEntries(line(2));
+    expect(await changed.observe()).toEqual({
+      state: 'rejected',
+      failure: {
+        code: 'conflict',
+        message:
+          'An unfinished attempt retains this identity for different input. Retry it with its own ' +
+          'values, or resolve it before submitting changed ones.',
+      },
+    });
+    expect(staged).toEqual(['line-1:1']);
+    expect(account.retained().map((attempt) => attempt.operationId)).toEqual([first.operationId]);
+  });
+
+  it('refuses confirmation input a retained identity did not review', async () => {
+    const confirmations: number[] = [];
+    const client = scriptedClient({
+      confirmImport: (input) => {
+        confirmations.push(input.entries[0]?.expectedRevision ?? 0);
+        return Promise.reject(unavailable());
+      },
+    });
+    const account = createUserCardsOperations({
+      client,
+      storage: null,
+      identity: identities(),
+    }).account('alice');
+    const confirmation = (expectedRevision: number) => ({
+      sessionId: 'import-1',
+      entries: [{ entryId: 'entry-1', expectedRevision }],
+    });
+
+    const first = account.confirmImport(confirmation(1));
+    expect(await first.observe()).toMatchObject({ state: 'unknown' });
+    const reviewed = account.confirmImport(confirmation(2));
+    expect(await reviewed.observe()).toMatchObject({
+      state: 'rejected',
+      failure: { code: 'conflict' },
+    });
+    expect(confirmations).toEqual([1]);
+    expect(account.retained().map((attempt) => attempt.operationId)).toEqual([first.operationId]);
+  });
+
+  it('reopens an established import under the identity it is known by', async () => {
+    const requested: string[] = [];
+    const client = scriptedClient({
+      stageSourceImport: (input) => {
+        requested.push(input.sessionId);
+        return Promise.resolve(sourceResult(input.sessionId));
+      },
+    });
+    const account = createUserCardsOperations({
+      client,
+      storage: null,
+      identity: identities(),
+    }).account('alice');
+
+    // The consumer carries the identity of an import that already exists: reconciling its source
+    // reads that import again instead of beginning another one.
+    const reopened = account.reopenSourceImport('import-9', {
+      format: 'moxfield',
+      url: 'https://moxfield.com/decks/deck-9',
+    });
+    expect(await reopened.observe()).toMatchObject({ state: 'committed' });
+    expect(requested).toEqual(['import-9']);
+
+    // An identity that is not retained composes no resumable state; the consumer already knows it.
+    expect(account.retained()).toEqual([]);
+  });
+
+  it('recovers a confirmation through the dispatch still in flight', async () => {
+    const call = pendingCall<ImportConfirmationResult>();
+    let recordedReads = 0;
+    const client = scriptedClient({
+      confirmImport: () => call.promise,
+      recoverImportOperation: async () => {
+        recordedReads += 1;
+        return { outcome: 'absent' };
+      },
+    });
+    const account = createUserCardsOperations({
+      client,
+      storage: null,
+      identity: identities(),
+    }).account('alice');
+
+    const confirmation = account.confirmImport({
+      sessionId: 'import-1',
+      entries: [{ entryId: 'entry-1', expectedRevision: 1 }],
+    });
+    // The explicit recovery observes the confirmation already in flight: a recorded read issued
+    // now could answer for a state that predates the commit.
+    const recovered = confirmation.recover();
+    call.resolve({
+      privateRevision: 'revision-2',
+      replayed: false,
+      operationId: confirmation.operationId,
+      sessionId: 'import-1',
+      sourceKind: 'pasted-list',
+      sourceId: 'import-1',
+      publicationPosition: '5',
+      copies: [
+        {
+          copyId: 'copy-1',
+          printingId: 'printing-1',
+          finish: 'nonfoil',
+          condition: null,
+          revision: 1,
+        },
+      ],
+    });
+
+    const observed = await confirmation.observe();
+    expect(observed).toMatchObject({
+      state: 'committed',
+      record: { operationId: confirmation.operationId, replayed: false },
+    });
+    expect(await recovered).toEqual(observed);
+    expect(recordedReads).toBe(0);
   });
 });

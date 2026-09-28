@@ -60,7 +60,8 @@ export type UiImportClient = Pick<
   | 'listImportSessions'
   | 'listImportEntries'
   | 'stageImportEntries'
-  | 'stageSourceImport'
+  | 'beginSourceImport'
+  | 'reopenSourceImport'
   | 'stageCaptureObservation'
   | 'reviewImportEntry'
   | 'attachImportCandidates'
@@ -87,8 +88,14 @@ export interface UiImportAccess {
     input: StageImportEntriesInput,
     signal?: AbortSignal,
   ): UserCardsOperation<'stageImportEntries', ImportStageResult>;
-  /** One parsed source: what each of its rows became, owned by the provider's import identity. */
-  source(
+  /** One new import: what each of its source rows became, under an identity of its own. */
+  beginSource(
+    input: UserCardsSourceImportRequest,
+    signal?: AbortSignal,
+  ): UserCardsOperation<'stageSourceImport', SourceImportResult>;
+  /** One existing import, reopened under the provider-owned identity it is known by. */
+  reopenSource(
+    operationId: string,
     input: UserCardsSourceImportRequest,
     signal?: AbortSignal,
   ): UserCardsOperation<'stageSourceImport', SourceImportResult>;
@@ -131,7 +138,8 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     'listImportSessions',
     'listImportEntries',
     'stageImportEntries',
-    'stageSourceImport',
+    'beginSourceImport',
+    'reopenSourceImport',
     'stageCaptureObservation',
     'reviewImportEntry',
     'attachImportCandidates',
@@ -153,7 +161,9 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     sessions: (options, signal) => userCards.listImportSessions(options, signal),
     entries: (input, signal) => userCards.listImportEntries(input, signal),
     stage: (input, signal) => userCards.stageImportEntries(input, signal),
-    source: (input, signal) => userCards.stageSourceImport(input, signal),
+    beginSource: (input, signal) => userCards.beginSourceImport(input, signal),
+    reopenSource: (operationId, input, signal) =>
+      userCards.reopenSourceImport(operationId, input, signal),
     capture: (input, signal) => userCards.stageCaptureObservation(input, signal),
     review: (input, signal) => userCards.reviewImportEntry(input, signal),
     attach: (input, signal) => userCards.attachImportCandidates(input, signal),
@@ -263,32 +273,68 @@ export async function stageCaptureObservation(
 }
 
 /**
- * What one source import whose outcome is not established reports: the input it composes is kept
- * under its identity, so importing the same source again reads the rows the provider recorded
+ * What one source import whose outcome is not established reports: the account keeps the input
+ * under the import's identity, so reopening that import reads the rows the provider recorded
  * (docs/user-interface.md#source-imports).
  */
 export const uiUnfinishedSourceMessage =
-  'The staging outcome is unknown. Import the same source again to read its recorded rows.';
+  'The staging outcome is unknown. Reopen the waiting import to read its recorded rows.';
 
 /**
- * Stages one supported source into review. The provider parses inside its own boundary and
- * reconciles every parsed line with what the import the caller identified already staged or
- * acquired, so a source whose response was lost is recovered by importing it again: the same input
- * resumes the retained import identity, and the recorded rows tell which lines staged nothing,
- * which stayed in review and which the import already acquired (docs/user-interface.md#source-imports,
- * docs/user-cards.md#source-imports).
+ * Begins one new import of a supported source. The provider parses inside its own boundary and
+ * composes a fresh import identity for it, so the same contents or source URL never merges with
+ * another import (docs/user-cards.md#import-state-and-identity); a source whose response was lost
+ * stays retained under that identity and is reopened through `reopenSourceImport`
+ * (docs/user-interface.md#source-imports).
  */
-export async function stageSourceImport(
+export async function beginSourceImport(
   access: UiImportAccess,
   input: UserCardsSourceImportRequest,
   signal?: AbortSignal,
 ): Promise<UiChangeCommit<SourceImportResult>> {
   return commitUiOperation(
-    access.source(input, signal),
+    access.beginSource(input, signal),
     async (): Promise<SourceImportResult | null> => null,
     'The source lines were not added to review.',
     { unknown: uiUnfinishedSourceMessage },
   );
+}
+
+/**
+ * Reopens one existing import under the provider-owned identity it is known by: the retained
+ * unfinished attempt is retried with its own input, and any other identity reconciles that
+ * import's source again instead of beginning another import
+ * (docs/user-interface.md#source-imports, docs/user-cards.md#source-imports).
+ */
+export async function reopenSourceImport(
+  access: UiImportAccess,
+  operationId: string,
+  input: UserCardsSourceImportRequest,
+  signal?: AbortSignal,
+): Promise<UiChangeCommit<SourceImportResult>> {
+  return commitUiOperation(
+    access.reopenSource(operationId, input, signal),
+    async (): Promise<SourceImportResult | null> => null,
+    'The source lines were not added to review.',
+    { unknown: uiUnfinishedSourceMessage },
+  );
+}
+
+/**
+ * Retries one attempt the account still retains, through that attempt's own handle, and presents
+ * what it establishes. The handle owns the identity and input, so a reopening view never composes
+ * a second operation (docs/user-cards.md#browser-operation-lifecycle).
+ */
+export async function retryRetainedAttempt<Kind extends string, Record>(
+  operation: UserCardsOperation<Kind, Record>,
+  signal: AbortSignal | undefined,
+  fallback: string,
+  unknown: string,
+): Promise<UiChangeCommit<Record>> {
+  void operation.retry(signal);
+  return commitUiOperation(operation, async (): Promise<Record | null> => null, fallback, {
+    unknown,
+  });
 }
 
 /**

@@ -140,12 +140,3 @@ export const usercardsConstraints: Omit<UserCardsConstraints, 'operations'> = {
     },
   },
 };
-
-/**
- * Bounds of the facade itself: how many unfinished attempts one account retains before the oldest
- * is released. This is presentation of the browser session, not a provider limit.
- */
-export const USERCARDS_BROWSER_LIMITS = {
-  /** Unfinished attempts one account keeps; the oldest is released beyond this bound. */
-  retainedAttempts: 32,
-} as const;

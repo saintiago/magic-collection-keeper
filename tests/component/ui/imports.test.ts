@@ -30,8 +30,8 @@ import {
   discardImportSession,
   recoverConfirmation,
   reviewImportEntry,
+  beginSourceImport,
   stageImportLines,
-  stageSourceImport,
   uiImportCandidates,
   uiImportIdentity,
   uiImportSourceLabel,
@@ -237,7 +237,7 @@ describe('import staging', () => {
   });
 
   it('stages a parsed source and reports what every row became', async () => {
-    const outcome = await stageSourceImport(
+    const outcome = await beginSourceImport(
       access({
         stageSourceImport: async () => ({
           privateRevision: 'r2',
@@ -268,8 +268,8 @@ describe('import staging', () => {
     });
   });
 
-  it('keeps an unreported source recoverable by importing it again', async () => {
-    const outcome = await stageSourceImport(
+  it('keeps an unreported source recoverable by reopening its import', async () => {
+    const outcome = await beginSourceImport(
       access({
         stageSourceImport: () => Promise.reject(new ApplicationError('busy', 'Try again.')),
       }),
@@ -281,11 +281,11 @@ describe('import staging', () => {
 
     expect(outcome.status).toBe('unknown');
     expect(outcome.record).toBeNull();
-    expect(outcome.message).toContain('Import the same source again');
+    expect(outcome.message).toContain('Reopen the waiting import');
   });
 
   it('reports a source the provider refused as a definite failure', async () => {
-    const outcome = await stageSourceImport(
+    const outcome = await beginSourceImport(
       access({
         stageSourceImport: () =>
           Promise.reject(new ApplicationError('invalid-request', 'Enter a public deck link.')),

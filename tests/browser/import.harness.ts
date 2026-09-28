@@ -328,6 +328,31 @@ export function installImportHarness(
       return begin(recoverRequests, operationId, signal) as Promise<ImportOperationRecoveryResult>;
     },
   };
+  // Source imports are the deployment's capability: Application enables the operations this
+  // environment serves, and the page presents only the published ones.
+  const userCards = createUserCardsOperations({
+    client: scriptedUserCards,
+    storage: browserAttemptStorage(),
+    ...((options.sourceImports ?? true)
+      ? {}
+      : {
+          operations: usercardsBrowserOperations.filter(
+            (operation) => operation !== 'stageSourceImport',
+          ),
+        }),
+  });
+  // Application ends the UserCards scope of the account it leaves, so no retained attempt or read
+  // of that account reaches the account that signs in next (docs/architecture.md#runtime-boundaries).
+  let scopedAccountId: string | null = account?.accountId ?? null;
+  listeners.add((next) => {
+    const nextAccountId = next?.accountId ?? null;
+    if (nextAccountId !== scopedAccountId) {
+      if (scopedAccountId !== null) {
+        userCards.release(scopedAccountId);
+      }
+      scopedAccountId = nextAccountId;
+    }
+  });
   const capabilities: UserInterfaceCapabilities = {
     settings: {
       environment: 'test',
@@ -340,19 +365,7 @@ export function installImportHarness(
     request,
     catalog,
     search,
-    // Source imports are the deployment's capability: Application enables the operations this
-    // environment serves, and the page presents only the published ones.
-    userCards: createUserCardsOperations({
-      client: scriptedUserCards,
-      storage: browserAttemptStorage(),
-      ...((options.sourceImports ?? true)
-        ? {}
-        : {
-            operations: usercardsBrowserOperations.filter(
-              (operation) => operation !== 'stageSourceImport',
-            ),
-          }),
-    }),
+    userCards,
     createRecognition: () => {
       throw new Error('The Import journeys do not run recognition.');
     },

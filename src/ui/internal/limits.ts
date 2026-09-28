@@ -35,17 +35,6 @@ export const UI_LIMITS = {
   fragmentBatch: 100,
   /** Items one entry's fragment result may present, so a broken source cannot grow one row. */
   fragmentItems: 20,
-  /**
-   * Characters one pasted or reviewed source list may carry. The bound mirrors the provider's own
-   * bound for one source text, so the form refuses an oversized paste before it is dispatched.
-   */
-  importSourceText: 128 * 1024,
-  /**
-   * Pending import entries one staging or confirmation request carries. The bound mirrors the
-   * provider's own bound for those changes, so an explicit selection larger than one request is
-   * decided through further bounded requests instead of being rejected by the provider.
-   */
-  importBatch: 50,
   /** Printings one page of a manual entry search asks Search for. */
   importPrintings: 20,
   /**

@@ -5,10 +5,10 @@
  * docs/user-interface.md#list-boundary, docs/user-cards.md#browser-operation-lifecycle).
  *
  * The provider-owned operation handle decides whether a change committed, was rejected or stays
- * unknown; a view never infers that classification from a raw failure. Only a committed outcome is
- * presented as saved. A change whose outcome stays unknown recovers through a read of the record,
- * so a lost response is never presented as a saved change while the record's current state stays
- * reviewable.
+ * unknown; a view never infers that classification from a raw failure and keeps no list of failure
+ * codes of its own. Only a committed outcome is presented as saved. A change whose outcome stays
+ * unknown recovers through a read of the record, so a lost response is never presented as a saved
+ * change while the record's current state stays reviewable.
  *
  * A rejected bounded read whose continuation bound the provider's revisions reports the same
  * outcome under Catalog's and Search's `stale-continuation` and under UserCards' `conflict`, so the
@@ -59,38 +59,15 @@ export async function commitUiOperation<Change, Record = Change>(
   }
   // An observer resolves a settled operation, so the only remaining state is an unknown outcome.
   const record = await recover();
-  // An unknown outcome that reported a definite refusal of a retry presents that refusal: the
-  // earlier attempt of the same identity stays unresolved and the owner decides what to do.
-  const failure = outcome.state === 'unknown' ? outcome.failure : null;
-  const refusal =
-    failure !== null && failure.code !== null && isUiDefiniteFailure(failure.code)
-      ? failure.message
-      : null;
+  // An unknown outcome keeps its own presentation: the earlier attempt of the same identity stays
+  // unresolved until an authoritative read or the owner resolves it, and the view never decides
+  // from a failure code that the operation did not apply.
   return {
     status: 'unknown',
     message:
-      record !== null
-        ? 'The outcome is unknown. Review the record before retrying.'
-        : (refusal ?? unknown),
+      record !== null ? 'The outcome is unknown. Review the record before retrying.' : unknown,
     record,
   };
-}
-
-/**
- * Failure codes that establish the change was not applied: the request was rejected before it
- * could commit, so the view reports a definite failure instead of recovering a recorded outcome.
- * A cancellation, a timeout, a busy service, an unavailable service and every other outcome after
- * dispatch leave the change's commitment open; reading the record cannot resolve that uncertainty.
- */
-export function isUiDefiniteFailure(code: string): boolean {
-  return (
-    code === 'invalid-request' ||
-    code === 'unsupported-query' ||
-    code === 'not-found' ||
-    code === 'unauthorized' ||
-    code === 'route-not-found' ||
-    code === 'method-not-allowed'
-  );
 }
 
 /** Failure code of one rejected operation, or null when the cause carries none. */

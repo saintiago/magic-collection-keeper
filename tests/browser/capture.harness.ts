@@ -369,6 +369,22 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
     },
   };
 
+  const userCards = createUserCardsOperations({
+    client: scriptedUserCards,
+    storage: browserAttemptStorage(),
+  });
+  // Application ends the UserCards scope of the account it leaves, so no retained attempt or read
+  // of that account reaches the account that signs in next (docs/architecture.md#runtime-boundaries).
+  let scopedAccountId: string | null = account?.accountId ?? null;
+  listeners.add((next) => {
+    const nextAccountId = next?.accountId ?? null;
+    if (nextAccountId !== scopedAccountId) {
+      if (scopedAccountId !== null) {
+        userCards.release(scopedAccountId);
+      }
+      scopedAccountId = nextAccountId;
+    }
+  });
   const capabilities: UserInterfaceCapabilities = {
     settings: {
       environment: 'test',
@@ -381,10 +397,7 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
     request,
     catalog,
     search,
-    userCards: createUserCardsOperations({
-      client: scriptedUserCards,
-      storage: browserAttemptStorage(),
-    }),
+    userCards,
     createRecognition: () => {
       const recognition = createRecognition<HTMLCanvasElement>({
         createEnginePipeline: () => scriptedPipeline(),

@@ -713,16 +713,6 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
           ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
         });
   const request = createEntryPointRequest(api, compute);
-  // Account isolation belongs to Application even when no UserInterface is constructed. A token
-  // refresh for the same account keeps its requests valid, including the one awaiting that token.
-  let accountId = authentication.identity.current()?.accountId ?? null;
-  authentication.identity.subscribe((account) => {
-    const nextAccountId = account?.accountId ?? null;
-    if (nextAccountId !== accountId) {
-      accountId = nextAccountId;
-      request.endSession();
-    }
-  });
   const catalog = createCatalogClient(request);
   const search = createSearchClient(request);
   // UserCards owns the browser operation lifecycle: its facade composes the transport adapter,
@@ -738,6 +728,23 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
             (operation) => operation !== 'stageSourceImport',
           ),
         }),
+  });
+  // Account isolation belongs to Application even when no UserInterface is constructed. A token
+  // refresh for the same account keeps its requests valid, including the one awaiting that token;
+  // leaving an account ends its UserCards scope before another account can bind, so no read or
+  // operation handle of the departed account reaches the transport the next one serves
+  // (docs/architecture.md#runtime-boundaries).
+  let accountId = authentication.identity.current()?.accountId ?? null;
+  authentication.identity.subscribe((account) => {
+    const nextAccountId = account?.accountId ?? null;
+    if (nextAccountId !== accountId) {
+      const ended = accountId;
+      accountId = nextAccountId;
+      if (ended !== null) {
+        userCards.release(ended);
+      }
+      request.endSession();
+    }
   });
   const createRecognitionContract = () =>
     options.createRecognition !== undefined

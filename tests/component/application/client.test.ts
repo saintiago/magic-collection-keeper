@@ -1100,6 +1100,40 @@ describe('browser application', () => {
     expect(application.userInterface).toEqual({ constructed: true });
   });
 
+  it('ends the UserCards scope of the account it leaves and composes a fresh one on return', async () => {
+    const { fetch } = jsonFetch({ error: 'The service is unavailable.' }, { status: 503 });
+    const received: UserInterfaceCapabilities[] = [];
+    const application = createBrowserApplication({
+      settings: publicSettings(),
+      prompt: testPrompt(),
+      storage: signedInStorage(),
+      attemptStorage: null,
+      fetch,
+      createUserInterface: (capabilities) => {
+        received.push(capabilities);
+        return null;
+      },
+    });
+    const userCards = received[0]?.userCards;
+    const alice = userCards?.account('cognito-alice');
+    const lost = alice?.beginSourceImport({ format: 'pasted-list', text: '1 Lightning Bolt' });
+    expect(await lost?.observe()).toMatchObject({ state: 'unknown' });
+    expect(alice?.retained()).toHaveLength(1);
+
+    application.endSession();
+
+    // Leaving the account ends the scope Application composed: its retained attempt is gone, its
+    // reads refuse, and nothing of it reaches the transport another account will serve.
+    expect(alice?.retained()).toEqual([]);
+    await expect(alice?.readCopies(['copy-1'])).rejects.toThrow(/has ended/);
+    expect(() => alice?.subscribe(() => {})).toThrow(/has ended/);
+
+    // Signing back in as the same account composes a fresh, usable scope.
+    const again = userCards?.account('cognito-alice');
+    expect(again).not.toBe(alice);
+    expect(again?.retained()).toEqual([]);
+  });
+
   it('reads Search through the entry point UserInterface received', async () => {
     const { fetch, calls } = jsonFetch({
       status: 'ready',
