@@ -5,10 +5,12 @@
  * The authenticated request attaches the caller's current identity to every backend call, routes
  * the preserved recognition calls to the compute entry point and everything else to the interactive
  * entry point, and rejects a response that belongs to a session that already ended. The catalog
- * and search clients and the browser application compose the component contracts the UserInterface
- * receives; only public settings cross into the browser. Application's own failure envelope keeps
- * its code and message; the preserved compute runtime reports a plain message beside the HTTP
- * status, so that status decides the failure instead of collapsing into an invalid request.
+ * and search clients, the UserCards transport adapter and the browser application compose the
+ * component contracts the UserInterface receives: UserCards' own browser facade owns the operation
+ * lifecycle over the adapter, so transport code carries no recovery or invalidation semantics; only
+ * public settings cross into the browser. Application's own failure envelope keeps its code and
+ * message; the preserved compute runtime reports a plain message beside the HTTP status, so that
+ * status decides the failure instead of collapsing into an invalid request.
  */
 
 // A type-only import of the Catalog public entry keeps the provider barrel out of a browser
@@ -42,7 +44,8 @@ import type {
   SearchRevisions,
 } from '../../search/index.js';
 // UserCards follows the same rule: the collection views reach its private operations through this
-// authenticated contract, and a value import would pull the component's Node-only internals into
+// authenticated contract, whose domain records and operation lifecycle stay behind UserCards'
+// browser entry point, so a value import of the component would pull its Node-only internals into
 // the browser bundle.
 import type {
   Association,
@@ -96,6 +99,13 @@ import type {
   TagListResult,
   TagReadResult,
 } from '../../usercards/index.js';
+import {
+  createUserCardsOperations,
+  usercardsBrowserOperations,
+  type UserCardsAttemptStorage,
+  type UserCardsBrowserClient,
+  type UserCardsOperations,
+} from '../../usercards/browser.js';
 
 import {
   isApplicationFailureCode,
@@ -281,125 +291,14 @@ export function createSearchClient(request: RequestTransport): SearchClient {
 }
 
 /**
- * The private UserCards operations the UserInterface presents
- * (docs/user-interface.md#interface, docs/user-cards.md#interface). The caller sends explicit copy
- * or tag references and the change it read them from; the transport derives the trusted account
- * from the verified identity, so no account crosses into the browser and every private read and
- * change is scoped to the caller at the backend boundary. Tags are read as bounded pages, a tag's
- * associations are listed under the same rule, copy corrections and association changes quote the
- * revision the caller read, and an operation that leaves records unchanged reports its failure
- * instead of an empty success. A query-visible change carries the durable publication position
- * its records were published at, and a recovered confirmation reports the position its copies
- * were published at (docs/user-cards.md#query-surface). Pending imports are read as bounded
- * session and entry pages, a staged line, review or discard quotes the entry identity the caller
- * read, and a confirmation carries the operation identity a retry or recovery refers to
- * (docs/user-cards.md#import-and-capture-state).
+ * Builds UserCards' private browser client over the authenticated transport: every operation the
+ * component publishes is reached through the route Application serves it at, the trusted account
+ * is derived from the verified identity, and the response is read into the component's records.
+ * The operation lifecycle — attempt retention, recovery, retry and committed-change invalidations
+ * — belongs to UserCards' browser facade, which composes this adapter
+ * (docs/user-cards.md#browser-operation-lifecycle, docs/application.md#interface).
  */
-export interface UserCardsClient {
-  /** Authorized copies of the requested references, with the references this account has none for. */
-  readCopies(copyIds: readonly CopyId[], signal?: AbortSignal): Promise<CopyReadResult>;
-  /** The corrected state of one copy, guarded by the revision the caller read. */
-  correctCopy(input: CorrectCopyInput, signal?: AbortSignal): Promise<CopyChangeResult>;
-  /** Page of the account's tags, ordered by stable tag identity. */
-  listTags(options?: TagListOptions, signal?: AbortSignal): Promise<TagListResult>;
-  /** Authorized tags of the requested references, with the references this account has none for. */
-  readTags(tagIds: readonly string[], signal?: AbortSignal): Promise<TagReadResult>;
-  /** One new tag of the account. */
-  createTag(input: CreateTagInput, signal?: AbortSignal): Promise<TagChangeResult>;
-  /** The renamed state of one tag, guarded by the revision the caller read. */
-  renameTag(input: RenameTagInput, signal?: AbortSignal): Promise<TagChangeResult>;
-  /** Page of one tag's associations, ordered by stable association identity. */
-  listAssociations(
-    tagId: string,
-    options?: Omit<ListAssociationsOptions, 'tagId'>,
-    signal?: AbortSignal,
-  ): Promise<AssociationListResult>;
-  /** Authorized associations of the requested references, for reviewing a change's outcome. */
-  readAssociations(
-    associationIds: readonly string[],
-    signal?: AbortSignal,
-  ): Promise<AssociationReadResult>;
-  /** One new association of a tag; a card or printing target carries its intended quantity. */
-  createAssociation(
-    input: CreateAssociationInput,
-    signal?: AbortSignal,
-  ): Promise<AssociationChangeResult>;
-  /** The changed state of one association, guarded by the revision the caller read. */
-  changeAssociation(
-    input: ChangeAssociationInput,
-    signal?: AbortSignal,
-  ): Promise<AssociationChangeResult>;
-  /** The removal of one association, guarded by the revision the caller read. */
-  removeAssociation(
-    input: RemoveAssociationInput,
-    signal?: AbortSignal,
-  ): Promise<AssociationRemovalResult>;
-  /** The new single physical location of one copy, guarded by the revision the caller read. */
-  setCopyLocation(input: SetCopyLocationInput, signal?: AbortSignal): Promise<CopyLocationResult>;
-  /** Page of the account's pending import sessions, ordered by stable session identity. */
-  listImportSessions(
-    options?: ListImportSessionsOptions,
-    signal?: AbortSignal,
-  ): Promise<ImportSessionListResult>;
-  /** Page of one pending import session's entries, in capture order. */
-  listImportEntries(
-    input: ListImportEntriesOptions,
-    signal?: AbortSignal,
-  ): Promise<ImportEntryListResult>;
-  /** Stages parsed or manually entered lines as pending entries of one session. */
-  stageImportEntries(
-    input: StageImportEntriesInput,
-    signal?: AbortSignal,
-  ): Promise<ImportStageResult>;
-  /**
-   * Parses one supported source into the account's pending entries and reports what each parsed
-   * row became, including the rows that staged nothing
-   * (docs/user-cards.md#source-imports).
-   */
-  stageSourceImport(
-    input: StageSourceImportInput,
-    signal?: AbortSignal,
-  ): Promise<SourceImportResult>;
-  /**
-   * Stages one capture observation as a pending entry of its capture session, or reports the
-   * admission decision the session's accepted identity produced
-   * (docs/user-cards.md#import-and-capture-state).
-   */
-  stageCaptureObservation(
-    input: StageCaptureInput,
-    signal?: AbortSignal,
-  ): Promise<CaptureStageResult>;
-  /** One pending entry's reviewed values, guarded by the revision the caller read. */
-  reviewImportEntry(
-    input: ReviewImportEntryInput,
-    signal?: AbortSignal,
-  ): Promise<ImportEntryChangeResult>;
-  /** Late recognition alternatives of one pending entry; reviewed values stay unchanged. */
-  attachImportCandidates(
-    input: AttachImportCandidatesInput,
-    signal?: AbortSignal,
-  ): Promise<ImportEntryChangeResult>;
-  /** Ends one pending entry without creating owned copies. */
-  discardImportEntry(
-    input: DiscardImportEntryInput,
-    signal?: AbortSignal,
-  ): Promise<ImportEntryChangeResult>;
-  /** Ends every pending entry of one import without creating owned copies. */
-  discardImportSession(
-    input: DiscardImportSessionInput,
-    signal?: AbortSignal,
-  ): Promise<ImportSessionChange>;
-  /** Confirms reviewed entries under one operation identity, creating their copies. */
-  confirmImport(input: ConfirmImportInput, signal?: AbortSignal): Promise<ImportConfirmationResult>;
-  /** The recorded outcome of one operation identity, or its explicit absence. */
-  recoverImportOperation(
-    operationId: string,
-    signal?: AbortSignal,
-  ): Promise<ImportOperationRecoveryResult>;
-}
-
-/** Builds the private contract the collection, organization and import views read and change through. */
-export function createUserCardsClient(request: RequestTransport): UserCardsClient {
+export function createUserCardsClient(request: RequestTransport): UserCardsBrowserClient {
   if (typeof request !== 'function') {
     throw new TypeError('createUserCardsClient requires the authenticated request contract.');
   }
@@ -742,8 +641,8 @@ export interface UserInterfaceCapabilities {
   readonly catalog: Catalog;
   /** Combined Catalog and UserCards queries with their ordering and continuation. */
   readonly search: SearchClient;
-  /** Private copy reads and corrections of the presented account. */
-  readonly userCards: UserCardsClient;
+  /** UserCards' browser operation facade: private reads, retained operations and invalidations. */
+  readonly userCards: UserCardsOperations;
   /** Builds the Recognition contract over the browser's preserved engines. */
   readonly createRecognition: () => Recognition<HTMLCanvasElement>;
 }
@@ -759,6 +658,8 @@ export interface BrowserApplicationOptions {
   readonly prompt: BrowserCredentialPrompt;
   /** Where the sign-in keeps its tokens; defaults to this browsing session. */
   readonly storage?: BrowserSessionStore;
+  /** Storage UserCards' unfinished attempts survive a reload in; defaults to this session. */
+  readonly attemptStorage?: UserCardsAttemptStorage | null;
   readonly fetch?: typeof globalThis.fetch;
   /** Current time in milliseconds; tests control refresh without changing the system clock. */
   readonly now?: () => number;
@@ -824,7 +725,20 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
   });
   const catalog = createCatalogClient(request);
   const search = createSearchClient(request);
-  const userCards = createUserCardsClient(request);
+  // UserCards owns the browser operation lifecycle: its facade composes the transport adapter,
+  // retains unfinished attempts in the account's browsing session and publishes the constraints
+  // and invalidations its consumers present (docs/user-cards.md#browser-operation-lifecycle).
+  const userCards = createUserCardsOperations({
+    client: createUserCardsClient(request),
+    storage: options.attemptStorage ?? browserAttemptStorage(),
+    ...(settings.capabilities.sourceImports
+      ? {}
+      : {
+          operations: usercardsBrowserOperations.filter(
+            (operation) => operation !== 'stageSourceImport',
+          ),
+        }),
+  });
   const createRecognitionContract = () =>
     options.createRecognition !== undefined
       ? options.createRecognition({ settings, request })
@@ -925,6 +839,20 @@ async function readCredential(
     throw new ApplicationError('unauthorized', 'Sign in to use the collection.');
   }
   return credential;
+}
+
+/**
+ * The browsing session's attempt storage, so UserCards' unfinished operations survive a reload of
+ * the page without outliving the browser session that began them. A context that offers no storage
+ * keeps them in memory only (docs/user-cards.md#persistence-and-recovery).
+ */
+function browserAttemptStorage(): UserCardsAttemptStorage | null {
+  try {
+    const storage = globalThis.sessionStorage;
+    return typeof storage?.getItem === 'function' ? storage : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

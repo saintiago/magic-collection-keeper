@@ -11,6 +11,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { ApplicationError } from '../../../src/application/index.js';
+import {
+  createUserCardsOperations,
+  type UserCardsConfirmationOutcome,
+  type UserCardsOperation,
+  type UserCardsBrowserClient,
+} from '../../../src/usercards/browser.js';
 import type {
   ImportEntry,
   ImportEntryChangeResult,
@@ -30,7 +36,6 @@ import {
   uiImportIdentity,
   uiImportSourceLabel,
   type UiImportAccess,
-  type UiImportClient,
 } from '../../../src/ui/index.js';
 
 function entry(overrides: Partial<ImportEntry> = {}): ImportEntry {
@@ -79,29 +84,22 @@ function changed(): ImportEntryChangeResult {
   return { privateRevision: 'r3', session: session({ revision: 5 }), entry: entry() };
 }
 
-/** One access whose operations the case scripts; unscripted calls fail loudly. */
-function access(overrides: Partial<UiImportAccess> = {}): UiImportAccess {
-  const unused = () => Promise.reject(new Error('The case did not script this operation.'));
-  return {
-    sessions: unused,
-    entries: unused,
-    stage: unused,
-    source: unused,
-    capture: unused,
-    review: unused,
-    attach: unused,
-    discardEntry: unused,
-    discardSession: unused,
-    confirm: unused,
-    recover: unused,
-    ...overrides,
-  };
-}
-
 /** One private client whose operations the case scripts; unscripted calls fail loudly. */
-function client(overrides: Partial<UiImportClient> = {}): UiImportClient {
+function client(overrides: Partial<UserCardsBrowserClient> = {}): UserCardsBrowserClient {
   const unused = () => Promise.reject(new Error('The case did not script this operation.'));
   return {
+    readCopies: unused,
+    correctCopy: unused,
+    listTags: unused,
+    readTags: unused,
+    createTag: unused,
+    renameTag: unused,
+    listAssociations: unused,
+    readAssociations: unused,
+    createAssociation: unused,
+    changeAssociation: unused,
+    removeAssociation: unused,
+    setCopyLocation: unused,
     listImportSessions: unused,
     listImportEntries: unused,
     stageImportEntries: unused,
@@ -115,6 +113,16 @@ function client(overrides: Partial<UiImportClient> = {}): UiImportClient {
     recoverImportOperation: unused,
     ...overrides,
   };
+}
+
+/**
+ * The Import page's private access over the provider-owned browser facade: the case scripts the
+ * transport-backed client, and the facade owns the operation lifecycle the page presents.
+ */
+function access(overrides: Partial<UserCardsBrowserClient> = {}): UiImportAccess {
+  return createImportAccess(
+    createUserCardsOperations({ client: client(overrides), storage: null }).account('alice'),
+  );
 }
 
 describe('import vocabulary', () => {
@@ -161,7 +169,7 @@ describe('import access', () => {
       entries: [entry()],
       continuation: null,
     }));
-    const built = createImportAccess(client({ listImportSessions, listImportEntries }));
+    const built = access({ listImportSessions, listImportEntries });
 
     await expect(built.sessions({ pageSize: 2 })).resolves.toMatchObject({
       sessions: [session()],
@@ -174,18 +182,18 @@ describe('import access', () => {
   });
 
   it('requires every operation the Import page presents', () => {
-    expect(() => createImportAccess({} as unknown as UiImportClient)).toThrow(TypeError);
+    expect(() => createImportAccess({} as never)).toThrow(TypeError);
     expect(() =>
       createImportAccess({
         listImportSessions: () => Promise.reject(new Error('no')),
-      } as unknown as UiImportClient),
+      } as never),
     ).toThrow(TypeError);
   });
 });
 
 describe('import staging', () => {
   it('reports committed lines as entries in review, never as ownership', async () => {
-    const outcome = await stageImportLines(access({ stage: async () => staged() }), {
+    const outcome = await stageImportLines(access({ stageImportEntries: async () => staged() }), {
       sessionId: 'manual',
       source: { kind: 'manual', id: 'manual' },
       entries: [{ entryId: 'entry-1', printingId: 'printing-1', quantity: 1 }],
@@ -198,7 +206,7 @@ describe('import staging', () => {
   it('keeps a line for an idempotent retry when the staging outcome is unknown', async () => {
     const outcome = await stageImportLines(
       access({
-        stage: () => Promise.reject(new ApplicationError('busy', 'Try again.')),
+        stageImportEntries: () => Promise.reject(new ApplicationError('busy', 'Try again.')),
       }),
       {
         sessionId: 'manual',
@@ -215,7 +223,8 @@ describe('import staging', () => {
   it('reports a line already staged with different content as a conflict', async () => {
     const outcome = await stageImportLines(
       access({
-        stage: () => Promise.reject(new ApplicationError('conflict', 'Reload the import.')),
+        stageImportEntries: () =>
+          Promise.reject(new ApplicationError('conflict', 'Reload the import.')),
       }),
       {
         sessionId: 'manual',
@@ -230,7 +239,7 @@ describe('import staging', () => {
   it('stages a parsed source and reports what every row became', async () => {
     const outcome = await stageSourceImport(
       access({
-        source: async () => ({
+        stageSourceImport: async () => ({
           privateRevision: 'r2',
           session: session({
             sessionId: 'pasted-list',
@@ -250,7 +259,7 @@ describe('import staging', () => {
           staged: 0,
         }),
       }),
-      { format: 'pasted-list', sessionId: 'paste-import-1', text: 'not a line' },
+      { format: 'pasted-list', text: 'not a line' },
     );
 
     expect(outcome).toMatchObject({
@@ -261,10 +270,11 @@ describe('import staging', () => {
 
   it('keeps an unreported source recoverable by importing it again', async () => {
     const outcome = await stageSourceImport(
-      access({ source: () => Promise.reject(new ApplicationError('busy', 'Try again.')) }),
+      access({
+        stageSourceImport: () => Promise.reject(new ApplicationError('busy', 'Try again.')),
+      }),
       {
         format: 'moxfield',
-        sessionId: 'deck-import-1',
         url: 'https://moxfield.com/decks/deck-1',
       },
     );
@@ -277,10 +287,10 @@ describe('import staging', () => {
   it('reports a source the provider refused as a definite failure', async () => {
     const outcome = await stageSourceImport(
       access({
-        source: () =>
+        stageSourceImport: () =>
           Promise.reject(new ApplicationError('invalid-request', 'Enter a public deck link.')),
       }),
-      { format: 'moxfield', sessionId: 'deck-import-2', url: 'https://example.test/deck' },
+      { format: 'moxfield', url: 'https://example.test/deck' },
     );
 
     expect(outcome).toMatchObject({
@@ -293,7 +303,7 @@ describe('import staging', () => {
 
 describe('import review and discard', () => {
   it('reports the committed entry of a saved review', async () => {
-    const outcome = await reviewImportEntry(access({ review: async () => changed() }), {
+    const outcome = await reviewImportEntry(access({ reviewImportEntry: async () => changed() }), {
       entryId: 'entry-1',
       expectedRevision: 3,
       printingId: 'printing-m11-149-en',
@@ -308,7 +318,7 @@ describe('import review and discard', () => {
   it('reports a stale reviewed revision as a conflict that keeps the input', async () => {
     const outcome = await reviewImportEntry(
       access({
-        review: () =>
+        reviewImportEntry: () =>
           Promise.reject(new ApplicationError('conflict', 'The entry changed; reload it.')),
       }),
       {
@@ -325,13 +335,16 @@ describe('import review and discard', () => {
   });
 
   it('discards one entry and one import without creating copies', async () => {
-    const removed = await discardImportEntry(access({ discardEntry: async () => changed() }), {
-      entryId: 'entry-1',
-      expectedRevision: 3,
-    });
+    const removed = await discardImportEntry(
+      access({ discardImportEntry: async () => changed() }),
+      {
+        entryId: 'entry-1',
+        expectedRevision: 3,
+      },
+    );
     const discarded = await discardImportSession(
       access({
-        discardSession: async () => ({
+        discardImportSession: async () => ({
           privateRevision: 'r4',
           session: session({ state: 'discarded' }),
         }),
@@ -367,46 +380,43 @@ describe('import confirmation', () => {
       privateRevision: 'r5',
       publicationPosition: '5',
     };
-    const outcome = await confirmImport(access({ confirm: async () => receipt }), {
-      operationId: 'operation-1',
+    const operation = access({ confirmImport: async () => receipt }).confirm({
       sessionId: 'manual',
       entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
     });
+    const outcome = await confirmImport(operation);
 
     expect(outcome.status).toBe('committed');
     expect(outcome.record?.copies.map((copy) => copy.copyId)).toEqual(['copy-1']);
   });
 
   it('recovers the recorded outcome of a lost confirmation response', async () => {
-    const outcome = await confirmImport(
-      access({
-        confirm: () => Promise.reject(new ApplicationError('busy', 'Try again.')),
-        recover: async () => ({
-          outcome: 'recorded',
-          receipt: {
-            operationId: 'operation-1',
-            sessionId: 'manual',
-            sourceKind: 'manual',
-            sourceId: 'manual',
-            publicationPosition: '5',
-            copies: [
-              {
-                copyId: 'copy-1',
-                printingId: 'printing-m11-149-en',
-                finish: 'nonfoil',
-                condition: null,
-                revision: 1,
-              },
-            ],
-          },
-        }),
+    const operation = access({
+      confirmImport: () => Promise.reject(new ApplicationError('busy', 'Try again.')),
+      recoverImportOperation: async () => ({
+        outcome: 'recorded',
+        receipt: {
+          operationId: 'operation-1',
+          sessionId: 'manual',
+          sourceKind: 'manual',
+          sourceId: 'manual',
+          publicationPosition: '5',
+          copies: [
+            {
+              copyId: 'copy-1',
+              printingId: 'printing-m11-149-en',
+              finish: 'nonfoil',
+              condition: null,
+              revision: 1,
+            },
+          ],
+        },
       }),
-      {
-        operationId: 'operation-1',
-        sessionId: 'manual',
-        entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
-      },
-    );
+    }).confirm({
+      sessionId: 'manual',
+      entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
+    });
+    const outcome = await confirmImport(operation);
 
     expect(outcome.status).toBe('committed');
     expect(outcome.record?.copies).toHaveLength(1);
@@ -414,17 +424,14 @@ describe('import confirmation', () => {
   });
 
   it('reports an explicit absence as a confirmation that created no copies', async () => {
-    const outcome = await confirmImport(
-      access({
-        confirm: () => Promise.reject(new ApplicationError('unavailable', 'Lost.')),
-        recover: async () => ({ outcome: 'absent' }),
-      }),
-      {
-        operationId: 'operation-1',
-        sessionId: 'manual',
-        entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
-      },
-    );
+    const operation = access({
+      confirmImport: () => Promise.reject(new ApplicationError('unavailable', 'Lost.')),
+      recoverImportOperation: async () => ({ outcome: 'absent' }),
+    }).confirm({
+      sessionId: 'manual',
+      entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
+    });
+    const outcome = await confirmImport(operation);
 
     expect(outcome.status).toBe('failed');
     expect(outcome.record).toBeNull();
@@ -432,17 +439,14 @@ describe('import confirmation', () => {
   });
 
   it('keeps the confirmation unknown when its recovery cannot be read', async () => {
-    const outcome = await confirmImport(
-      access({
-        confirm: () => Promise.reject(new ApplicationError('busy', 'Lost.')),
-        recover: () => Promise.reject(new ApplicationError('unavailable', 'Offline.')),
-      }),
-      {
-        operationId: 'operation-1',
-        sessionId: 'manual',
-        entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
-      },
-    );
+    const operation = access({
+      confirmImport: () => Promise.reject(new ApplicationError('busy', 'Lost.')),
+      recoverImportOperation: () => Promise.reject(new ApplicationError('unavailable', 'Offline.')),
+    }).confirm({
+      sessionId: 'manual',
+      entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
+    });
+    const outcome = await confirmImport(operation);
 
     expect(outcome).toMatchObject({ status: 'unknown', record: null });
     expect(outcome.message).toContain('could not be read');
@@ -450,17 +454,14 @@ describe('import confirmation', () => {
 
   it('reports a confirmation refused before it could commit as a definite failure', async () => {
     const recover = vi.fn(async () => ({ outcome: 'absent' as const }));
-    const outcome = await confirmImport(
-      access({
-        confirm: () => Promise.reject(new ApplicationError('invalid-request', 'Bad input.')),
-        recover,
-      }),
-      {
-        operationId: 'operation-1',
-        sessionId: 'manual',
-        entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
-      },
-    );
+    const operation = access({
+      confirmImport: () => Promise.reject(new ApplicationError('invalid-request', 'Bad input.')),
+      recoverImportOperation: recover,
+    }).confirm({
+      sessionId: 'manual',
+      entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
+    });
+    const outcome = await confirmImport(operation);
 
     expect(outcome).toMatchObject({ status: 'failed', message: 'Bad input.' });
     expect(recover).not.toHaveBeenCalled();
@@ -484,16 +485,17 @@ describe('import confirmation', () => {
       ],
     };
     const recorded = await recoverConfirmation(
-      access({ recover: async () => ({ outcome: 'recorded', receipt }) }),
-      'operation-1',
+      retainedConfirmation(
+        access({ recoverImportOperation: async () => ({ outcome: 'recorded', receipt }) }),
+      ),
     );
     const absent = await recoverConfirmation(
-      access({ recover: async () => ({ outcome: 'absent' }) }),
-      'operation-1',
+      retainedConfirmation(access({ recoverImportOperation: async () => ({ outcome: 'absent' }) })),
     );
     const unreadable = await recoverConfirmation(
-      access({ recover: () => Promise.reject(new Error('Offline.')) }),
-      'operation-1',
+      retainedConfirmation(
+        access({ recoverImportOperation: () => Promise.reject(new Error('Offline.')) }),
+      ),
     );
 
     expect(recorded).toMatchObject({ status: 'committed', record: { copies: receipt.copies } });
@@ -503,4 +505,18 @@ describe('import confirmation', () => {
     expect(unreadable).toMatchObject({ status: 'unknown', record: null });
     expect(unreadable.message).toContain('could not be read');
   });
+
+  /**
+   * One unfinished confirmation of the account: its response is lost, so the attempt stays
+   * recoverable through the identity UserCards owns.
+   */
+  function retainedConfirmation(
+    access: UiImportAccess,
+  ): UserCardsOperation<'confirmImport', UserCardsConfirmationOutcome> {
+    const operation = access.confirm({
+      sessionId: 'manual',
+      entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
+    });
+    return operation;
+  }
 });

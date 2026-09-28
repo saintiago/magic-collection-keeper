@@ -104,7 +104,9 @@ export function createCardDetailsPage(): UiPageDefinition {
       container.append(status, content);
 
       const catalog = context.capabilities.catalog;
-      const copies = createCopyAccess(context.capabilities.userCards);
+      const copies = createCopyAccess(
+        context.capabilities.userCards.account(context.account.accountId),
+      );
       /** The copy form's state, kept whether or not the form is presented at this moment. */
       let draft = readCopyDraft(restored);
       /** The card level's printing list; the page keeps the state the list itself captured. */

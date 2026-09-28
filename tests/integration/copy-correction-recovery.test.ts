@@ -3,8 +3,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCatalog } from '../../src/catalog/index.js';
 import { correctCopy, createCopyAccess } from '../../src/ui/index.js';
+import {
+  createUserCardsOperations,
+  type UserCardsBrowserClient,
+} from '../../src/usercards/browser.js';
 import { createUserCards, type UserCards } from '../../src/usercards/index.js';
 import { publishCatalog } from '../support/catalog-database.js';
+import { unusedUserCardsClient } from '../support/usercards-browser.js';
 import {
   createUserCardsTestDatabase,
   type UserCardsTestDatabase,
@@ -64,25 +69,31 @@ describe('copy correction recovery', () => {
       } else {
         await userCards.correctCopy(account, input);
       }
-      const access = createCopyAccess({
-        readCopies: (ids) => userCards.readCopies(account, ids),
-        correctCopy: (correction) => userCards.correctCopy(account, correction),
-      });
-
       let providerFailure: unknown;
-      const outcome = await correctCopy(
-        {
-          read: access.read,
-          async correct(correction) {
-            // The real provider rejects this operation; only its response is lost.
-            return access.correct(correction).catch((cause: unknown) => {
-              providerFailure = cause;
-              throw new Error('The response was lost.');
-            });
-          },
+      // Only the first attempt's response is lost; a reviewed retry reaches the provider again.
+      let lost = true;
+      const client: UserCardsBrowserClient = {
+        ...unusedUserCardsClient(),
+        readCopies: (ids) => userCards.readCopies(account, ids),
+        async correctCopy(correction) {
+          try {
+            return await userCards.correctCopy(account, correction);
+          } catch (cause) {
+            // The real provider rejects this operation.
+            providerFailure = cause;
+            if (!lost) {
+              throw cause;
+            }
+            lost = false;
+            throw new Error('The response was lost.', { cause });
+          }
         },
-        input,
+      };
+      const access = createCopyAccess(
+        createUserCardsOperations({ client, storage: null }).account(account.accountId),
       );
+
+      const outcome = await correctCopy(access, input);
 
       expect(providerFailure).toMatchObject({ code: 'conflict' });
       expect(outcome.status).toBe('unknown');

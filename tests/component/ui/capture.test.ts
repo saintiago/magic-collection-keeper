@@ -12,6 +12,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ApplicationError } from '../../../src/application/index.js';
 import type { RecognitionCandidate, RecognitionReading } from '../../../src/recognition/index.js';
+import {
+  createUserCardsOperations,
+  type UserCardsBrowserClient,
+} from '../../../src/usercards/browser.js';
 import type {
   CaptureStageResult,
   ImportEntry,
@@ -25,7 +29,6 @@ import {
   stageCaptureObservation,
   uiCaptureIdentity,
   type UiImportAccess,
-  type UiImportClient,
 } from '../../../src/ui/index.js';
 import {
   createCaptureAdmission,
@@ -119,29 +122,22 @@ const observation: StageCaptureInput = {
   printingId: 'printing-1',
 };
 
-/** One access whose operations the case scripts; unscripted calls fail loudly. */
-function access(overrides: Partial<UiImportAccess> = {}): UiImportAccess {
-  const unused = () => Promise.reject(new Error('The case did not script this operation.'));
-  return {
-    sessions: unused,
-    entries: unused,
-    stage: unused,
-    source: unused,
-    capture: unused,
-    review: unused,
-    attach: unused,
-    discardEntry: unused,
-    discardSession: unused,
-    confirm: unused,
-    recover: unused,
-    ...overrides,
-  };
-}
-
 /** One private client whose operations the case scripts; unscripted calls fail loudly. */
-function client(overrides: Partial<UiImportClient> = {}): UiImportClient {
+function client(overrides: Partial<UserCardsBrowserClient> = {}): UserCardsBrowserClient {
   const unused = () => Promise.reject(new Error('The case did not script this operation.'));
   return {
+    readCopies: unused,
+    correctCopy: unused,
+    listTags: unused,
+    readTags: unused,
+    createTag: unused,
+    renameTag: unused,
+    listAssociations: unused,
+    readAssociations: unused,
+    createAssociation: unused,
+    changeAssociation: unused,
+    removeAssociation: unused,
+    setCopyLocation: unused,
     listImportSessions: unused,
     listImportEntries: unused,
     stageImportEntries: unused,
@@ -155,6 +151,16 @@ function client(overrides: Partial<UiImportClient> = {}): UiImportClient {
     recoverImportOperation: unused,
     ...overrides,
   };
+}
+
+/**
+ * The Import page's private access over the provider-owned browser facade: the case scripts the
+ * transport-backed client, and the facade owns the capture operation lifecycle the page presents.
+ */
+function access(overrides: Partial<UserCardsBrowserClient> = {}): UiImportAccess {
+  return createImportAccess(
+    createUserCardsOperations({ client: client(overrides), storage: null }).account('alice'),
+  );
 }
 
 describe('capture admission', () => {
@@ -255,7 +261,7 @@ describe('capture observation', () => {
 describe('capture staging', () => {
   it('reports an admitted capture as an entry in review, never as ownership', async () => {
     const outcome = await stageCaptureObservation(
-      access({ capture: async () => captureStage('admitted') }),
+      access({ stageCaptureObservation: async () => captureStage('admitted') }),
       observation,
     );
 
@@ -268,7 +274,7 @@ describe('capture staging', () => {
 
   it('reports a suppressed repeat without adding an entry', async () => {
     const outcome = await stageCaptureObservation(
-      access({ capture: async () => captureStage('suppressed') }),
+      access({ stageCaptureObservation: async () => captureStage('suppressed') }),
       observation,
     );
 
@@ -277,7 +283,9 @@ describe('capture staging', () => {
 
   it('keeps the capture identity for a retry when the outcome is unknown', async () => {
     const outcome = await stageCaptureObservation(
-      access({ capture: () => Promise.reject(new ApplicationError('busy', 'Try again.')) }),
+      access({
+        stageCaptureObservation: () => Promise.reject(new ApplicationError('busy', 'Try again.')),
+      }),
       observation,
     );
 
@@ -288,7 +296,9 @@ describe('capture staging', () => {
 
   it('reports a capture already staged with different content as a conflict', async () => {
     const outcome = await stageCaptureObservation(
-      access({ capture: () => Promise.reject(new ApplicationError('conflict', 'Reload.')) }),
+      access({
+        stageCaptureObservation: () => Promise.reject(new ApplicationError('conflict', 'Reload.')),
+      }),
       observation,
     );
 
@@ -297,7 +307,7 @@ describe('capture staging', () => {
 
   it('attaches late alternatives without changing the reviewed values', async () => {
     const attach = vi.fn(async () => changedEntry());
-    const outcome = await attachImportCandidates(access({ attach }), {
+    const outcome = await attachImportCandidates(access({ attachImportCandidates: attach }), {
       entryId: 'capture-1',
       candidates: [
         { printingId: 'printing-2', provider: 'recognition', evidence: 'title-evidence' },
@@ -319,17 +329,18 @@ describe('capture staging', () => {
   it('reads the capture operations through the private contract', async () => {
     const stageCaptureObservationCall = vi.fn(async () => captureStage('admitted'));
     const attachImportCandidatesCall = vi.fn(async () => changedEntry());
-    const built = createImportAccess(
-      client({
-        stageCaptureObservation: stageCaptureObservationCall,
-        attachImportCandidates: attachImportCandidatesCall,
-      }),
-    );
-
-    await expect(built.capture(observation)).resolves.toMatchObject({ outcome: 'admitted' });
-    await expect(built.attach({ entryId: 'capture-1', candidates: [] })).resolves.toMatchObject({
-      entry: entry(),
+    const built = access({
+      stageCaptureObservation: stageCaptureObservationCall,
+      attachImportCandidates: attachImportCandidatesCall,
     });
+
+    await expect(built.capture(observation).observe()).resolves.toMatchObject({
+      state: 'committed',
+      record: { outcome: 'admitted' },
+    });
+    await expect(
+      built.attach({ entryId: 'capture-1', candidates: [] }).observe(),
+    ).resolves.toMatchObject({ state: 'committed', record: { entry: entry() } });
     expect(stageCaptureObservationCall).toHaveBeenCalledWith(observation, undefined);
     expect(attachImportCandidatesCall).toHaveBeenCalledWith(
       { entryId: 'capture-1', candidates: [] },
@@ -337,18 +348,15 @@ describe('capture staging', () => {
     );
   });
 
-  it('requires the capture operations the Import page stages through', () => {
-    expect(() =>
-      createImportAccess({
-        ...client(),
-        stageCaptureObservation: undefined,
-      } as unknown as UiImportClient),
-    ).toThrow(TypeError);
-    expect(() =>
-      createImportAccess({
-        ...client(),
-        attachImportCandidates: undefined,
-      } as unknown as UiImportClient),
-    ).toThrow(TypeError);
+  it('reports a capture operation the deployment does not enable', () => {
+    const operations = createUserCardsOperations({
+      client: client(),
+      storage: null,
+      operations: ['listImportSessions', 'listImportEntries'],
+    }).account('alice');
+    const built = createImportAccess(operations);
+
+    expect(operations.constraints.operations).toEqual(['listImportSessions', 'listImportEntries']);
+    expect(() => built.capture(observation)).toThrow(/stageCaptureObservation/);
   });
 });

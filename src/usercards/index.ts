@@ -19,8 +19,10 @@
  * owns its own acquisitions. Every query-visible mutation also publishes its records durably
  * through that contract; the caller receives the change's publication position, and recovering a
  * recorded outcome returns the position it was published at. Other components import UserCards
- * through this module only; its internal modules stay private to the component
- * (docs/architecture.md, .dependency-cruiser.mjs).
+ * through this module or its browser operation facade (src/usercards/browser.ts), which owns the
+ * operation lifecycle, the account-scoped attempts and the input constraints a browser consumer
+ * presents; its internal modules stay private to the component (docs/architecture.md,
+ * .dependency-cruiser.mjs).
  */
 
 export { UserCardsError, type UserCardsFailureCode } from './internal/errors.js';

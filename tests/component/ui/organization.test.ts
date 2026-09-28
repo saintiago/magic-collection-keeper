@@ -13,6 +13,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApplicationError } from '../../../src/application/index.js';
 import type { Association, PhysicalCopy, Tag } from '../../../src/usercards/index.js';
 import {
+  createUserCardsOperations,
+  type UserCardsBrowserClient,
+} from '../../../src/usercards/browser.js';
+import {
   addAssociation,
   addToTagTool,
   createTagAccess,
@@ -25,7 +29,6 @@ import {
   uiTagKindLabel,
   uiTagKinds,
   type UiTagAccess,
-  type UiTagClient,
 } from '../../../src/ui/index.js';
 
 function tag(overrides: Partial<Tag> = {}): Tag {
@@ -63,10 +66,11 @@ function copy(overrides: Partial<PhysicalCopy> = {}): PhysicalCopy {
 }
 
 /** One private client whose operations the case scripts; unscripted calls fail loudly. */
-function client(overrides: Partial<UiTagClient> = {}): UiTagClient {
+function client(overrides: Partial<UserCardsBrowserClient> = {}): UserCardsBrowserClient {
   const unused = () => Promise.reject(new Error('The case did not script this operation.'));
   return {
     readCopies: unused,
+    correctCopy: unused,
     listTags: unused,
     readTags: unused,
     createTag: unused,
@@ -77,27 +81,29 @@ function client(overrides: Partial<UiTagClient> = {}): UiTagClient {
     changeAssociation: unused,
     removeAssociation: unused,
     setCopyLocation: unused,
+    listImportSessions: unused,
+    listImportEntries: unused,
+    stageImportEntries: unused,
+    stageSourceImport: unused,
+    stageCaptureObservation: unused,
+    reviewImportEntry: unused,
+    attachImportCandidates: unused,
+    discardImportEntry: unused,
+    discardImportSession: unused,
+    confirmImport: unused,
+    recoverImportOperation: unused,
     ...overrides,
   };
 }
 
-/** One access whose operations the case scripts; unscripted calls fail loudly. */
-function access(overrides: Partial<UiTagAccess> = {}): UiTagAccess {
-  const unused = () => Promise.reject(new Error('The case did not script this operation.'));
-  return {
-    list: unused,
-    read: unused,
-    associations: unused,
-    readAssociations: unused,
-    readCopies: unused,
-    createTag: unused,
-    renameTag: unused,
-    createAssociation: unused,
-    changeAssociation: unused,
-    removeAssociation: unused,
-    setCopyLocation: unused,
-    ...overrides,
-  };
+/**
+ * The organization views' private access over the provider-owned browser facade: the case scripts
+ * the transport-backed client, and the facade owns the operation lifecycle the views present.
+ */
+function access(overrides: Partial<UserCardsBrowserClient> = {}): UiTagAccess {
+  return createTagAccess(
+    createUserCardsOperations({ client: client(overrides), storage: null }).account('alice'),
+  );
 }
 
 describe('tag vocabulary', () => {
@@ -127,7 +133,7 @@ describe('tag access', () => {
       associations: [association()],
       continuation: null,
     }));
-    const built = createTagAccess(client({ listTags, listAssociations }));
+    const built = access({ listTags, listAssociations });
 
     await expect(built.list({ pageSize: 2 })).resolves.toEqual({
       privateRevision: 'r1',
@@ -144,11 +150,11 @@ describe('tag access', () => {
   });
 
   it('requires every operation the organization views present', () => {
-    expect(() => createTagAccess({} as unknown as UiTagClient)).toThrow(TypeError);
+    expect(() => createTagAccess({} as never)).toThrow(TypeError);
     expect(() =>
       createTagAccess({
         readCopies: () => Promise.reject(new Error('no')),
-      } as unknown as UiTagClient),
+      } as never),
     ).toThrow(TypeError);
   });
 });
@@ -200,7 +206,7 @@ describe('tag changes', () => {
       access({
         renameTag: () =>
           Promise.reject(new ApplicationError('unavailable', 'The service is down.')),
-        read: async () => ({
+        readTags: async () => ({
           privateRevision: 'r2',
           tags: new Map([[observed.tagId, observed]]),
           missing: [],

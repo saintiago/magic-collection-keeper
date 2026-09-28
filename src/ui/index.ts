@@ -83,7 +83,7 @@ export {
   type UiImportClient,
   type UiImportLine,
 } from './internal/import-edits.js';
-export { createImportPages, uiMaxImportQuantity } from './internal/imports.js';
+export { createImportPages } from './internal/imports.js';
 export { UI_LIMITS } from './internal/limits.js';
 export {
   uiFragmentKinds,

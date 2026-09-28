@@ -16,6 +16,11 @@ import type { SearchEntry, SearchPage } from '../../../src/search/index.js';
 import type { SearchClient } from '../../../src/application/index.js';
 import type { PhysicalCopy } from '../../../src/usercards/index.js';
 import {
+  createUserCardsOperations,
+  type UserCardsBrowserClient,
+} from '../../../src/usercards/browser.js';
+import { unusedUserCardsClient } from '../../support/usercards-browser.js';
+import {
   collectionSearchRequest,
   copyChangeTool,
   correctCopy,
@@ -28,7 +33,6 @@ import {
   uiEntryKey,
   uiHref,
   type UiCopyAccess,
-  type UiCopyClient,
   type UiCopyCorrection,
   type UiListEntry,
 } from '../../../src/ui/index.js';
@@ -419,7 +423,7 @@ describe('bulk copy changes', () => {
   it('reads the revision of every selected copy and corrects exactly them', async () => {
     const reads: (readonly string[])[] = [];
     const corrections: UiCopyCorrection[] = [];
-    const access: UiCopyAccess = {
+    const access = copyAccess({
       read(copyIds) {
         reads.push([...copyIds]);
         return Promise.resolve({
@@ -434,7 +438,7 @@ describe('bulk copy changes', () => {
         corrections.push(input);
         return Promise.resolve(copy({ copyId: input.copyId, finish: input.finish }));
       },
-    };
+    });
     const tool = copyChangeTool({
       id: 'apply-finish',
       label: 'Apply finish',
@@ -473,7 +477,7 @@ describe('bulk copy changes', () => {
   });
 
   it('never reports a partially applied selection as saved', async () => {
-    const access: UiCopyAccess = {
+    const access = copyAccess({
       read: () =>
         Promise.resolve({
           copies: [copy({ copyId: 'copy-1' }), copy({ copyId: 'copy-2' })],
@@ -484,7 +488,7 @@ describe('bulk copy changes', () => {
           ? Promise.reject(Object.assign(new Error('The copy changed.'), { code: 'conflict' }))
           : Promise.resolve(copy({ copyId: input.copyId, condition: input.condition }));
       },
-    };
+    });
     const tool = copyChangeTool({
       id: 'apply-condition',
       label: 'Apply condition',
@@ -508,13 +512,13 @@ describe('bulk copy changes', () => {
 
   it('acts on nothing when the selection names another entry level', async () => {
     let reads = 0;
-    const access: UiCopyAccess = {
+    const access = copyAccess({
       read() {
         reads += 1;
         return Promise.resolve({ copies: [], missing: [] });
       },
       correct: () => Promise.reject(new Error('The change must not run.')),
-    };
+    });
     const tool = copyChangeTool({
       id: 'apply-finish',
       label: 'Apply finish',
@@ -534,10 +538,10 @@ describe('bulk copy changes', () => {
   });
 
   it('asks for a choice before applying a change the controls do not name', async () => {
-    const access: UiCopyAccess = {
+    const access = copyAccess({
       read: () => Promise.reject(new Error('The change must not read.')),
       correct: () => Promise.reject(new Error('The change must not run.')),
-    };
+    });
     const tool = copyChangeTool({
       id: 'apply-finish',
       label: 'Apply finish',
@@ -563,7 +567,8 @@ describe('copy access', () => {
   it('reads and corrects copies through the UserCards contract', async () => {
     const stored = copy();
     const reads: (readonly string[])[] = [];
-    const userCards = {
+    const client: UserCardsBrowserClient = {
+      ...unusedUserCardsClient(),
       readCopies(copyIds: readonly string[]) {
         reads.push([...copyIds]);
         return Promise.resolve({
@@ -572,23 +577,24 @@ describe('copy access', () => {
           missing: ['copy-2'],
         });
       },
-      correctCopy: (input: UiCopyCorrection) =>
+      correctCopy: (input) =>
         Promise.resolve({
           privateRevision: 'private-2',
           publicationPosition: '2',
           copies: [copy({ ...input })],
         }),
-    } as UiCopyClient;
-    const access = createCopyAccess(userCards);
+    };
+    const access = createCopyAccess(
+      createUserCardsOperations({ client, storage: null }).account('alice'),
+    );
 
     await expect(access.read(['copy-1', 'copy-2'])).resolves.toEqual({
       copies: [stored],
       missing: ['copy-2'],
     });
-    await expect(access.correct(correction())).resolves.toMatchObject({
-      copyId: 'copy-1',
-      finish: 'foil',
-      condition: 'LP',
+    await expect(access.correct(correction()).observe()).resolves.toMatchObject({
+      state: 'committed',
+      record: { copies: [{ copyId: 'copy-1', finish: 'foil', condition: 'LP' }] },
     });
     expect(reads).toEqual([['copy-1', 'copy-2']]);
   });
@@ -606,10 +612,26 @@ function copyAccess(options: {
   }>;
   readonly correct: (input: UiCopyCorrection) => Promise<PhysicalCopy>;
 }): UiCopyAccess {
-  return {
-    read: options.read ?? (() => Promise.resolve({ copies: [], missing: [] })),
-    correct: options.correct,
+  const read = options.read ?? (() => Promise.resolve({ copies: [], missing: [] }));
+  const client: UserCardsBrowserClient = {
+    ...unusedUserCardsClient(),
+    async readCopies(copyIds) {
+      const result = await read(copyIds);
+      return {
+        privateRevision: 'private-1',
+        copies: new Map(result.copies.map((stored) => [stored.copyId, stored] as const)),
+        missing: [...result.missing],
+      };
+    },
+    async correctCopy(input) {
+      return {
+        privateRevision: 'private-2',
+        publicationPosition: '2',
+        copies: [await options.correct(input)],
+      };
+    },
   };
+  return createCopyAccess(createUserCardsOperations({ client, storage: null }).account('alice'));
 }
 
 function printingRecord(): PrintingRecord {

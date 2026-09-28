@@ -11,9 +11,10 @@
  *
  * The browser side composes the same contracts for the running environment:
  * `createBrowserApplication` validates the public settings, builds the authenticated request, the
- * Catalog and Search clients and the Recognition contract over the preserved browser engines, and
- * hands UserInterface its capabilities. Other components import Application through these public
- * entries only; its internal modules stay private to the component (docs/architecture.md,
+ * Catalog and Search clients and the Recognition contract over the preserved browser engines,
+ * composes UserCards' browser operation facade over the transport adapter it serves, and hands
+ * UserInterface its capabilities. Other components import Application through these public entries
+ * only; its internal modules stay private to the component (docs/architecture.md,
  * .dependency-cruiser.mjs).
  */
 
@@ -43,7 +44,6 @@ export {
   type BrowserApplicationOptions,
   type RequestTransport,
   type SearchClient,
-  type UserCardsClient,
   type UserInterfaceCapabilities,
 } from './internal/client.js';
 export {

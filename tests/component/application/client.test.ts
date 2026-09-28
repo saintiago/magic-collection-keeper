@@ -1089,8 +1089,9 @@ describe('browser application', () => {
     expect(capabilities?.request).toBeTypeOf('function');
     expect(capabilities?.catalog.resolve).toBeTypeOf('function');
     expect(capabilities?.search.execute).toBeTypeOf('function');
-    expect(capabilities?.userCards.readCopies).toBeTypeOf('function');
-    expect(capabilities?.userCards.correctCopy).toBeTypeOf('function');
+    expect(capabilities?.userCards.account).toBeTypeOf('function');
+    expect(capabilities?.userCards.account('alice').readCopies).toBeTypeOf('function');
+    expect(capabilities?.userCards.account('alice').correctCopy).toBeTypeOf('function');
     expect(Object.keys(capabilities?.createRecognition() ?? {}).sort()).toEqual([
       'dispose',
       'prepare',

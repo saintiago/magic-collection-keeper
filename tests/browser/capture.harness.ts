@@ -17,9 +17,12 @@ import {
   inspectCanvasFrame,
   type ApplicationFailureCode,
   type SearchClient,
-  type UserCardsClient,
   type UserInterfaceCapabilities,
 } from '../../src/application/index.js';
+import {
+  createUserCardsOperations,
+  type UserCardsBrowserClient,
+} from '../../src/usercards/browser.js';
 // A type-only import of the Catalog public entry keeps the provider barrel, including its Node-only
 // synchronization job, out of the browser bundle (docs/application.md#interface).
 import type {
@@ -55,7 +58,7 @@ import {
   type UserInterface,
 } from '../../src/ui/index.js';
 
-import { unusedUserCards } from './unused-usercards.js';
+import { browserAttemptStorage, unusedUserCardsClient } from './unused-usercards.js';
 
 interface Pending {
   resolve(value: unknown): void;
@@ -338,8 +341,8 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
     },
   };
 
-  const userCards: UserCardsClient = {
-    ...unusedUserCards,
+  const scriptedUserCards: UserCardsBrowserClient = {
+    ...unusedUserCardsClient,
     listImportSessions(options, signal) {
       return begin(
         sessionRequests,
@@ -378,7 +381,10 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
     request,
     catalog,
     search,
-    userCards,
+    userCards: createUserCardsOperations({
+      client: scriptedUserCards,
+      storage: browserAttemptStorage(),
+    }),
     createRecognition: () => {
       const recognition = createRecognition<HTMLCanvasElement>({
         createEnginePipeline: () => scriptedPipeline(),

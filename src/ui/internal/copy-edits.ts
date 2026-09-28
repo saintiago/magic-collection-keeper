@@ -16,17 +16,14 @@
 
 import type { Finish } from '../../catalog/index.js';
 import type {
-  CopyChangeResult,
-  CopyCondition,
-  CopyId,
-  CopyReadResult,
-  CorrectCopyInput,
-  PhysicalCopy,
-} from '../../usercards/index.js';
+  UserCardsAccountOperations,
+  UserCardsConstraints,
+  UserCardsOperation,
+} from '../../usercards/browser.js';
+import type { CopyChangeResult, CopyCondition, PhysicalCopy } from '../../usercards/index.js';
 
 import type { UiCardListTool } from './card-list.js';
-import { isUiDefiniteFailure, readUiFailureCode, readUiFailureMessage } from './failure.js';
-import { UI_LIMITS } from './limits.js';
+import { readUiFailureMessage } from './failure.js';
 import type { UiOperationOutcome, UiToolRequest } from './list.js';
 
 /**
@@ -61,8 +58,14 @@ export interface UiCopyRead {
 
 /** Private copy access of the collection views. */
 export interface UiCopyAccess {
+  /** Input constraints and operation availability the collection views present. */
+  readonly constraints: UserCardsConstraints;
   read(copyIds: readonly string[], signal?: AbortSignal): Promise<UiCopyRead>;
-  correct(input: UiCopyCorrection, signal?: AbortSignal): Promise<PhysicalCopy>;
+  /** The provider-owned correction the view presents once its outcome is established. */
+  correct(
+    input: UiCopyCorrection,
+    signal?: AbortSignal,
+  ): UserCardsOperation<'correctCopy', CopyChangeResult>;
 }
 
 /**
@@ -70,31 +73,27 @@ export interface UiCopyAccess {
  * browser contract these views use, so a consumer depends only on the capabilities it presents
  * (docs/architecture.md#composition-and-replacement).
  */
-export interface UiCopyClient {
-  readCopies(copyIds: readonly CopyId[], signal?: AbortSignal): Promise<CopyReadResult>;
-  correctCopy(input: CorrectCopyInput, signal?: AbortSignal): Promise<CopyChangeResult>;
-}
+export type UiCopyClient = Pick<
+  UserCardsAccountOperations,
+  'constraints' | 'readCopies' | 'correctCopy'
+>;
 
 /** Builds the copy access over the private contract Application supplies. */
 export function createCopyAccess(userCards: UiCopyClient): UiCopyAccess {
-  if (typeof userCards?.readCopies !== 'function' || typeof userCards.correctCopy !== 'function') {
+  if (
+    typeof userCards?.readCopies !== 'function' ||
+    typeof userCards.correctCopy !== 'function' ||
+    userCards.constraints === undefined
+  ) {
     throw new TypeError('The collection views read and correct copies through UserCards.');
   }
   return {
+    constraints: userCards.constraints,
     async read(copyIds, signal) {
       const result = await userCards.readCopies(copyIds, signal);
       return { copies: [...result.copies.values()], missing: [...result.missing] };
     },
-    async correct(input, signal) {
-      const result = await userCards.correctCopy(input, signal);
-      const copy = result.copies[0];
-      if (copy === undefined) {
-        // A change that reports no committed copy carries no receipt: the caller recovers instead
-        // of presenting it as saved (docs/application.md#interface).
-        throw new Error('The corrected copy was not returned.');
-      }
-      return copy;
-    },
+    correct: (input, signal) => userCards.correctCopy(input, signal),
   };
 }
 
@@ -116,26 +115,31 @@ export async function correctCopy(
   input: UiCopyCorrection,
   signal?: AbortSignal,
 ): Promise<UiCopyCorrectionOutcome> {
-  try {
-    return { status: 'committed', message: null, copy: await access.correct(input, signal) };
-  } catch (cause) {
-    const code = readUiFailureCode(cause);
-    if (code === 'conflict') {
-      return {
-        status: 'conflict',
-        message: 'The copy changed since you read it. Reload it and review your change.',
-        copy: null,
-      };
+  const outcome = await access.correct(input, signal).observe();
+  if (outcome.state === 'committed') {
+    const copy = outcome.record.copies[0];
+    if (copy === undefined) {
+      // A change that reports no committed copy carries no receipt: the view recovers instead of
+      // presenting it as saved (docs/application.md#interface).
+      return recoverCorrection(access, input.copyId, signal);
     }
-    if (code !== null && isUiDefiniteFailure(code)) {
-      return {
-        status: 'failed',
-        message: readUiFailureMessage(cause, 'The change was not saved.'),
-        copy: null,
-      };
-    }
-    return recoverCorrection(access, input.copyId, signal);
+    return { status: 'committed', message: null, copy };
   }
+  if (outcome.state === 'rejected') {
+    return outcome.failure.code === 'conflict'
+      ? {
+          status: 'conflict',
+          message: 'The copy changed since you read it. Reload it and review your change.',
+          copy: null,
+        }
+      : {
+          status: 'failed',
+          message:
+            outcome.failure.message === '' ? 'The change was not saved.' : outcome.failure.message,
+          copy: null,
+        };
+  }
+  return recoverCorrection(access, input.copyId, signal);
 }
 
 /**
@@ -299,8 +303,9 @@ async function readCopies(
   signal: AbortSignal,
 ): Promise<readonly PhysicalCopy[]> {
   const copies: PhysicalCopy[] = [];
-  for (let index = 0; index < copyIds.length; index += UI_LIMITS.copyBatch) {
-    const batch = copyIds.slice(index, index + UI_LIMITS.copyBatch);
+  const batchSize = access.constraints.batch.references;
+  for (let index = 0; index < copyIds.length; index += batchSize) {
+    const batch = copyIds.slice(index, index + batchSize);
     const read = await access.read(batch, signal);
     copies.push(...read.copies);
     if (read.missing.length > 0) {

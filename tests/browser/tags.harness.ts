@@ -15,9 +15,12 @@ import {
   ApplicationError,
   type ApplicationFailureCode,
   type SearchClient,
-  type UserCardsClient,
   type UserInterfaceCapabilities,
 } from '../../src/application/index.js';
+import {
+  createUserCardsOperations,
+  type UserCardsBrowserClient,
+} from '../../src/usercards/browser.js';
 import type {
   CardPrintingsPage,
   CardRecord,
@@ -57,7 +60,7 @@ import {
   type UserInterface,
 } from '../../src/ui/index.js';
 
-import { unusedUserCards } from './unused-usercards.js';
+import { browserAttemptStorage, unusedUserCardsClient } from './unused-usercards.js';
 
 interface Pending {
   resolve(value: unknown): void;
@@ -318,11 +321,11 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
       return begin(countsRequests, request, signal) as Promise<SearchCountResult>;
     },
   };
-  const userCards: UserCardsClient = {
-    ...unusedUserCards,
+  const scriptedUserCards: UserCardsBrowserClient = {
+    ...unusedUserCardsClient,
     readCopies(copyIds, signal) {
       return begin(readCopyRequests, [...copyIds], signal) as ReturnType<
-        UserCardsClient['readCopies']
+        UserCardsBrowserClient['readCopies']
       >;
     },
     listTags(options, signal) {
@@ -384,7 +387,10 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
     request,
     catalog,
     search,
-    userCards,
+    userCards: createUserCardsOperations({
+      client: scriptedUserCards,
+      storage: browserAttemptStorage(),
+    }),
     createRecognition: () => {
       throw new Error('The organization journeys do not run recognition.');
     },

@@ -46,7 +46,6 @@ import type {
   SourceImportOutcome,
   SourceImportResult,
   SourceImportRow,
-  StageSourceImportInput,
 } from '../../usercards/index.js';
 
 import { createCaptureControls, type UiCaptureReviewChange } from './capture.js';
@@ -74,14 +73,12 @@ import {
   type UiImportLine,
 } from './import-edits.js';
 import { isUiInvalidatedContinuation, type UiChangeCommit } from './failure.js';
-import {
-  createSourceImportRecovery,
-  releaseSourceImports,
-  type UiSourceFormat,
-  type UiSourceImportRecovery,
-  type UiSourceInput,
-  type UiUnfinishedSourceImport,
-} from './import-recovery.js';
+import type {
+  UserCardsAccountOperations,
+  UserCardsConfirmationOutcome,
+  UserCardsOperation,
+  UserCardsSourceImportRequest,
+} from '../../usercards/browser.js';
 import { UI_LIMITS } from './limits.js';
 import type {
   UiEntryTarget,
@@ -113,23 +110,21 @@ const manualImport = {
   source: { kind: 'manual', id: 'manual' },
 } as const;
 
-/** Largest pending quantity one manual line may declare; the value mirrors the provider's bound. */
-export const uiMaxImportQuantity = 100;
-
 /** The source methods the Import page offers, in the order its form presents them. */
 const uiSourceFormats = ['pasted-list', 'moxfield', 'wizards-precon'] as const;
 
 /** The Import page: manual entry beside the pending review and confirmation of one import. */
 export function createImportPages(): readonly UiPageDefinition[] {
-  // The storage the Import page keeps its account's unfinished source imports in, learned when the
-  // page is presented: an account's records end with the account even when another page is the one
-  // presented when identity changes
-  // (docs/user-interface.md#state-ownership-and-restoration).
-  const sourceStorage: { current: Storage | null } = { current: null };
+  // The account-scoped UserCards operations this page presents, learned when the page is
+  // presented: an account's retained attempts end with the account even when another page is the
+  // one presented when identity changes
+  // (docs/user-interface.md#state-ownership-and-restoration,
+  // docs/user-cards.md#browser-operation-lifecycle).
+  const account: { current: UserCardsAccountOperations | null } = { current: null };
   return [
     {
-      ...importPage(sourceStorage),
-      accountEnded: (accountId) => releaseSourceImports(sourceStorage.current, accountId),
+      ...importPage(account),
+      accountEnded: () => account.current?.release(),
     },
   ];
 }
@@ -167,6 +162,22 @@ interface UiStagingDraft {
 }
 
 /**
+ * One source method the Import page parses into review.
+ */
+type UiSourceFormat = UserCardsSourceImportRequest['format'];
+
+/** The unsaved source input of one method, before the account composes the import it identifies. */
+type UiSourceInput =
+  | { readonly format: 'pasted-list'; readonly text: string }
+  | { readonly format: 'moxfield'; readonly url: string }
+  | {
+      readonly format: 'wizards-precon';
+      readonly identity: string;
+      readonly reference: string;
+      readonly lines: string;
+    };
+
+/**
  * Unsaved input of the source form. The page keeps it with its history entry so leaving and
  * returning keeps the edits to retry; the identity of the import an input composes stays with the
  * account instead, because importing the same source again under that identity is what replays the
@@ -183,13 +194,16 @@ interface UiSourceDraft {
 }
 
 /**
- * One outstanding confirmation, retained until its own operation outcome is established.
+ * One outstanding confirmation the page presents until UserCards establishes its outcome. The
+ * provider-owned operation keeps the identity and the input; the page keeps the handles it must
+ * present messages for and the entries a resolved confirmation covers.
  */
 interface UiConfirmationDraft {
   /** Import session the confirmed entries belong to. */
   readonly sessionId: string;
-  readonly operationId: string;
   readonly entries: readonly ConfirmImportEntryInput[];
+  /** The provider-owned operation whose recorded outcome decides this confirmation. */
+  readonly operation: UserCardsOperation<'confirmImport', UserCardsConfirmationOutcome>;
 }
 
 /** One presented pending-entry editor, redrawn as its draft or its stored record changes. */
@@ -199,12 +213,15 @@ interface UiImportEditor {
   readonly status: HTMLParagraphElement;
 }
 
-function importPage(sourceStorage: { current: Storage | null }): UiPageDefinition {
+function importPage(account: { current: UserCardsAccountOperations | null }): UiPageDefinition {
   return {
     page: 'import',
     mount(container, context) {
       const document = container.ownerDocument;
-      const access = createImportAccess(context.capabilities.userCards);
+      const operations = context.capabilities.userCards.account(context.account.accountId);
+      account.current = operations;
+      const access = createImportAccess(operations);
+      const constraints = operations.constraints;
       const catalog = context.capabilities.catalog;
       const search = context.capabilities.search;
       const restored = readPageState(context.restored?.state);
@@ -231,7 +248,7 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
         document,
         'import-manual-quantity',
         manual.quantity,
-        uiMaxImportQuantity,
+        constraints.quantity.copy,
       );
       const finish = select(document, finishOptions(), manual.finish);
       finish.id = 'import-manual-finish';
@@ -250,14 +267,16 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
       resultsHost.id = 'import-results';
       const resultsHeading = text(document, 'h3', 'import-results-heading', 'Add a printing');
 
-      // Source imports are the deployment's capability: when the configuration disables them, the
-      // page presents no method the backend would refuse (docs/user-interface.md#source-imports).
-      const sourceEnabled = context.capabilities.settings.capabilities.sourceImports;
-      sourceStorage.current = pageStorage(document);
-      const recovery: UiSourceImportRecovery | null = sourceEnabled
-        ? createSourceImportRecovery(sourceStorage.current, context.account.accountId)
-        : null;
-      const source = readSourceDraft(restored?.source, recovery?.outstanding);
+      // Source imports are the deployment's capability: when the provider publishes no staging
+      // operation, the page presents no method the backend would refuse
+      // (docs/user-interface.md#source-imports, docs/user-cards.md#browser-operation-lifecycle).
+      const sourceEnabled = constraints.operations.includes('stageSourceImport');
+      const source = readSourceDraft(
+        restored?.source,
+        unfinishedSources(),
+        constraints.text.sourceText,
+        constraints.text.identifier,
+      );
       const sourceHeading = text(document, 'h3', 'import-source-heading', 'Import a source');
       const sourceForm = document.createElement('form');
       sourceForm.id = 'import-source';
@@ -274,24 +293,24 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
         document,
         'import-source-text',
         source.text,
-        UI_LIMITS.importSourceText,
+        constraints.text.sourceText,
       );
       const sourceUrl = textInput(document, 'import-source-url', source.url);
       sourceUrl.type = 'url';
-      sourceUrl.maxLength = UI_LIMITS.entryKey;
+      sourceUrl.maxLength = constraints.text.sourceReference;
       sourceUrl.placeholder = 'https://moxfield.com/decks/…';
       const sourceIdentity = textInput(document, 'import-source-identity', source.identity);
-      sourceIdentity.maxLength = UI_LIMITS.entryKey;
+      sourceIdentity.maxLength = constraints.text.identifier;
       sourceIdentity.placeholder = 'wizards:mkm:deadly-disguise:regular:en';
       const sourceReference = textInput(document, 'import-source-reference', source.reference);
       sourceReference.type = 'url';
-      sourceReference.maxLength = UI_LIMITS.entryKey;
+      sourceReference.maxLength = constraints.text.sourceReference;
       sourceReference.placeholder = 'https://magic.wizards.com/en/news/feature/decklist';
       const sourceLines = textArea(
         document,
         'import-source-lines',
         source.lines,
-        UI_LIMITS.importSourceText,
+        constraints.text.sourceText,
       );
       const formatField = controlLabel(document, 'Source method', sourceFormat);
       const textField = controlLabel(document, 'Card lines', sourceText);
@@ -393,10 +412,10 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
       /** Current search per entry; editing its query or leaving its session retires the request. */
       const printingSearches = new Map<string, symbol>();
       /** Unsaved manual lines kept for an idempotent retry, keyed by the entry key they stage. */
-      const staging = readStagingDrafts(restored?.staging);
+      const staging = readStagingDrafts(restored?.staging, constraints.quantity.copy);
       /** Unsaved review input per entry, kept across redraws and with the history entry. */
       const drafts = readReviewDrafts(restored?.review);
-      let confirmation = readConfirmationDraft(restored?.confirmation);
+      let confirmation = retainedConfirmation();
       let results: UiCardList<UiCatalogQuery> | null = null;
       let pending: UiCardList<string> | null = null;
       /** Whether a confirmation or a recovery of one is in flight, so only one acts at a time. */
@@ -451,9 +470,9 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
       paintUnfinishedSource();
       paintConfirmation();
       if (confirmation !== null) {
-        // A confirmation the page kept without an established outcome stays recoverable through
-        // its operation identity, also after returning to the view
-        // (docs/application.md#construction-and-request-boundary).
+        // A confirmation whose outcome the provider has not established stays recoverable through
+        // the identity it was dispatched under, also after a reload or a return to the view
+        // (docs/user-cards.md#browser-operation-lifecycle).
         reviewStatus.textContent =
           'A confirmation is kept whose outcome is not established. Check it before confirming ' +
           'the same entries again.';
@@ -504,14 +523,6 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
           selection: Object.fromEntries(
             [...selectionContext()].map(([key, review]) => [key, { ...review }]),
           ),
-          confirmation:
-            confirmation === null
-              ? null
-              : {
-                  sessionId: confirmation.sessionId,
-                  operationId: confirmation.operationId,
-                  entries: confirmation.entries.map((entry) => ({ ...entry })),
-                },
           // A list not composed yet keeps the state its entry handed back instead of overwriting it
           // with a partially presented view (docs/user-interface.md#state-ownership-and-restoration).
           results: results === null ? retainedResults : { list: results.capture() },
@@ -557,7 +568,7 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
         try {
           page = await access.sessions(
             {
-              pageSize: UI_LIMITS.importSessions,
+              pageSize: constraints.pages.imports.default,
               ...(continuation === null ? {} : { continuation }),
             },
             context.signal,
@@ -696,7 +707,7 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
           container: pendingHost,
           source: pendingSource(),
           context: presentedSession,
-          pageSize: UI_LIMITS.importPage,
+          pageSize: constraints.pages.imports.default,
           restored: restoredState,
           fragments: { tools: pendingToolsReader() },
           tools: [confirmTool()],
@@ -779,15 +790,34 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
       function paintUnfinishedSource(): void {
         const format = readSourceFormat(sourceFormat.value);
         if (
+          !sourceEnabled ||
           format === null ||
-          recovery === null ||
-          !Array.from(recovery.outstanding.values()).some(
-            (record) => record.input.format === format,
-          )
+          !unfinishedSources().some((request) => request.format === format)
         ) {
           return;
         }
         sourceStatus.textContent = uiUnfinishedSourceMessage;
+      }
+
+      /** The unfinished source imports the account retains, oldest first. */
+      function unfinishedSources(): readonly UserCardsSourceImportRequest[] {
+        return access
+          .retained()
+          .flatMap((attempt) => (attempt.kind === 'stageSourceImport' ? [attempt.request] : []));
+      }
+
+      /** The confirmation the provider still tracks for this account, or null when none is open. */
+      function retainedConfirmation(): UiConfirmationDraft | null {
+        for (const attempt of access.retained()) {
+          if (attempt.kind === 'confirmImport') {
+            return {
+              sessionId: attempt.request.sessionId,
+              entries: attempt.request.entries,
+              operation: attempt,
+            };
+          }
+        }
+        return null;
       }
 
       /** Reports one problem of the source form before any import is dispatched. */
@@ -842,17 +872,16 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
         return { format, identity, reference, lines: sourceLines.value };
       }
 
-      /** The request one source input dispatches, quoting the import identity it composes. */
-      function sourceRequest(input: UiSourceInput, sessionId: string): StageSourceImportInput {
+      /** The request one source input composes, under the import identity the provider owns. */
+      function sourceRequest(input: UiSourceInput): UserCardsSourceImportRequest {
         switch (input.format) {
           case 'pasted-list':
-            return { format: input.format, sessionId, text: input.text };
+            return { format: input.format, text: input.text };
           case 'moxfield':
-            return { format: input.format, sessionId, url: input.url };
+            return { format: input.format, url: input.url };
           case 'wizards-precon':
             return {
               format: input.format,
-              sessionId,
               sourceId: input.identity,
               reference: input.reference,
               entries: reviewedWizardsLines(input.lines),
@@ -876,15 +905,10 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
         if (input === null) {
           return;
         }
-        // Retrying an input whose import has no established outcome keeps that import's identity;
-        // any other input composes an import of its own
-        // (docs/user-interface.md#source-imports).
-        const retained = recovery?.retained(input) ?? null;
-        const request = sourceRequest(input, retained ?? uiImportIdentity());
-        // The identity is kept before the request is dispatched, so a reload while it is pending,
-        // or a response that never arrives, still retries this import instead of staging another
-        // one (docs/user-interface.md#source-imports).
-        recovery?.remember(request.sessionId, input);
+        // Retrying an input whose import has no established outcome keeps that import's identity,
+        // because UserCards retains the unfinished attempt under it; any other input composes an
+        // import of its own (docs/user-interface.md#source-imports).
+        const request = sourceRequest(input);
         sourcing = true;
         paintSourceForm();
         let outcome: UiChangeCommit<SourceImportResult>;
@@ -898,12 +922,6 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
         // requests or restore records after sign-out. The retained request can still be retried.
         if (closed) {
           return;
-        }
-        // An outcome the provider established decides this import: a committed parse leaves nothing
-        // to retry, and an input that was refused before writing composes a new import on its next
-        // submission. A refused retry leaves the earlier uncertain attempt standing.
-        if (outcome.status === 'committed' || (outcome.status === 'failed' && retained === null)) {
-          recovery?.forgetImport(request.sessionId);
         }
         const result = outcome.record;
         if (result === null) {
@@ -947,11 +965,11 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
        * (docs/user-cards.md#import-and-capture-state).
        */
       async function addSelection(request: UiToolRequest): Promise<UiOperationOutcome> {
-        const wantedQuantity = readQuantity(quantity, uiMaxImportQuantity);
+        const wantedQuantity = readQuantity(quantity, constraints.quantity.copy);
         if (wantedQuantity === null) {
           return {
             status: 'failed',
-            message: `Choose a quantity from 1 to ${uiMaxImportQuantity}.`,
+            message: `Choose a quantity from 1 to ${constraints.quantity.copy}.`,
           };
         }
         const wantedFinish = readFinishValue(finish.value);
@@ -994,7 +1012,7 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
         // keeping its identity for an idempotent retry (docs/user-cards.md#interface).
         let inReview = 0;
         let reported: UiOperationOutcome | null = null;
-        for (const batch of inBatches(lines, UI_LIMITS.importBatch)) {
+        for (const batch of inBatches(lines, constraints.batch.stageEntries)) {
           const keys = batch.map((line) => uiEntryKey(stagedLineTarget(line)));
           for (const line of batch) {
             staging.set(uiEntryKey(stagedLineTarget(line)), {
@@ -1181,7 +1199,7 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
           document,
           `import-review-quantity-${encodeURIComponent(entry.entryId)}`,
           draft?.quantity ?? String(entry.quantity),
-          uiMaxImportQuantity,
+          constraints.quantity.copy,
         );
         const save = button(
           document,
@@ -1358,9 +1376,9 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
           report(editor, 'Choose the finish of the printing.');
           return;
         }
-        const wantedQuantity = readQuantityValue(submitted.quantity, uiMaxImportQuantity);
+        const wantedQuantity = readQuantityValue(submitted.quantity, constraints.quantity.copy);
         if (wantedQuantity === null) {
-          report(editor, `Choose a quantity from 1 to ${uiMaxImportQuantity}.`);
+          report(editor, `Choose a quantity from 1 to ${constraints.quantity.copy}.`);
           return;
         }
         let chosenPrinting = knownPrinting(
@@ -1496,12 +1514,6 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
           outcome.status === 'committed'
             ? 'The import was discarded; no copies were created.'
             : (outcome.message ?? 'The import was not discarded.');
-        if (outcome.status === 'committed') {
-          // The discarded import is abandoned: the account keeps no identity to retry it under, so
-          // the next submission of that input composes a new list
-          // (docs/user-interface.md#source-imports).
-          recovery?.forgetImport(presented);
-        }
         if (outcome.status === 'committed' && presented === sessionId) {
           // Only the discarded import's own review input ends; the unsaved work of another import
           // the page still presents stays (docs/user-interface.md#state-ownership-and-restoration).
@@ -1565,24 +1577,23 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
         let note: string | null = null;
         let reported: UiOperationOutcome | null = null;
         try {
-          for (const entries of inBatches(chosen, UI_LIMITS.importBatch)) {
+          for (const entries of inBatches(chosen, constraints.batch.confirmEntries)) {
+            // The provider owns the operation identity; the page presents the attempt while its
+            // outcome is not established, so a lost response is recovered through its receipt.
             const operation: UiConfirmationDraft = {
               sessionId: presented,
-              operationId: uiImportIdentity(),
               entries,
+              operation: access.confirm({ sessionId: presented, entries }, request.signal),
             };
             confirmation = operation;
             paintConfirmation();
-            const outcome = await confirmImport(
-              access,
-              { operationId: operation.operationId, sessionId: presented, entries },
-              request.signal,
-            );
+            const outcome = await confirmImport(operation.operation);
             if (closed) {
               return { status: 'unknown', message: null };
             }
             if (outcome.status !== 'unknown' && confirmation === operation) {
               confirmation = null;
+              paintConfirmation();
             }
             if (outcome.status !== 'committed' || outcome.record === null) {
               reported = {
@@ -1723,7 +1734,7 @@ function importPage(sourceStorage: { current: Storage | null }): UiPageDefinitio
         paintConfirmation();
         let outcome: UiChangeCommit<ImportReceipt>;
         try {
-          outcome = await recoverConfirmation(access, outstanding.operationId, context.signal);
+          outcome = await recoverConfirmation(outstanding.operation, context.signal);
         } finally {
           recovering = false;
           paintConfirmation();
@@ -1968,8 +1979,9 @@ async function resolvePrintings(
 ): Promise<ReadonlyMap<string, PrintingRecord>> {
   const printings = new Map<string, PrintingRecord>();
   const distinct = [...new Set(printingIds)];
-  for (let index = 0; index < distinct.length; index += UI_LIMITS.copyBatch) {
-    const batch = distinct.slice(index, index + UI_LIMITS.copyBatch);
+  const batchSize = UI_LIMITS.catalogResolveBatch;
+  for (let index = 0; index < distinct.length; index += batchSize) {
+    const batch = distinct.slice(index, index + batchSize);
     const resolution = await catalog.resolve(
       batch.map((printingId) => ({ kind: 'printing' as const, printingId })),
     );
@@ -1987,8 +1999,9 @@ async function resolveCards(
 ): Promise<ReadonlyMap<string, CardRecord>> {
   const cards = new Map<string, CardRecord>();
   const distinct = [...new Set(cardIds)];
-  for (let index = 0; index < distinct.length; index += UI_LIMITS.copyBatch) {
-    const batch = distinct.slice(index, index + UI_LIMITS.copyBatch);
+  const batchSize = UI_LIMITS.catalogResolveBatch;
+  for (let index = 0; index < distinct.length; index += batchSize) {
+    const batch = distinct.slice(index, index + batchSize);
     const resolution = await catalog.resolve(
       batch.map((cardId) => ({ kind: 'card' as const, cardId })),
     );
@@ -2047,20 +2060,6 @@ function readSourceFormat(value: string): UiSourceFormat | null {
 }
 
 /**
- * The session storage of the page's browsing context, or null when the context offers none. The
- * storage keeps an account's unfinished source imports across a reload
- * (docs/user-cards.md#persistence-and-recovery).
- */
-function pageStorage(document: Document): Storage | null {
-  try {
-    return document.defaultView?.sessionStorage ?? null;
-  } catch {
-    // A browsing context that refuses storage keeps the page's in-memory records only.
-    return null;
-  }
-}
-
-/**
  * The source form one history entry kept, or the unfinished imports the account kept across a
  * reload. An unfinished import is presented beside the input it composes, so submitting that input
  * again retries its own list instead of staging another one
@@ -2068,29 +2067,31 @@ function pageStorage(document: Document): Storage | null {
  */
 function readSourceDraft(
   value: unknown,
-  outstanding: ReadonlyMap<string, UiUnfinishedSourceImport> | undefined,
+  unfinished: readonly UserCardsSourceImportRequest[],
+  textBound: number,
+  keyBound: number,
 ): UiSourceDraft {
   const record = readPageState(value);
   if (record === null) {
-    return unfinishedSourceDraft(outstanding ?? new Map());
+    return unfinishedSourceDraft(unfinished);
   }
   return {
     format: readSourceFormat(readDraftValue(record.format, 32) ?? '') ?? 'pasted-list',
-    text: readDraftValue(record.text, UI_LIMITS.importSourceText) ?? '',
-    url: readDraftValue(record.url, UI_LIMITS.entryKey) ?? '',
-    identity: readDraftValue(record.identity, UI_LIMITS.entryKey) ?? '',
-    reference: readDraftValue(record.reference, UI_LIMITS.entryKey) ?? '',
-    lines: readDraftValue(record.lines, UI_LIMITS.importSourceText) ?? '',
+    text: readDraftValue(record.text, textBound) ?? '',
+    url: readDraftValue(record.url, keyBound) ?? '',
+    identity: readDraftValue(record.identity, keyBound) ?? '',
+    reference: readDraftValue(record.reference, keyBound) ?? '',
+    lines: readDraftValue(record.lines, textBound) ?? '',
   };
 }
 
 /**
  * The fields of the account's unfinished imports, each method filling its own controls, most
- * recently dispatched last (docs/user-interface.md#source-imports).
+ * recently dispatched last. The reviewed Wizards lines are presented again from the entries the
+ * attempt keeps, in the same `quantity name` form the form parses
+ * (docs/user-interface.md#source-imports, docs/user-cards.md#browser-operation-lifecycle).
  */
-function unfinishedSourceDraft(
-  outstanding: ReadonlyMap<string, UiUnfinishedSourceImport>,
-): UiSourceDraft {
+function unfinishedSourceDraft(unfinished: readonly UserCardsSourceImportRequest[]): UiSourceDraft {
   const draft: UiSourceDraft = {
     format: uiSourceFormats[0],
     text: '',
@@ -2099,19 +2100,19 @@ function unfinishedSourceDraft(
     reference: '',
     lines: '',
   };
-  for (const unfinished of outstanding.values()) {
-    draft.format = unfinished.input.format;
-    switch (unfinished.input.format) {
+  for (const request of unfinished) {
+    draft.format = request.format;
+    switch (request.format) {
       case 'pasted-list':
-        draft.text = unfinished.input.text;
+        draft.text = request.text;
         break;
       case 'moxfield':
-        draft.url = unfinished.input.url;
+        draft.url = request.url;
         break;
       case 'wizards-precon':
-        draft.identity = unfinished.input.identity;
-        draft.reference = unfinished.input.reference;
-        draft.lines = unfinished.input.lines;
+        draft.identity = request.sourceId;
+        draft.reference = request.reference;
+        draft.lines = request.entries.map((entry) => `${entry.quantity} ${entry.name}`).join('\n');
         break;
     }
   }
@@ -2224,7 +2225,7 @@ function readSessionId(value: unknown): string | null {
 }
 
 /** The manual lines a history entry kept for an idempotent retry. */
-function readStagingDrafts(value: unknown): Map<string, UiStagingDraft> {
+function readStagingDrafts(value: unknown, quantityBound: number): Map<string, UiStagingDraft> {
   const drafts = new Map<string, UiStagingDraft>();
   const record = readPageState(value);
   if (record === null) {
@@ -2233,7 +2234,7 @@ function readStagingDrafts(value: unknown): Map<string, UiStagingDraft> {
   for (const [key, candidate] of Object.entries(record)) {
     const line = readPageState(candidate);
     const entryId = readDraftValue(line?.entryId, UI_LIMITS.entryKey);
-    const quantity = readQuantityValue(line?.quantity, uiMaxImportQuantity);
+    const quantity = readQuantityValue(line?.quantity, quantityBound);
     if (line === null || entryId === null || quantity === null) {
       continue;
     }
@@ -2270,31 +2271,6 @@ function readReviewDrafts(value: unknown): Map<string, UiReviewDraft> {
   }
   boundByWindow(drafts);
   return drafts;
-}
-
-/**
- * The outstanding confirmation one history entry kept, recoverable through its operation identity
- * independently of the pending entries it covered.
- */
-function readConfirmationDraft(value: unknown): UiConfirmationDraft | null {
-  const record = readPageState(value);
-  const sessionId = readSessionId(record?.sessionId);
-  const operationId = readDraftValue(record?.operationId, UI_LIMITS.entryKey);
-  const entries = record?.entries;
-  if (sessionId === null || operationId === null || !Array.isArray(entries)) {
-    return null;
-  }
-  const read: ConfirmImportEntryInput[] = [];
-  for (const candidate of entries) {
-    const entry = readPageState(candidate);
-    const entryId = readDraftValue(entry?.entryId, UI_LIMITS.entryKey);
-    const revision = entry?.expectedRevision;
-    if (entryId === null || !Number.isSafeInteger(revision) || Number(revision) < 1) {
-      return null;
-    }
-    read.push({ entryId, expectedRevision: Number(revision) });
-  }
-  return read.length === 0 ? null : { sessionId, operationId, entries: read };
 }
 
 /**

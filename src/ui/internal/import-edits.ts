@@ -1,37 +1,41 @@
 /**
  * Import staging, review and confirmation of the Import page
  * (docs/user-interface.md#capture-and-review, docs/user-interface.md#source-imports,
- * docs/user-cards.md#import-and-capture-state).
+ * docs/user-cards.md#browser-operation-lifecycle).
  *
  * The page stages manual lines and parsed sources as pending entries, reviews a pending entry's
- * printing, finish, condition and quantity under the revision it read, stages capture observations
- * with the provider's admission decision, attaches late recognition alternatives, discards entries
- * and confirms the reviewed entries under one operation identity. Staging, review and discard quote
- * an entry identity, so a rejected change either conflicts or stays unknown exactly like every
- * other private edit, and a confirmation that lost its response is recovered through the recorded
- * outcome of its operation identity instead of inferring commitment
- * (docs/application.md#construction-and-request-boundary). A source whose parsing response was lost
- * is replayed by importing the same source again under the identity of the import it belongs to,
- * which returns the recorded rows. Nothing here reports ownership: a staged line, source row or
- * capture is a candidate in review, and only a confirmation creates the physical copies.
+ * printing, finish, condition and quantity under the revision it read, stages capture observations,
+ * attaches late recognition alternatives, discards entries and confirms the reviewed entries. Every
+ * change is a UserCards operation: the provider-owned handle reports whether it committed, was
+ * rejected or stays unknown, retains the identity an unfinished attempt needs, and recovers a
+ * recorded outcome under that identity. The page presents those outcomes; it never classifies a
+ * failure, invents an operation identity or infers that a lost response committed. Nothing here
+ * reports ownership: a staged line, source row or capture is a candidate in review, and only a
+ * confirmation creates the physical copies.
  */
 
-import type { UserCardsClient } from '../../application/index.js';
 import type { Finish } from '../../catalog/index.js';
+import type {
+  UserCardsAccountOperations,
+  UserCardsConfirmationRequest,
+  UserCardsConfirmationOutcome,
+  UserCardsConstraints,
+  UserCardsOperation,
+  UserCardsOperationOutcome,
+  UserCardsRetainedAttempt,
+  UserCardsSourceImportRequest,
+} from '../../usercards/browser.js';
 import type {
   AttachImportCandidatesInput,
   CaptureStageResult,
-  ConfirmImportInput,
   CopyCondition,
   DiscardImportEntryInput,
   DiscardImportSessionInput,
-  ImportConfirmationResult,
+  ImportCandidate,
   ImportEntry,
   ImportEntryChangeResult,
   ImportEntryId,
   ImportEntryListResult,
-  ImportOperationId,
-  ImportOperationRecoveryResult,
   ImportReceipt,
   ImportSessionChange,
   ImportSessionListResult,
@@ -42,24 +46,17 @@ import type {
   SourceImportResult,
   StageCaptureInput,
   StageImportEntriesInput,
-  StageSourceImportInput,
 } from '../../usercards/index.js';
 
-import {
-  commitUiChange,
-  isUiDefiniteFailure,
-  readUiFailureCode,
-  readUiFailureMessage,
-  type UiChangeCommit,
-} from './failure.js';
+import { commitUiOperation, type UiChangeCommit } from './failure.js';
 
 /**
- * The private import operations the Import page presents. It is the narrow part of Application's
+ * The private import operations the Import page presents. It is the narrow part of the UserCards
  * browser contract this page uses, so a consumer depends only on the capabilities it presents
  * (docs/architecture.md#composition-and-replacement).
  */
 export type UiImportClient = Pick<
-  UserCardsClient,
+  UserCardsAccountOperations,
   | 'listImportSessions'
   | 'listImportEntries'
   | 'stageImportEntries'
@@ -70,11 +67,15 @@ export type UiImportClient = Pick<
   | 'discardImportEntry'
   | 'discardImportSession'
   | 'confirmImport'
-  | 'recoverImportOperation'
+  | 'retained'
+  | 'resume'
+  | 'constraints'
 >;
 
-/** Private pending-import access of the Import page. */
+/** Private pending-import access of the Import page, over the provider-owned operation handles. */
 export interface UiImportAccess {
+  /** Input constraints and operation availability the page presents. */
+  readonly constraints: UserCardsConstraints;
   /** One bounded page of the account's pending import sessions. */
   sessions(
     options?: ListImportSessionsOptions,
@@ -82,34 +83,49 @@ export interface UiImportAccess {
   ): Promise<ImportSessionListResult>;
   /** One bounded page of one session's pending entries, in capture order. */
   entries(input: ListImportEntriesOptions, signal?: AbortSignal): Promise<ImportEntryListResult>;
-  stage(input: StageImportEntriesInput, signal?: AbortSignal): Promise<ImportStageResult>;
-  /** One parsed source: what each of its rows became, owned by the provider's session. */
-  source(input: StageSourceImportInput, signal?: AbortSignal): Promise<SourceImportResult>;
+  stage(
+    input: StageImportEntriesInput,
+    signal?: AbortSignal,
+  ): UserCardsOperation<'stageImportEntries', ImportStageResult>;
+  /** One parsed source: what each of its rows became, owned by the provider's import identity. */
+  source(
+    input: UserCardsSourceImportRequest,
+    signal?: AbortSignal,
+  ): UserCardsOperation<'stageSourceImport', SourceImportResult>;
   /** One capture observation, admitted, suppressed or explicitly unresolved. */
-  capture(input: StageCaptureInput, signal?: AbortSignal): Promise<CaptureStageResult>;
-  review(input: ReviewImportEntryInput, signal?: AbortSignal): Promise<ImportEntryChangeResult>;
+  capture(
+    input: StageCaptureInput,
+    signal?: AbortSignal,
+  ): UserCardsOperation<'stageCaptureObservation', CaptureStageResult>;
+  review(
+    input: ReviewImportEntryInput,
+    signal?: AbortSignal,
+  ): UserCardsOperation<'reviewImportEntry', ImportEntryChangeResult>;
   /** Late recognition alternatives of one pending entry. */
   attach(
     input: AttachImportCandidatesInput,
     signal?: AbortSignal,
-  ): Promise<ImportEntryChangeResult>;
+  ): UserCardsOperation<'attachImportCandidates', ImportEntryChangeResult>;
   discardEntry(
     input: DiscardImportEntryInput,
     signal?: AbortSignal,
-  ): Promise<ImportEntryChangeResult>;
+  ): UserCardsOperation<'discardImportEntry', ImportEntryChangeResult>;
   discardSession(
     input: DiscardImportSessionInput,
     signal?: AbortSignal,
-  ): Promise<ImportSessionChange>;
-  confirm(input: ConfirmImportInput, signal?: AbortSignal): Promise<ImportConfirmationResult>;
-  /** The recorded outcome of one operation identity, or its explicit absence. */
-  recover(
-    operationId: ImportOperationId,
+  ): UserCardsOperation<'discardImportSession', ImportSessionChange>;
+  /** Confirms reviewed entries under a new operation identity, or resumes a retained one. */
+  confirm(
+    input: UserCardsConfirmationRequest,
     signal?: AbortSignal,
-  ): Promise<ImportOperationRecoveryResult>;
+  ): UserCardsOperation<'confirmImport', UserCardsConfirmationOutcome>;
+  /** Unfinished attempts the account retains, oldest first. */
+  retained(): readonly UserCardsRetainedAttempt[];
+  /** Reattaches to one retained attempt, or null when the account retains none with it. */
+  resume(operationId: string): UserCardsRetainedAttempt | null;
 }
 
-/** Builds the import access over the private contract Application supplies. */
+/** Builds the import access over the account-scoped UserCards operations. */
 export function createImportAccess(userCards: UiImportClient): UiImportAccess {
   for (const operation of [
     'listImportSessions',
@@ -122,13 +138,18 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     'discardImportEntry',
     'discardImportSession',
     'confirmImport',
-    'recoverImportOperation',
+    'retained',
+    'resume',
   ] as const) {
     if (typeof userCards?.[operation] !== 'function') {
       throw new TypeError('The Import page reads and changes pending imports through UserCards.');
     }
   }
+  if (userCards.constraints === undefined) {
+    throw new TypeError('The Import page presents the constraints UserCards publishes.');
+  }
   return {
+    constraints: userCards.constraints,
     sessions: (options, signal) => userCards.listImportSessions(options, signal),
     entries: (input, signal) => userCards.listImportEntries(input, signal),
     stage: (input, signal) => userCards.stageImportEntries(input, signal),
@@ -139,7 +160,8 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     discardEntry: (input, signal) => userCards.discardImportEntry(input, signal),
     discardSession: (input, signal) => userCards.discardImportSession(input, signal),
     confirm: (input, signal) => userCards.confirmImport(input, signal),
-    recover: (operationId, signal) => userCards.recoverImportOperation(operationId, signal),
+    retained: () => userCards.retained(),
+    resume: (operationId) => userCards.resume(operationId),
   };
 }
 
@@ -177,7 +199,7 @@ export interface UiImportCandidate {
 
 /** Alternatives of one pending entry whose printing a capture or source left unresolved. */
 export function uiImportCandidates(entry: ImportEntry): readonly UiImportCandidate[] {
-  return entry.candidates.map((candidate) => ({
+  return entry.candidates.map((candidate: ImportCandidate) => ({
     printingId: candidate.printingId,
     provider: candidate.provider,
     evidence: candidate.evidence,
@@ -196,7 +218,7 @@ export interface UiImportLine {
 
 /**
  * Stages lines as pending entries of one import session. Staging never changes ownership, so the
- * page reports a committed outcome as entries in review, and a repeated call with the same line
+ * page reports a committed outcome as entries in review, and a repeated call with the same entry
  * identities replays its recorded staging instead of adding the lines twice
  * (docs/user-cards.md#import-and-capture-state).
  */
@@ -205,22 +227,23 @@ export async function stageImportLines(
   input: StageImportEntriesInput,
   signal?: AbortSignal,
 ): Promise<UiChangeCommit<ImportStageResult>> {
-  return commitUiChange(
-    () => access.stage(input, signal),
-    async () => null,
+  return commitUiOperation(
+    access.stage(input, signal),
+    async (): Promise<ImportStageResult | null> => null,
     'The lines were not added to review.',
-    'The staging outcome is unknown. The lines may be in review; reload the import before retrying.',
+    {
+      unknown:
+        'The staging outcome is unknown. The lines may be in review; reload the import before retrying.',
+    },
   );
 }
 
 /**
  * Stages one capture observation into review. The provider decides the admission: a repeated
  * observation is suppressed, an unresolved reading stages nothing and the same capture identity
- * may resolve later, and only an admitted observation adds a pending entry. Staging never changes
- * ownership, so a committed outcome is an entry in review, and a repeated call with the same
- * capture identity replays its recorded decision instead of adding the card twice. An outcome
- * whose response was lost stays unknown, so the capture view retains the observation it submitted
- * and recovers the recorded decision by replaying exactly that observation
+ * may resolve later, and only an admitted observation adds a pending entry. An outcome whose
+ * response was lost keeps the observation under its capture identity, and the capture view
+ * recovers the recorded decision by replaying exactly that observation through the same handle
  * (docs/user-cards.md#import-and-capture-state).
  */
 export async function stageCaptureObservation(
@@ -228,11 +251,14 @@ export async function stageCaptureObservation(
   input: StageCaptureInput,
   signal?: AbortSignal,
 ): Promise<UiChangeCommit<CaptureStageResult>> {
-  return commitUiChange(
-    () => access.capture(input, signal),
-    async () => null,
+  return commitUiOperation(
+    access.capture(input, signal),
+    async (): Promise<CaptureStageResult | null> => null,
     'The capture was not added to review.',
-    'The staging outcome is unknown. The capture may be in review; reload the import before retrying.',
+    {
+      unknown:
+        'The staging outcome is unknown. The capture may be in review; reload the import before retrying.',
+    },
   );
 }
 
@@ -247,21 +273,21 @@ export const uiUnfinishedSourceMessage =
 /**
  * Stages one supported source into review. The provider parses inside its own boundary and
  * reconciles every parsed line with what the import the caller identified already staged or
- * acquired, so a source whose response was lost is recovered by importing it again under that
- * identity: the recorded rows tell which lines staged nothing, which stayed in review and which the
- * import already acquired (docs/user-interface.md#source-imports,
+ * acquired, so a source whose response was lost is recovered by importing it again: the same input
+ * resumes the retained import identity, and the recorded rows tell which lines staged nothing,
+ * which stayed in review and which the import already acquired (docs/user-interface.md#source-imports,
  * docs/user-cards.md#source-imports).
  */
 export async function stageSourceImport(
   access: UiImportAccess,
-  input: StageSourceImportInput,
+  input: UserCardsSourceImportRequest,
   signal?: AbortSignal,
 ): Promise<UiChangeCommit<SourceImportResult>> {
-  return commitUiChange(
-    () => access.source(input, signal),
-    async () => null,
+  return commitUiOperation(
+    access.source(input, signal),
+    async (): Promise<SourceImportResult | null> => null,
     'The source lines were not added to review.',
-    uiUnfinishedSourceMessage,
+    { unknown: uiUnfinishedSourceMessage },
   );
 }
 
@@ -276,11 +302,11 @@ export async function attachImportCandidates(
   input: AttachImportCandidatesInput,
   signal?: AbortSignal,
 ): Promise<UiChangeCommit<ImportEntryChangeResult>> {
-  return commitUiChange(
-    () => access.attach(input, signal),
-    async () => null,
+  return commitUiOperation(
+    access.attach(input, signal),
+    async (): Promise<ImportEntryChangeResult | null> => null,
     'The later alternatives were not stored.',
-    'The outcome is unknown. Reload the pending import before retrying.',
+    { unknown: 'The outcome is unknown. Reload the pending import before retrying.' },
   );
 }
 
@@ -294,11 +320,11 @@ export async function reviewImportEntry(
   input: ReviewImportEntryInput,
   signal?: AbortSignal,
 ): Promise<UiChangeCommit<ImportEntryChangeResult>> {
-  return commitUiChange(
-    () => access.review(input, signal),
-    async () => null,
+  return commitUiOperation(
+    access.review(input, signal),
+    async (): Promise<ImportEntryChangeResult | null> => null,
     'The review was not saved.',
-    'The review outcome is unknown. Reload the pending import before retrying.',
+    { unknown: 'The review outcome is unknown. Reload the pending import before retrying.' },
   );
 }
 
@@ -308,11 +334,11 @@ export async function discardImportEntry(
   input: DiscardImportEntryInput,
   signal?: AbortSignal,
 ): Promise<UiChangeCommit<ImportEntryChangeResult>> {
-  return commitUiChange(
-    () => access.discardEntry(input, signal),
-    async () => null,
+  return commitUiOperation(
+    access.discardEntry(input, signal),
+    async (): Promise<ImportEntryChangeResult | null> => null,
     'The entry was not discarded.',
-    'The discard outcome is unknown. Reload the pending import before retrying.',
+    { unknown: 'The discard outcome is unknown. Reload the pending import before retrying.' },
   );
 }
 
@@ -325,83 +351,43 @@ export async function discardImportSession(
   input: DiscardImportSessionInput,
   signal?: AbortSignal,
 ): Promise<UiChangeCommit<ImportSessionChange>> {
-  return commitUiChange(
-    () => access.discardSession(input, signal),
-    async () => null,
+  return commitUiOperation(
+    access.discardSession(input, signal),
+    async (): Promise<ImportSessionChange | null> => null,
     'The import was not discarded.',
-    'The discard outcome is unknown. Reload the pending imports before retrying.',
+    { unknown: 'The discard outcome is unknown. Reload the pending imports before retrying.' },
   );
-}
-
-/**
- * Confirms reviewed entries under one operation identity. A successful response or the operation's
- * recorded outcome reports the receipt that names the created copies; an explicit absence of a
- * recorded outcome says that the confirmation did not commit, so the page keeps the reviewed
- * entries for another explicit confirmation
- * (docs/user-cards.md#interface, docs/user-interface.md#capture-and-review).
- */
-export async function confirmImport(
-  access: UiImportAccess,
-  input: ConfirmImportInput,
-  signal?: AbortSignal,
-): Promise<UiChangeCommit<ImportReceipt>> {
-  try {
-    return { status: 'committed', message: null, record: await access.confirm(input, signal) };
-  } catch (cause) {
-    const code = readUiFailureCode(cause);
-    if (code === 'conflict') {
-      return {
-        status: 'conflict',
-        message: readUiFailureMessage(cause, 'The confirmation was not committed.'),
-        record: null,
-      };
-    }
-    if (code !== null && isUiDefiniteFailure(code)) {
-      return {
-        status: 'failed',
-        message: readUiFailureMessage(cause, 'The confirmation was not committed.'),
-        record: null,
-      };
-    }
-    // The response was lost or the service is busy: the operation identity decides, never an
-    // inference from the pending entries that may or may not have produced copies.
-    return recoverConfirmation(access, input.operationId, signal);
-  }
 }
 
 /** Note the page presents beside the copies of a confirmation that had already been recorded. */
 const recordedConfirmationNote =
   'This confirmation had already been recorded; the copies it created are listed.';
 
-/**
- * Reads the recorded outcome of one confirmation operation independently of the entries it
- * covered. The receipt of a recorded outcome is reported as committed; an explicit absence says
- * that no copies were created, so the page can release the operation identity; an unreadable
- * outcome stays unknown, so the page keeps the identity instead of inferring commitment
- * (docs/application.md#construction-and-request-boundary).
- */
-export async function recoverConfirmation(
-  access: UiImportAccess,
-  operationId: ImportOperationId,
-  signal?: AbortSignal,
-): Promise<UiChangeCommit<ImportReceipt>> {
-  let recovered: ImportOperationRecoveryResult | null;
-  try {
-    recovered = await access.recover(operationId, signal);
-  } catch {
-    recovered = null;
-  }
-  if (recovered?.outcome === 'recorded') {
-    return { status: 'committed', message: recordedConfirmationNote, record: recovered.receipt };
-  }
-  if (recovered?.outcome === 'absent') {
+/** What one confirmation's outcome reports to the page. */
+function confirmationCommit(
+  outcome: UserCardsOperationOutcome<UserCardsConfirmationOutcome>,
+): UiChangeCommit<ImportReceipt> {
+  if (outcome.state === 'committed') {
     return {
-      status: 'failed',
-      message:
-        'This confirmation is not recorded, so no copies were created. Review the entries and ' +
-        'confirm them again.',
-      record: null,
+      status: 'committed',
+      // The provider reports whether it returned a recorded outcome; only that earns the note.
+      message: outcome.record.replayed ? recordedConfirmationNote : null,
+      record: outcome.record,
     };
+  }
+  if (outcome.state === 'rejected') {
+    if (outcome.failure.code === 'not-found') {
+      return {
+        status: 'failed',
+        message:
+          'This confirmation is not recorded, so no copies were created. Review the entries and ' +
+          'confirm them again.',
+        record: null,
+      };
+    }
+    return outcome.failure.code === 'conflict'
+      ? { status: 'conflict', message: outcome.failure.message, record: null }
+      : { status: 'failed', message: outcome.failure.message, record: null };
   }
   return {
     status: 'unknown',
@@ -411,29 +397,46 @@ export async function recoverConfirmation(
   };
 }
 
-/** Prefix of the identities this page generates for staged lines and confirmation operations. */
-const importIdentityPrefix = 'ui-import';
+/**
+ * Confirms reviewed entries under one operation identity. A successful response or the operation's
+ * recorded receipt reports the copies it created; an explicit absence of a recorded outcome says
+ * that the confirmation did not commit, so the page keeps the reviewed entries for another
+ * explicit confirmation (docs/user-cards.md#interface, docs/user-interface.md#capture-and-review).
+ */
+export async function confirmImport(
+  operation: UserCardsOperation<'confirmImport', UserCardsConfirmationOutcome>,
+): Promise<UiChangeCommit<ImportReceipt>> {
+  return confirmationCommit(await operation.observe());
+}
 
-/** Prefix of the identities this page generates for capture sessions, captures and attempts. */
+/**
+ * Reads the recorded outcome of the confirmation the page kept, independently of the current
+ * selection and of whether the entries it covered are still pending
+ * (docs/user-cards.md#browser-operation-lifecycle).
+ */
+export async function recoverConfirmation(
+  operation: UserCardsOperation<'confirmImport', UserCardsConfirmationOutcome>,
+  signal?: AbortSignal,
+): Promise<UiChangeCommit<ImportReceipt>> {
+  return confirmationCommit(await operation.recover(signal));
+}
+
+/** Prefix of the identities this page generates for staged lines and capture sessions. */
+const importIdentityPrefix = 'ui-import';
 const captureIdentityPrefix = 'ui-capture';
 
 let importSerial = 0;
 
 /**
- * One stable identity for an import the page composes, a staged line or a confirmation operation.
- * It is unique inside this presentation and bounded like every identifier UserCards accepts, so a
- * retry of the same input refers to the recorded import, staging or confirmation instead of
- * creating a second one.
+ * One stable identity for a staged line or the capture session of one attempt. It is unique inside
+ * this presentation and bounded like every identifier UserCards accepts, so a retry of the same
+ * line or capture refers to its recorded staging instead of creating a second one.
  */
 export function uiImportIdentity(): string {
   return uiIdentity(importIdentityPrefix);
 }
 
-/**
- * One stable identity for a capture session, one capture inside it or one capture attempt. It is
- * bounded like every identifier UserCards and Recognition accept, so a repeated delivery of the
- * same capture refers to its recorded admission instead of staging the card twice.
- */
+/** One stable identity for a capture session or one capture inside it. */
 export function uiCaptureIdentity(): string {
   return uiIdentity(captureIdentityPrefix);
 }
