@@ -15,9 +15,12 @@ import {
   ApplicationError,
   type ApplicationFailureCode,
   type SearchClient,
-  type UserCardsClient,
   type UserInterfaceCapabilities,
 } from '../../src/application/index.js';
+import {
+  createUserCardsOperations,
+  type UserCardsBrowserClient,
+} from '../../src/usercards/browser.js';
 import type {
   CardPrintingsPage,
   Catalog,
@@ -37,7 +40,7 @@ import {
   type UserInterface,
 } from '../../src/ui/index.js';
 
-import { unusedUserCards } from './unused-usercards.js';
+import { browserAttemptStorage, unusedUserCardsClient } from './unused-usercards.js';
 
 /** One Search request the collection view issued. */
 export interface UiCollectionSearchRequest {
@@ -226,8 +229,8 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
       });
     },
   };
-  const userCards: UserCardsClient = {
-    ...unusedUserCards,
+  const scriptedUserCards: UserCardsBrowserClient = {
+    ...unusedUserCardsClient,
     readCopies(copyIds, signal) {
       const id = next();
       copyReads.push({
@@ -266,7 +269,10 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
     request,
     catalog,
     search,
-    userCards,
+    userCards: createUserCardsOperations({
+      client: scriptedUserCards,
+      storage: browserAttemptStorage(),
+    }),
     createRecognition: () => {
       throw new Error('The collection journeys do not run recognition.');
     },

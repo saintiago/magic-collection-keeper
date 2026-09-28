@@ -14,7 +14,11 @@
  * committed (docs/user-interface.md#browsing-and-organization).
  */
 
-import type { UserCardsClient } from '../../application/index.js';
+import type {
+  UserCardsAccountOperations,
+  UserCardsConstraints,
+  UserCardsOperation,
+} from '../../usercards/browser.js';
 import type {
   Association,
   AssociationChangeResult,
@@ -39,7 +43,7 @@ import type {
   UserTagKind,
 } from '../../usercards/index.js';
 
-import { commitUiChange, readUiFailureMessage, type UiChangeCommit } from './failure.js';
+import { commitUiOperation, readUiFailureMessage, type UiChangeCommit } from './failure.js';
 import type { UiEntryTarget, UiOperationOutcome, UiToolRequest } from './list.js';
 
 /**
@@ -55,12 +59,6 @@ export const uiTagKinds = [
 ] as const satisfies readonly UserTagKind[];
 
 export type UiTagKind = (typeof uiTagKinds)[number];
-
-/**
- * Largest intended quantity an association control offers. The bound mirrors the UserCards
- * provider's published maximum, so a value the provider accepts stays enterable.
- */
-export const uiMaxAssociationQuantity = 1000;
 
 /**
  * Association levels each tag kind presents. A wishlist expresses intent for a card or one of its
@@ -108,7 +106,8 @@ export function uiAssociationLevelLabel(level: AssociationTargetLevel): string {
  * capabilities it presents (docs/architecture.md#composition-and-replacement).
  */
 export type UiTagClient = Pick<
-  UserCardsClient,
+  UserCardsAccountOperations,
+  | 'constraints'
   | 'readCopies'
   | 'listTags'
   | 'readTags'
@@ -124,6 +123,8 @@ export type UiTagClient = Pick<
 
 /** Private tag access of the organization views. */
 export interface UiTagAccess {
+  /** Input constraints and operation availability the organization views present. */
+  readonly constraints: UserCardsConstraints;
   /** One page of the account's tags, ordered by stable identity. */
   list(options?: TagListOptions, signal?: AbortSignal): Promise<TagListResult>;
   /** Authorized tags of the requested references, with the references this account has none for. */
@@ -141,21 +142,30 @@ export interface UiTagAccess {
   ): Promise<AssociationReadResult>;
   /** Authorized copies of the requested references; a location move quotes their revisions. */
   readCopies(copyIds: readonly CopyId[], signal?: AbortSignal): Promise<CopyReadResult>;
-  createTag(input: CreateTagInput, signal?: AbortSignal): Promise<TagChangeResult>;
-  renameTag(input: RenameTagInput, signal?: AbortSignal): Promise<TagChangeResult>;
+  createTag(
+    input: CreateTagInput,
+    signal?: AbortSignal,
+  ): UserCardsOperation<'createTag', TagChangeResult>;
+  renameTag(
+    input: RenameTagInput,
+    signal?: AbortSignal,
+  ): UserCardsOperation<'renameTag', TagChangeResult>;
   createAssociation(
     input: CreateAssociationInput,
     signal?: AbortSignal,
-  ): Promise<AssociationChangeResult>;
+  ): UserCardsOperation<'createAssociation', AssociationChangeResult>;
   changeAssociation(
     input: AssociationCorrection,
     signal?: AbortSignal,
-  ): Promise<AssociationChangeResult>;
+  ): UserCardsOperation<'changeAssociation', AssociationChangeResult>;
   removeAssociation(
     input: AssociationRemoval,
     signal?: AbortSignal,
-  ): Promise<AssociationRemovalResult>;
-  setCopyLocation(input: SetCopyLocationInput, signal?: AbortSignal): Promise<CopyLocationResult>;
+  ): UserCardsOperation<'removeAssociation', AssociationRemovalResult>;
+  setCopyLocation(
+    input: SetCopyLocationInput,
+    signal?: AbortSignal,
+  ): UserCardsOperation<'setCopyLocation', CopyLocationResult>;
 }
 
 /** One association change as the views present it: the target level, identity and revision. */
@@ -192,7 +202,11 @@ export function createTagAccess(userCards: UiTagClient): UiTagAccess {
       throw new TypeError('The organization views read and change tags through UserCards.');
     }
   }
+  if (userCards.constraints === undefined) {
+    throw new TypeError('The organization views present the constraints UserCards publishes.');
+  }
   return {
+    constraints: userCards.constraints,
     list: (options, signal) => userCards.listTags(options, signal),
     read: (tagIds, signal) => userCards.readTags(tagIds, signal),
     associations: (tagId, options, signal) => userCards.listAssociations(tagId, options, signal),
@@ -217,10 +231,13 @@ export async function createTag(
   input: CreateTagInput,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<Tag>> {
-  return commitUiChange(
-    () => access.createTag(input, signal).then((result) => result.tag),
+  return commitUiOperation(
+    access.createTag(input, signal),
     async () => null,
     'The tag was not created.',
+    {
+      record: (result) => result.tag,
+    },
   );
 }
 
@@ -233,8 +250,8 @@ export async function renameTag(
   input: RenameTagInput,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<Tag>> {
-  return commitUiChange(
-    () => access.renameTag(input, signal).then((result) => result.tag),
+  return commitUiOperation(
+    access.renameTag(input, signal),
     async () => {
       try {
         const read = await access.read([input.tagId], signal);
@@ -244,6 +261,7 @@ export async function renameTag(
       }
     },
     'The rename was not saved.',
+    { record: (result) => result.tag },
   );
 }
 
@@ -253,10 +271,11 @@ export async function addAssociation(
   input: CreateAssociationInput,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<Association>> {
-  return commitUiChange(
-    () => access.createAssociation(input, signal).then((result) => result.association),
+  return commitUiOperation(
+    access.createAssociation(input, signal),
     async () => null,
     'The association was not added.',
+    { record: (result) => result.association },
   );
 }
 
@@ -269,8 +288,8 @@ export async function saveAssociation(
   input: AssociationCorrection,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<Association>> {
-  return commitUiChange(
-    () => access.changeAssociation(input, signal).then((result) => result.association),
+  return commitUiOperation(
+    access.changeAssociation(input, signal),
     async () => {
       try {
         const read = await access.readAssociations([input.associationId], signal);
@@ -280,6 +299,7 @@ export async function saveAssociation(
       }
     },
     'The association was not saved.',
+    { record: (result) => result.association },
   );
 }
 
@@ -289,10 +309,11 @@ export async function removeAssociation(
   input: AssociationRemoval,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<string>> {
-  return commitUiChange(
-    () => access.removeAssociation(input, signal).then((result) => result.associationId),
+  return commitUiOperation(
+    access.removeAssociation(input, signal),
     async () => null,
     'The association was not removed.',
+    { record: (result) => result.associationId },
   );
 }
 
@@ -305,8 +326,8 @@ async function moveCopyLocation(
   input: SetCopyLocationInput,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<PhysicalCopy>> {
-  return commitUiChange(
-    () => access.setCopyLocation(input, signal).then((result) => result.copy),
+  return commitUiOperation(
+    access.setCopyLocation(input, signal),
     async () => {
       try {
         const read = await access.readCopies([input.copyId], signal);
@@ -316,6 +337,7 @@ async function moveCopyLocation(
       }
     },
     'The copy’s location was not saved.',
+    { record: (result) => result.copy },
   );
 }
 

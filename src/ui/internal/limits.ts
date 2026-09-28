@@ -35,31 +35,12 @@ export const UI_LIMITS = {
   fragmentBatch: 100,
   /** Items one entry's fragment result may present, so a broken source cannot grow one row. */
   fragmentItems: 20,
-  /** Tags one page of the tags page asks the UserCards contract for. */
-  tagPage: 50,
-  /** Associations one page of a tag view asks the UserCards contract for. */
-  associationPage: 50,
-  /** Pending import entries one page of the Import page asks UserCards for. */
-  importPage: 50,
-  /** Pending import sessions one page of the Import page asks UserCards for. */
-  importSessions: 50,
-  /**
-   * Characters one pasted or reviewed source list may carry. The bound mirrors the provider's own
-   * bound for one source text, so the form refuses an oversized paste before it is dispatched.
-   */
-  importSourceText: 128 * 1024,
-  /**
-   * Pending import entries one staging or confirmation request carries. The bound mirrors the
-   * provider's own bound for those changes, so an explicit selection larger than one request is
-   * decided through further bounded requests instead of being rejected by the provider.
-   */
-  importBatch: 50,
   /** Printings one page of a manual entry search asks Search for. */
   importPrintings: 20,
   /**
-   * Copy references one private copy read asks for at most. The bound mirrors the copy references
-   * a UserCards read accepts, so a selection larger than one read is read in further bounded
-   * batches instead of being rejected by the provider.
+   * References one Catalog resolve request carries. The provider's own accepted bound is
+   * published by the Catalog contract, whose barrel is not browser-safe, so the page sizes its
+   * requests itself within that bound and a larger set is resolved in further requests.
    */
-  copyBatch: 100,
+  catalogResolveBatch: 100,
 } as const;

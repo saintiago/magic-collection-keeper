@@ -146,6 +146,20 @@ async function settle<Value>(
   await control(page, method, id, value);
 }
 
+/**
+ * Reopens one waiting import through the explicit control the page presents for its identity.
+ * A new-import submission and a reopen are distinct intents: reopening reads the import the
+ * identity already names instead of deciding one from the input the form holds
+ * (docs/ui/editors.md#internal-design).
+ */
+async function reopenWaitingImport(page: Page, operationId: string): Promise<void> {
+  await page.click(`#import-source-waiting [data-ui-source-waiting="${operationId}"] button`);
+}
+
+/** The status the page presents after a source import whose outcome is not established. */
+const sourceOutcomeUnknown =
+  'The staging outcome is unknown. Reopen the waiting import to read its recorded rows.';
+
 /** Answers every catalog resolve of the journey from this table, like the provider the page reads. */
 async function scriptCatalog(
   page: Page,
@@ -588,7 +602,7 @@ test('recovers a lost confirmation through its recorded operation outcome', asyn
   expect(errors).toEqual([]);
 });
 
-test('keeps one line identity when a staging response is lost and replays it on retry', async ({
+test('keeps one line identity when a staging response is lost and retries it explicitly', async ({
   page,
 }) => {
   const errors = await openImport(page, '#/import');
@@ -608,14 +622,24 @@ test('keeps one line identity when a staging response is lost and replays it on 
   expect(firstLine?.entryId).toBeTruthy();
   await control(page, 'fail', first.id, { code: 'busy', message: 'The service is busy.' });
 
-  // The outcome is unknown: the page reads the pending import again and keeps the selection.
+  // The outcome is unknown: the page reads the pending import again and presents the retained
+  // attempt with the retry its outcome needs.
   await expect(page.locator('#import-results [data-ui-outcome]')).toContainText(
     'The staging outcome is unknown',
   );
   const refresh = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
   await settle(page, 'settleSessions', refresh.id, []);
+  await expect(page.locator('#import-manual-recovery')).toBeVisible();
 
+  // Adding more lines while that attempt is unresolved is refused before anything is dispatched.
   await page.click('#import-results [data-ui-tool="add-to-review"]');
+  await expect(page.locator('#import-results [data-ui-outcome]')).toContainText(
+    'Retry it before adding more lines',
+  );
+  expect(await control<unknown[]>(page, 'stage')).toHaveLength(1);
+
+  // Retrying the retained attempt replays the line identity it was begun with.
+  await page.click('#import-manual-recover');
   const second = await requested<Record<string, unknown>>(page, 'stage', 1);
   const secondLine = (second.arguments.entries as readonly Record<string, unknown>[])[0];
   expect(secondLine?.entryId).toBe(firstLine?.entryId);
@@ -625,9 +649,10 @@ test('keeps one line identity when a staging response is lost and replays it on 
     staged: 0,
     replayed: true,
   });
-  await expect(page.locator('#import-results [data-ui-outcome]')).toHaveText(
+  await expect(page.locator('#import-manual-status')).toHaveText(
     'Those lines were already in review; no new entries were added.',
   );
+  await expect(page.locator('#import-manual-recovery')).toBeHidden();
   const reconciled = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
   await settle(page, 'settleSessions', reconciled.id, [session()]);
   const entriesRead = await requested<UiImportEntriesRequest>(page, 'entries', 0);
@@ -1343,6 +1368,104 @@ async function selectManualPrintings(page: Page, count: number): Promise<string[
   return errors;
 }
 
+test('restores a source reference within the bound its control accepts', async ({ page }) => {
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, []);
+
+  // A reference longer than one identifier but inside the source-reference bound is accepted by the
+  // control, so leaving the view and returning must present it unchanged
+  // (docs/user-cards.md#browser-operation-lifecycle).
+  const official = 'https://magic.wizards.com/en/news/feature/';
+  const reference = `${official}${'deadly-disguise-'.repeat(16)}`;
+  expect(reference.length).toBeGreaterThan(200);
+  expect(reference.length).toBeLessThanOrEqual(500);
+  await page.selectOption('#import-source-format', 'wizards-precon');
+  await page.fill('#import-source-identity', 'wizards:mkm:deadly-disguise:regular:en');
+  await page.fill('#import-source-reference', reference);
+  await page.fill('#import-source-lines', '1 Kadena, Slinking Sorcerer');
+
+  await control(page, 'navigate', { page: 'home' });
+  await control(page, 'back');
+  const restored = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', restored.id, []);
+  await expect(page.locator('#import-source-reference')).toHaveValue(reference);
+  await expect(page.locator('#import-source-identity')).toHaveValue(
+    'wizards:mkm:deadly-disguise:regular:en',
+  );
+  expect(errors).toEqual([]);
+});
+
+test('reattaches the manual staging attempt a reload left unresolved', async ({ page }) => {
+  const errors = await selectManualPrintings(page, 1);
+  await page.click('#import-results [data-ui-tool="add-to-review"]');
+  const first = await requested<Record<string, unknown>>(page, 'stage');
+  await control(page, 'fail', first.id, { code: 'unavailable', message: 'Lost response' });
+  await expect(page.locator('#import-manual-recovery')).toBeVisible();
+  const refresh = await requested(page, 'sessions', 1);
+  await settle(page, 'settleSessions', refresh.id, []);
+
+  // A reload reattaches the attempt UserCards retained: the page presents the retry its outcome
+  // needs, and that retry reuses the line identities its request carried
+  // (docs/user-cards.md#browser-operation-lifecycle).
+  await page.reload();
+  await loadImport(page);
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  const restored = await requested(page, 'sessions');
+  await settle(page, 'settleSessions', restored.id, []);
+  await expect(page.locator('#import-manual-recovery')).toBeVisible();
+  await page.click('#import-manual-recover');
+  const retry = await requested<Record<string, unknown>>(page, 'stage');
+  expect(retry.arguments.entries).toEqual(first.arguments.entries);
+  await settle(page, 'settleStage', retry.id, {
+    session: session(),
+    entries: [entry()],
+    staged: 1,
+    replayed: false,
+  });
+  await expect(page.locator('#import-manual-status')).toContainText('1 line is in review');
+  const reconciled = await requested(page, 'sessions', 1);
+  await settle(page, 'settleSessions', reconciled.id, [session()]);
+  const read = await requested(page, 'entries');
+  await settle(page, 'settleEntries', read.id, { session: session(), entries: [entry()] });
+  await expect(page.locator('#import-pending [data-ui-entry="pending:entry-1"]')).toBeVisible();
+  await expect(page.locator('#import-manual-recovery')).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
+test('begins a distinct import for the same source while another is unresolved', async ({
+  page,
+}) => {
+  const errors = await openImport(page, '#/import');
+  const listing = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', listing.id, []);
+  await page.selectOption('#import-source-format', 'moxfield');
+  await page.fill('#import-source-url', 'https://moxfield.com/decks/deck-same-0001');
+  await page.click('#import-source-submit');
+  const first = await requested<StageSourceImportInput>(page, 'source');
+  await control(page, 'fail', first.id, { code: 'unavailable', message: 'Response lost.' });
+
+  // The same contents and the same source URL never merge two imports: this submission begins an
+  // import of its own, and the account keeps both attempts
+  // (docs/user-cards.md#import-state-and-identity).
+  await page.click('#import-source-submit');
+  const second = await requested<StageSourceImportInput>(page, 'source', 1);
+  expect(second.arguments).toMatchObject({
+    format: 'moxfield',
+    url: 'https://moxfield.com/decks/deck-same-0001',
+  });
+  expect(second.arguments.sessionId).not.toBe(first.arguments.sessionId);
+  for (const request of [first, second]) {
+    await expect(
+      page.locator(
+        `#import-source-waiting [data-ui-source-waiting="${request.arguments.sessionId}"]`,
+      ),
+    ).toBeVisible();
+  }
+  expect(errors).toEqual([]);
+});
+
 /** Answers the restored result window through the same bounded search boundary. */
 async function restoreManualPrintings(page: Page, count: number): Promise<void> {
   let index = Math.ceil(count / 20);
@@ -1385,7 +1508,8 @@ test('retries only the unresolved staging batch after a partial bulk success and
   const restored = await requested(page, 'sessions', 2);
   await settle(page, 'settleSessions', restored.id, []);
   await restoreManualPrintings(page, 51);
-  await page.click('#import-results [data-ui-tool="add-to-review"]');
+  await expect(page.locator('#import-manual-recovery')).toBeVisible();
+  await page.click('#import-manual-recover');
   const retry = await requested<Record<string, unknown>>(page, 'stage', 2);
   expect(retry.arguments.entries).toEqual(last.arguments.entries);
   await settle(page, 'settleStage', retry.id, {
@@ -1408,10 +1532,13 @@ test('retains staging identities beyond the rendering window and through Back', 
   await expect(page.locator('#import-results [data-ui-outcome]')).toContainText('unknown');
   const refresh = await requested(page, 'sessions', 1);
   await settle(page, 'settleSessions', refresh.id, []);
-  // Changing the manual input cannot mint new identities for an uncertain acquisition.
+  // Changing the manual input cannot mint new identities for an uncertain acquisition: the
+  // retained attempt is the only identity the unresolved lines have.
   await page.fill('#import-manual-quantity', '2');
   await page.click('#import-results [data-ui-tool="add-to-review"]');
-  await expect(page.locator('#import-results [data-ui-outcome]')).toContainText('original finish');
+  await expect(page.locator('#import-results [data-ui-outcome]')).toContainText(
+    'Retry it before adding more lines',
+  );
   expect(await control<unknown[]>(page, 'stage')).toHaveLength(1);
   await page.fill('#import-manual-quantity', '1');
   await control(page, 'navigate', { page: 'home' });
@@ -1419,7 +1546,9 @@ test('retains staging identities beyond the rendering window and through Back', 
   const restored = await requested(page, 'sessions', 2);
   await settle(page, 'settleSessions', restored.id, []);
   await restoreManualPrintings(page, 501);
-  await page.click('#import-results [data-ui-tool="add-to-review"]');
+  // The retained attempt survives the view change and retries the batch it was begun with.
+  await expect(page.locator('#import-manual-recovery')).toBeVisible();
+  await page.click('#import-manual-recover');
   const retry = await requested<Record<string, unknown>>(page, 'stage', 1);
   expect(retry.arguments.entries).toEqual(first.arguments.entries);
   expect(retry.arguments.entries as unknown[]).toHaveLength(50);
@@ -1588,7 +1717,7 @@ for (const priorUnknown of [false, true]) {
     if (priorUnknown) {
       await control(page, 'fail', attempt.id, { code: 'unavailable', message: 'Lost response' });
       await expect(page.locator('#import-results [data-ui-outcome]')).toContainText('unknown');
-      await page.click('#import-results [data-ui-tool="add-to-review"]');
+      await page.click('#import-manual-recover');
       attempt = await requested<Record<string, unknown>>(page, 'stage', 1);
       expect(attempt.arguments.entries).toEqual(original);
     }
@@ -1596,15 +1725,24 @@ for (const priorUnknown of [false, true]) {
       code: 'invalid-request',
       message: 'Unsupported attributes',
     });
-    await expect(page.locator('#import-results [data-ui-outcome]')).toContainText(
-      'Unsupported attributes',
-    );
+    if (priorUnknown) {
+      // A refused retry of an unresolved attempt does not establish that it did not write: the
+      // outcome stays open, and the retained identity stays the one the lines were staged under.
+      await expect(page.locator('#import-results [data-ui-outcome]')).toContainText(
+        'The staging outcome is unknown',
+      );
+      await expect(page.locator('#import-manual-recovery')).toBeVisible();
+    } else {
+      await expect(page.locator('#import-results [data-ui-outcome]')).toContainText(
+        'Unsupported attributes',
+      );
+    }
     await page.fill('#import-manual-quantity', '2');
     await page.click('#import-results [data-ui-tool="add-to-review"]');
     if (priorUnknown) {
-      await expect(page.locator('#import-results [data-ui-outcome]')).toContainText(
-        'original finish',
-      );
+      // A refused retry does not establish the earlier attempt: the retained identity stays the
+      // one the lines were staged under, and changed values are never dispatched under it.
+      await expect(page.locator('#import-manual-recovery')).toBeVisible();
       expect(await control<unknown[]>(page, 'stage')).toHaveLength(2);
     } else {
       const corrected = await requested<Record<string, unknown>>(page, 'stage', 1);
@@ -1872,8 +2010,9 @@ test('recovers a source whose response was lost and explains what the import hol
     code: 'unavailable',
     message: 'The import could not be read within the time limit; no import is proven.',
   });
-  await expect(page.locator('#import-source-status')).toHaveText(
-    'The staging outcome is unknown. Import the same source again to read its recorded rows.',
+  await expect(page.locator('#import-source-status')).toHaveText(sourceOutcomeUnknown);
+  await expect(page.locator('#import-source-waiting')).toContainText(
+    'waiting for its recorded rows',
   );
 
   // The parse had committed: the page reads the import the account holds and presents it, so the
@@ -1901,9 +2040,9 @@ test('recovers a source whose response was lost and explains what the import hol
     ],
   });
 
-  // The retry keeps that import's identity, so the provider reports what it already holds instead
-  // of staging the list twice.
-  await page.click('#import-source-submit');
+  // Reopening the waiting import keeps its identity, so the provider reports what it already holds
+  // instead of staging the list twice.
+  await reopenWaitingImport(page, first.arguments.sessionId);
   const retry = await requested<StageSourceImportInput>(page, 'source', 1);
   expect(retry.arguments).toEqual(first.arguments);
   await settle(page, 'settleSource', retry.id, {
@@ -1967,7 +2106,7 @@ test('recovers a source whose response was lost and explains what the import hol
   expect(errors).toEqual([]);
 });
 
-test('keeps a source whose response was lost and recovers it by importing it again', async ({
+test('keeps a source whose response was lost and recovers it by reopening its import', async ({
   page,
 }) => {
   const errors = await openImport(page, '#/import');
@@ -1990,14 +2129,13 @@ test('keeps a source whose response was lost and recovers it by importing it aga
     code: 'unavailable',
     message: 'Moxfield could not be reached within the time limit; no import changed.',
   });
-  await expect(page.locator('#import-source-status')).toHaveText(
-    'The staging outcome is unknown. Import the same source again to read its recorded rows.',
-  );
+  await expect(page.locator('#import-source-status')).toHaveText(sourceOutcomeUnknown);
   // The page reads what the account holds instead of inferring that the source staged nothing.
   const reconcile = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
   await settle(page, 'settleSessions', reconcile.id, []);
 
-  // Leaving the view keeps the unfinished import, so returning composes the same list again.
+  // Leaving the view keeps the unfinished import, so returning presents it as a waiting import
+  // while the form keeps the link the owner typed.
   await control(page, 'navigate', { page: 'home' });
   await control(page, 'back');
   const restored = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
@@ -2005,10 +2143,13 @@ test('keeps a source whose response was lost and recovers it by importing it aga
   await expect(page.locator('#import-source-url')).toHaveValue(
     'https://moxfield.com/decks/deck-identity-0001',
   );
+  await expect(
+    page.locator(`#import-source-waiting [data-ui-source-waiting="${first.arguments.sessionId}"]`),
+  ).toBeVisible();
 
-  // The link describes the import and never identifies it: the retry keeps the identity the page
-  // already used, so the provider reconciles this list instead of staging another one.
-  await page.click('#import-source-submit');
+  // The link describes the import and never identifies it: reopening the waiting import keeps the
+  // identity it was begun with, so the provider reconciles this list instead of staging another.
+  await reopenWaitingImport(page, first.arguments.sessionId);
   const retry = await requested<StageSourceImportInput>(page, 'source', 1);
   expect(retry.arguments).toEqual(first.arguments);
   const deckSession = session({
@@ -2254,9 +2395,14 @@ for (const method of sourceMethods) {
       await page.click('#import-source-submit');
       const first = await requested<StageSourceImportInput>(page, 'source');
       await control(page, 'fail', first.id, { code: 'unavailable', message: 'Response lost.' });
-      await expect(page.locator('#import-source-status')).toContainText('outcome is unknown');
+      await expect(page.locator('#import-source-status')).toHaveText(sourceOutcomeUnknown);
+      await expect(
+        page.locator(
+          `#import-source-waiting [data-ui-source-waiting="${first.arguments.sessionId}"]`,
+        ),
+      ).toBeVisible();
 
-      // A different input starts its own import without resolving or abandoning the first one.
+      // A different input begins its own import without resolving or abandoning the first one.
       await method.fillAnother(page);
       await page.click('#import-source-submit');
       const second = await requested<StageSourceImportInput>(page, 'source', 1);
@@ -2278,12 +2424,18 @@ for (const method of sourceMethods) {
         );
       }
 
-      // Neither another submission nor its outcome can retire the first request's identity.
+      // Neither another submission nor its outcome can retire the first import's identity.
       // Reload also verifies that the records survive beyond this page's in-memory state.
       await page.reload();
       await loadImport(page);
-      await method.fill(page);
-      await page.click('#import-source-submit');
+      const restored = await requested<UiImportSessionsRequest>(page, 'sessions');
+      await settle(page, 'settleSessions', restored.id, []);
+      await expect(
+        page.locator(
+          `#import-source-waiting [data-ui-source-waiting="${first.arguments.sessionId}"]`,
+        ),
+      ).toBeVisible();
+      await reopenWaitingImport(page, first.arguments.sessionId);
       const retry = await requested<StageSourceImportInput>(page, 'source');
       expect(retry.arguments).toEqual(first.arguments);
       await settle(page, 'settleSource', retry.id, {
@@ -2292,20 +2444,33 @@ for (const method of sourceMethods) {
         staged: 0,
       });
       await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+      // The resolved import leaves the waiting list; the other one keeps its own row.
+      await expect(
+        page.locator(
+          `#import-source-waiting [data-ui-source-waiting="${first.arguments.sessionId}"]`,
+        ),
+      ).toBeHidden();
 
-      // Resolving the first request releases only that request. The second one retains its
-      // input and identity if its outcome is still unknown; resolved inputs start a new list.
+      // Resolving the first import releases only that one. The second keeps its identity if its
+      // outcome is still unknown, and every submission of the form begins a list of its own.
       await page.reload();
       await loadImport(page);
-      if (secondOutcome !== 'unknown') {
-        await method.fill(page);
-        await method.fillAnother(page);
-      }
-      await page.click('#import-source-submit');
-      const secondRetry = await requested<StageSourceImportInput>(page, 'source');
+      const secondRestored = await requested<UiImportSessionsRequest>(page, 'sessions');
+      await settle(page, 'settleSessions', secondRestored.id, []);
       if (secondOutcome === 'unknown') {
+        await expect(
+          page.locator(
+            `#import-source-waiting [data-ui-source-waiting="${second.arguments.sessionId}"]`,
+          ),
+        ).toBeVisible();
+        await reopenWaitingImport(page, second.arguments.sessionId);
+        const secondRetry = await requested<StageSourceImportInput>(page, 'source');
         expect(secondRetry.arguments).toEqual(second.arguments);
       } else {
+        await method.fill(page);
+        await method.fillAnother(page);
+        await page.click('#import-source-submit');
+        const secondRetry = await requested<StageSourceImportInput>(page, 'source');
         expect(secondRetry.arguments.sessionId).not.toBe(second.arguments.sessionId);
       }
       expect(errors).toEqual([]);
@@ -2330,9 +2495,7 @@ for (const method of sourceMethods) {
       code: 'unavailable',
       message: 'The source could not be read within the time limit; no import is proven.',
     });
-    await expect(page.locator('#import-source-status')).toHaveText(
-      'The staging outcome is unknown. Import the same source again to read its recorded rows.',
-    );
+    await expect(page.locator('#import-source-status')).toHaveText(sourceOutcomeUnknown);
 
     const recorded = method.recorded(parsed.arguments.sessionId);
     const reconcile = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
@@ -2369,13 +2532,15 @@ for (const method of sourceMethods) {
     ).toBeVisible();
     await expect(page.locator('#import-provenance')).toHaveText(method.provenance);
 
-    // The unfinished import survives the reload: its input and the identity it was dispatched
-    // under are presented again, so importing that input retries this import instead of staging
-    // another list (docs/user-interface.md#source-imports).
-    await expect(page.locator('#import-source-status')).toHaveText(
-      'The staging outcome is unknown. Import the same source again to read its recorded rows.',
-    );
-    await page.click('#import-source-submit');
+    // The unfinished import survives the reload: the page presents it with the source it was
+    // begun from, and reopening it reads that import again instead of staging another list
+    // (docs/user-interface.md#source-imports).
+    await expect(
+      page.locator(
+        `#import-source-waiting [data-ui-source-waiting="${parsed.arguments.sessionId}"]`,
+      ),
+    ).toBeVisible();
+    await reopenWaitingImport(page, parsed.arguments.sessionId);
     const retried = await requested<StageSourceImportInput>(page, 'source');
     expect(retried.arguments).toEqual(parsed.arguments);
     expect(errors).toEqual([]);
@@ -2412,17 +2577,19 @@ test('keeps the unfinished import of a source method across a method switch', as
     message: 'The source listed no card lines this import can parse.',
   });
 
-  // Coming back to the unfinished method presents its own input again, and importing it retries
-  // that import instead of staging a second deck
+  // Coming back to the method keeps its own draft on the form, and the waiting list still names the
+  // unfinished deck: reopening it reads that import instead of staging a second deck
   // (docs/user-interface.md#source-imports).
   await page.selectOption('#import-source-format', 'moxfield');
   await expect(page.locator('#import-source-url')).toHaveValue(
     'https://moxfield.com/decks/deck-switch-0001',
   );
-  await expect(page.locator('#import-source-status')).toHaveText(
-    'The staging outcome is unknown. Import the same source again to read its recorded rows.',
-  );
-  await page.click('#import-source-submit');
+  await expect(
+    page.locator(
+      `#import-source-waiting [data-ui-source-waiting="${moxfield.arguments.sessionId}"]`,
+    ),
+  ).toBeVisible();
+  await reopenWaitingImport(page, moxfield.arguments.sessionId);
   const retry = await requested<StageSourceImportInput>(page, 'source', 2);
   expect(retry.arguments).toEqual(moxfield.arguments);
   expect(errors).toEqual([]);
@@ -2448,8 +2615,8 @@ test('keeps newer unresolved source imports when a departed page receives a late
   await control(page, 'fail', current.id, { code: 'unavailable', message: 'Response lost.' });
   await expect(page.locator('#import-source-status')).toContainText('outcome is unknown');
 
-  // The departed page's recovery snapshot predates the current request. A late successful
-  // outcome must not write that old snapshot over the current page's unfinished imports.
+  // The departed page's late outcome resolves only the import that page began; the unfinished
+  // import the current page began stays retained under its own identity.
   await settle(page, 'settleSource', departed.id, {
     session: session({
       sessionId: departed.arguments.sessionId,
@@ -2461,8 +2628,19 @@ test('keeps newer unresolved source imports when a departed page receives a late
   });
   await page.reload();
   await loadImport(page);
-  await page.fill('#import-source-text', '2 Counterspell (M10) 51');
-  await page.click('#import-source-submit');
+  const restored = await requested<UiImportSessionsRequest>(page, 'sessions');
+  await settle(page, 'settleSessions', restored.id, []);
+  await expect(
+    page.locator(
+      `#import-source-waiting [data-ui-source-waiting="${current.arguments.sessionId}"]`,
+    ),
+  ).toBeVisible();
+  await expect(
+    page.locator(
+      `#import-source-waiting [data-ui-source-waiting="${departed.arguments.sessionId}"]`,
+    ),
+  ).toBeHidden();
+  await reopenWaitingImport(page, current.arguments.sessionId);
   const retry = await requested<StageSourceImportInput>(page, 'source');
   expect(retry.arguments).toEqual(current.arguments);
   expect(errors).toEqual([]);
@@ -2480,13 +2658,17 @@ test('keeps a source import whose request is still pending across a reload', asy
   const first = await requested<StageSourceImportInput>(page, 'source');
 
   // The response never arrived: the page is reloaded while its request is still pending, and the
-  // import it composes keeps its identity (docs/user-interface.md#source-imports).
+  // import it began keeps its identity as a waiting import
+  // (docs/user-interface.md#source-imports).
   await page.reload();
   await loadImport(page);
   await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
   const reopened = await requested<UiImportSessionsRequest>(page, 'sessions');
   await settle(page, 'settleSessions', reopened.id, []);
-  await page.click('#import-source-submit');
+  await expect(
+    page.locator(`#import-source-waiting [data-ui-source-waiting="${first.arguments.sessionId}"]`),
+  ).toBeVisible();
+  await reopenWaitingImport(page, first.arguments.sessionId);
   const retry = await requested<StageSourceImportInput>(page, 'source');
   expect(retry.arguments).toEqual(first.arguments);
   expect(errors).toEqual([]);

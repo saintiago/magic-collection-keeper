@@ -7,7 +7,8 @@
  * and the packaged deployment composition src/application/deployment.ts. UserInterface's browser
  * entry points are src/ui/index.ts and the deployment composition src/ui/deployment.ts. Search's
  * browser-safe contract is src/search/browser.ts; its query, count and indexing capabilities stay
- * in src/search/index.ts.
+ * in src/search/index.ts. UserCards publishes its browser operation facade and constraints
+ * through src/usercards/browser.ts, while its backend contracts stay in src/usercards/index.ts.
  */
 
 export const components = ['application', 'catalog', 'recognition', 'search', 'ui', 'usercards'];
@@ -19,7 +20,7 @@ const componentEntries = {
   recognition: ['index'],
   search: ['index', 'browser'],
   ui: ['index', 'deployment'],
-  usercards: ['index'],
+  usercards: ['index', 'browser'],
 };
 
 const publicInterfaceRules = components.map((component) => ({

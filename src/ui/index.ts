@@ -65,15 +65,17 @@ export type { UiDialogOptions, UiDialogs } from './internal/dialogs.js';
 export type { UiAccount, UiIdentity } from './internal/identity.js';
 export {
   attachImportCandidates,
+  beginSourceImport,
   confirmImport,
   createImportAccess,
   discardImportEntry,
   discardImportSession,
   recoverConfirmation,
+  reopenSourceImport,
+  retryRetainedAttempt,
   reviewImportEntry,
   stageCaptureObservation,
   stageImportLines,
-  stageSourceImport,
   uiCaptureIdentity,
   uiImportCandidates,
   uiImportIdentity,
@@ -83,7 +85,7 @@ export {
   type UiImportClient,
   type UiImportLine,
 } from './internal/import-edits.js';
-export { createImportPages, uiMaxImportQuantity } from './internal/imports.js';
+export { createImportPages } from './internal/imports.js';
 export { UI_LIMITS } from './internal/limits.js';
 export {
   uiFragmentKinds,

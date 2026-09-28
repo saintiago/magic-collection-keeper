@@ -93,7 +93,9 @@ function collectionPage(): UiPageDefinition {
         context.capabilities.search,
         context.capabilities.catalog,
       );
-      const copies = createCopyAccess(context.capabilities.userCards);
+      const copies = createCopyAccess(
+        context.capabilities.userCards.account(context.account.accountId),
+      );
       const list = createCardList<UiCollectionQuery>({
         container: listHost,
         source: access.source,

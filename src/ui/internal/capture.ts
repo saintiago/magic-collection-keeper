@@ -16,10 +16,12 @@
  * error cue. Late readings of the same capture are attached as alternatives, leaving the owner's
  * reviewed values untouched, and a comparison that finds no usable identity never retracts an
  * accepted capture. An observation
- * whose staging response was lost stays retained and is recovered by replaying it identically, so
- * the provider returns its recorded decision instead of the same capture staging changed content.
- * Recovery retains late alternatives and pauses new attempts until the writes resolve; its control
- * remains available after Recognition completes or the camera stops.
+ * whose staging response was lost stays retained by UserCards and is recovered by replaying it
+ * identically through its own handle, so the provider returns its recorded decision instead of the
+ * same capture staging changed content; the view keeps no copy of that input for recovery, and it
+ * presents the attempts an earlier view left retained as well. Recovery retains late alternatives
+ * and pauses new attempts until the writes resolve; its control remains available after Recognition
+ * completes or the camera stops.
  * The session releases the camera and the Recognition session when it stops, and the page disposes
  * it when the view closes, so sign-out leaves no private capture state or outstanding work behind.
  */
@@ -45,9 +47,10 @@ import {
   type UiCaptureOutcome,
 } from './capture-admission.js';
 import type { UiCamera, UiDevice } from './device.js';
-import { readUiFailureMessage } from './failure.js';
+import { readUiFailureMessage, type UiChangeCommit } from './failure.js';
 import {
   attachImportCandidates,
+  retryRetainedAttempt,
   stageCaptureObservation,
   uiCaptureIdentity,
   type UiImportAccess,
@@ -126,10 +129,12 @@ interface UiCaptureAttempt {
   /** Entry the observation was admitted as, or null while none is reviewable. */
   entryId: string | null;
   /**
-   * The observation the attempt submitted, kept while the provider has not reported its decision:
-   * the identical replay of this observation is what recovers a lost staging outcome.
+   * The observation this attempt is submitting now, or null once its request settled. Recovery
+   * replays the attempt UserCards retains under the capture identity, not a copy of this input.
    */
   staging: StageCaptureInput | null;
+  /** Whether the provider has not established this attempt's staging outcome yet. */
+  unresolved: boolean;
   /** Usable later readings, retained until their alternatives are attached to the admitted entry. */
   alternatives: { readonly reading: RecognitionReading; uncertain: boolean }[];
 }
@@ -233,7 +238,15 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
   // A submitted write belongs to the view, not to the camera or Recognition lifetime. New
   // attempts wait until it is resolved; stopping the camera still leaves explicit recovery.
   let pending: UiCaptureAttempt | null = null;
+  /**
+   * Capture identities whose staging outcome UserCards has not established, oldest first. The
+   * provider keeps the attempt and its input, so this view recovers them through their own handles
+   * — also when the page was reloaded in between (docs/user-cards.md#browser-operation-lifecycle).
+   */
+  let retained: readonly string[] = [];
   let saving = false;
+
+  refreshRetained();
 
   if (typeof device.openCamera === 'function') {
     say('Start the camera to capture cards hands-free.', null);
@@ -262,17 +275,32 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
   });
 
   recoverButton.addEventListener('click', () => {
-    if (pending !== null && !busy && !saving && !closed) {
-      void saveCapture(pending);
+    if (!busy && !saving && !closed) {
+      void recoverCapture();
     }
   });
+  paintRecovery();
 
   return { element, stop: stopCapture, dispose: dispose };
 
   function paintRecovery(): void {
-    recoverButton.hidden = pending === null;
+    // The control stays available for the attempt this view presents — while its write is in
+    // flight, and while its outcome or its later alternatives are unresolved — and for the
+    // attempts UserCards still retains from an earlier view.
+    recoverButton.hidden = pending === null && retained.length === 0;
     recoverButton.disabled = busy || saving;
-    startButton.disabled = starting || pending !== null;
+    startButton.disabled = starting || pending !== null || retained.length > 0;
+  }
+
+  /** Reads back the capture attempts UserCards still retains for this account. */
+  function refreshRetained(): void {
+    retained = access
+      .retained()
+      .flatMap((attempt) =>
+        attempt.kind === 'stageCaptureObservation' && attempt.operationId !== pending?.captureId
+          ? [attempt.operationId]
+          : [],
+      );
   }
 
   /** Starts the capture session: camera permission, then the hands-free capture loop. */
@@ -472,6 +500,7 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       staged: false,
       entryId: null,
       staging: null,
+      unresolved: false,
       alternatives: [],
     };
     current = record;
@@ -568,7 +597,7 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       presence === 'single'
         ? uiCaptureObservation(record.sessionId, record.captureId, reading)
         : null;
-    if (record.staging !== null) {
+    if (record.staging !== null || record.unresolved) {
       // Keep every usable comparison before replaying: that response may be lost too. Even an
       // unusable comparison must recover the prior write before it can report any admission.
       if (observation !== null && !retained) {
@@ -635,23 +664,29 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
     saving = true;
     paintRecovery();
     try {
-      if (record.staging !== null) {
-        const commit = await stageCaptureObservation(access, record.staging, options.signal);
+      if (record.staging !== null || record.unresolved) {
+        const commit = await submitCapture(record);
         if (closed) {
           return;
         }
         if (commit.status !== 'committed' || commit.record === null) {
-          if (initialReading !== undefined && commit.status !== 'unknown') {
-            // Only a definite rejection of the first submission establishes that it did not write.
+          if (commit.status === 'unknown') {
+            // The provider keeps the attempt: the view presents the recovery control and keeps
+            // nothing of the observation it dispatched itself.
             record.staging = null;
-            settle(record, 'unavailable', commit.message ?? 'The capture was not added to review.');
-          } else {
+            record.unresolved = true;
             options.reviewChanged({ kind: 'unknown' });
             settle(record, 'unavailable', captureStagingUnknown);
+          } else {
+            // A definite refusal establishes that the observation staged nothing.
+            record.staging = null;
+            record.unresolved = false;
+            settle(record, 'unavailable', commit.message ?? 'The capture was not added to review.');
           }
           return;
         }
         record.staging = null;
+        record.unresolved = false;
         record.entryId = commit.record.entry?.entryId ?? null;
         // An explicitly unresolved decision is not recorded by the provider, so a later reading
         // can still resolve the capture. Suppression and admission are authoritative decisions.
@@ -714,11 +749,80 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       }
     } finally {
       saving = false;
-      if (record.staging === null && record.alternatives.length === 0) {
+      if (!record.unresolved && record.staging === null && record.alternatives.length === 0) {
         pending = null;
       }
+      refreshRetained();
       paintRecovery();
     }
+  }
+
+  /**
+   * Submits the observation this attempt holds, or replays the attempt UserCards retains under the
+   * capture identity. Recovery goes through the provider's own handle and input, so a reloaded view
+   * re-reads the recorded decision instead of composing a second observation
+   * (docs/user-cards.md#browser-operation-lifecycle).
+   */
+  async function submitCapture(
+    record: UiCaptureAttempt,
+  ): Promise<UiChangeCommit<CaptureStageResult>> {
+    if (record.unresolved) {
+      const attempt = access.resume(record.captureId);
+      if (attempt !== null && attempt.kind === 'stageCaptureObservation') {
+        return retryRetainedAttempt(
+          attempt,
+          options.signal,
+          'The capture was not added to review.',
+          captureStagingUnknown,
+        );
+      }
+      return { status: 'unknown', message: captureStagingUnknown, record: null };
+    }
+    const observation = record.staging;
+    if (observation === null) {
+      return { status: 'unknown', message: captureStagingUnknown, record: null };
+    }
+    return stageCaptureObservation(access, observation, options.signal);
+  }
+
+  /**
+   * Recovers every observation whose staging outcome UserCards has not established — the attempt
+   * this view already presents, and the attempts an earlier view left retained, also across a
+   * reload — through their own handles (docs/user-cards.md#browser-operation-lifecycle).
+   */
+  async function recoverCapture(): Promise<void> {
+    if (busy || saving || closed) {
+      return;
+    }
+    if (pending !== null) {
+      // The attempt this view presents still has work: its staging outcome or its later
+      // alternatives are not established yet, so that attempt is what recovery resumes.
+      await saveCapture(pending);
+      return;
+    }
+    refreshRetained();
+    for (const captureId of retained) {
+      const attempt = access.resume(captureId);
+      if (attempt === null || attempt.kind !== 'stageCaptureObservation') {
+        continue;
+      }
+      attempts += 1;
+      await saveCapture({
+        sessionId: attempt.request.sessionId,
+        captureId,
+        id: ((attempts - 1) % (RECOGNITION_LIMITS.maxAttempt - 1)) + 1,
+        staged: false,
+        entryId: null,
+        staging: null,
+        unresolved: true,
+        alternatives: [],
+      });
+      if (closed) {
+        return;
+      }
+    }
+    refreshRetained();
+    paintRecovery();
   }
 
   /**

@@ -1426,3 +1426,42 @@ test('a comparison delivered after camera stop is excluded from pending capture 
   expect(await control(page, 'attachments')).toEqual([]);
   expect(errors).toEqual([]);
 });
+
+test('recovers a capture whose staging outcome was lost across a reload', async ({ page }) => {
+  const errors = await openCapture(page);
+  await settleSessions(page, 0, []);
+  await control(page, 'scriptReading', {
+    candidates: [hostName('bolt')],
+    printingId: 'printing-bolt',
+  });
+  await page.click('#import-camera-start');
+  const first = await requested<StageCaptureInput>(page, 'captures');
+  await control(page, 'fail', first.id, { code: 'unavailable', message: 'Response lost.' });
+  await expect(page.locator('#import-camera-status')).toContainText('staging outcome is unknown');
+
+  // The observation and its identity belong to UserCards: a reloaded view presents the retained
+  // attempt and recovers it through that attempt's own handle
+  // (docs/user-cards.md#browser-operation-lifecycle).
+  await page.reload();
+  await page.addScriptTag({ content: await captureBundle(), type: 'module' });
+  await page.waitForFunction(() => Reflect.has(globalThis, 'keeperCaptureControl'));
+  await settleSessions(page, 0, []);
+  const recover = page.getByRole('button', { name: 'Recover capture' });
+  await expect(recover).toBeVisible();
+  await expect(page.locator('#import-camera-start')).toBeDisabled();
+  await recover.click();
+  const replay = await requested<StageCaptureInput>(page, 'captures');
+  expect(replay.arguments).toEqual(first.arguments);
+  await control(page, 'settleCapture', replay.id, {
+    outcome: 'admitted',
+    replayed: true,
+    session: captureSession(),
+    entry: captureEntry(),
+  });
+  await expect(page.locator('#import-camera-status')).toHaveText(
+    'The earlier capture was already accepted into review.',
+  );
+  await expect(recover).toBeHidden();
+  await expect(page.locator('#import-camera-start')).toBeEnabled();
+  expect(errors).toEqual([]);
+});

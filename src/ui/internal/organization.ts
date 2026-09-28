@@ -54,7 +54,6 @@ import {
   saveAssociation,
   uiAssociationLevelsByTagKind,
   uiAssociationLevelLabel,
-  uiMaxAssociationQuantity,
   uiTagKindLabel,
   uiTagKinds,
   type UiChangeOutcome,
@@ -77,7 +76,9 @@ function tagsPage(): UiPageDefinition {
     mount(container, context) {
       const document = container.ownerDocument;
       const restored = readPageState(context.restored?.state);
-      const access = createTagAccess(context.capabilities.userCards);
+      const access = createTagAccess(
+        context.capabilities.userCards.account(context.account.accountId),
+      );
       const heading = text(document, 'h2', 'tags-heading', 'Your tags');
       const createForm = document.createElement('form');
       createForm.id = 'tag-create';
@@ -264,7 +265,7 @@ function tagsPage(): UiPageDefinition {
           for (;;) {
             const page = await access.list(
               {
-                pageSize: UI_LIMITS.tagPage,
+                pageSize: access.constraints.pages.tags.default,
                 ...(next === null ? {} : { continuation: next }),
               },
               context.signal,
@@ -334,7 +335,7 @@ function tagsPage(): UiPageDefinition {
         const current = beginRead();
         try {
           const page = await access.list(
-            { pageSize: UI_LIMITS.tagPage, continuation: requested },
+            { pageSize: access.constraints.pages.tags.default, continuation: requested },
             context.signal,
           );
           if (closed || current !== version) {
@@ -545,7 +546,9 @@ function tagViewPage(): UiPageDefinition {
       const tagId = view.tagId;
       const document = container.ownerDocument;
       const restored = readPageState(context.restored?.state);
-      const access = createTagAccess(context.capabilities.userCards);
+      const access = createTagAccess(
+        context.capabilities.userCards.account(context.account.accountId),
+      );
       const counts = createSearchCounts(context.capabilities.search);
       const presented = Promise.withResolvers<void>();
       // A page whose presentation the shell never awaits must still not surface a rejection.
@@ -596,7 +599,7 @@ function tagViewPage(): UiPageDefinition {
       quantity.type = 'number';
       quantity.id = 'tag-add-quantity';
       quantity.min = '1';
-      quantity.max = String(uiMaxAssociationQuantity);
+      quantity.max = String(access.constraints.quantity.association);
       const addSubmit = submitButton(document, 'tag-add-submit', 'Search');
       const addHost = document.createElement('div');
       addHost.id = 'tag-add-results';
@@ -738,7 +741,7 @@ function tagViewPage(): UiPageDefinition {
             onWindow: associationWindow,
           }),
           context: tagId,
-          pageSize: UI_LIMITS.associationPage,
+          pageSize: access.constraints.pages.associations.default,
           restored: readListState<string>(retainedAssociations),
           fragments: {
             ownership: createEntryOwnershipReader(counts, associationReferenceOf, () => tagId),
@@ -863,7 +866,7 @@ function tagViewPage(): UiPageDefinition {
         try {
           const page = await access.list(
             {
-              pageSize: UI_LIMITS.tagPage,
+              pageSize: access.constraints.pages.tags.default,
               ...(continuation === null ? {} : { continuation }),
             },
             context.signal,
@@ -961,10 +964,10 @@ function tagViewPage(): UiPageDefinition {
                     label: 'Add to this tag',
                     access,
                     tag: () => tag,
-                    quantity: () => readQuantity(quantity),
+                    quantity: () => readQuantity(quantity, access.constraints.quantity.association),
                     guidance:
                       'Choose an intended quantity from 1 to ' +
-                      `${uiMaxAssociationQuantity} before adding.`,
+                      `${access.constraints.quantity.association} before adding.`,
                   });
                   const outcome = await base.tool.invoke(request);
                   if (outcome.committed > 0 || outcome.status === 'unknown') {
@@ -1107,6 +1110,7 @@ function tagViewPage(): UiPageDefinition {
             document,
             `tag-quantity-${encodeURIComponent(association.associationId)}`,
             draft?.quantity ?? String(association.quantity ?? 1),
+            access.constraints.quantity.association,
           );
           wanted.addEventListener('input', () => {
             draftFor(association.associationId).quantity = wanted.value;
@@ -1285,11 +1289,13 @@ function tagViewPage(): UiPageDefinition {
         association: Association,
         wanted: HTMLInputElement,
       ): Promise<void> {
-        const quantity = readQuantity(wanted);
+        const quantity = readQuantity(wanted, access.constraints.quantity.association);
         const editor = editors.get(associationKey(association));
         if (quantity === null) {
           if (editor !== undefined) {
-            editor.status.textContent = `Choose an intended quantity from 1 to ${uiMaxAssociationQuantity}.`;
+            editor.status.textContent =
+              'Choose an intended quantity from 1 to ' +
+              `${access.constraints.quantity.association}.`;
           }
           return;
         }
@@ -1939,8 +1945,9 @@ async function readAssociationCopies(
     ),
   ];
   const copies = new Map<string, PhysicalCopy>();
-  for (let index = 0; index < ids.length; index += UI_LIMITS.copyBatch) {
-    const batch = ids.slice(index, index + UI_LIMITS.copyBatch);
+  const batchSize = access.constraints.batch.references;
+  for (let index = 0; index < ids.length; index += batchSize) {
+    const batch = ids.slice(index, index + batchSize);
     const read = await access.readCopies(batch, signal);
     for (const copy of read.copies.values()) {
       copies.set(copy.copyId, copy);
@@ -1955,8 +1962,8 @@ async function resolvePrintings(
   printingIds: readonly string[],
 ): Promise<ReadonlyMap<string, PrintingRecord>> {
   const printings = new Map<string, PrintingRecord>();
-  for (let index = 0; index < printingIds.length; index += UI_LIMITS.copyBatch) {
-    const batch = printingIds.slice(index, index + UI_LIMITS.copyBatch);
+  for (let index = 0; index < printingIds.length; index += UI_LIMITS.catalogResolveBatch) {
+    const batch = printingIds.slice(index, index + UI_LIMITS.catalogResolveBatch);
     const resolution = await catalog.resolve(
       batch.map((printingId) => ({ kind: 'printing' as const, printingId })),
     );
@@ -1973,8 +1980,8 @@ async function resolveCards(
   cardIds: readonly string[],
 ): Promise<ReadonlyMap<string, CardRecord>> {
   const cards = new Map<string, CardRecord>();
-  for (let index = 0; index < cardIds.length; index += UI_LIMITS.copyBatch) {
-    const batch = cardIds.slice(index, index + UI_LIMITS.copyBatch);
+  for (let index = 0; index < cardIds.length; index += UI_LIMITS.catalogResolveBatch) {
+    const batch = cardIds.slice(index, index + UI_LIMITS.catalogResolveBatch);
     const resolution = await catalog.resolve(
       batch.map((cardId) => ({ kind: 'card' as const, cardId })),
     );
@@ -2171,11 +2178,9 @@ function readDraftValue(value: unknown, bound: number): string | null {
 }
 
 /** The intended quantity one control names, or null when it is not a bounded positive number. */
-function readQuantity(input: HTMLInputElement): number | null {
+function readQuantity(input: HTMLInputElement, bound: number): number | null {
   const value = Number(input.value);
-  return Number.isSafeInteger(value) && value >= 1 && value <= uiMaxAssociationQuantity
-    ? value
-    : null;
+  return Number.isSafeInteger(value) && value >= 1 && value <= bound ? value : null;
 }
 
 /** Reads one tag, or null when this account has none with that identity. */
@@ -2230,12 +2235,17 @@ function textInput(document: Document, id: string, value: string): HTMLInputElem
   return element;
 }
 
-function numberInput(document: Document, id: string, value: string): HTMLInputElement {
+function numberInput(
+  document: Document,
+  id: string,
+  value: string,
+  bound: number,
+): HTMLInputElement {
   const element = document.createElement('input');
   element.id = id;
   element.type = 'number';
   element.min = '1';
-  element.max = String(uiMaxAssociationQuantity);
+  element.max = String(bound);
   element.value = value;
   return element;
 }

@@ -802,8 +802,7 @@ function readCapabilities(value: unknown): UserInterfaceCapabilities {
     readObject(record.settings) === null ||
     typeof readObject(record.catalog)?.resolve !== 'function' ||
     typeof readObject(record.search)?.execute !== 'function' ||
-    typeof userCards?.readCopies !== 'function' ||
-    typeof userCards.correctCopy !== 'function' ||
+    typeof userCards?.account !== 'function' ||
     typeof request !== 'function' ||
     typeof (request as { endSession?: unknown }).endSession !== 'function'
   ) {
