@@ -90,7 +90,7 @@ const binderTag: UserCardsPublishedRecord = {
 };
 
 /** One published copy of the printing, in the location the case names. */
-function boltCopy(locationId: string | null): UserCardsPublishedRecord {
+function boltCopy(locationId: string | null): Extract<UserCardsPublishedRecord, { kind: 'copy' }> {
   return {
     kind: 'copy',
     copy: {
@@ -408,6 +408,201 @@ describe('search indexing over overlapping runs', () => {
       await first.query('select account_id, position from search_private.account_checkpoint'),
     ).toEqual([{ account_id: accountId, position: '8' }]);
   });
+
+  it.for(['catalog', 'private', 'account bootstrap'] as const)(
+    'preserves concurrent served %s progress when publishing a replacement',
+    async (kind, context) => {
+      if (unavailable !== '') {
+        context.skip(`A real PostgreSQL server is unavailable: ${unavailable}`);
+        return;
+      }
+      if (first === undefined || second === undefined) {
+        throw new Error('The two-connection harness was not opened.');
+      }
+      await indexerOn(first).index({ accounts: kind === 'private' ? [accountId] : [] });
+      const serving = createPause();
+      const rebuilding = createPause();
+      const servedRun = indexerOn(first, {
+        holdStatement: 'from search_private.generation',
+        pause: serving,
+      }).index({ accounts: kind === 'catalog' ? [] : [accountId] });
+      await serving.reached;
+      const rebuildRun = indexerOn(second, {
+        holdStatement: ')::int as unresolved',
+        pause: rebuilding,
+      }).index({ rebuild: true });
+      await rebuilding.reached;
+
+      if (kind === 'catalog') {
+        catalog.publish(
+          cardChange('11', 'revision-2', 'Lightning Bolt (r2)'),
+          catalogRevisionChange('12', 'revision-2'),
+        );
+      } else if (kind === 'private') {
+        alice.publish(copyChange('5', '2', boltCopy(null)), accountRevisionChange('6', '2'));
+      }
+      serving.resume();
+      const served = await servedRun.finally(() => rebuilding.resume());
+      const replacement = await rebuildRun;
+
+      expect(served).toMatchObject({ published: true, caughtUp: true });
+      expect(replacement).toMatchObject({ published: true, caughtUp: true });
+      expect(replacement.generation).not.toBe(served.generation);
+      expect(replacement.catalog).toEqual(served.catalog);
+      expect(replacement.accounts).toEqual(served.accounts);
+      if (kind === 'catalog') {
+        expect(await second.query('select name from search.cards')).toEqual([
+          { name: 'Lightning Bolt (r2)' },
+        ]);
+      } else {
+        expect(await scopedCopies(second)).toEqual([
+          { copy_id: 'copy-alice-1', location_id: kind === 'private' ? null : 'tag-binder' },
+        ]);
+      }
+    },
+  );
+
+  it('catches up an account another run added to the unfinished replacement', async (context) => {
+    if (unavailable !== '') {
+      context.skip(`A real PostgreSQL server is unavailable: ${unavailable}`);
+      return;
+    }
+    if (first === undefined || second === undefined) {
+      throw new Error('The two-connection harness was not opened.');
+    }
+    await indexerOn(first).index();
+    const pause = createPause();
+    const rebuildRun = indexerOn(second, {
+      holdStatement: ')::int as unresolved',
+      pause,
+    }).index({ rebuild: true });
+    await pause.reached;
+    alice.publish(
+      copyChange('5', '2', boltCopy(null)),
+      accountRevisionChange('6', '2'),
+      copyChange('7', '3', boltCopy('tag-binder')),
+      accountRevisionChange('8', '3'),
+    );
+    const pending = await indexerOn(first)
+      .index({ accounts: [accountId], pageSize: 1, maxBatches: 1 })
+      .finally(() => pause.resume());
+    const replacement = await rebuildRun;
+    expect(pending).toMatchObject({ published: false, caughtUp: false });
+    expect(pending.accounts).toEqual([{ accountId, position: '6', caughtUp: false }]);
+    expect(replacement).toMatchObject({ published: true, caughtUp: true });
+    expect(replacement.accounts).toEqual([{ accountId, position: '8', caughtUp: true }]);
+    expect(await scopedCopies(second)).toEqual([
+      { copy_id: 'copy-alice-1', location_id: 'tag-binder' },
+    ]);
+  });
+
+  it.for(['incremental', 'snapshot'] as const)(
+    'keeps references resolved when a private %s races a catalog removal',
+    async (kind, context) => {
+      if (unavailable !== '') {
+        context.skip(`A real PostgreSQL server is unavailable: ${unavailable}`);
+        return;
+      }
+      if (first === undefined || second === undefined || server === undefined) {
+        throw new Error('The two-connection harness was not opened.');
+      }
+      const retainedPrinting: CatalogPublishedRecord = {
+        ...m11Printing,
+        printing: { ...m11Printing.printing, printingId: 'printing-retained' },
+      };
+      catalog.replaceSnapshot({
+        revision: revision('revision-1'),
+        position: '10',
+        records: [boltCard('Lightning Bolt'), boltName, m11Printing, retainedPrinting],
+      });
+      alice.replaceSnapshot({ position: '0', records: [] });
+      await indexerOn(first).index({ accounts: kind === 'incremental' ? [accountId] : [] });
+      const inserted = boltCopy(null);
+      if (kind === 'incremental') {
+        alice.publish(copyChange('1', '1', inserted), accountRevisionChange('2', '1'));
+      } else {
+        alice.replaceSnapshot({ position: '2', records: [inserted] });
+      }
+      const pause = createPause();
+      let privateWrite = false;
+      let held = false;
+      const privateIndexer = createSearchIndexer({
+        sql: second.transactor({
+          onStatement(statement) {
+            if (statement.includes('insert into search_private.copy')) privateWrite = true;
+          },
+          async beforeCommit() {
+            if (privateWrite && !held) {
+              held = true;
+              pause.markReached();
+              await pause.wait();
+            }
+          },
+        }),
+        catalog: catalog.publication,
+        userCards: alice.publication,
+      });
+      const privateRun = privateIndexer.index({ accounts: [accountId], maxBatches: 1 });
+      await pause.reached;
+      // The authoritative copy has already moved to a retained printing. The held transaction
+      // still carries the earlier publication, so deleting its printing must wait for its commit.
+      alice.publish(
+        copyChange('3', '2', {
+          ...inserted,
+          copy: { ...inserted.copy, printingId: 'printing-retained' },
+        }),
+        accountRevisionChange('4', '2'),
+      );
+      catalog.publish(
+        {
+          kind: 'printing',
+          position: '11',
+          revisionId: 'revision-2',
+          reference: { kind: 'printing', printingId: 'printing-m11-149-en' },
+          removed: true,
+          record: null,
+        },
+        catalogRevisionChange('12', 'revision-2'),
+      );
+      const [{ pid } = {}] = await first.query('select pg_backend_pid() as pid');
+      const observer = await server.connect();
+      let removalFinished = false;
+      const removalRun = indexerOn(first)
+        .index()
+        .finally(() => {
+          removalFinished = true;
+        });
+      try {
+        // Observe actual lock contention, or the unsafe commit in the unfixed implementation.
+        await expect
+          .poll(async () => {
+            const rows = await observer.query(
+              'select cardinality(pg_blocking_pids($1::int)) > 0 as blocked',
+              [pid],
+            );
+            return removalFinished || rows[0]?.blocked === true;
+          })
+          .toBe(true);
+      } finally {
+        pause.resume();
+        await observer.close();
+      }
+      const [removal] = await Promise.all([removalRun, privateRun]);
+      expect(removal.catalog).toEqual({
+        position: '10',
+        revisionId: 'revision-1',
+        caughtUp: false,
+      });
+      expect(removal.unresolvedReferences).toBe(0);
+      await indexerOn(first).index({ accounts: [accountId] });
+      const complete = await indexerOn(first).index({ accounts: [accountId] });
+      expect(complete).toMatchObject({ published: true, caughtUp: true, unresolvedReferences: 0 });
+      expect(complete.catalog.position).toBe('12');
+      expect(await first.query('select printing_id from search.printings')).toEqual([
+        { printing_id: 'printing-retained' },
+      ]);
+    },
+  );
 
   it('moves a run whose generation was replaced onto the current generation', async (context) => {
     if (unavailable !== '') {

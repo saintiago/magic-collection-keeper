@@ -610,40 +610,153 @@ describe('search indexing', () => {
     ).toEqual([{ copy_id: 'copy-alice-1' }, { copy_id: 'copy-alice-2' }]);
   });
 
-  it('holds a catalog removal pending while a private record still references it', async () => {
-    await indexer.index({ accounts: [accountId] });
+  it.each([1, 2, 3, 500])(
+    'converges when an addition, private correction and removal cross page size %i',
+    async (pageSize) => {
+      await indexer.index({ accounts: [accountId] });
+      catalog.publish(
+        catalogCardChange('11', 'revision-2', staPrinting),
+        catalogRevisionChange('12', 'revision-2'),
+        catalogCardChange('13', 'revision-3', m11Printing, true),
+        catalogRevisionChange('14', 'revision-3'),
+      );
+      alice.publish(
+        copyChange(
+          '5',
+          '2',
+          {
+            ...staCopy,
+            copy: { ...staCopy.copy, copyId: 'copy-alice-1' },
+          },
+          'copy-alice-1',
+        ),
+        accountRevisionChange('6', '2'),
+      );
 
-    // The catalog drops the card the account's copy belongs to through its printing.
-    catalog.publish(
-      catalogCardChange('11', 'revision-2', boltCard, true),
-      catalogRevisionChange('12', 'revision-2'),
-    );
+      const pending = await indexer.index({ accounts: [accountId], pageSize });
+      expect(pending.catalog).toEqual({
+        position: '12',
+        revisionId: 'revision-2',
+        caughtUp: false,
+      });
+      expect(pending.accounts).toEqual([{ accountId, position: '6', caughtUp: true }]);
+      expect(pending.unresolvedReferences).toBe(0);
 
-    const pending = await indexer.index({ accounts: [accountId] });
+      const complete = await indexer.index({ accounts: [accountId], pageSize });
+      expect(complete).toMatchObject({ published: true, caughtUp: true, unresolvedReferences: 0 });
+      expect(complete.catalog.position).toBe('14');
+      expect(await database.query('select printing_id from search.printings')).toEqual([
+        { printing_id: 'printing-sta-109-en' },
+      ]);
+      expect(await readScoped(accountId, 'select copy_id, printing_id from search.copies')).toEqual(
+        [{ copy_id: 'copy-alice-1', printing_id: 'printing-sta-109-en' }],
+      );
+    },
+  );
 
-    expect(pending).toMatchObject({ published: true, caughtUp: false, unresolvedReferences: 0 });
-    expect(pending.catalog).toEqual({ position: '10', revisionId: 'revision-1', caughtUp: false });
-    // The previous usable facts stay queryable while the removal is pending.
-    expect(await database.query('select card_id from search.cards')).toEqual([
-      { card_id: 'oracle-bolt' },
-    ]);
-    expect(await readScoped(accountId, 'select copy_id from search.copies')).toEqual([
-      { copy_id: 'copy-alice-1' },
-    ]);
+  it.each([1, 3, 500])(
+    'commits a resolving private correction before a pending private addition at page size %i',
+    async (pageSize) => {
+      catalog.replaceSnapshot({
+        revision: revision('revision-1'),
+        position: '10',
+        records: [boltCard, boltName, m11Printing, staPrinting],
+      });
+      await indexer.index({ accounts: [accountId] });
+      const newPrinting: CatalogPublishedRecord = {
+        ...staPrinting,
+        printing: { ...staPrinting.printing, printingId: 'printing-new' },
+      };
+      catalog.publish(
+        catalogCardChange('11', 'revision-2', m11Printing, true),
+        catalogRevisionChange('12', 'revision-2'),
+        catalogCardChange('13', 'revision-3', newPrinting),
+        catalogRevisionChange('14', 'revision-3'),
+      );
+      alice.publish(
+        copyChange(
+          '5',
+          '2',
+          {
+            ...staCopy,
+            copy: { ...staCopy.copy, copyId: 'copy-alice-1' },
+          },
+          'copy-alice-1',
+        ),
+        accountRevisionChange('6', '2'),
+        copyChange(
+          '7',
+          '3',
+          {
+            ...staCopy,
+            copy: { ...staCopy.copy, printingId: 'printing-new' },
+          },
+          'copy-alice-2',
+        ),
+        accountRevisionChange('8', '3'),
+      );
 
-    // A later publication restores the card, so the pending removal and the restore apply together.
-    catalog.publish(
-      catalogCardChange('13', 'revision-2', boltCard),
-      catalogRevisionChange('14', 'revision-2'),
-    );
+      const pending = await indexer.index({ accounts: [accountId], pageSize });
+      expect(pending.catalog.position).toBe('10');
+      expect(pending.accounts).toEqual([{ accountId, position: '6', caughtUp: false }]);
+      expect(pending.unresolvedReferences).toBe(0);
+      const complete = await indexer.index({ accounts: [accountId], pageSize });
+      expect(complete).toMatchObject({ published: true, caughtUp: true, unresolvedReferences: 0 });
+      expect(complete.catalog.position).toBe('14');
+      expect(complete.accounts).toEqual([{ accountId, position: '8', caughtUp: true }]);
+      expect(
+        await readScoped(
+          accountId,
+          'select copy_id, printing_id from search.copies order by copy_id',
+        ),
+      ).toEqual([
+        { copy_id: 'copy-alice-1', printing_id: 'printing-sta-109-en' },
+        { copy_id: 'copy-alice-2', printing_id: 'printing-new' },
+      ]);
+    },
+  );
 
-    const applied = await indexer.index({ accounts: [accountId] });
+  it.each([1, 2, 500])(
+    'holds a catalog removal pending until a later page resolves it (%i)',
+    async (pageSize) => {
+      await indexer.index({ accounts: [accountId], pageSize });
 
-    expect(applied.catalog).toEqual({ position: '14', revisionId: 'revision-2', caughtUp: true });
-    expect(await database.query('select card_id from search.cards')).toEqual([
-      { card_id: 'oracle-bolt' },
-    ]);
-  });
+      // The catalog drops the card the account's copy belongs to through its printing.
+      catalog.publish(
+        catalogCardChange('11', 'revision-2', boltCard, true),
+        catalogRevisionChange('12', 'revision-2'),
+      );
+
+      const pending = await indexer.index({ accounts: [accountId], pageSize });
+
+      expect(pending).toMatchObject({ published: true, caughtUp: false, unresolvedReferences: 0 });
+      expect(pending.catalog).toEqual({
+        position: '10',
+        revisionId: 'revision-1',
+        caughtUp: false,
+      });
+      // The previous usable facts stay queryable while the removal is pending.
+      expect(await database.query('select card_id from search.cards')).toEqual([
+        { card_id: 'oracle-bolt' },
+      ]);
+      expect(await readScoped(accountId, 'select copy_id from search.copies')).toEqual([
+        { copy_id: 'copy-alice-1' },
+      ]);
+
+      // A later publication restores the card, so the pending removal and the restore apply together.
+      catalog.publish(
+        catalogCardChange('13', 'revision-2', boltCard),
+        catalogRevisionChange('14', 'revision-2'),
+      );
+
+      const applied = await indexer.index({ accounts: [accountId], pageSize });
+
+      expect(applied.catalog).toEqual({ position: '14', revisionId: 'revision-2', caughtUp: true });
+      expect(await database.query('select card_id from search.cards')).toEqual([
+        { card_id: 'oracle-bolt' },
+      ]);
+    },
+  );
 
   it('keeps the accounts of an unfinished generation when its position expired', async () => {
     alice.replaceSnapshot({ position: '4', records: [binderTag, boltCopy, staCopy] });
