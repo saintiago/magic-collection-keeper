@@ -34,33 +34,49 @@ const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const harnessPath = path.join(repoRoot, 'tests', 'browser', 'collection.harness.ts');
 const collectionPageHtml = '<!doctype html><html><body><div id="ui-root"></div></body></html>';
 
+const replacementPath = path.join(repoRoot, 'tests', 'browser', 'replacement-modules.ts');
+
 let bundle: Promise<string> | null = null;
+let replacementBundle: Promise<string> | null = null;
 
 /** Bundles the collection pages with the journey harness, as a deployment bundles the UI. */
 function collectionBundle(): Promise<string> {
-  bundle ??= (async () => {
-    const result = await build({
-      stdin: {
-        contents: [
-          `import { installCollectionHarness } from ${JSON.stringify(harnessPath)};`,
-          "globalThis.keeperCollectionControl = installCollectionHarness(document.getElementById('ui-root'));",
-        ].join('\n'),
-        resolveDir: repoRoot,
-        sourcefile: 'collection-consumer.ts',
-        loader: 'ts',
-      },
-      bundle: true,
-      format: 'esm',
-      platform: 'browser',
-      write: false,
-    });
-    const [output] = result.outputFiles ?? [];
-    if (output === undefined) {
-      throw new Error('esbuild produced no browser bundle.');
-    }
-    return output.text;
-  })();
+  bundle ??= bundleOf([
+    `import { installCollectionHarness } from ${JSON.stringify(harnessPath)};`,
+    "globalThis.keeperCollectionControl = installCollectionHarness(document.getElementById('ui-root'));",
+  ]);
   return bundle;
+}
+
+/** The same pages over a replacement CardViews module (docs/ui/architecture.md#replacement-check). */
+function replacementCollectionBundle(): Promise<string> {
+  replacementBundle ??= bundleOf([
+    `import { installCollectionHarness } from ${JSON.stringify(harnessPath)};`,
+    `import { replacementModules } from ${JSON.stringify(replacementPath)};`,
+    "globalThis.keeperCollectionControl = installCollectionHarness(document.getElementById('ui-root'), replacementModules());",
+  ]);
+  return replacementBundle;
+}
+
+/** Bundles one journey entry as a deployment bundles the UI. */
+async function bundleOf(lines: readonly string[]): Promise<string> {
+  const result = await build({
+    stdin: {
+      contents: lines.join('\n'),
+      resolveDir: repoRoot,
+      sourcefile: 'collection-consumer.ts',
+      loader: 'ts',
+    },
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    write: false,
+  });
+  const [output] = result.outputFiles ?? [];
+  if (output === undefined) {
+    throw new Error('esbuild produced no browser bundle.');
+  }
+  return output.text;
 }
 
 /** Serves a fresh document for the collection pages, enters it at `hash` and loads the UI. */
@@ -74,6 +90,21 @@ async function openCollection(page: Page, hash: string): Promise<string[]> {
   );
   await page.goto(`http://keeper-collection.test/${hash}`);
   await page.addScriptTag({ content: await collectionBundle(), type: 'module' });
+  await page.waitForFunction(() => Reflect.has(globalThis, 'keeperCollectionControl'));
+  return errors;
+}
+
+/** Serves a fresh document for the collection pages over a replacement module. */
+async function openReplacementCollection(page: Page, hash: string): Promise<string[]> {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => {
+    errors.push(String(error));
+  });
+  await page.route('http://keeper-collection.test/**', (route) =>
+    route.fulfill({ contentType: 'text/html', body: collectionPageHtml }),
+  );
+  await page.goto(`http://keeper-collection.test/${hash}`);
+  await page.addScriptTag({ content: await replacementCollectionBundle(), type: 'module' });
   await page.waitForFunction(() => Reflect.has(globalThis, 'keeperCollectionControl'));
   return errors;
 }
@@ -299,6 +330,12 @@ async function settleCard(
     },
     { id: cardId, value: records },
   );
+}
+
+/** Chooses one printing through the copy form's picker: select the entry and choose it. */
+async function choosePrinting(page: Page, printingId: string): Promise<void> {
+  await page.locator(`#copy-printing-picker [data-ui-select="printing:${printingId}"]`).check();
+  await page.locator('#copy-printing-picker [data-ui-tool="choose-printing"]').click();
 }
 
 /** One owned card entry of the collection result, with its evaluated counts. */
@@ -925,9 +962,7 @@ test('leaving and returning keeps the collection selection and the unsaved copy 
   expect(errors).toEqual([]);
 });
 
-test('a returned copy keeps the printing, language and finish its draft intends', async ({
-  page,
-}) => {
+test('a returned copy keeps the printing and finish its draft intends', async ({ page }) => {
   const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
   await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
   await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
@@ -936,10 +971,11 @@ test('a returned copy keeps the printing, language and finish its draft intends'
 
   // A second page offers a foil-only printing of another language.
   const foilOnly = { ...printingRecord('printing-2'), language: 'es', finishes: ['foil'] as const };
-  await page.locator('#copy-printings-more').click();
+  await page.locator('#copy-printing-picker [data-ui-more]').click();
   await settlePrintings(page, (await printingsRequest(page, 1))!.id, [foilOnly], null);
-  await page.locator('#copy-language').selectOption('es');
-  await page.locator('#copy-printing-choice').selectOption('printing-2');
+  await choosePrinting(page, 'printing-2');
+  // The form reads the chosen printing's record, so the finish control follows its finishes.
+  await settlePrinting(page, 'printing-2', { printings: [foilOnly] });
   await page.locator('#copy-finish-choice').selectOption('foil');
 
   // Leaving for the card level and returning keeps the draft while its data loads again.
@@ -962,17 +998,15 @@ test('a returned copy keeps the printing, language and finish its draft intends'
     'cursor-2',
   );
 
-  // The first page knows neither the printing, its language nor its finish: the draft stays.
-  await expect(page.locator('#copy-language')).toHaveValue('es');
-  await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-2');
+  // The loaded first page does not carry the intended printing: the draft stays, named by its own
+  // identity until the record that describes it arrives.
+  await expect(page.locator('#copy-printing-line')).toHaveText('Printing printing-2');
   await expect(page.locator('#copy-finish-choice')).toHaveValue('foil');
   await expect(page.locator('#copy-condition-choice')).toHaveValue('NM');
 
-  // Once its record loads again the intended printing is presented by its published data.
-  await page.locator('#copy-printings-more').click();
-  await settlePrintings(page, (await printingsRequest(page, 4))!.id, [foilOnly], null);
-  await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-2');
-  await expect(page.locator('#copy-printing-choice option:checked')).toHaveText('M11 149 · es');
+  // Once its record loads the intended printing is presented by its published data.
+  await settlePrinting(page, 'printing-2', { printings: [foilOnly] });
+  await expect(page.locator('#copy-printing-line')).toHaveText('M11 149 · es');
   await expect(page.locator('#copy-finish-choice')).toHaveValue('foil');
   expect(errors).toEqual([]);
 });
@@ -991,19 +1025,18 @@ test('an initial printing-list failure is reported and retried from the copy lev
   });
 
   // The failure stays presented beside its retry, and the copy's own printing stays correctable.
-  await expect(page.locator('#copy-printings-status')).toHaveText(
+  await expect(page.locator('#copy-printing-picker [data-ui-status]')).toHaveText(
     'The printings could not be loaded.',
   );
-  await expect(page.locator('#copy-printings-more')).toHaveText('Retry printings');
-  await expect(page.locator('#copy-printings-more')).toBeVisible();
-  await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-1');
+  await expect(page.locator('#copy-printing-picker [data-ui-retry]')).toBeVisible();
+  await expect(page.locator('#copy-printing-line')).toHaveText('M11 149 · en');
 
-  await page.locator('#copy-printings-more').click();
+  await page.locator('#copy-printing-picker [data-ui-retry]').click();
   const retried = await printingsRequest(page, 1);
   await settlePrintings(page, retried!.id, [printingRecord('printing-2')], null);
-  await expect(page.locator('#copy-printings-status')).toHaveText('');
-  await expect(page.locator('#copy-printings-more')).toBeHidden();
-  await expect(page.locator('#copy-printing-choice option')).toHaveCount(2);
+  await expect(page.locator('#copy-printing-picker [data-ui-status]')).toHaveText('');
+  await expect(page.locator('#copy-printing-picker [data-ui-retry]')).toBeHidden();
+  await expect(page.locator('#copy-printing-picker [data-ui-entry]')).toHaveCount(1);
   expect(errors).toEqual([]);
 });
 
@@ -1014,18 +1047,18 @@ test('the copy printing window stays bounded while the user pages through it', a
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
   await settlePrintings(page, (await printingsRequest(page))!.id, printingBatch(1), 'cursor-1');
 
-  // Six bounded catalog pages are offered one after another.
+  // Six bounded catalog pages are offered one after another through the list's own window.
   for (let pageIndex = 2; pageIndex <= 6; pageIndex += 1) {
-    await page.locator('#copy-printings-more').click();
+    await page.locator('#copy-printing-picker [data-ui-more]').click();
     const request = await printingsRequest(page, pageIndex - 1);
     expect(request?.options.continuation).toBe(`cursor-${pageIndex - 1}`);
     const next = pageIndex === 6 ? null : `cursor-${pageIndex}`;
     await settlePrintings(page, request!.id, printingBatch(pageIndex), next);
   }
 
-  // The window retires the oldest printings beyond the working set, keeping the copy's own one.
-  await expect(page.locator('#copy-printing-choice option')).toHaveCount(501);
-  await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-1');
+  // The window retires the oldest printings beyond its own bound.
+  await expect(page.locator('#copy-printing-picker [data-ui-entry]')).toHaveCount(500);
+  await expect(page.locator('#copy-printing-line')).toHaveText('M11 149 · en');
   expect(errors).toEqual([]);
 });
 
@@ -1040,7 +1073,7 @@ test('an expired catalog page restarts the copy printing offer from its first pa
   await page.locator('#copy-condition-choice').selectOption('MP');
 
   // The catalog published a revision since that page was read, so the cursor is unusable.
-  await page.locator('#copy-printings-more').click();
+  await page.locator('#copy-printing-picker [data-ui-more]').click();
   const expired = await printingsRequest(page, 1);
   expect(expired?.options.continuation).toBe('cursor-2');
   await failPrintings(page, expired!.id, (await organizationContinuationFailures()).printings);
@@ -1051,18 +1084,18 @@ test('an expired catalog page restarts the copy printing offer from its first pa
   expect(restarted?.cardId).toBe('card-1');
   expect(restarted?.options.continuation).toBeUndefined();
   await settlePrintings(page, restarted!.id, [printingRecord()], 'cursor-3');
-  await expect(page.locator('#copy-printings-status')).toHaveText('');
-  await expect(page.locator('#copy-printings-more')).toHaveText('More printings');
-  await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-1');
+  await expect(page.locator('#copy-printing-picker [data-ui-status]')).toHaveText('');
+  await expect(page.locator('#copy-printing-picker [data-ui-more]')).toBeVisible();
+  await expect(page.locator('#copy-printing-line')).toHaveText('M11 149 · en');
   await expect(page.locator('#copy-condition-choice')).toHaveValue('MP');
 
   // The restarted page's continuation is the one further pages are read with.
-  await page.locator('#copy-printings-more').click();
+  await page.locator('#copy-printing-picker [data-ui-more]').click();
   const next = await printingsRequest(page, 3);
   expect(next?.options.continuation).toBe('cursor-3');
   await settlePrintings(page, next!.id, [printingRecord('printing-2')], null);
-  await expect(page.locator('#copy-printing-choice option')).toHaveCount(2);
-  await expect(page.locator('#copy-printings-more')).toBeHidden();
+  await expect(page.locator('#copy-printing-picker [data-ui-entry]')).toHaveCount(2);
+  await expect(page.locator('#copy-printing-picker [data-ui-more]')).toBeHidden();
   expect(errors).toEqual([]);
 });
 
@@ -1075,7 +1108,7 @@ test('a failed restart of the copy printing offer keeps its retry on the first p
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
   await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], 'cursor-2');
 
-  await page.locator('#copy-printings-more').click();
+  await page.locator('#copy-printing-picker [data-ui-more]').click();
   const expired = await printingsRequest(page, 1);
   await failPrintings(page, expired!.id, (await organizationContinuationFailures()).printings);
   const restarted = await printingsRequest(page, 2);
@@ -1085,17 +1118,84 @@ test('a failed restart of the copy printing offer keeps its retry on the first p
   });
 
   // The unusable cursor is not retained: the retry the failure leaves behind starts the list again.
-  await expect(page.locator('#copy-printings-status')).toHaveText(
+  await expect(page.locator('#copy-printing-picker [data-ui-status]')).toHaveText(
     'The printings could not be loaded.',
   );
-  await expect(page.locator('#copy-printings-more')).toHaveText('Retry printings');
-  await page.locator('#copy-printings-more').click();
+  await page.locator('#copy-printing-picker [data-ui-retry]').click();
   const retried = await printingsRequest(page, 3);
   expect(retried?.options.continuation).toBeUndefined();
   await settlePrintings(page, retried!.id, [printingRecord('printing-2')], null);
-  await expect(page.locator('#copy-printings-status')).toHaveText('');
-  await expect(page.locator('#copy-printings-more')).toBeHidden();
-  await expect(page.locator('#copy-printing-choice')).toHaveValue('printing-1');
+  await expect(page.locator('#copy-printing-picker [data-ui-status]')).toHaveText('');
+  await expect(page.locator('#copy-printing-picker [data-ui-retry]')).toBeHidden();
+  await expect(page.locator('#copy-printing-line')).toHaveText('M11 149 · en');
+  expect(errors).toEqual([]);
+});
+
+test('choosing a printing reports the selection without claiming a committed change', async ({
+  page,
+}) => {
+  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], null);
+
+  await choosePrinting(page, 'printing-1');
+
+  // The picker reports the explicit selection the owner made and presents no outcome of its own:
+  // a selection is not a provider-committed change, so nothing claims that one was saved
+  // (docs/ui/cardviews.md#interface, docs/ui/editors.md#interface).
+  await expect(page.locator('#copy-printing-line')).toHaveText('M11 149 · en');
+  await expect(page.locator('#copy-printing-picker [data-ui-outcome]')).toHaveCount(0);
+  await expect(page.locator('#copy-printing-picker')).not.toContainText('Saved');
+  await expect(page.locator('#copy-status')).toHaveText('');
+  expect(errors).toEqual([]);
+});
+
+test('presents details, lists and printing choices through the supplied CardViews module', async ({
+  page,
+}) => {
+  const errors = await openReplacementCollection(page, '#/cards/card-1/printing-1');
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+
+  // The printing level renders through the supplied module: the page composes its routes and
+  // layout around the detail view it receives (docs/ui/cardviews.md#interface).
+  await expect(page.locator('#card-details-content [data-ui-replacement-detail]')).toHaveText(
+    'REPLACEMENT DETAIL',
+  );
+  await expect(page.locator('#printing-name')).toHaveText('Lightning Bolt');
+  await expect(page.locator('#printing-line')).toHaveText('M11 149 · en');
+
+  // The card level composes its printing list beside the supplied detail as well.
+  await page.locator('#printing-card-link').click();
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], null);
+  await expect(page.locator('#card-details-content [data-ui-replacement-detail]')).toHaveText(
+    'REPLACEMENT DETAIL',
+  );
+  await expect(page.locator('#card-printings [data-ui-entry]')).toHaveCount(1);
+
+  // The copy level requests its printing choices through the supplied picker.
+  await page.evaluate(() =>
+    (
+      globalThis as unknown as { keeperCollectionControl: UiCollectionControl }
+    ).keeperCollectionControl.navigate({
+      page: 'card',
+      cardId: 'card-1',
+      printingId: 'printing-1',
+      copyId: 'copy-1',
+    }),
+  );
+  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(page, (await printingsRequest(page, 1))!.id, [printingRecord()], null);
+  await expect(page.locator('#copy-printing-picker [data-ui-replacement-picker]')).toHaveText(
+    'REPLACEMENT PICKER',
+  );
+  await choosePrinting(page, 'printing-1');
+  await expect(page.locator('#copy-printing-line')).toHaveText('M11 149 · en');
   expect(errors).toEqual([]);
 });
 

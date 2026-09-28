@@ -14,7 +14,7 @@
  * committed (docs/user-interface.md#browsing-and-organization).
  */
 
-import type { UiOperationOutcome, UiActionRequest } from '../../shared/actions.js';
+import type { UiActionRequest, UiOperationAction, UiOperationOutcome } from './operations.js';
 
 import type {
   UserCardsAccountOperations,
@@ -351,12 +351,8 @@ async function moveCopyLocation(
  * the outcome of the whole selection; partial work is never reported as saved
  * (docs/user-interface.md#browsing-and-organization).
  */
-export interface UiAddToTagTool {
-  readonly id: string;
-  readonly label: string;
-  readonly tool: {
-    invoke(request: UiActionRequest): Promise<UiAddOutcome>;
-  };
+export interface UiAddToTagTool extends UiOperationAction {
+  apply(request: UiActionRequest): Promise<UiAddOutcome>;
 }
 
 /**
@@ -385,10 +381,8 @@ export function addToTagTool(options: {
   return {
     id: options.id,
     label: options.label,
-    tool: {
-      invoke(request: UiActionRequest): Promise<UiAddOutcome> {
-        return addSelection(options, request);
-      },
+    apply(request: UiActionRequest): Promise<UiAddOutcome> {
+      return addSelection(options, request);
     },
   };
 }
@@ -406,7 +400,7 @@ async function addSelection(
       unknown: 0,
     };
   }
-  if (request.targets.length === 0) {
+  if (request.selection.targets.length === 0) {
     return {
       status: 'failed',
       message: 'Select the entries to add.',
@@ -417,14 +411,14 @@ async function addSelection(
   const quantity = options.quantity();
   const counts = { committed: 0, conflict: 0, failed: 0, unknown: 0 };
   const failures: string[] = [];
-  for (const target of request.targets) {
+  for (const target of request.selection.targets) {
     const outcome = await addTarget(options.access, tag, target, quantity, request.signal);
     counts[outcome.status] += 1;
     if (outcome.status !== 'committed' && outcome.message !== null) {
       failures.push(outcome.message);
     }
   }
-  return addOutcome(counts, failures, request.targets.length, options.guidance);
+  return addOutcome(counts, failures, request.selection.targets.length, options.guidance);
 }
 
 /** Adds one selected target to the tag; a location holds copies through their location move. */

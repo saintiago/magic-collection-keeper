@@ -42,6 +42,7 @@ import {
   type UiIdentity,
   type UserInterface,
 } from '../../src/ui/index.js';
+import type { UiPresentationModules } from '../../src/ui/internal/composition.js';
 
 import { browserAttemptStorage, unusedUserCardsClient } from './unused-usercards.js';
 import { unusedCapture } from './unused-capture.js';
@@ -160,8 +161,14 @@ function sameReference(left: CatalogReference, right: CatalogReference): boolean
   return false;
 }
 
-/** Installs the collection pages into `root`; identity starts signed in. */
-export function installCollectionHarness(root: Element | null): UiCollectionControl {
+/**
+ * Installs the collection pages into `root`; identity starts signed in. `modules` supplies a
+ * replacement presentation, so a journey can prove the pages consume what it is given.
+ */
+export function installCollectionHarness(
+  root: Element | null,
+  modules?: UiPresentationModules,
+): UiCollectionControl {
   if (root === null) {
     throw new Error('The collection journey needs its root element.');
   }
@@ -288,6 +295,7 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
     capabilities,
     identity,
     pages: createCollectionPages(),
+    ...(modules === undefined ? {} : { modules }),
   });
 
   function report(next: UiAccount | null): void {

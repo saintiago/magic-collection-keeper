@@ -214,7 +214,9 @@ export function createCardDetailsPage(): UiPageDefinition {
           document,
           access: copies,
           catalog,
-          cardId,
+          cardList: context.capabilities.cardList,
+          cardViews: context.modules.cardViews,
+          accountId: context.account.accountId,
           copy,
           card,
           printing,
@@ -263,36 +265,26 @@ export function createCardDetailsPage(): UiPageDefinition {
           signal: context.signal,
         });
         printings = list;
+        const detail = context.modules.cardViews.detail({
+          document,
+          card,
+          printing: null,
+          content: [line('card-printings-label', 'Published printings'), host],
+          navigation: [collectionLinks(card)],
+        });
         return {
-          nodes: [
-            heading('card-name', card.name),
-            line('card-type', card.typeLine ?? 'Type not published'),
-            line('card-text', card.rulesText ?? 'No rules text published.'),
-            line('card-printings-label', 'Published printings'),
-            host,
-            collectionLinks(card),
-          ],
+          nodes: detail.nodes,
           restoration: restoredPresentation(list),
         };
       }
 
       function printingContent(card: CardRecord, printing: PrintingRecord): readonly Node[] {
-        const nodes: Node[] = [
-          heading('printing-name', card.name),
-          line('printing-line', printingLine(printing)),
-          line(
-            'printing-finishes',
-            printing.finishes.length === 0
-              ? 'No finish published'
-              : `Finishes: ${printing.finishes.join(', ')}`,
-          ),
-        ];
-        const image = printingImage(printing);
-        if (image !== null) {
-          nodes.push(image);
-        }
-        nodes.push(navigation([cardLink(card), collectionLink(card, 'copy')]));
-        return nodes;
+        return context.modules.cardViews.detail({
+          document,
+          card,
+          printing,
+          navigation: [navigation([cardLink(card), collectionLink(card, 'copy')])],
+        }).nodes;
       }
 
       function collectionLinks(card: CardRecord): Node {
@@ -323,13 +315,6 @@ export function createCardDetailsPage(): UiPageDefinition {
         copyId: string | null,
       ): UiView {
         return { page: 'card', cardId, printingId, copyId };
-      }
-
-      function heading(id: string, text: string): HTMLHeadingElement {
-        const element = document.createElement('h2');
-        element.id = id;
-        element.textContent = text;
-        return element;
       }
 
       function line(id: string, text: string): HTMLParagraphElement {
@@ -369,29 +354,8 @@ export function createCardDetailsPage(): UiPageDefinition {
         element.textContent = message;
         return element;
       }
-
-      function printingImage(printing: PrintingRecord): HTMLImageElement | null {
-        const src =
-          printing.images.normal ??
-          printing.images.small ??
-          printing.images.large ??
-          printing.images.artCrop;
-        if (src === null) {
-          return null;
-        }
-        const image = document.createElement('img');
-        image.id = 'printing-image';
-        image.src = src;
-        image.alt = printingLine(printing);
-        return image;
-      }
     },
   };
-}
-
-/** One printing as the page presents it: its edition, collector number and language. */
-function printingLine(printing: PrintingRecord): string {
-  return `${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
 }
 
 /** Resolves one card, or null when the published revision does not carry it. */
@@ -407,19 +371,17 @@ function readCopyDraft(state: Readonly<Record<string, unknown>> | null): UiCopyD
     return null;
   }
   const values = draft as Readonly<Record<string, unknown>>;
-  const language = values.language;
   const printingId = values.printingId;
   const finish = values.finish;
   const condition = values.condition;
   if (
-    typeof language !== 'string' ||
     typeof printingId !== 'string' ||
     typeof finish !== 'string' ||
     typeof condition !== 'string'
   ) {
     return null;
   }
-  return { language, printingId, finish, condition };
+  return { printingId, finish, condition };
 }
 
 function readMessage(cause: unknown, fallback: string): string {

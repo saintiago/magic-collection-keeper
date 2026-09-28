@@ -47,15 +47,19 @@ export {
 export {
   cardListBasicContent,
   createCardListView,
+  type UiActionIntent,
   type UiCardList,
   type UiCardListOptions,
   type UiCardListPresentation,
   type UiEntryImage,
   type UiEntryOwnership,
   type UiEntryTag,
+  type UiListAction,
 } from './card-views/index.js';
 export {
   createCardViews,
+  type CardViewDetail,
+  type CardViewDetailOptions,
   type CardViewEntryPresentation,
   type CardViewOpenOptions,
   type CardViewPickerChoice,
@@ -65,6 +69,7 @@ export {
 export type { UiDialogOptions, UiDialogs } from './internal/dialogs.js';
 export type { UiAccount, UiIdentity } from './internal/identity.js';
 export {
+  applyAction,
   beginSourceImport,
   confirmImport,
   createImportAccess,
@@ -78,10 +83,13 @@ export {
   uiImportCandidates,
   uiImportIdentity,
   uiImportSourceLabel,
+  type UiActionRequest,
   type UiImportAccess,
   type UiImportCandidate,
   type UiImportClient,
   type UiImportLine,
+  type UiOperationAction,
+  type UiOperationOutcome,
 } from './editors/index.js';
 export { createImportPages } from './internal/imports.js';
 export { UI_LIMITS } from './shared/limits.js';
@@ -98,6 +106,7 @@ export {
   createTag,
   createTagAccess,
   moveCopyById,
+  outcomeText,
   removeAssociation,
   renameTag,
   saveAssociation,

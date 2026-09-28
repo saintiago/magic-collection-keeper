@@ -45,7 +45,6 @@ function importPage(): UiPageDefinition {
         cardViews: context.modules.cardViews,
         accountId,
         catalog: context.capabilities.catalog,
-        search: context.capabilities.search,
         signal: context.signal,
       };
 

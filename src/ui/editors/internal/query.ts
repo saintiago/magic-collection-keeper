@@ -78,7 +78,7 @@ export function createSearchEntryEditor(options: UiSearchEntryEditorOptions): Ui
     event.preventDefault();
     options.onSubmit(input.value.trim());
   });
-  return {
+  const editor: UiSearchEntryEditor = {
     element: form,
     capture: () => ({ query: input.value }),
     restore(restored) {
@@ -87,6 +87,11 @@ export function createSearchEntryEditor(options: UiSearchEntryEditorOptions): Ui
       }
     },
   };
+  // The draft of a previous visit is presented as the entry is constructed; the page then keeps
+  // what the owner types rather than the value its route carried
+  // (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
+  editor.restore(readDraft(options.restored));
+  return editor;
 }
 
 export interface UiCatalogQueryEditorOptions {

@@ -1,18 +1,12 @@
 /**
- * Presentation of the UserCards browser operations the UserInterface presents and of the read
- * failures the list sources translate into their presentation contract
- * (docs/user-interface.md#browsing-and-organization,
- * docs/user-interface.md#list-boundary, docs/user-cards.md#browser-operation-lifecycle).
+ * Presentation of the UserCards browser operations the UserInterface presents
+ * (docs/user-interface.md#browsing-and-organization, docs/user-cards.md#browser-operation-lifecycle).
  *
  * The provider-owned operation handle decides whether a change committed, was rejected or stays
  * unknown; a view never infers that classification from a raw failure and keeps no list of failure
  * codes of its own. Only a committed outcome is presented as saved. A change whose outcome stays
  * unknown recovers through a read of the record, so a lost response is never presented as a saved
  * change while the record's current state stays reviewable.
- *
- * A rejected bounded read whose continuation bound the provider's revisions reports the same
- * outcome under Catalog's and Search's `stale-continuation` and under UserCards' `conflict`, so the
- * source bindings share one test for it instead of each interpreting those codes on its own.
  */
 
 import type { UserCardsOperation } from '../../../usercards/browser.js';
@@ -68,26 +62,6 @@ export async function commitUiOperation<Change, Record = Change>(
       record !== null ? 'The outcome is unknown. Review the record before retrying.' : unknown,
     record,
   };
-}
-
-/** Failure code of one rejected operation, or null when the cause carries none. */
-export function readUiFailureCode(cause: unknown): string | null {
-  if (typeof cause !== 'object' || cause === null) {
-    return null;
-  }
-  const code = Reflect.get(cause, 'code');
-  return typeof code === 'string' && code.length > 0 ? code : null;
-}
-
-/**
- * True when a rejected read reported that the revision its continuation named changed: the
- * sequence is invalidated and must restart from its first page rather than repeat the rejected
- * continuation (docs/user-interface.md#list-boundary). Only a source binding asks this, so CardList
- * itself stays independent of provider failure codes.
- */
-export function isUiInvalidatedContinuation(cause: unknown): boolean {
-  const code = readUiFailureCode(cause);
-  return code === 'conflict' || code === 'stale-continuation';
 }
 
 /** Message of one rejected operation, or the fallback when the cause carries none. */

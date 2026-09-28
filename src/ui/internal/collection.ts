@@ -53,6 +53,7 @@ function collectionPage(): UiPageDefinition {
       const changes = context.modules.editors.copyBulk({
         document,
         access: copies,
+        signal: context.signal,
         restored,
       });
       const heading = document.createElement('h2');
@@ -81,7 +82,8 @@ function collectionPage(): UiPageDefinition {
             .account(context.account.accountId)
             .copyTools(['apply-finish', 'apply-condition']),
         },
-        tools: changes.tools,
+        tools: changes.actions,
+        onAction: (intent) => changes.apply(intent),
         presentation: {
           ...context.modules.cardViews.openEntries({
             document,

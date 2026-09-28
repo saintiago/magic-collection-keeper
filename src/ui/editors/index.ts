@@ -70,12 +70,17 @@ export {
 } from './internal/import-edits.js';
 export {
   commitUiOperation,
-  isUiInvalidatedContinuation,
-  readUiFailureCode,
   readUiFailureMessage,
   type UiChangeCommit,
   type UiOperation,
 } from './internal/failure.js';
+export {
+  applyAction,
+  outcomeText,
+  type UiActionRequest,
+  type UiOperationAction,
+  type UiOperationOutcome,
+} from './internal/operations.js';
 export { createEditors, type Editors, type EditorsOptions } from './internal/editors.js';
 export {
   createCatalogQueryEditor,

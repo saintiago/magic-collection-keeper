@@ -12,7 +12,7 @@
  * contract.
  */
 
-import type { UiOperationOutcome } from '../../src/ui/shared/actions.js';
+import type { UiOperationOutcome } from '../../src/ui/index.js';
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -2505,20 +2505,12 @@ for (const availability of [false, true]) {
     expect((await capture(page, 'a')).selection).toEqual(['card:1', 'card:4']);
     const tool = page.locator('#list-a [data-ui-tool="move"]');
     await expect(tool).toBeDisabled();
-    expect(
-      await page.evaluate(() =>
-        (globalThis as unknown as GlobalControl).keeperCardListControl.invoke('a', 'move'),
-      ),
-    ).toBeNull();
+    // A disabled action reports nothing: the list never emits an intent over a partial selection.
     expect(await toolRequests(page)).toEqual([]);
 
     await failPage(page, (await lastRequest(page, 'a')).id, 'Unavailable');
     await expect(tool).toBeDisabled();
-    expect(
-      await page.evaluate(() =>
-        (globalThis as unknown as GlobalControl).keeperCardListControl.invoke('a', 'move'),
-      ),
-    ).toBeNull();
+    expect(await toolRequests(page)).toEqual([]);
     await page.locator('#list-a [data-ui-retry]').click();
     await settlePage(page, (await lastRequest(page, 'a')).id, [card('3'), card('4')]);
     if (availability) {

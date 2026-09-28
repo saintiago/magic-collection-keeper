@@ -33,7 +33,10 @@ const printingKeyPrefix = 'printing:';
  * continuation the catalog republished is reported as an invalidated sequence, so the list reads
  * the printings again from their first page instead of repeating an unusable cursor.
  */
-export function cardPrintingsSource(catalog: Catalog, card: CardRecord): CardListSource<string> {
+export function cardPrintingsSource(
+  catalog: Catalog,
+  card: Pick<CardRecord, 'cardId' | 'name'>,
+): CardListSource<string> {
   if (typeof catalog?.listCardPrintings !== 'function') {
     throw new TypeError('The card printings are read through the Catalog contract.');
   }
@@ -66,7 +69,10 @@ export function cardPrintingsSource(catalog: Catalog, card: CardRecord): CardLis
 }
 
 /** One published printing as the list protocol presents it. */
-export function printingEntry(card: CardRecord, printing: PrintingRecord): CardListEntry {
+export function printingEntry(
+  card: Pick<CardRecord, 'cardId' | 'name'>,
+  printing: PrintingRecord,
+): CardListEntry {
   return {
     key: `${printingKeyPrefix}${printing.printingId}`,
     target: { kind: 'printing', printingId: printing.printingId },

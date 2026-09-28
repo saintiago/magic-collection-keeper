@@ -14,7 +14,6 @@
 
 import type { CardListBrowser } from '../../../card-list/index.js';
 import type { Catalog, Finish, PrintingRecord } from '../../../catalog/index.js';
-import type { SearchClient } from '../../../application/index.js';
 import type { CaptureReviewChange } from '../../../capture/index.js';
 import type {
   ConfirmImportEntryInput,
@@ -30,8 +29,10 @@ import type {
   UserCardsSourceImportRequest,
 } from '../../../usercards/browser.js';
 
-import type { UiActionRequest, UiListAction, UiOperationOutcome } from '../../shared/actions.js';
+import type { UiActionIntent } from '../../shared/actions.js';
 import type { CardViews } from '../../card-views/index.js';
+import type { UiActionRequest, UiOperationAction, UiOperationOutcome } from './operations.js';
+import { applyAction, outcomeText } from './operations.js';
 import {
   button,
   controlLabel,
@@ -50,13 +51,14 @@ import { UI_LIMITS } from '../../shared/limits.js';
 import { readRetainedList, readState } from '../../shared/state.js';
 import {
   cardListEntryKey,
-  readableSearchPage,
   resolvePrintings,
   type CardListCatalogQuery,
+  type CardListPickerQuery,
   type CardListEntry,
   type CardListFragmentReader,
   type CardListPendingRecord,
   type CardListRetained,
+  type CardListToolSelection,
 } from '../../../card-list/index.js';
 import type { UiCardList } from '../../card-views/index.js';
 
@@ -89,7 +91,6 @@ import {
   knownPrinting,
   manualImport,
   printingLine,
-  printingSelect,
   readConditionValue,
   readFinishValue,
   readManualDraft,
@@ -134,8 +135,6 @@ export interface UiImportEditorContext {
   readonly accountId: string;
   /** Catalog the printing searches resolve through. */
   readonly catalog: Catalog;
-  /** Search the printing searches evaluate through. */
-  readonly search: SearchClient;
   /** Aborted when the view closes; late results must not change a replacement view. */
   readonly signal: AbortSignal;
 }
@@ -153,6 +152,68 @@ interface UiImportEntryEditor {
   readonly controls: HTMLSpanElement;
   readonly entry: CardListEntry;
   readonly status: HTMLParagraphElement;
+}
+
+/** One mounted printing picker of a pending entry and the region it presents in. */
+interface UiImportEntryPicker {
+  readonly host: HTMLElement;
+  readonly list: UiCardList<CardListPickerQuery>;
+}
+
+/** One focused control of a row a redraw keeps in place. */
+interface UiKeptFocus {
+  readonly id: string;
+  readonly value: string | null;
+  readonly start: number | null;
+  readonly end: number | null;
+}
+
+/** The focused control of one row, or null when the focus is elsewhere. */
+function readFocusedControl(container: HTMLElement): UiKeptFocus | null {
+  const active = container.ownerDocument.activeElement;
+  if (!(active instanceof HTMLElement) || active.id.length === 0) {
+    return null;
+  }
+  if (!container.contains(active)) {
+    return null;
+  }
+  const field =
+    active instanceof HTMLInputElement ||
+    active instanceof HTMLTextAreaElement ||
+    active instanceof HTMLSelectElement
+      ? active
+      : null;
+  const textField =
+    active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement ? active : null;
+  return {
+    id: active.id,
+    value: field?.value ?? null,
+    start: textField?.selectionStart ?? null,
+    end: textField?.selectionEnd ?? null,
+  };
+}
+
+/** Focuses the same control of a redrawn row again, with the input the owner had typed. */
+function resumeFocusedControl(container: HTMLElement, kept: UiKeptFocus | null): void {
+  if (kept === null) {
+    return;
+  }
+  const control = container.ownerDocument.getElementById(kept.id);
+  if (!(control instanceof HTMLElement) || !container.contains(control)) {
+    return;
+  }
+  if (
+    kept.value !== null &&
+    (control instanceof HTMLInputElement ||
+      control instanceof HTMLTextAreaElement ||
+      control instanceof HTMLSelectElement)
+  ) {
+    control.value = kept.value;
+  }
+  if (kept.start !== null && kept.end !== null && control instanceof HTMLInputElement) {
+    control.setSelectionRange(kept.start, kept.end);
+  }
+  control.focus({ preventScroll: true });
 }
 
 /* --------------------------------------------------------------------------------------------
@@ -241,13 +302,23 @@ export function createManualImportEditor(
   recoveryNote.textContent = 'A manual staging attempt is waiting for its outcome.';
   const recover = button(document, 'import-manual-recover', 'Retry pending staging');
   recovery.append(recoveryNote, recover);
+  // The region keeps the result list beside the editor's own presentation of the action the list
+  // offers: the list reports the intent, the editor stages the lines and presents what the
+  // provider established (docs/ui/editors.md#interface).
+  const resultsRegion = document.createElement('div');
+  resultsRegion.id = 'import-results';
   const resultsHost = document.createElement('div');
-  resultsHost.id = 'import-results';
+  resultsHost.id = 'import-results-list';
+  const resultsStatus = statusLine(document, 'import-results-status');
+  resultsStatus.dataset.uiOutcome = '';
+  resultsRegion.append(resultsHost, resultsStatus);
   const resultsHeading = text(document, 'h3', 'import-results-heading', 'Add a printing');
 
   /** Printings the manual search presents as a bounded list over the supplied contracts. */
   let results: UiCardList<CardListCatalogQuery> | null = null;
   let recoveringStaging = false;
+  /** Whether one staging is in flight; a further intent is ignored instead of run twice. */
+  let addingToReview = false;
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     findCards();
@@ -261,7 +332,7 @@ export function createManualImportEditor(
   paintManualRecovery();
 
   return {
-    nodes: [heading, form, status, recovery, resultsHeading, resultsHost],
+    nodes: [heading, form, status, recovery, resultsHeading, resultsRegion],
     capture: () => ({
       manual: {
         text: query.value,
@@ -291,9 +362,37 @@ export function createManualImportEditor(
       pageSize: UI_LIMITS.importPrintings,
       restored: restoredState,
       fragments: { tools: resultToolsReader() },
-      tools: [addTool()],
+      tools: [{ id: 'add-to-review', label: 'Add to review' }],
+      onAction: (intent) => {
+        void applyManualAdd(intent);
+      },
       signal: options.signal,
     });
+  }
+
+  /**
+   * Stages the explicit selected printings as manual pending lines and presents the pending state
+   * and authoritative outcome the provider established. Only a committed staging is reported as
+   * added; an unresolved one keeps its retained attempt visible for the explicit retry
+   * (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
+   */
+  async function applyManualAdd(intent: UiActionIntent): Promise<void> {
+    if (disposed || addingToReview) {
+      return;
+    }
+    addingToReview = true;
+    resultsStatus.removeAttribute('data-ui-outcome-status');
+    resultsStatus.textContent = 'Adding to review…';
+    const outcome = await applyAction(addAction(), {
+      selection: intent.selection,
+      signal: options.signal,
+    });
+    if (disposed) {
+      return;
+    }
+    addingToReview = false;
+    resultsStatus.dataset.uiOutcomeStatus = outcome.status;
+    resultsStatus.textContent = outcome.message ?? outcomeText(outcome.status);
   }
 
   /** Searches the catalog for the printings the manual entry form names. */
@@ -345,7 +444,7 @@ export function createManualImportEditor(
     const wantedFinish = readFinishValue(finish.value);
     const wantedCondition = readConditionValue(condition.value);
     const lines: UiImportLine[] = [];
-    for (const target of request.targets) {
+    for (const target of request.selection.targets) {
       if (target.kind !== 'printing' || target.printingId === undefined) {
         continue;
       }
@@ -484,14 +583,12 @@ export function createManualImportEditor(
     };
   }
 
-  /** The tool that stages the explicit selected printings as manual pending lines. */
-  function addTool(): UiListAction {
+  /** The action that stages the explicit selected printings as manual pending lines. */
+  function addAction(): UiOperationAction {
     return {
       id: 'add-to-review',
       label: 'Add to review',
-      tool: {
-        invoke: (request) => addSelection(request),
-      },
+      apply: (request) => addSelection(request),
     };
   }
 }
@@ -572,8 +669,15 @@ export function createImportReviewEditor(
   const provenance = note(document, '');
   provenance.id = 'import-provenance';
   provenance.hidden = true;
+  // The region keeps the pending list beside the editor's own presentation of the confirmation
+  // action the list offers (docs/ui/editors.md#interface).
+  const pendingRegion = document.createElement('div');
+  pendingRegion.id = 'import-pending';
   const pendingHost = document.createElement('div');
-  pendingHost.id = 'import-pending';
+  pendingHost.id = 'import-pending-list';
+  const pendingStatus = statusLine(document, 'import-pending-status');
+  pendingStatus.dataset.uiOutcome = '';
+  pendingRegion.append(pendingHost, pendingStatus);
   const discard = button(document, 'import-discard-session', 'Discard this import');
   discard.disabled = true;
 
@@ -603,10 +707,12 @@ export function createImportReviewEditor(
    * message reported after an operation reaches the controls the review presents now.
    */
   const editors = new Map<string, UiImportEntryEditor>();
-  /** Printings one row's own search offered, keyed by entry identity. */
+  /** Records of the printings a row's review read, keyed by entry identity. */
   const printings = new Map<string, readonly PrintingRecord[]>();
-  /** Current search per entry; editing its query or leaving its session retires the request. */
-  const printingSearches = new Map<string, symbol>();
+  /** Printing records already read, so an unanswered identity is never asked for again. */
+  const learnedPrintings = new Set<string>();
+  /** Printing pickers one row presented, keyed by the entry key they belong to. */
+  const printingPickers = new Map<string, UiImportEntryPicker>();
   /** Unsaved review input per entry, kept across redraws and with the history entry. */
   const drafts = readReviewDrafts(restored?.review);
   let confirmation = retainedConfirmation();
@@ -659,7 +765,7 @@ export function createImportReviewEditor(
       refresh,
       recover,
       reviewStatus,
-      pendingHost,
+      pendingRegion,
       discard,
     ],
     capture: () => ({
@@ -698,6 +804,9 @@ export function createImportReviewEditor(
     dispose: () => {
       disposed = true;
       pending?.dispose();
+      for (const key of [...printingPickers.keys()]) {
+        releasePrintingPicker(key);
+      }
     },
   };
 
@@ -840,7 +949,9 @@ export function createImportReviewEditor(
       return;
     }
     sessionId = next;
-    printingSearches.clear();
+    for (const key of [...printingPickers.keys()]) {
+      releasePrintingPicker(key);
+    }
     selectedRevisions.clear();
     messages.clear();
     editors.clear();
@@ -874,7 +985,10 @@ export function createImportReviewEditor(
       pageSize: constraints.pages.imports.default,
       restored: restoredState,
       fragments: { tools: pendingToolsReader() },
-      tools: [confirmTool()],
+      tools: [{ id: 'confirm-import', label: 'Confirm selected' }],
+      onAction: (intent) => {
+        void applyPendingConfirmation(intent);
+      },
       // A committed change of the presented import reacquires its entries through the binding; the
       // view never patches a row after an operation it drove.
       changes: bindings.changes(),
@@ -964,6 +1078,7 @@ export function createImportReviewEditor(
    * keeps what the user must review; only a committed change clears its own draft.
    */
   function paintEditor(editor: UiImportEntryEditor): void {
+    const focused = readFocusedControl(editor.controls);
     const record = pendingRecord(editor.entry.key);
     if (record === null) {
       editor.controls.replaceChildren(editor.status);
@@ -976,6 +1091,12 @@ export function createImportReviewEditor(
     const found = printings.get(entry.entryId) ?? [];
     const chosenPrintingId = draft?.printingId ?? entry.printingId ?? '';
     const chosenPrinting = knownPrinting(record, found, chosenPrintingId);
+    if (chosenPrinting === null && chosenPrintingId.length > 0) {
+      // The draft names a printing the row has not read: its record is read again, so the
+      // reviewed values and the finish control keep following the choice
+      // (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
+      learnPrinting(entry.entryId, chosenPrintingId);
+    }
     const query = textInput(
       document,
       `import-printing-query-${encodeURIComponent(entry.entryId)}`,
@@ -988,8 +1109,15 @@ export function createImportReviewEditor(
       `import-printing-find-${encodeURIComponent(entry.entryId)}`,
       'Find printings',
     );
-    const chosen = printingSelect(document, record, found, chosenPrintingId);
+    const chosen = document.createElement('span');
     chosen.id = `import-review-printing-${encodeURIComponent(entry.entryId)}`;
+    chosen.dataset.uiImportChosen = '';
+    chosen.textContent =
+      chosenPrintingId.length === 0
+        ? 'No printing chosen'
+        : chosenPrinting === null
+          ? `Printing ${chosenPrintingId}`
+          : printingLine(chosenPrinting);
     const wantedFinish = finishSelect(
       document,
       chosenPrinting,
@@ -1021,20 +1149,9 @@ export function createImportReviewEditor(
     query.addEventListener('input', () => {
       clearMessage(editor);
       draftFor(record).query = query.value;
-      printingSearches.delete(entry.entryId);
     });
     find.addEventListener('click', () => {
-      void findPrintings(editor, query.value);
-    });
-    chosen.addEventListener('change', () => {
-      clearMessage(editor);
-      const next = draftFor(record);
-      next.printingId = chosen.value;
-      const known = knownPrinting(record, found, chosen.value);
-      if (known !== null && !known.finishes.includes(next.finish as Finish)) {
-        next.finish = '';
-      }
-      paintEditor(editor);
+      openPrintingSearch(editor, query.value);
     });
     wantedFinish.addEventListener('change', () => {
       clearMessage(editor);
@@ -1051,7 +1168,7 @@ export function createImportReviewEditor(
     save.addEventListener('click', () => {
       void saveReview(editor, {
         query: query.value,
-        printingId: chosen.value,
+        printingId: chosenPrintingId,
         finish: wantedFinish.value,
         condition: wantedCondition.value,
         quantity: wantedQuantity.value,
@@ -1060,10 +1177,12 @@ export function createImportReviewEditor(
     remove.addEventListener('click', () => {
       void removeEntry(editor);
     });
+    const picker = printingPickers.get(editor.entry.key) ?? null;
     content.push(
       controlLabel(document, 'Printing search', query),
       find,
       controlLabel(document, 'Printing', chosen),
+      ...(picker === null ? [] : [picker.host]),
       controlLabel(document, 'Finish', wantedFinish),
       controlLabel(document, 'Condition', wantedCondition),
       controlLabel(document, 'Quantity', wantedQuantity),
@@ -1071,6 +1190,7 @@ export function createImportReviewEditor(
       remove,
     );
     editor.controls.replaceChildren(...content);
+    resumeFocusedControl(editor.controls, focused);
   }
 
   /** The reviewed values one entry exposes before its confirmation is decided. */
@@ -1115,55 +1235,147 @@ export function createImportReviewEditor(
   }
 
   /**
-   * Searches the catalog for printings one entry's review may choose instead. One bounded provider
-   * read answers the row's own query: the review offers the printings of one search, and the
-   * provider owns matching, ordering and freshness.
+   * Presents the printings one entry's review may choose through the supplied picker: the row's
+   * search describes the list once, and a further search refines the window it holds. The list
+   * owns matching, ordering, continuation and the recovery of a failed page, so an exact printing
+   * beyond the first page stays reachable (docs/search.md#freshness, docs/ui/editors.md#interface).
    */
-  async function findPrintings(editor: UiImportEntryEditor, text: string): Promise<void> {
+  function openPrintingSearch(editor: UiImportEntryEditor, text: string): void {
     const record = pendingRecord(editor.entry.key);
     if (record === null) {
       return;
     }
-    const entryId = record.entry.entryId;
-    const request = Symbol();
-    printingSearches.set(entryId, request);
-    const current = () => !disposed && printingSearches.get(entryId) === request;
     const wanted = text.trim();
     if (wanted.length === 0) {
       report(editor, 'Enter a card name to find its printings.');
-      printingSearches.delete(entryId);
       return;
     }
-    report(editor, 'Searching for printings…');
-    try {
-      const offered = await searchPrintingChoices(
-        options.search,
-        options.catalog,
-        wanted,
-        options.signal,
-      );
-      if (!current()) {
-        return;
-      }
-      printings.set(entryId, offered);
-      boundByWindow(printings);
-      report(
-        editor,
-        offered.length === 0 ? 'The catalog published no printing for that search.' : '',
-      );
-    } catch (cause) {
-      if (!current()) {
-        return;
-      }
-      report(editor, `The printings could not be read: ${readMessage(cause, 'unknown failure')}`);
-    } finally {
-      if (current()) {
-        printingSearches.delete(entryId);
-        // The row may have been redrawn while the search ran; drawing its tools fragment again
-        // presents the choices now known to the view.
-        pending?.reloadFragment(editor.entry.key, 'tools');
-      }
+    clearMessage(editor);
+    draftFor(record).query = text;
+    const context: CardListPickerQuery = { text: wanted, level: 'printing' };
+    const existing = printingPickers.get(editor.entry.key);
+    if (existing === undefined) {
+      composePrintingPicker(editor, context);
+      return;
     }
+    existing.host.hidden = false;
+    existing.list.refine(context);
+    paintEditor(editor);
+  }
+
+  /** Mounts the picker of one entry's printing search. */
+  function composePrintingPicker(editor: UiImportEntryEditor, context: CardListPickerQuery): void {
+    const host = document.createElement('div');
+    host.dataset.uiImportPrintingPicker = editor.entry.key;
+    const list = options.cardViews.picker<CardListPickerQuery>({
+      container: host,
+      create: options.cardList.create,
+      source: bindings.pickerQuery(),
+      context,
+      accountId: options.accountId,
+      pageSize: UI_LIMITS.importPrintings,
+      fragments: { tools: printingChoicesReader() },
+      choice: { id: 'choose-printing', label: 'Use this printing' },
+      onChoose: (selection) => {
+        void choosePrinting(editor, selection);
+      },
+      signal: options.signal,
+    });
+    printingPickers.set(editor.entry.key, { host, list });
+    paintEditor(editor);
+  }
+
+  /** Availability of the picker's choice for the printings one entry's search presents. */
+  function printingChoicesReader(): CardListFragmentReader<readonly string[]> {
+    return {
+      read(request) {
+        return Promise.resolve(
+          request.keys.map((key) => ({
+            key,
+            status: 'ready' as const,
+            values: key.startsWith('printing:') ? ['choose-printing'] : [],
+          })),
+        );
+      },
+    };
+  }
+
+  /**
+   * Takes the printing the picker's explicit selection names into the entry's review draft and
+   * reads its record, so the finish control follows the finishes that printing offers.
+   */
+  async function choosePrinting(
+    editor: UiImportEntryEditor,
+    selection: CardListToolSelection,
+  ): Promise<void> {
+    const record = pendingRecord(editor.entry.key);
+    const target = selection.targets.find((candidate) => candidate.kind === 'printing');
+    if (disposed || record === null || target?.kind !== 'printing') {
+      return;
+    }
+    clearMessage(editor);
+    const draft = draftFor(record);
+    draft.printingId = target.printingId;
+    const picker = printingPickers.get(editor.entry.key);
+    if (picker !== undefined) {
+      picker.host.hidden = true;
+    }
+    await learnPrinting(record.entry.entryId, target.printingId);
+    const known = knownPrinting(
+      record,
+      printings.get(record.entry.entryId) ?? [],
+      target.printingId,
+    );
+    if (known !== null && !known.finishes.includes(draft.finish as Finish)) {
+      draft.finish = '';
+    }
+    paintEditor(editor);
+  }
+
+  /**
+   * Reads the record of one printing the review chose; a read that fails leaves the catalog's
+   * published finish vocabulary standing instead of blocking the review.
+   */
+  async function learnPrinting(entryId: string, printingId: string): Promise<void> {
+    const known = printings.get(entryId) ?? [];
+    const token = `${entryId}\u0000${printingId}`;
+    if (
+      known.some((printing) => printing.printingId === printingId) ||
+      learnedPrintings.has(token)
+    ) {
+      return;
+    }
+    learnedPrintings.add(token);
+    try {
+      const resolved = await resolvePrintings(options.catalog, [printingId]);
+      const record = resolved.get(printingId) ?? null;
+      if (disposed || record === null) {
+        return;
+      }
+      const current = printings.get(entryId) ?? [];
+      if (!current.some((printing) => printing.printingId === printingId)) {
+        printings.set(entryId, [...current, record]);
+        boundByWindow(printings);
+      }
+      for (const editor of editors.values()) {
+        if (pendingRecord(editor.entry.key)?.entry.entryId === entryId) {
+          paintEditor(editor);
+        }
+      }
+    } catch {
+      // The published finish vocabulary stays usable while the record is unavailable.
+    }
+  }
+
+  /** Releases the printing picker of one entry, if it is mounted. */
+  function releasePrintingPicker(entryKey: string): void {
+    const picker = printingPickers.get(entryKey);
+    if (picker === undefined) {
+      return;
+    }
+    printingPickers.delete(entryKey);
+    picker.list.dispose();
+    picker.host.remove();
   }
 
   /**
@@ -1286,7 +1498,7 @@ export function createImportReviewEditor(
     if (outcome.status === 'committed') {
       drafts.delete(record.entry.entryId);
       printings.delete(record.entry.entryId);
-      printingSearches.delete(record.entry.entryId);
+      releasePrintingPicker(editor.entry.key);
       messages.delete(editor.entry.key);
     } else {
       report(editor, outcome.message ?? 'The entry was not discarded.');
@@ -1341,7 +1553,7 @@ export function createImportReviewEditor(
       }
       drafts.delete(record.entry.entryId);
       printings.delete(record.entry.entryId);
-      printingSearches.delete(record.entry.entryId);
+      releasePrintingPicker(key);
       messages.delete(key);
     }
     selectedRevisions.clear();
@@ -1360,7 +1572,7 @@ export function createImportReviewEditor(
       return { status: 'failed', message: 'Read the pending import before confirming it.' };
     }
     const chosen: ConfirmImportEntryInput[] = [];
-    for (const target of request.targets) {
+    for (const target of request.selection.targets) {
       if (target.kind !== 'pending') {
         continue;
       }
@@ -1448,7 +1660,7 @@ export function createImportReviewEditor(
       }
       drafts.delete(entry.entryId);
       printings.delete(entry.entryId);
-      printingSearches.delete(entry.entryId);
+      releasePrintingPicker(key);
     }
   }
 
@@ -1607,15 +1819,35 @@ export function createImportReviewEditor(
     };
   }
 
-  /** The tool that confirms the explicit selected pending entries. */
-  function confirmTool(): UiListAction {
+  /** The action that confirms the explicit selected pending entries. */
+  function confirmAction(): UiOperationAction {
     return {
       id: 'confirm-import',
       label: 'Confirm selected',
-      tool: {
-        invoke: (request) => confirmSelection(request),
-      },
+      apply: (request) => confirmSelection(request),
     };
+  }
+
+  /**
+   * Confirms the explicit selected entries and presents the pending state and outcome the provider
+   * established. A confirmation that was not established keeps its retained attempt visible for
+   * the explicit recovery (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
+   */
+  async function applyPendingConfirmation(intent: UiActionIntent): Promise<void> {
+    if (disposed) {
+      return;
+    }
+    pendingStatus.removeAttribute('data-ui-outcome-status');
+    pendingStatus.textContent = 'Confirming…';
+    const outcome = await applyAction(confirmAction(), {
+      selection: intent.selection,
+      signal: options.signal,
+    });
+    if (disposed) {
+      return;
+    }
+    pendingStatus.dataset.uiOutcomeStatus = outcome.status;
+    pendingStatus.textContent = outcome.message ?? outcomeText(outcome.status);
   }
 
   /**
@@ -1702,32 +1934,6 @@ function readRetainedPending(
     return null;
   }
   return { sessionId: retainedSession, list: readRetainedList<string>(record) };
-}
-
-/**
- * Printings one review search offers for a card name or expression. A search the index cannot
- * answer completely yet fails as a retryable read instead of offering no printing
- * (docs/search.md#freshness).
- */
-async function searchPrintingChoices(
-  search: SearchClient,
-  catalog: Catalog,
-  text: string,
-  signal: AbortSignal,
-): Promise<readonly PrintingRecord[]> {
-  const page = readableSearchPage(
-    await search.execute(
-      { resultLevel: 'printing', query: text, pageSize: UI_LIMITS.importPrintings },
-      signal,
-    ),
-  );
-  const printingIds = page.entries.flatMap((entry) =>
-    entry.printing === null ? [] : [entry.printing.printingId],
-  );
-  const resolution = await catalog.resolve(
-    printingIds.map((printingId) => ({ kind: 'printing' as const, printingId })),
-  );
-  return [...resolution.printings.values()];
 }
 
 /* --------------------------------------------------------------------------------------------

@@ -14,7 +14,7 @@
  * (docs/user-interface.md#browsing-and-organization, docs/application.md#interface).
  */
 
-import type { UiOperationOutcome, UiActionRequest, UiListAction } from '../../shared/actions.js';
+import type { UiActionRequest, UiOperationAction, UiOperationOutcome } from './operations.js';
 
 import type { Finish } from '../../../catalog/index.js';
 import type {
@@ -192,14 +192,12 @@ export function copyChangeTool(options: {
   change(): UiCopyChange | null;
   /** What the user must choose before the tool can act, reported when `change` names none. */
   readonly guidance: string;
-}): UiListAction {
+}): UiOperationAction {
   return {
     id: options.id,
     label: options.label,
-    tool: {
-      invoke(request: UiActionRequest): Promise<UiOperationOutcome> {
-        return applyCopyChange(options.access, request, options.change(), options.guidance);
-      },
+    apply(request: UiActionRequest): Promise<UiOperationOutcome> {
+      return applyCopyChange(options.access, request, options.change(), options.guidance);
     },
   };
 }
@@ -214,7 +212,7 @@ async function applyCopyChange(
     return { status: 'failed', message: guidance };
   }
   const copyIds: string[] = [];
-  for (const target of request.targets) {
+  for (const target of request.selection.targets) {
     if (target.kind !== 'copy') {
       return { status: 'failed', message: 'Select physical copies to change them.' };
     }

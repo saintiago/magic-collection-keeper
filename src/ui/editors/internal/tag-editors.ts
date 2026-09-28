@@ -13,14 +13,11 @@
  * the operation reported it committed. Every provider value renders as text.
  */
 
-import type { PrintingRecord } from '../../../catalog/index.js';
-import type { Catalog } from '../../../catalog/index.js';
 import type { Association, AssociationTargetLevel, Tag } from '../../../usercards/index.js';
 import {
   associationKey,
   cardListEntryKey,
   isInvalidatedContinuation,
-  readFailureCode,
   referenceOfAssociation,
   type CardListBrowser,
   type CardListEntry,
@@ -28,18 +25,15 @@ import {
   type CardListPickerQuery,
   type CardListRetained,
   type CardListTagAssociations,
+  type CardListToolSelection,
 } from '../../../card-list/index.js';
 
-import {
-  cardListBasicContent,
-  type CardViews,
-  type UiCardList,
-  type UiEntryOwnership,
-} from '../../card-views/index.js';
+import type { CardViews, UiCardList, UiEntryOwnership } from '../../card-views/index.js';
 import { UI_LIMITS } from '../../shared/limits.js';
 import { controlLabel } from '../../shared/controls.js';
 import type { UiDialogs } from '../../shared/dialogs.js';
 import { readRetainedList, readState } from '../../shared/state.js';
+import type { UiActionIntent } from '../../shared/actions.js';
 import { readUiCollectionLevel } from '../../shared/vocabulary.js';
 import {
   addToTagTool,
@@ -56,6 +50,7 @@ import {
   type UiTagAccess,
   type UiTagKind,
 } from './tag-edits.js';
+import { applyAction, outcomeText, type UiOperationOutcome } from './operations.js';
 
 /** The reported presentation of one list's retention, or null when this visit restored none. */
 function presentedOf<Context>(list: UiCardList<Context>): Promise<void> | null {
@@ -83,8 +78,6 @@ export interface UiTagEditorContext {
   readonly cardList: CardListBrowser;
   /** CardViews module the editors render their lists with. */
   readonly cardViews: CardViews;
-  /** Catalog the printing offers resolve through. */
-  readonly catalog: Catalog;
   /** Verified account the editors present. */
   readonly accountId: string;
   /** Brief confirmation dialogs the shell supplies for removals. */
@@ -656,8 +649,15 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
   quantity.min = '1';
   quantity.max = String(access.constraints.quantity.association);
   const addSubmit = submitButton(document, 'tag-add-submit', 'Search');
+  // The region keeps the results list beside the editor's own presentation of the action it
+  // offers: the list reports the intent, the editor runs it and presents what the provider
+  // established (docs/ui/editors.md#interface).
+  const addRegion = document.createElement('div');
+  addRegion.id = 'tag-add-results';
   const addHost = document.createElement('div');
-  addHost.id = 'tag-add-results';
+  const addStatus = statusLine(document, 'tag-add-status');
+  addStatus.dataset.uiOutcome = '';
+  addRegion.append(addHost, addStatus);
   const restoredAdd = readAddDraft(restored?.add);
   query.value = restoredAdd?.text ?? '';
   quantity.value = restoredAdd?.quantity ?? '1';
@@ -673,7 +673,7 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
     locationsMore,
     addHeading,
     addForm,
-    addHost,
+    addRegion,
   ];
 
   /** Tag the page presents; null until it is read or after a failed read. */
@@ -686,9 +686,13 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
   let associationRecords: CardListTagAssociations | null = null;
   /** Editors of the presented association rows, redrawn as their choices or records change. */
   const editors = new Map<string, UiAssociationEditor>();
-  /** Printings offered to refine a card-level association, keyed by card identity. */
-  const printings = new Map<string, UiPrintingOffer>();
-  const printingRequests = new Set<string>();
+  /**
+   * Printing pickers of the card-level associations whose owner asked to refine them, keyed by
+   * the association's entry key. Each picker is one CardViews list over the card's published
+   * printings, so acquiring them, their continuation and the recovery of a failed page stay with
+   * CardList (docs/card-list.md#interface, docs/ui/editors.md#interface).
+   */
+  const printingPickers = new Map<string, UiPrintingPicker>();
   /** Location tags the page offers for a move; the presented tag is always offered. */
   let locations: UiLocationOffer = {
     tags: [],
@@ -702,6 +706,8 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
   const drafts = readAssociationDrafts(restored?.drafts);
   let associations: UiCardList<string> | null = null;
   let addList: UiCardList<CardListPickerQuery> | null = null;
+  /** Whether one add action is in flight; a further intent is ignored instead of run twice. */
+  let adding = false;
   /** The retained list states, kept while the lists are not composed yet. */
   const retainedAssociations = readPageState(restored?.associations);
   const retainedResults = readPageState(restored?.results);
@@ -727,6 +733,9 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
       closed = true;
       associations?.dispose();
       addList?.dispose();
+      for (const key of [...printingPickers.keys()]) {
+        releasePrintingPicker(key);
+      }
     },
   };
 
@@ -1018,43 +1027,65 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
         renderFragment: (kind, _entry, values) =>
           kind === 'ownership' ? ownershipContent(values as UiEntryOwnership) : null,
       },
-      tools: [
-        {
-          id: 'add-to-tag',
-          label: 'Add to this tag',
-          tool: {
-            async invoke(request) {
-              const base = addToTagTool({
-                id: 'add-to-tag',
-                label: 'Add to this tag',
-                access,
-                tag: () => tag,
-                quantity: () => readQuantity(quantity, access.constraints.quantity.association),
-                guidance:
-                  'Choose an intended quantity from 1 to ' +
-                  `${access.constraints.quantity.association} before adding.`,
-              });
-              const outcome = await base.tool.invoke(request);
-              if (outcome.unknown > 0) {
-                // Earlier committed notifications cannot establish a later uncertain write.
-                // Reconcile after every unknown aggregate outcome; known commits already
-                // reacquire the list through the binding's change notifications.
-                associations?.refresh();
-              }
-              return outcome;
-            },
-          },
-        },
-      ],
+      tools: [{ id: 'add-to-tag', label: 'Add to this tag' }],
+      onAction: (intent) => {
+        void applyAddToTag(intent);
+      },
       signal: options.signal,
     });
     reportPresentation([presentedOf(addList)]);
   }
 
+  /**
+   * Runs the add action over the explicit selection the list reported and presents its pending
+   * state and authoritative outcome. Only a committed change is reported as saved; a committed or
+   * uncertain change reacquires the presented counts through the list's own bindings
+   * (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
+   */
+  async function applyAddToTag(intent: UiActionIntent): Promise<void> {
+    if (closed || adding) {
+      return;
+    }
+    adding = true;
+    addStatus.removeAttribute('data-ui-outcome-status');
+    addStatus.textContent = 'Adding to the tag…';
+    const action = addToTagTool({
+      id: 'add-to-tag',
+      label: 'Add to this tag',
+      access,
+      tag: () => tag,
+      quantity: () => readQuantity(quantity, access.constraints.quantity.association),
+      guidance:
+        'Choose an intended quantity from 1 to ' +
+        `${access.constraints.quantity.association} before adding.`,
+    });
+    const outcome = await applyAction(action, {
+      selection: intent.selection,
+      signal: options.signal,
+    });
+    if (closed) {
+      return;
+    }
+    adding = false;
+    presentAddOutcome(outcome);
+    if (outcome.unknown > 0) {
+      // Earlier committed notifications cannot establish a later uncertain write. Reconcile after
+      // every unknown aggregate outcome; known commits already reacquire the list through the
+      // binding's change notifications.
+      associations?.refresh();
+    }
+  }
+
+  /** Presents one add outcome; the editor reports success only for a committed change. */
+  function presentAddOutcome(outcome: UiOperationOutcome): void {
+    addStatus.dataset.uiOutcomeStatus = outcome.status;
+    addStatus.textContent = outcome.message ?? outcomeText(outcome.status);
+  }
+
   /** One entry's basic information beside the association level the row presents. */
   function associationEntry(document: Document, entry: CardListEntry): Node {
     const content = document.createElement('span');
-    content.append(cardListBasicContent(document, entry));
+    content.append(options.cardViews.basicContent(document, entry));
     const association = associationRecord(entry.key);
     if (association !== null) {
       const level = document.createElement('span');
@@ -1153,6 +1184,10 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
     if (association === null || current === null) {
       return;
     }
+    if (association.targetLevel !== 'card') {
+      // The row no longer offers a card-level refinement; its picker leaves with the choice.
+      releasePrintingPicker(editor.entry.key);
+    }
     if (
       cardListEntryKey(editor.entry.target) !==
       cardListEntryKey(referenceOfAssociation(association))
@@ -1184,8 +1219,8 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
       controls.push(controlLabel(document, 'Intended', wanted), save, ' ');
     }
     if (association.targetLevel === 'card') {
-      const offer = printings.get(association.targetId);
-      if (offer === undefined) {
+      const picker = printingPickers.get(editor.entry.key);
+      if (picker === undefined) {
         // The card's printings are read when the owner refines this association, so a long
         // wishlist issues no catalog request for every presented card.
         const choose = button(
@@ -1194,60 +1229,11 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
           'Choose printing…',
         );
         choose.addEventListener('click', () => {
-          choose.disabled = true;
-          void loadPrintings(association.targetId, null);
+          openPrintingPicker(editor, association);
         });
         controls.push(choose, ' ');
       } else {
-        const chosen = document.createElement('select');
-        chosen.id = `tag-refine-${encodeURIComponent(association.associationId)}`;
-        paintPrintings(chosen, offer.printings, draft?.printingId ?? undefined);
-        chosen.addEventListener('change', () => {
-          draftFor(association.associationId).printingId = chosen.value;
-        });
-        const refine = button(
-          document,
-          `tag-refine-save-${encodeURIComponent(association.associationId)}`,
-          'Refine to printing',
-        );
-        refine.disabled = !offer.printings.some((printing) => printing.printingId === chosen.value);
-        chosen.addEventListener('change', () => {
-          refine.disabled = !offer.printings.some(
-            (printing) => printing.printingId === chosen.value,
-          );
-        });
-        refine.addEventListener('click', () => {
-          if (chosen.value.length === 0) {
-            editor.status.textContent = 'Choose the printing to refine the association to.';
-            return;
-          }
-          draftFor(association.associationId).printingId = chosen.value;
-          void saveAssociationChange(
-            association,
-            'printing',
-            chosen.value,
-            association.quantity,
-            editor.status,
-          );
-        });
-        const more = button(
-          document,
-          `tag-refine-more-${encodeURIComponent(association.associationId)}`,
-          'More printings',
-        );
-        more.hidden = offer.continuation === null && offer.error === null;
-        more.textContent = offer.error === null ? 'More printings' : 'Retry printings';
-        more.disabled = offer.loading;
-        more.addEventListener('click', () => {
-          void loadPrintings(association.targetId, offer.continuation);
-        });
-        controls.push(controlLabel(document, 'Printing', chosen), refine, ' ', more, ' ');
-        const printingStatus = document.createElement('span');
-        printingStatus.id = `tag-refine-status-${encodeURIComponent(association.associationId)}`;
-        printingStatus.textContent = offer.error ?? (offer.loading ? 'Loading printings…' : '');
-        if (printingStatus.textContent.length > 0) {
-          controls.push(printingStatus, ' ');
-        }
+        controls.push(picker.host, ' ');
       }
     }
     if (association.targetLevel === 'printing') {
@@ -1569,92 +1555,101 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
   }
 
   /**
-   * Reads one page of the printings of a card the owner asked to refine an association to, on
-   * demand: a presented card association issues no catalog request until the owner refines it.
-   * The offered window keeps the continuation of the rest and the row offers the next page, so
-   * an exact printing beyond the first page stays selectable; a failure stays visible beside
-   * the control that reads further printings instead of presenting the known ones as the whole
-   * list (docs/user-interface.md#browsing-and-organization).
+   * Mounts the picker of one card-level association on demand: a presented card association
+   * issues no catalog request until the owner asks to refine it. The picker is one CardViews list
+   * over the card's published printings; acquiring them, their continuation, paging and the
+   * recovery of a failed page belong to CardList, and the row only presents its choice
+   * (docs/ui/editors.md#interface, docs/card-list.md#interface).
    */
-  async function loadPrintings(cardId: string, continuation: string | null): Promise<void> {
-    if (printingRequests.has(cardId)) {
+  function openPrintingPicker(editor: UiAssociationEditor, association: Association): void {
+    if (closed || association.targetLevel !== 'card') {
       return;
     }
-    printingRequests.add(cardId);
-    const offered = printings.get(cardId);
-    const previous = offered?.printings ?? [];
-    printings.set(cardId, {
-      printings: previous,
-      continuation,
-      loading: true,
-      error: null,
-    });
-    repaintEditors(cardId);
-    try {
-      const page = await options.catalog.listCardPrintings(cardId, {
-        pageSize: UI_LIMITS.printingPage,
-        ...(continuation === null ? {} : { continuation }),
-      });
-      if (closed) {
-        return;
-      }
-      const merged = [...(continuation === null ? [] : previous), ...page.printings];
-      printings.set(cardId, {
-        printings: merged.slice(-UI_LIMITS.listWindow),
-        continuation: page.continuation,
-        loading: false,
-        error: null,
-      });
-      // The offers of the working set are bounded: the oldest cards a page no longer refines
-      // release theirs, so repeated refinement cannot retain every card ever visited.
-      for (const other of printings.keys()) {
-        if (printings.size <= UI_LIMITS.listWindow) {
-          break;
-        }
-        if (other !== cardId) {
-          printings.delete(other);
-        }
-      }
-    } catch (cause) {
-      if (closed) {
-        return;
-      }
-      if (continuation !== null && readFailureCode(cause) === 'stale-continuation') {
-        printingRequests.delete(cardId);
-        await loadPrintings(cardId, null);
-        return;
-      }
-      const known = printings.get(cardId);
-      printings.set(cardId, {
-        printings: known?.printings ?? [],
-        continuation: known?.continuation ?? null,
-        loading: false,
-        error: readMessage(cause, 'The printings could not be loaded.'),
-      });
-    } finally {
-      printingRequests.delete(cardId);
+    const card = editor.entry.basic?.card ?? null;
+    if (card === null) {
+      editor.status.textContent = 'The card of this association is not available.';
+      return;
     }
-    repaintEditors(cardId);
+    const host = document.createElement('div');
+    host.dataset.uiPrintingPicker = association.associationId;
+    const list = options.cardViews.picker<string>({
+      container: host,
+      create: options.cardList.create,
+      source: options.cardList.account(options.accountId).cardPrintings(card),
+      context: card.cardId,
+      accountId: options.accountId,
+      pageSize: UI_LIMITS.printingPage,
+      fragments: { tools: printingChoicesReader() },
+      choice: { id: 'refine-printing', label: 'Refine to this printing' },
+      onChoose: (selection) => {
+        void refineFromPicker(editor.entry.key, selection);
+      },
+      signal: options.signal,
+    });
+    printingPickers.set(editor.entry.key, { host, list });
+    // The draft keeps the printing the owner chose to refine to: once the row's window presents
+    // that printing again, the picker presents it as the selection for review
+    // (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
+    let presented = false;
+    list.subscribe((snapshot) => {
+      if (presented) {
+        return;
+      }
+      const wanted = drafts.get(association.associationId)?.printingId ?? null;
+      const key = wanted === null ? null : `printing:${wanted}`;
+      if (key === null || !snapshot.entries.some((entry) => entry.entry.key === key)) {
+        return;
+      }
+      presented = true;
+      list.setSelected(key, true);
+    });
+    editor.refresh();
   }
 
-  /** Fills one refinement control with the printings the catalog published. */
-  function paintPrintings(
-    chosen: HTMLSelectElement,
-    known: readonly PrintingRecord[],
-    wanted?: string,
-  ): void {
-    chosen.replaceChildren(
-      ...known.map((printing) => {
-        const option = document.createElement('option');
-        option.value = printing.printingId;
-        option.textContent = `${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
-        return option;
-      }),
-    );
-    chosen.disabled = known.length === 0;
-    if (wanted !== undefined) {
-      retainChoice(chosen, wanted, 'Selected printing (not loaded)');
+  /** Availability of the refine choice for the printings of the card the picker presents. */
+  function printingChoicesReader(): CardListFragmentReader<readonly string[]> {
+    return {
+      read(request) {
+        return Promise.resolve(
+          request.keys.map((key) => ({
+            key,
+            status: 'ready' as const,
+            values: key.startsWith('printing:') ? ['refine-printing'] : [],
+          })),
+        );
+      },
+    };
+  }
+
+  /** Refines one association to the printing the picker's explicit selection names. */
+  async function refineFromPicker(
+    entryKey: string,
+    selection: CardListToolSelection,
+  ): Promise<void> {
+    const association = associationRecord(entryKey);
+    const target = selection.targets.find((candidate) => candidate.kind === 'printing');
+    if (association === null || target?.kind !== 'printing') {
+      return;
     }
+    draftFor(association.associationId).printingId = target.printingId;
+    await saveAssociationChange(
+      association,
+      'printing',
+      target.printingId,
+      association.quantity,
+      editors.get(entryKey)?.status ?? null,
+    );
+  }
+
+  /** Releases the printing picker of one association, if it is mounted. */
+  function releasePrintingPicker(entryKey: string): void {
+    const picker = printingPickers.get(entryKey);
+    if (picker === undefined) {
+      return;
+    }
+    printingPickers.delete(entryKey);
+    picker.list.dispose();
+    picker.host.remove();
   }
 
   /** Whether each presented entry offers the add tool for the presented tag. */
@@ -1705,6 +1700,7 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
       for (const key of [...editors.keys()]) {
         if (!presented.has(key)) {
           editors.delete(key);
+          releasePrintingPicker(key);
         }
       }
       boundDrafts(drafts);
@@ -1754,12 +1750,10 @@ interface UiAssociationDraft {
   locationId: string | null;
 }
 
-/** One card's offered printings: the window the page read and the continuation of the rest. */
-interface UiPrintingOffer {
-  readonly printings: readonly PrintingRecord[];
-  readonly continuation: string | null;
-  readonly loading: boolean;
-  readonly error: string | null;
+/** One mounted printing picker of a card-level association and the region it presents in. */
+interface UiPrintingPicker {
+  readonly host: HTMLElement;
+  readonly list: UiCardList<string>;
 }
 
 /** The account's offered location tags: the known ones, their continuation and its state. */

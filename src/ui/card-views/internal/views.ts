@@ -12,6 +12,9 @@
  */
 
 import type { CardListEntry, CardListToolSelection } from '../../../card-list/index.js';
+import type { CardRecord, PrintingRecord } from '../../../catalog/index.js';
+
+import type { UiActionIntent } from '../../shared/actions.js';
 
 import {
   cardListBasicContent,
@@ -39,24 +42,56 @@ export interface CardViewOpenOptions {
 /** Presentation of one entry that opens the target it names. */
 export type CardViewEntryPresentation = Required<Pick<UiCardListPresentation, 'renderEntry'>>;
 
-/** One choice a picker offers for the explicit selection. */
+/**
+ * One choice a picker offers for the explicit selection. Choosing reports the selection the user
+ * made to the caller that supplied the choice: the picker neither runs an operation nor presents
+ * an outcome, because a selection is not a commitment
+ * (docs/ui/card-views.md#interface, docs/ui/editors.md#interface).
+ */
 export interface CardViewPickerChoice {
   /** Stable id the entry's tool availability fragment reports. */
   readonly id: string;
   /** Label of the choice's control. */
   readonly label: string;
-  /** Runs the choice over the explicit selection the user made. */
-  choose(selection: CardListToolSelection): void | Promise<void>;
 }
 
 /**
  * The picker a page or editor presents for card and printing choices. It is one list view over
- * the supplied CardList description, with the caller's choice offered as an explicit action over
- * the current selection.
+ * the supplied CardList description, with the caller's choice offered as an explicit control the
+ * user expresses an intent through. The caller owns what the choice does with the selection it
+ * receives.
  */
-export interface CardViewPickerOptions<Context> extends Omit<UiCardListOptions<Context>, 'tools'> {
+export interface CardViewPickerOptions<Context> extends Omit<
+  UiCardListOptions<Context>,
+  'tools' | 'onAction'
+> {
   /** The choice the picker offers, or absent while choosing is not available yet. */
   readonly choice?: CardViewPickerChoice;
+  /** Reports the explicit selection the user chose with. */
+  onChoose?(selection: CardListToolSelection): void;
+}
+
+/**
+ * The detail one page presents for a published card or printing. The page owns the route, the
+ * level it resolves and the related lists and editors it composes; the view owns the presentation
+ * of the identity it is handed.
+ */
+export interface CardViewDetailOptions {
+  readonly document: Document;
+  /** Published card the detail presents. */
+  readonly card: CardRecord;
+  /** Published printing the level presents, or null at the card level. */
+  readonly printing: PrintingRecord | null;
+  /** Nodes the page composes into the detail after its own identity information. */
+  readonly content?: readonly Node[];
+  /** Navigation the page presents after the composed content. */
+  readonly navigation?: readonly Node[];
+}
+
+/** Presentation of one card or printing detail. */
+export interface CardViewDetail {
+  /** The detail's nodes in presentation order. */
+  readonly nodes: readonly Node[];
 }
 
 /**
@@ -71,6 +106,8 @@ export interface CardViews {
   list<Context>(options: UiCardListOptions<Context>): UiCardList<Context>;
   /** Presentation that opens each entry through the location the page supplies. */
   openEntries(options: CardViewOpenOptions): CardViewEntryPresentation;
+  /** Presentation of one published card or printing detail. */
+  detail(options: CardViewDetailOptions): CardViewDetail;
   /** Builds one mounted picker list over the description a page or editor supplies. */
   picker<Context>(options: CardViewPickerOptions<Context>): UiCardList<Context>;
 }
@@ -98,30 +135,81 @@ export function createCardViews(): CardViews {
         },
       };
     },
+    detail(options) {
+      const document = options.document;
+      const printing = options.printing;
+      const nodes: Node[] =
+        printing === null
+          ? [
+              heading(document, 'card-name', options.card.name),
+              line(document, 'card-type', options.card.typeLine ?? 'Type not published'),
+              line(document, 'card-text', options.card.rulesText ?? 'No rules text published.'),
+            ]
+          : [
+              heading(document, 'printing-name', options.card.name),
+              line(document, 'printing-line', printingLine(printing)),
+              line(
+                document,
+                'printing-finishes',
+                printing.finishes.length === 0
+                  ? 'No finish published'
+                  : `Finishes: ${printing.finishes.join(', ')}`,
+              ),
+            ];
+      const image = printing === null ? null : printingImage(document, printing);
+      if (image !== null) {
+        nodes.push(image);
+      }
+      nodes.push(...(options.content ?? []), ...(options.navigation ?? []));
+      return { nodes };
+    },
     picker(options) {
-      const choice = options.choice;
+      const { choice, onChoose, ...rest } = options;
       return createCardListView({
-        ...options,
-        ...(choice === undefined
+        ...rest,
+        ...(choice === undefined ? {} : { tools: [{ id: choice.id, label: choice.label }] }),
+        ...(onChoose === undefined
           ? {}
-          : {
-              tools: [
-                {
-                  id: choice.id,
-                  label: choice.label,
-                  tool: {
-                    async invoke(request) {
-                      // The choice itself reports the outcome of the operation it presents; the
-                      // picker presents the outcome the caller returned through the list's own
-                      // outcome line.
-                      await choice.choose(request.selection);
-                      return { status: 'committed' as const, message: null };
-                    },
-                  },
-                },
-              ],
-            }),
+          : { onAction: (intent: UiActionIntent) => onChoose(intent.selection) }),
       });
     },
   };
+}
+
+/** One heading of the detail presentation. */
+function heading(document: Document, id: string, text: string): HTMLHeadingElement {
+  const element = document.createElement('h2');
+  element.id = id;
+  element.textContent = text;
+  return element;
+}
+
+/** One text line of the detail presentation. */
+function line(document: Document, id: string, text: string): HTMLParagraphElement {
+  const element = document.createElement('p');
+  element.id = id;
+  element.textContent = text;
+  return element;
+}
+
+/** One printing as the detail presents it: its edition, collector number and language. */
+function printingLine(printing: PrintingRecord): string {
+  return `${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
+}
+
+/** The image of one printing, or null when the catalog publishes none. */
+function printingImage(document: Document, printing: PrintingRecord): HTMLImageElement | null {
+  const src =
+    printing.images.normal ??
+    printing.images.small ??
+    printing.images.large ??
+    printing.images.artCrop;
+  if (src === null) {
+    return null;
+  }
+  const image = document.createElement('img');
+  image.id = 'printing-image';
+  image.src = src;
+  image.alt = printingLine(printing);
+  return image;
 }

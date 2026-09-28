@@ -33,7 +33,7 @@ import { uiImportSourceLabel, type UiImportLine } from './import-edits.js';
 import { uiCatalogFinishes, uiFinishLabel } from '../../shared/vocabulary.js';
 import { uiCopyConditions } from './copy-edits.js';
 import type { UiChangeCommit } from './failure.js';
-import type { UiOperationOutcome } from '../../shared/actions.js';
+import type { UiOperationOutcome } from './operations.js';
 
 /** The one manual entry queue of an account; its lines are reviewed and confirmed like any import. */
 export const manualImport = {
@@ -371,31 +371,6 @@ export function knownPrinting(
     found.find((printing) => printing.printingId === printingId) ??
     null
   );
-}
-
-/**
- * The printing choices of one review: the printing the entry already names and the printings its
- * own search found. A named printing outside those choices stays selectable, so a stored value is
- * never silently replaced by another printing.
- */
-export function printingSelect(
-  document: Document,
-  record: CardListPendingRecord,
-  found: readonly PrintingRecord[],
-  value: string,
-): HTMLSelectElement {
-  const known = [
-    ...(record.printing === null ? [] : [record.printing]),
-    ...found.filter((printing) => printing.printingId !== record.printing?.printingId),
-  ];
-  const options: UiSelectOption[] = [
-    { value: '', label: 'Choose a printing' },
-    ...known.map((printing) => ({ value: printing.printingId, label: printingLine(printing) })),
-  ];
-  if (value.length > 0 && !options.some((option) => option.value === value)) {
-    options.push({ value, label: 'Selected printing (not loaded)' });
-  }
-  return selectControl(document, options, value);
 }
 
 /**
