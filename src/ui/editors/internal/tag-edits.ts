@@ -14,13 +14,13 @@
  * committed (docs/user-interface.md#browsing-and-organization).
  */
 
-import type { UiOperationOutcome, UiActionRequest } from './actions.js';
+import type { UiOperationOutcome, UiActionRequest } from '../../shared/actions.js';
 
 import type {
   UserCardsAccountOperations,
   UserCardsConstraints,
   UserCardsOperation,
-} from '../../usercards/browser.js';
+} from '../../../usercards/browser.js';
 import type {
   Association,
   AssociationChangeResult,
@@ -43,10 +43,10 @@ import type {
   TagListResult,
   TagReadResult,
   UserTagKind,
-} from '../../usercards/index.js';
+} from '../../../usercards/index.js';
 
 import { commitUiOperation, readUiFailureMessage, type UiChangeCommit } from './failure.js';
-import type { CardListTarget } from '../../card-list/index.js';
+import type { CardListTarget } from '../../../card-list/index.js';
 
 /**
  * Tag kinds the organization views create and edit. The values are the UserCards provider's

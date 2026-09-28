@@ -19,8 +19,8 @@
 
 import type { CardListCatalogQuery } from '../../card-list/index.js';
 
-import { createCardListView } from './card-list.js';
-import { UI_LIMITS } from './limits.js';
+import { createCardListView } from '../card-views/index.js';
+import { UI_LIMITS } from '../shared/limits.js';
 import type { UiPageDefinition } from './pages.js';
 import {
   controlLabel,

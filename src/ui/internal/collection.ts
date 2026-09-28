@@ -20,15 +20,15 @@
 
 import { type CardListCollectionQuery } from '../../card-list/index.js';
 
-import { createCardListView } from './card-list.js';
+import { createCardListView } from '../card-views/index.js';
 import {
   copyChangeTool,
   createCopyAccess,
   uiCopyConditions,
   type UiCopyChange,
-} from './copy-edits.js';
+} from '../editors/index.js';
 import { createCardDetailsPage } from './card-details.js';
-import { UI_LIMITS } from './limits.js';
+import { UI_LIMITS } from '../shared/limits.js';
 import {
   controlLabel,
   openEntryPresentation,

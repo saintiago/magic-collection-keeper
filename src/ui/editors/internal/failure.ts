@@ -15,7 +15,7 @@
  * source bindings share one test for it instead of each interpreting those codes on its own.
  */
 
-import type { UserCardsOperation } from '../../usercards/browser.js';
+import type { UserCardsOperation } from '../../../usercards/browser.js';
 
 /** Outcome of one private change as a view presents it. */
 export interface UiChangeCommit<Record> {

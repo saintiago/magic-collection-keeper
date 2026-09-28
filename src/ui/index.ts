@@ -37,13 +37,13 @@ export {
   type UiCopyCorrection,
   type UiCopyCorrectionOutcome,
   type UiCopyRead,
-} from './internal/copy-edits.js';
+} from './editors/index.js';
 export { createCollectionPages } from './internal/collection.js';
 export {
   createCaptureControls,
   type UiCaptureControls,
   type UiCaptureOptions,
-} from './internal/capture.js';
+} from './capture-controls/index.js';
 export {
   cardListBasicContent,
   createCardListView,
@@ -53,7 +53,15 @@ export {
   type UiEntryImage,
   type UiEntryOwnership,
   type UiEntryTag,
-} from './internal/card-list.js';
+} from './card-views/index.js';
+export {
+  createCardViews,
+  type CardViewEntryPresentation,
+  type CardViewOpenOptions,
+  type CardViewPickerChoice,
+  type CardViewPickerOptions,
+  type CardViews,
+} from './card-views/index.js';
 export type { UiDialogOptions, UiDialogs } from './internal/dialogs.js';
 export type { UiAccount, UiIdentity } from './internal/identity.js';
 export {
@@ -74,9 +82,9 @@ export {
   type UiImportCandidate,
   type UiImportClient,
   type UiImportLine,
-} from './internal/import-edits.js';
+} from './editors/index.js';
 export { createImportPages } from './internal/imports.js';
-export { UI_LIMITS } from './internal/limits.js';
+export { UI_LIMITS } from './shared/limits.js';
 export type { UiPageContext, UiPageDefinition, UiPageHandle } from './internal/pages.js';
 export { createOrganizationPages } from './internal/organization.js';
 export {
@@ -103,7 +111,8 @@ export {
   type UiTagAccess,
   type UiTagClient,
   type UiTagKind,
-} from './internal/tag-edits.js';
+} from './editors/index.js';
+export { createEditors, type Editors, type EditorsOptions } from './editors/index.js';
 export {
   readUiCatalogFinish,
   readUiCatalogLevel,

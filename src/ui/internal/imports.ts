@@ -31,7 +31,7 @@
  * UserCards scope Application composed (docs/architecture.md#runtime-boundaries).
  */
 
-import type { UiOperationOutcome, UiActionRequest, UiListAction } from './actions.js';
+import type { UiOperationOutcome, UiActionRequest, UiListAction } from '../shared/actions.js';
 
 import type { SearchClient } from '../../application/index.js';
 import type { CaptureReviewChange } from '../../capture/index.js';
@@ -50,7 +50,7 @@ import type {
   SourceImportRow,
 } from '../../usercards/index.js';
 
-import { createCaptureControls } from './capture.js';
+import { createCaptureControls } from '../capture-controls/index.js';
 import {
   cardListEntryKey,
   readableSearchPage,
@@ -63,8 +63,8 @@ import {
   type CardListRetained,
   type CardListTarget,
 } from '../../card-list/index.js';
-import { cardListBasicContent, createCardListView, type UiCardList } from './card-list.js';
-import { uiCopyConditions } from './copy-edits.js';
+import { cardListBasicContent, createCardListView, type UiCardList } from '../card-views/index.js';
+import { uiCopyConditions } from '../editors/index.js';
 import {
   beginSourceImport,
   confirmImport,
@@ -80,8 +80,8 @@ import {
   uiImportIdentity,
   uiImportSourceLabel,
   type UiImportLine,
-} from './import-edits.js';
-import { type UiChangeCommit } from './failure.js';
+} from '../editors/index.js';
+import { type UiChangeCommit } from '../editors/index.js';
 import type {
   UserCardsConfirmationOutcome,
   UserCardsOperation,
@@ -89,7 +89,7 @@ import type {
   UserCardsRetainedAttempt,
   UserCardsSourceImportRequest,
 } from '../../usercards/browser.js';
-import { UI_LIMITS } from './limits.js';
+import { UI_LIMITS } from '../shared/limits.js';
 import type { UiPageDefinition } from './pages.js';
 import {
   controlLabel,

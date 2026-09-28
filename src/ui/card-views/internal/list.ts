@@ -15,8 +15,8 @@
  * result back through the same contract.
  */
 
-import { runAction } from './actions.js';
-import type { UiOperationOutcome, UiListAction } from './actions.js';
+import { runAction } from '../../shared/actions.js';
+import type { UiOperationOutcome, UiListAction } from '../../shared/actions.js';
 
 import {
   cardListFragmentKinds,
@@ -34,15 +34,15 @@ import {
   type CardListOptions,
   type CardListRetained,
   type CardListSnapshot,
-} from '../../card-list/index.js';
+} from '../../../card-list/index.js';
 
-import { observeUiInput } from './interaction.js';
+import { observeUiInput } from '../../shared/interaction.js';
 
 export type {
   CardListEntryImage as UiEntryImage,
   CardListEntryOwnership as UiEntryOwnership,
   CardListEntryTag as UiEntryTag,
-} from '../../card-list/index.js';
+} from '../../../card-list/index.js';
 
 /** Presentation adjustments over the default rendering of the list's information. */
 export interface UiCardListPresentation {

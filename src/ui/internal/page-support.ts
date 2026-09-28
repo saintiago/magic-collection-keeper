@@ -12,9 +12,9 @@
 
 import type { CardListEntry, CardListRetained } from '../../card-list/index.js';
 
-import { cardListBasicContent, type UiCardList } from './card-list.js';
+import { cardListBasicContent, type UiCardList } from '../card-views/index.js';
 import type { UiPageHandle } from './pages.js';
-import { UI_LIMITS } from './limits.js';
+import { UI_LIMITS } from '../shared/limits.js';
 import { uiHref, type UiView } from './routes.js';
 
 /** One option of a select control the pages present. */

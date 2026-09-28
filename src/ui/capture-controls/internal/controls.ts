@@ -22,7 +22,7 @@ import type {
   CaptureReviewChange,
   CaptureSnapshot,
   CaptureStatusKind,
-} from '../../capture/index.js';
+} from '../../../capture/index.js';
 
 /** Longest candidate name the capture status presents, so one engine reading stays bounded. */
 const uiCaptureNameLength = 120;

@@ -12,7 +12,7 @@
  * contract.
  */
 
-import type { UiOperationOutcome } from '../../src/ui/internal/actions.js';
+import type { UiOperationOutcome } from '../../src/ui/shared/actions.js';
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

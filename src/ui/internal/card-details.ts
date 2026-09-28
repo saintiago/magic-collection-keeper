@@ -29,14 +29,14 @@ import type {
 import { readFailureCode } from '../../card-list/index.js';
 import type { PhysicalCopy } from '../../usercards/index.js';
 
-import { createCardListView, type UiCardList } from './card-list.js';
+import { createCardListView, type UiCardList } from '../card-views/index.js';
 import {
   correctCopy,
   createCopyAccess,
   uiCopyConditions,
   type UiCopyCorrection,
-} from './copy-edits.js';
-import { UI_LIMITS } from './limits.js';
+} from '../editors/index.js';
+import { UI_LIMITS } from '../shared/limits.js';
 import {
   controlLabel,
   openEntryPresentation,

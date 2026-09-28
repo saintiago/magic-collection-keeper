@@ -14,17 +14,17 @@
  * (docs/user-interface.md#browsing-and-organization, docs/application.md#interface).
  */
 
-import type { UiOperationOutcome, UiActionRequest, UiListAction } from './actions.js';
+import type { UiOperationOutcome, UiActionRequest, UiListAction } from '../../shared/actions.js';
 
-import type { Finish } from '../../catalog/index.js';
+import type { Finish } from '../../../catalog/index.js';
 import type {
   UserCardsAccountOperations,
   UserCardsConstraints,
   UserCardsOperation,
-} from '../../usercards/browser.js';
-import type { CopyChangeResult, CopyCondition, PhysicalCopy } from '../../usercards/index.js';
+} from '../../../usercards/browser.js';
+import type { CopyChangeResult, CopyCondition, PhysicalCopy } from '../../../usercards/index.js';
 
-import type {} from '../../card-list/index.js';
+import type {} from '../../../card-list/index.js';
 import { readUiFailureMessage } from './failure.js';
 
 /**

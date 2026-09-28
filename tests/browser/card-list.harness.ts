@@ -15,7 +15,7 @@
 import type {
   UiOperationOutcome,
   UiListAction as UiCardListTool,
-} from '../../src/ui/internal/actions.js';
+} from '../../src/ui/shared/actions.js';
 
 import {
   createCardList,

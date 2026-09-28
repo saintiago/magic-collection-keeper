@@ -33,8 +33,8 @@ import {
   createCardListView,
   type UiCardList,
   type UiEntryOwnership,
-} from './card-list.js';
-import { UI_LIMITS } from './limits.js';
+} from '../card-views/index.js';
+import { UI_LIMITS } from '../shared/limits.js';
 import {
   controlLabel,
   readListState,
@@ -58,7 +58,7 @@ import {
   type UiChangeOutcome,
   type UiTagAccess,
   type UiTagKind,
-} from './tag-edits.js';
+} from '../editors/index.js';
 
 /** The organization views: the account's tags and one tag's deck, wishlist, location or grouping. */
 export function createOrganizationPages(): readonly UiPageDefinition[] {

@@ -21,7 +21,7 @@
 import type { Finish } from '../../catalog/index.js';
 import type { SearchResultLevel } from '../../search/index.js';
 
-import { UI_LIMITS } from './limits.js';
+import { UI_LIMITS } from '../shared/limits.js';
 
 export const uiPageNames = [
   'home',

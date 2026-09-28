@@ -1,4 +1,14 @@
-/** Operation presentation belongs to Editors; CardList supplies only explicit action context. */
+/**
+ * Action context shared by the presentation modules of the UserInterface
+ * (docs/ui/architecture.md#modules-and-composition, docs/ui/card-views.md, docs/ui/editors.md).
+ *
+ * A list presents the advisory actions of its explicit selection, and the editor layer owns what
+ * one action does: the request carries the selected target context the list observed, and the
+ * outcome is the presentation vocabulary of a provider-owned operation. CardViews forwards the
+ * user's intent through this contract without implementing an operation; Editors supplies the
+ * implementation.
+ */
+
 import type { CardListTarget, CardListToolSelection } from '../../card-list/index.js';
 
 /** One user action over explicit targets through the owning component's operation. */
@@ -34,7 +44,11 @@ export interface UiListAction {
   };
 }
 
-/** A rejected dispatch has no receipt; only the provider can recover its outcome. */
+/**
+ * Forwards one user action to the editor-supplied tool and normalizes its outcome. A rejected
+ * dispatch carries no receipt, so only the provider can recover its outcome
+ * (docs/application.md#construction-and-request-boundary).
+ */
 export async function runAction(
   action: UiListAction,
   request: UiActionRequest,

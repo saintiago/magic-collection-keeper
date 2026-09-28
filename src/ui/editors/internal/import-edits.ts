@@ -15,7 +15,7 @@
  * physical copies.
  */
 
-import type { Finish } from '../../catalog/index.js';
+import type { Finish } from '../../../catalog/index.js';
 import type {
   UserCardsAccountOperations,
   UserCardsConfirmationRequest,
@@ -25,7 +25,7 @@ import type {
   UserCardsOperationOutcome,
   UserCardsRetainedAttempt,
   UserCardsSourceImportRequest,
-} from '../../usercards/browser.js';
+} from '../../../usercards/browser.js';
 import type {
   CopyCondition,
   DiscardImportEntryInput,
@@ -44,7 +44,7 @@ import type {
   ReviewImportEntryInput,
   SourceImportResult,
   StageImportEntriesInput,
-} from '../../usercards/index.js';
+} from '../../../usercards/index.js';
 
 import { commitUiOperation, type UiChangeCommit } from './failure.js';
 

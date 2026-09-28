@@ -22,7 +22,7 @@ import type { CaptureBrowserDevice } from '../../capture/index.js';
 
 import { createDialogs, type UiDialogs } from './dialogs.js';
 import { readAccount, type UiAccount, type UiIdentity } from './identity.js';
-import { observeUiInput } from './interaction.js';
+import { observeUiInput } from '../shared/interaction.js';
 import type { UiPageContext, UiPageDefinition, UiPageHandle } from './pages.js';
 import { createViewStateStore, type UiViewSnapshot } from './restoration.js';
 import {
