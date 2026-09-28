@@ -34,16 +34,17 @@ npm run install:browsers
 ## Checks
 
 ```sh
-npm run format:check     # Prettier over sources, tests and documentation
-npm run lint             # ESLint
-npm run typecheck        # tsc --noEmit
-npm run boundaries       # dependency-cruiser over src/
-npm run test:component   # Vitest component contracts
-npm run test:integration # Vitest integration boundaries
-npm run test:browser     # Playwright browser journeys
-npm run test:python      # Python unittest recognition suite (src/recognition/python/tests)
-npm run test:recognition # Retained browser recognition regressions (tests/recognition)
-npm run build            # compile the component public entry points into build/
+npm run format:check        # Prettier over sources, tests and documentation
+npm run lint                # ESLint
+npm run typecheck           # tsc --noEmit
+npm run boundaries          # dependency-cruiser over src/
+npm run lint:infrastructure # cfn-lint over the CloudFormation templates in infra/
+npm run test:component      # Vitest component contracts
+npm run test:integration    # Vitest integration boundaries
+npm run test:browser        # Playwright browser journeys
+npm run test:python         # Python unittest recognition suite (src/recognition/python/tests)
+npm run test:recognition    # Retained browser recognition regressions (tests/recognition)
+npm run build               # compile the component public entry points into build/
 ```
 
 Focus a scope with a path filter, for example `npm run test:component -- public-contracts`. Component
@@ -56,6 +57,10 @@ extra setup. The check requires the complete 27-regression suite: when the depen
 or cannot be installed it fails with an actionable error instead of skipping regressions. Set
 `KEEPER_PYTHON` to an interpreter that already provides NumPy, Pillow and OpenCV to bypass
 provisioning.
+The infrastructure check provisions the pinned `infra/requirements-lint.txt` release into the
+ignored `.infrastructure-python/` environment the same way and lints every template under `infra/`;
+it establishes template validity only, while the identity and network boundaries of a deployed
+environment stay separate evidence (infra/README.md).
 
 `npm run validate` runs every check through Turborepo, which caches only the deterministic checks
 (formatting, linting, type checking and boundaries) and always runs the test suites and build.
@@ -70,6 +75,12 @@ the snapshot source and the transaction-capable RDS Data API executor; resource 
 packaging and deployment stay with the deployment tasks listed in docs/tasks/inventory.md. The
 component and integration checks exercise the same statements, provider limits, rollback and
 published relations that the deployed job uses.
+The AWS stack itself is defined in `infra/`: the foundation template creates the isolated network,
+the Aurora cluster behind the RDS Data API, the private buckets, the image repositories and the
+database secrets, and the service template adds the app client of the retained user pool, the
+JWT-authorized HTTP API, both compute runtimes, the finite catalog task definition and the
+CloudFront delivery. `infra/README.md` records create/update/rollback, data retention, cost
+assumptions and the checks that require a deployed environment.
 
 UserCards owns the account's physical copies and their organization: each copy keeps one stable
 identity, one Catalog printing reference, its finish and condition, its system-owned membership and
