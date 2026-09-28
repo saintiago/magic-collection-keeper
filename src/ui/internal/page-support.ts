@@ -10,7 +10,7 @@
  * representation opaque to the others.
  */
 
-import type { CardListEntry, CardListRetained } from '../../card-list/index.js';
+import type { CardListEntry } from '../../card-list/index.js';
 
 import type { UiCardList } from '../card-views/index.js';
 import type { UiPageHandle } from './pages.js';
@@ -25,6 +25,7 @@ export {
   selectControl,
   type UiSelectOption,
 } from '../shared/controls.js';
+export { readRetainedList as readListState, readState as readPageState } from '../shared/state.js';
 
 /**
  * One page's handle: the page keeps its own form state beside the state its list retains, and it
@@ -94,26 +95,4 @@ export function cardViewOf(entry: CardListEntry): UiView | null {
       // A pending import entry has no catalog record to open before its confirmation.
       return null;
   }
-}
-
-/**
- * The page state a history entry kept, or null when it kept none. The page owns this shape and
- * interprets it; the shell hands it back without reading or restricting it
- * (docs/user-interface.md#state-ownership-and-restoration).
- */
-export function readPageState(value: unknown): Readonly<Record<string, unknown>> | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return null;
-  }
-  return value as Readonly<Record<string, unknown>>;
-}
-
-/** The list state one page kept, or undefined when this visit restored none. */
-export function readListState<Context>(
-  state: Readonly<Record<string, unknown>> | null,
-): CardListRetained<Context> | undefined {
-  const list = state?.list;
-  return typeof list === 'object' && list !== null && !Array.isArray(list)
-    ? (list as CardListRetained<Context>)
-    : undefined;
 }

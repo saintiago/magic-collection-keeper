@@ -100,3 +100,17 @@ export {
   type UiCopyEditor,
   type UiCopyEditorOptions,
 } from './internal/copy.js';
+export {
+  createImportReviewEditor,
+  createManualImportEditor,
+  createSourceImportEditor,
+  type UiImportEditorContext,
+  type UiImportReviewDraft,
+  type UiImportReviewEditor,
+  type UiImportReviewEditorOptions,
+  type UiManualImportDraft,
+  type UiManualImportEditor,
+  type UiManualImportEditorOptions,
+  type UiSourceImportEditor,
+  type UiSourceImportEditorOptions,
+} from './internal/imports.js';

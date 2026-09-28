@@ -32,6 +32,17 @@ import {
   type UiCopyBulkEditorOptions,
 } from './copy.js';
 import type { CardListCatalogQuery, CardListCollectionQuery } from '../../../card-list/index.js';
+import {
+  createImportReviewEditor,
+  createManualImportEditor,
+  createSourceImportEditor,
+  type UiImportReviewEditor,
+  type UiImportReviewEditorOptions,
+  type UiManualImportEditor,
+  type UiManualImportEditorOptions,
+  type UiSourceImportEditor,
+  type UiSourceImportEditorOptions,
+} from './imports.js';
 
 export interface EditorsOptions {
   /**
@@ -58,6 +69,12 @@ export interface Editors {
   copyBulk(options: UiCopyBulkEditorOptions): UiCopyBulkEditor;
   /** The attribute editor of one physical copy. */
   copy(options: UiCopyEditorOptions): UiCopyEditor;
+  /** The manual entry editor of the Import activity. */
+  importManual(options: UiManualImportEditorOptions): UiManualImportEditor;
+  /** The source import editor of the Import activity. */
+  importSource(options: UiSourceImportEditorOptions): UiSourceImportEditor;
+  /** The pending review and confirmation editor of the Import activity. */
+  importReview(options: UiImportReviewEditorOptions): UiImportReviewEditor;
 }
 
 /** The default Editors module of the browser application. */
@@ -72,5 +89,8 @@ export function createEditors(options: EditorsOptions): Editors {
     collectionQuery: (editorOptions) => createCollectionQueryEditor(editorOptions),
     copyBulk: (editorOptions) => createCopyBulkEditor(editorOptions),
     copy: (editorOptions) => createCopyEditor(editorOptions),
+    importManual: (editorOptions) => createManualImportEditor(editorOptions),
+    importSource: (editorOptions) => createSourceImportEditor(editorOptions),
+    importReview: (editorOptions) => createImportReviewEditor(editorOptions),
   };
 }
