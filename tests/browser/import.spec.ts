@@ -2987,6 +2987,16 @@ test('releases replaced import editor controls while preserving drafts and selec
   page,
 }) => {
   const errors = await openPendingReview(page, [entry()]);
+  const client = await page.context().newCDPSession(page);
+  const observers = async (): Promise<number> => {
+    const counted = await client.send('Runtime.evaluate', {
+      expression: "getEventListeners(document)['focusin']?.length ?? 0",
+      includeCommandLineAPI: true,
+      returnByValue: true,
+    });
+    return counted.result.value as number;
+  };
+  const baseline = await observers();
   await page.fill('#import-review-quantity-entry-1', '5');
   await page.locator('#import-pending [data-ui-select]').check();
   type TrackedEditors = { retiredEditors: WeakRef<Element>[] };
@@ -2994,6 +3004,19 @@ test('releases replaced import editor controls while preserving drafts and selec
     (globalThis as unknown as TrackedEditors).retiredEditors = [];
   });
   for (let index = 1; index <= 6; index += 1) {
+    await page.fill(`#import-printing-query-entry-${index}`, 'Bolt');
+    await page.click(`#import-printing-find-entry-${index}`);
+    await settle(
+      page,
+      'settleSearch',
+      (await requested(page, 'searches', index - 1)).id,
+      searchSlice([m10], null),
+    );
+    await expect(page.locator('[data-ui-import-printing-picker] [data-ui-entry]')).toHaveCount(1);
+    expect(await observers()).toBe(baseline + 1);
+    await page.locator('[data-ui-import-printing-picker]').evaluate((picker) => {
+      (globalThis as unknown as TrackedEditors).retiredEditors.push(new WeakRef(picker));
+    });
     await page.locator('[data-ui-import-editor]').evaluate((editor) => {
       (globalThis as unknown as TrackedEditors).retiredEditors.push(new WeakRef(editor));
     });
@@ -3008,6 +3031,7 @@ test('releases replaced import editor controls while preserving drafts and selec
     await expect(
       page.locator(`[data-ui-import-editor="pending:entry-${index + 1}"]`),
     ).toBeVisible();
+    expect(await observers()).toBe(baseline);
   }
   await page.requestGC();
   expect(
@@ -3052,3 +3076,157 @@ test('preserves the focused review choice and draft through a printing correctio
   await expect(condition).toHaveValue('LP');
   expect(errors).toEqual([]);
 });
+
+test('keeps pending selection and paging independent of its nested printing picker', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry()]);
+  // Give the parent a continuation so a bubbled Load more would issue an observable read.
+  await page.click('#import-refresh');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+    continuation: 'pending-next',
+  });
+  const parentSelection = page.locator('[data-ui-select="pending:entry-1"]');
+  await parentSelection.check();
+  await page.fill('#import-printing-query-entry-1', 'Bolt');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchSlice([m11], 'printing-next'),
+  );
+  const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
+  await picker.locator('[data-ui-select]').check();
+  await picker.getByRole('button', { name: 'Clear selection' }).click();
+  await expect(parentSelection).toBeChecked();
+  await picker.locator('[data-ui-more]').click();
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches', 1)).id,
+    searchSlice([m10], null),
+  );
+  await expect(picker.locator('[data-ui-entry]')).toHaveCount(2);
+  expect(await control<unknown[]>(page, 'entries')).toHaveLength(2);
+  await expect(parentSelection).toBeChecked();
+  expect(errors).toEqual([]);
+});
+
+test('rejects ambiguous review choices and applies cached choices to the refreshed row', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.fill('#import-printing-query-entry-1', 'Bolt');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchSlice([m10, m11], null),
+  );
+  const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await page.click('#import-refresh');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches', 1)).id,
+    searchSlice([m10, m11], null),
+  );
+  await chooseImportPrinting(page, 'entry-1', m11.printingId);
+  await expect(page.locator('#import-entry-status-entry-1')).toHaveText(
+    'Select exactly one printing, then choose it.',
+  );
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  expect(await control<unknown[]>(page, 'review')).toHaveLength(0);
+  await picker.locator(`[data-ui-select="printing:${m10.printingId}"]`).uncheck();
+  await picker.locator('[data-ui-tool="choose-printing"]').click();
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M11 149 · en');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches', 2)).id,
+    searchSlice([m10, m11], null),
+  );
+  await picker.locator('[data-ui-clear-selection]').click();
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await page.click('#import-review-save-entry-1');
+  expect((await requested<Record<string, unknown>>(page, 'review')).arguments.printingId).toBe(
+    m10.printingId,
+  );
+  expect(errors).toEqual([]);
+});
+
+for (const superseded of [false, true]) {
+  test(`resolves a printing choice across row replacement (superseded: ${superseded})`, async ({
+    page,
+  }) => {
+    const errors = await openPendingReview(page, [entry()]);
+    await page.fill('#import-printing-query-entry-1', 'Bolt');
+    await page.click('#import-printing-find-entry-1');
+    await settle(
+      page,
+      'settleSearch',
+      (await requested(page, 'searches')).id,
+      searchSlice([m10, m11], null),
+    );
+    const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
+    await expect(picker.locator('[data-ui-entry]')).toHaveCount(2);
+    const reads = (await control<unknown[]>(page, 'catalogRequests')).length;
+    await control(page, 'scriptCatalog', null);
+    await chooseImportPrinting(page, 'entry-1', m10.printingId);
+    const lookup = await requested(page, 'catalogRequests', reads);
+    await scriptCatalog(page, { cards: [boltCard], printings: [m11, m10] });
+    await page.click('#import-refresh');
+    await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+    await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+      session: session(),
+      entries: [entry()],
+    });
+    await expect(page.locator('#import-review-printing-entry-1')).toHaveText(
+      `Printing ${m10.printingId}`,
+    );
+    if (superseded) {
+      await page.click('#import-printing-find-entry-1');
+      await settle(
+        page,
+        'settleSearch',
+        (await requested(page, 'searches', 1)).id,
+        searchSlice([m10, m11], null),
+      );
+      await picker.locator('[data-ui-clear-selection]').click();
+      await chooseImportPrinting(page, 'entry-1', m11.printingId);
+      await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M11 149 · en');
+    }
+    // Resolving the older choice must neither paint detached controls nor clear a newer finish.
+    await settle(page, 'settleCatalog', lookup.id, { printings: [{ ...m10, finishes: ['foil'] }] });
+    await expect(page.locator('#import-review-printing-entry-1')).toHaveText(
+      superseded ? 'M11 149 · en' : 'M10 146 · en',
+    );
+    if (superseded) {
+      await expect(page.locator('#import-review-finish-entry-1')).toHaveValue('nonfoil');
+    } else {
+      await page.selectOption('#import-review-finish-entry-1', 'foil');
+    }
+    await page.click('#import-review-save-entry-1');
+    expect((await requested<Record<string, unknown>>(page, 'review')).arguments).toMatchObject({
+      printingId: superseded ? m11.printingId : m10.printingId,
+      finish: superseded ? 'nonfoil' : 'foil',
+    });
+    expect(errors).toEqual([]);
+  });
+}

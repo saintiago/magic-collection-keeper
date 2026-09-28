@@ -51,6 +51,7 @@ import {
   type UiTagKind,
 } from './tag-edits.js';
 import { applyAction, outcomeText, type UiOperationOutcome } from './operations.js';
+import { printingChoiceGuidance, singlePrintingChoice } from './printing-choice.js';
 
 /** The reported presentation of one list's retention, or null when this visit restored none. */
 function presentedOf<Context>(list: UiCardList<Context>): Promise<void> | null {
@@ -1185,7 +1186,6 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
       return;
     }
     if (association.targetLevel !== 'card') {
-      // The row no longer offers a card-level refinement; its picker leaves with the choice.
       releasePrintingPicker(editor.entry.key);
     }
     if (
@@ -1193,6 +1193,15 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
       cardListEntryKey(referenceOfAssociation(association))
     ) {
       editor.controls.replaceChildren(editor.status);
+      return;
+    }
+    const previousPicker = printingPickers.get(editor.entry.key);
+    if (previousPicker !== undefined && previousPicker.cardId !== association.targetId) {
+      // A picker is bound to one card, even when the association keeps its own identity.
+      releasePrintingPicker(editor.entry.key);
+      const draft = drafts.get(association.associationId);
+      if (draft !== undefined) draft.printingId = null;
+      openPrintingPicker(editor, association);
       return;
     }
     const draft = drafts.get(association.associationId) ?? null;
@@ -1570,6 +1579,7 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
       editor.status.textContent = 'The card of this association is not available.';
       return;
     }
+    const entryKey = editor.entry.key;
     const host = document.createElement('div');
     host.dataset.uiPrintingPicker = association.associationId;
     const list = options.cardViews.picker<string>({
@@ -1582,11 +1592,14 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
       fragments: { tools: printingChoicesReader() },
       choice: { id: 'refine-printing', label: 'Refine to this printing' },
       onChoose: (selection) => {
-        void refineFromPicker(editor.entry.key, selection);
+        const current = associationRecord(entryKey);
+        if (current?.targetLevel === 'card' && current.targetId === card.cardId) {
+          void refineFromPicker(entryKey, selection);
+        }
       },
       signal: options.signal,
     });
-    printingPickers.set(editor.entry.key, { host, list });
+    printingPickers.set(entryKey, { host, list, cardId: card.cardId });
     // The draft keeps the printing the owner chose to refine to: once the row's window presents
     // that printing again, the picker presents it as the selection for review
     // (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
@@ -1627,8 +1640,13 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
     selection: CardListToolSelection,
   ): Promise<void> {
     const association = associationRecord(entryKey);
-    const target = selection.targets.find((candidate) => candidate.kind === 'printing');
-    if (association === null || target?.kind !== 'printing') {
+    if (association === null) {
+      return;
+    }
+    const target = singlePrintingChoice(selection);
+    if (target === null) {
+      const editor = editors.get(entryKey);
+      if (editor !== undefined) editor.status.textContent = printingChoiceGuidance;
       return;
     }
     draftFor(association.associationId).printingId = target.printingId;
@@ -1752,6 +1770,7 @@ interface UiAssociationDraft {
 
 /** One mounted printing picker of a card-level association and the region it presents in. */
 interface UiPrintingPicker {
+  readonly cardId: string;
   readonly host: HTMLElement;
   readonly list: UiCardList<string>;
 }

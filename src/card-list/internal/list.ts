@@ -223,7 +223,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
   if (signal !== undefined && signal.aborted) {
     dispose();
   } else {
-    signal?.addEventListener('abort', () => dispose());
+    signal?.addEventListener('abort', dispose, { once: true });
     const start = kept?.position ?? null;
     startRequest(start?.continuation ?? null, start?.offset ?? 0);
     startObservation();
@@ -1512,6 +1512,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
   }
 
   function dispose(): void {
+    signal?.removeEventListener('abort', dispose);
     if (disposed) {
       return;
     }

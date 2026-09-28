@@ -263,7 +263,7 @@ export function createCardListView<Context>(
   if (options.signal?.aborted === true) {
     dispose();
   } else {
-    options.signal?.addEventListener('abort', () => dispose(), { once: true });
+    options.signal?.addEventListener('abort', dispose, { once: true });
   }
 
   return {
@@ -705,7 +705,8 @@ export function createCardListView<Context>(
   /** Preserve the actual editor field after all replacement fragments have mounted. */
   function preserveEditorFocus(): (() => boolean) | null {
     const active = document.activeElement;
-    if (!(active instanceof HTMLElement) || !entriesHost.contains(active)) return null;
+    if (!(active instanceof HTMLElement) || !entriesHost.contains(active) || !ownsInput(active))
+      return null;
     const focus = readEntryFocus();
     const row = active.closest<HTMLElement>('[data-ui-entry]');
     const path: number[] = [];
@@ -730,7 +731,11 @@ export function createCardListView<Context>(
         for (const index of path) replacement = replacement?.children.item(index) ?? null;
         if (replacement?.tagName !== active.tagName) replacement = null;
       }
-      if (replacement instanceof HTMLElement && entriesHost.contains(replacement)) {
+      if (
+        replacement instanceof HTMLElement &&
+        entriesHost.contains(replacement) &&
+        ownsInput(replacement)
+      ) {
         if (
           value !== null &&
           (replacement instanceof HTMLInputElement ||
@@ -755,7 +760,7 @@ export function createCardListView<Context>(
   /** The control of one entry that holds keyboard focus, so a re-rendering of the window keeps it. */
   function readEntryFocus(): CardListFocus | null {
     const active = document.activeElement;
-    if (active === null || !entriesHost.contains(active)) {
+    if (active === null || !entriesHost.contains(active) || !ownsInput(active)) {
       return null;
     }
     const row = active.closest('[data-ui-entry]');
@@ -787,7 +792,7 @@ export function createCardListView<Context>(
     }
     if (focus.control === 'element') {
       const control = document.getElementById(focus.id);
-      if (control !== null && entriesHost.contains(control)) {
+      if (control !== null && entriesHost.contains(control) && ownsInput(control)) {
         control.focus({ preventScroll: true });
       }
       return;
@@ -809,7 +814,8 @@ export function createCardListView<Context>(
     }
     const slot = row?.fragments.get(focus.kind);
     // A fragment that now shows a retry keeps the button focused; another state keeps the slot.
-    const control = slot?.querySelector<HTMLElement>('[data-ui-fragment-retry]') ?? slot;
+    const retry = slot?.querySelector<HTMLElement>('[data-ui-fragment-retry]');
+    const control = retry !== undefined && retry !== null && ownsInput(retry) ? retry : slot;
     if (control !== undefined) {
       control.focus();
     }
@@ -827,8 +833,11 @@ export function createCardListView<Context>(
   }
 
   /** Reports the logical position this presentation shows to the list that retains it. */
-  function reportPosition(): void {
-    if (disposed) {
+  function reportPosition(event?: Event): void {
+    if (
+      disposed ||
+      (event?.target instanceof Element && event.target !== container && !ownsInput(event.target))
+    ) {
       return;
     }
     list.reportPosition({
@@ -837,11 +846,19 @@ export function createCardListView<Context>(
     });
   }
 
+  /** Nested views translate their own controls, selection and focus through their own list. */
+  function ownsInput(element: Element): boolean {
+    return element.closest('[data-ui-card-list]') === section;
+  }
+
   function onClick(event: Event): void {
     if (disposed) {
       return;
     }
     const target = event.target as Element | null;
+    if (target === null || !ownsInput(target)) {
+      return;
+    }
     const control =
       target?.closest?.(
         '[data-ui-more],[data-ui-retry],[data-ui-tool],[data-ui-fragment-retry],[data-ui-clear-selection]',
@@ -878,16 +895,16 @@ export function createCardListView<Context>(
       return;
     }
     const input = event.target as HTMLInputElement | null;
-    if (input === null || input.type !== 'checkbox') {
+    if (input === null || input.type !== 'checkbox' || !ownsInput(input)) {
       return;
     }
     const row = input.closest('[data-ui-entry]');
-    if (row !== null) {
+    if (row !== null && input.hasAttribute('data-ui-select')) {
       list.setSelected(row.getAttribute('data-ui-entry') ?? '', input.checked);
       return;
     }
     const group = input.closest('[data-ui-group]');
-    if (group !== null) {
+    if (group !== null && input.hasAttribute('data-ui-group-select')) {
       const header = groupHeaders.get(group.getAttribute('data-ui-group') ?? '');
       if (header !== undefined) {
         list.setGroupSelected(header.keys, input.checked);
@@ -900,6 +917,7 @@ export function createCardListView<Context>(
       return;
     }
     disposed = true;
+    options.signal?.removeEventListener('abort', dispose);
     unsubscribe();
     interaction.abort();
     editorInteraction.abort();

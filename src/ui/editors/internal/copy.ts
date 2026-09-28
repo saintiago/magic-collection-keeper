@@ -41,6 +41,7 @@ import {
   type UiCopyCorrection,
 } from './copy-edits.js';
 import { applyAction, outcomeText, type UiOperationOutcome } from './operations.js';
+import { printingChoiceGuidance, singlePrintingChoice } from './printing-choice.js';
 
 /** Draft of the collection's bulk change controls. */
 export interface UiCopyBulkDraft {
@@ -496,10 +497,12 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
 
   /** Takes the printing the picker's explicit selection names into the draft. */
   function choosePrintingTarget(selection: CardListToolSelection): void {
-    const target = selection.targets.find((candidate) => candidate.kind === 'printing');
-    if (target === undefined || target.kind !== 'printing') {
+    const target = singlePrintingChoice(selection);
+    if (target === null) {
+      copyStatus.textContent = printingChoiceGuidance;
       return;
     }
+    copyStatus.textContent = '';
     draft = { ...readForm(), printingId: target.printingId };
     paint();
   }

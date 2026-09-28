@@ -1263,3 +1263,26 @@ test('overlapping reloads present the newest recorded state', async ({ page }) =
   await expect(page.locator('#copy-status')).toHaveText('Reloaded the copy.');
   expect(errors).toEqual([]);
 });
+
+test('rejects ambiguous copy printing choices after choosing another printing', async ({
+  page,
+}) => {
+  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  const other = { ...printingRecord('printing-2'), edition: 'M10', collectorNumber: '146' };
+  await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord(), other], null);
+  await choosePrinting(page, 'printing-1');
+  await choosePrinting(page, 'printing-2');
+  await expect(page.locator('#copy-status')).toHaveText(
+    'Select exactly one printing, then choose it.',
+  );
+  await expect(page.locator('#copy-printing-line')).toHaveText('M11 149 · en');
+  await page.locator('#copy-printing-picker [data-ui-select="printing:printing-1"]').uncheck();
+  await page.locator('#copy-printing-picker [data-ui-tool="choose-printing"]').click();
+  await settlePrinting(page, 'printing-2', { printings: [other] });
+  await expect(page.locator('#copy-printing-line')).toHaveText('M10 146 · en');
+  await expect(page.locator('#copy-status')).toBeEmpty();
+  expect(errors).toEqual([]);
+});

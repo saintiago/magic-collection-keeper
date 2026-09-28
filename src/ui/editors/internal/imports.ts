@@ -33,6 +33,7 @@ import type { UiActionIntent } from '../../shared/actions.js';
 import type { CardViews } from '../../card-views/index.js';
 import type { UiActionRequest, UiOperationAction, UiOperationOutcome } from './operations.js';
 import { applyAction, outcomeText } from './operations.js';
+import { printingChoiceGuidance, singlePrintingChoice } from './printing-choice.js';
 import {
   button,
   controlLabel,
@@ -1017,6 +1018,7 @@ export function createImportReviewEditor(
       for (const key of editors.keys()) {
         if (!presentedKeys.has(key)) {
           editors.delete(key);
+          releasePrintingPicker(key);
         }
       }
       const readSession = binding.session();
@@ -1265,6 +1267,7 @@ export function createImportReviewEditor(
 
   /** Mounts the picker of one entry's printing search. */
   function composePrintingPicker(editor: UiImportEntryEditor, context: CardListPickerQuery): void {
+    const entryKey = editor.entry.key;
     const host = document.createElement('div');
     host.dataset.uiImportPrintingPicker = editor.entry.key;
     const list = options.cardViews.picker<CardListPickerQuery>({
@@ -1277,7 +1280,7 @@ export function createImportReviewEditor(
       fragments: { tools: printingChoicesReader() },
       choice: { id: 'choose-printing', label: 'Use this printing' },
       onChoose: (selection) => {
-        void choosePrinting(editor, selection);
+        void choosePrinting(entryKey, selection);
       },
       signal: options.signal,
     });
@@ -1304,23 +1307,35 @@ export function createImportReviewEditor(
    * Takes the printing the picker's explicit selection names into the entry's review draft and
    * reads its record, so the finish control follows the finishes that printing offers.
    */
-  async function choosePrinting(
-    editor: UiImportEntryEditor,
-    selection: CardListToolSelection,
-  ): Promise<void> {
-    const record = pendingRecord(editor.entry.key);
-    const target = selection.targets.find((candidate) => candidate.kind === 'printing');
-    if (disposed || record === null || target?.kind !== 'printing') {
+  async function choosePrinting(entryKey: string, selection: CardListToolSelection): Promise<void> {
+    const editor = editors.get(entryKey);
+    const record = pendingRecord(entryKey);
+    if (disposed || record === null || editor === undefined) {
+      return;
+    }
+    const target = singlePrintingChoice(selection);
+    if (target === null) {
+      report(editor, printingChoiceGuidance);
       return;
     }
     clearMessage(editor);
     const draft = draftFor(record);
     draft.printingId = target.printingId;
-    const picker = printingPickers.get(editor.entry.key);
+    const picker = printingPickers.get(entryKey);
     if (picker !== undefined) {
       picker.host.hidden = true;
     }
     await learnPrinting(record.entry.entryId, target.printingId);
+    const currentEditor = editors.get(entryKey);
+    if (
+      disposed ||
+      currentEditor === undefined ||
+      printingPickers.get(entryKey) !== picker ||
+      drafts.get(record.entry.entryId) !== draft ||
+      draft.printingId !== target.printingId
+    ) {
+      return;
+    }
     const known = knownPrinting(
       record,
       printings.get(record.entry.entryId) ?? [],
@@ -1329,7 +1344,7 @@ export function createImportReviewEditor(
     if (known !== null && !known.finishes.includes(draft.finish as Finish)) {
       draft.finish = '';
     }
-    paintEditor(editor);
+    paintEditor(currentEditor);
   }
 
   /**
@@ -1337,6 +1352,7 @@ export function createImportReviewEditor(
    * published finish vocabulary standing instead of blocking the review.
    */
   async function learnPrinting(entryId: string, printingId: string): Promise<void> {
+    const binding = pendingEntries;
     const known = printings.get(entryId) ?? [];
     const token = `${entryId}\u0000${printingId}`;
     if (
@@ -1349,7 +1365,7 @@ export function createImportReviewEditor(
     try {
       const resolved = await resolvePrintings(options.catalog, [printingId]);
       const record = resolved.get(printingId) ?? null;
-      if (disposed || record === null) {
+      if (disposed || pendingEntries !== binding || record === null) {
         return;
       }
       const current = printings.get(entryId) ?? [];
