@@ -16,6 +16,7 @@ import {
   createApiGatewayHandler,
   createInteractiveDeployment,
   runCatalogJob,
+  type SnapshotObjectClient,
 } from '../../src/application/deployment.js';
 import { catalogSchemaSql } from '../../src/catalog/index.js';
 import { usercardsSchemaSql } from '../../src/usercards/index.js';
@@ -90,12 +91,13 @@ const catalogJobEnvironment: Record<string, string> = {
 };
 
 function claimsFor(accountId: string, overrides: Readonly<Record<string, unknown>> = {}) {
+  // The claims an HTTP API JWT authorizer delivers: every value, including the expiry, is text.
   return {
     iss: issuer,
     aud: appClientId,
     sub: accountId,
     token_use: 'id',
-    exp: Math.floor(Date.now() / 1000) + 300,
+    exp: String(Math.floor(Date.now() / 1000) + 300),
     ...overrides,
   };
 }
@@ -162,6 +164,7 @@ describe('packaged runtimes', () => {
   it('publishes through the finite job and serves the published catalog to a verified caller', async () => {
     const outcome = await runJob({
       metadata: { 'source-version': sourceVersion },
+      version: 'snapshot-version-1',
       text: `${JSON.stringify(bolt)}\n`,
     });
 
@@ -207,6 +210,7 @@ describe('packaged runtimes', () => {
   it('stores a private copy for the verified account and keeps another account out', async () => {
     await runJob({
       metadata: { 'source-version': sourceVersion },
+      version: 'snapshot-version-1',
       text: `${JSON.stringify(bolt)}\n`,
     });
     const deployment = interactive();
@@ -267,6 +271,7 @@ describe('packaged runtimes', () => {
   it('rejects an invocation of another environment’s identity before it writes anything', async () => {
     await runJob({
       metadata: { 'source-version': sourceVersion },
+      version: 'snapshot-version-1',
       text: `${JSON.stringify(bolt)}\n`,
     });
     const deployment = interactive();
@@ -293,6 +298,32 @@ describe('packaged runtimes', () => {
     deployment.dispose();
   });
 
+  it('rejects an expired or unreadable authorizer expiry before it writes anything', async () => {
+    const deployment = interactive();
+    const handler = createApiGatewayHandler(deployment.application);
+    const expired = String(Math.floor(Date.now() / 1000) - 1);
+
+    for (const exp of [expired, 'not-a-time']) {
+      const response = await handler(
+        invocation({
+          method: 'POST',
+          path: '/api/collection/copies',
+          claims: claimsFor('cognito-alice', { exp }),
+          body: {
+            printingId: 'printing-tle-32-en',
+            finish: 'nonfoil',
+            condition: null,
+            quantity: 1,
+          },
+        }),
+      );
+      expect(response.statusCode).toBe(401);
+    }
+
+    expect(dataApi.transactions().begun).toBe(0);
+    deployment.dispose();
+  });
+
   it('serves no health or readiness endpoint', async () => {
     const deployment = interactive();
     const handler = createApiGatewayHandler(deployment.application);
@@ -308,6 +339,7 @@ describe('packaged runtimes', () => {
   it('reports an already published snapshot without ingesting it again', async () => {
     const fixture = {
       metadata: { 'source-version': sourceVersion },
+      version: 'snapshot-version-1',
       text: `${JSON.stringify(bolt)}\n`,
     };
     const first = await runJob(fixture);
@@ -322,6 +354,45 @@ describe('packaged runtimes', () => {
     expect(repeated.length).toBeGreaterThan(0);
     expect(repeated.some((entry) => /\b(insert|update|delete)\b/i.test(entry.sql))).toBe(false);
     expect(records.at(-1)).toMatchObject({ outcome: 'ok', sourceVersion });
+  });
+
+  it('opens no snapshot body when the published version is unchanged', async () => {
+    const fixture = {
+      metadata: { 'source-version': sourceVersion },
+      version: 'snapshot-version-1',
+      text: `${JSON.stringify(bolt)}\n`,
+    };
+    const source = createSnapshotObjects({ [snapshotKey]: fixture });
+    let bodies = 0;
+    const snapshots: SnapshotObjectClient = {
+      head: (command) => source.head(command),
+      get: (command) => {
+        bodies += 1;
+        return source.get(command);
+      },
+    };
+
+    const first = await runCatalogJob({
+      environment: catalogJobEnvironment,
+      dataApi,
+      snapshots,
+      log: (record) => records.push({ ...record }),
+    });
+    expect(first.ok).toBe(true);
+    expect(bodies).toBe(1);
+    const published = bodies;
+
+    const second = await runCatalogJob({
+      environment: catalogJobEnvironment,
+      dataApi,
+      snapshots,
+      log: (record) => records.push({ ...record }),
+    });
+
+    expect(second.ok).toBe(true);
+    expect(second.revision?.revisionId).toBe(first.revision?.revisionId);
+    // The unchanged run reads the metadata and never opens the transfer it does not ingest.
+    expect(bodies).toBe(published);
   });
 
   it('reports an unusable snapshot as a failed run and publishes nothing', async () => {

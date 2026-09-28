@@ -261,6 +261,7 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
       recognition: { cloudEnabled: false, computeBaseUrl: null },
       capabilities: { sourceImports: false },
     },
+    identity,
     request,
     catalog,
     search,

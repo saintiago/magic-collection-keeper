@@ -69,7 +69,9 @@ describe('packaging the deployable artifacts', () => {
     expect(manifest.schema).toBe(1);
     expect(manifest.revision).toBe(readRevision(repoRoot));
     expect(manifest.workingTree).toMatch(/^(clean|dirty)$/);
-    expect(manifest.version).toBe(`0.1.0+${manifest.revision.slice(0, 12)}`);
+    // The label names artifacts and the published catalog image, so it stays a valid Docker tag.
+    expect(manifest.version).toBe(`0.1.0-${manifest.revision.slice(0, 12)}`);
+    expect(manifest.version).toMatch(/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/);
     expect(manifest.artifacts.backend.file).toBe(artifactLayout.backendArchive);
     expect(manifest.artifacts.browser.directory).toBe(artifactLayout.browserDirectory);
     expect(manifest.artifacts.catalog.dockerfile).toBe(artifactLayout.catalogDockerfile);

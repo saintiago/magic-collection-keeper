@@ -77,7 +77,15 @@ export async function createTestDatabase(schemaSql: string): Promise<TestDatabas
   };
 }
 
-/** Replaces `:name` placeholders with positional parameters; `::` casts and quoted text survive. */
+/**
+ * Replaces `:name` placeholders with positional parameters; `::` casts and quoted text survive.
+ *
+ * Every parameter carries the type the deployed RDS Data API gives it, because the local drivers
+ * would otherwise leave the type to the server's inference and accept statements the deployed
+ * transport rejects: a `stringValue` arrives as text, a `longValue` as bigint, a `doubleValue` as
+ * double precision and a `booleanValue` as boolean, exactly as src/application/deployment.ts maps
+ * them. A null value stays untyped, as the Data API's `isNull` does.
+ */
 export function bindNamedParameters(
   statement: string,
   parameters: Readonly<Record<string, TestSqlValue>>,
@@ -117,7 +125,7 @@ export function bindNamedParameters(
       }
       used.push(name);
       values.push(value);
-      text += `$${values.length}`;
+      text += `$${values.length}${sqlTypeOf(value)}`;
       index = end;
       continue;
     }
@@ -129,4 +137,18 @@ export function bindNamedParameters(
     throw new Error(`Test statement ignores bound parameters: ${unused.join(', ')}.`);
   }
   return { text, values };
+}
+
+/** The SQL type of one Data API parameter, or nothing for a value it sends without a type. */
+function sqlTypeOf(value: TestSqlValue): string {
+  if (value === null) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return '::text';
+  }
+  if (typeof value === 'boolean') {
+    return '::boolean';
+  }
+  return Number.isInteger(value) ? '::bigint' : '::double precision';
 }

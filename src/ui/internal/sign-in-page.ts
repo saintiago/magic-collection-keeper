@@ -1,23 +1,25 @@
 /**
  * The deployment's sign-in interaction (docs/application.md#configuration-and-lifecycle,
- * docs/user-interface.md#interface).
+ * docs/user-interface.md#pages-and-navigation).
  *
- * The visitor signs in against this environment's user pool through a modal form the deployment
- * renders; the account and the tokens stay with the authentication boundary, so the shell only
- * receives the verified account it presents. A closed or cancelled form rejects the sign-in the
- * shell is running, and nothing the visitor typed is retained anywhere else.
+ * The visitor signs in against this environment's user pool through a page of this build, not a
+ * modal window: the form takes the place of the shell's current page content with its own heading
+ * and the fields the step needs, and the region returns to the page it presented when the step
+ * settles. A refused sign-in leaves the visitor on the view they came from, where the shell's
+ * status reports what happened and the sign-in action is offered again, and a completed one
+ * presents the view the URL names. Nothing the visitor typed is retained anywhere else.
  */
 
-import type { BrowserCredentialPrompt } from './cognito.js';
+import type { BrowserCredentialPrompt } from '../../application/index.js';
 
-/** Renders the credential prompt of this document; the form is created per sign-in. */
-export function createCredentialPrompt(document: Document): BrowserCredentialPrompt {
+/** Renders the credential prompt of this document; the page is created per sign-in step. */
+export function createCredentialPrompt(root: Element): BrowserCredentialPrompt {
+  const document = root.ownerDocument;
   return {
     request(mode, account) {
-      const dialog = document.createElement('dialog');
-      const form = document.createElement('form');
-      form.method = 'dialog';
-      const heading = document.createElement('h2');
+      const page = document.createElement('section');
+      const heading = document.createElement('h1');
+      heading.tabIndex = -1;
       heading.textContent = mode === 'sign-in' ? 'Sign in' : 'Choose a password';
       const hint = document.createElement('p');
       hint.textContent =
@@ -25,6 +27,7 @@ export function createCredentialPrompt(document: Document): BrowserCredentialPro
           ? 'Sign in with the username and password of your account.'
           : 'This account signs in for the first time; choose its password.';
 
+      const form = document.createElement('form');
       const username = document.createElement('input');
       username.name = 'username';
       username.autocomplete = 'username';
@@ -46,17 +49,20 @@ export function createCredentialPrompt(document: Document): BrowserCredentialPro
       passwordLabel.textContent = mode === 'sign-in' ? 'Password' : 'New password';
       passwordLabel.append(password);
 
-      const error = document.createElement('p');
-      error.setAttribute('role', 'alert');
       const submit = document.createElement('button');
       submit.type = 'submit';
       submit.textContent = mode === 'sign-in' ? 'Sign in' : 'Set password and continue';
       const cancel = document.createElement('button');
       cancel.type = 'button';
       cancel.textContent = 'Cancel';
-      form.append(heading, hint, usernameLabel, passwordLabel, error, submit, cancel);
-      dialog.append(form);
-      document.body.append(dialog);
+      form.append(heading, hint, usernameLabel, passwordLabel, submit, cancel);
+      page.append(form);
+
+      // The prompt is one page of the shell's page region; the region keeps what it presented
+      // before, so settling the step restores the view the visitor came from.
+      const region = readPageRegion(root);
+      const previous = [...region.childNodes];
+      region.replaceChildren(page);
 
       return new Promise<{ readonly username: string; readonly password: string }>(
         (resolve, reject) => {
@@ -67,8 +73,9 @@ export function createCredentialPrompt(document: Document): BrowserCredentialPro
             }
             settled = true;
             const values = { username: username.value, password: password.value };
-            dialog.close();
-            dialog.remove();
+            if (page.parentNode === region) {
+              region.replaceChildren(...previous);
+            }
             if (outcome === 'resolve') {
               resolve(values);
             } else {
@@ -78,10 +85,6 @@ export function createCredentialPrompt(document: Document): BrowserCredentialPro
           cancel.addEventListener('click', () => {
             close('reject');
           });
-          dialog.addEventListener('cancel', (event) => {
-            event.preventDefault();
-            close('reject');
-          });
           form.addEventListener('submit', (event) => {
             event.preventDefault();
             if (!form.reportValidity()) {
@@ -89,10 +92,14 @@ export function createCredentialPrompt(document: Document): BrowserCredentialPro
             }
             close('resolve');
           });
-          dialog.showModal();
-          username.focus();
+          heading.focus();
         },
       );
     },
   };
+}
+
+/** The page region of this shell; a root without one presents the prompt as its content. */
+function readPageRegion(root: Element): Element {
+  return root.querySelector('main') ?? root;
 }

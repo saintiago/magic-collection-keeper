@@ -116,6 +116,11 @@ export interface DataApiCommand {
 
 export interface DataApiClient {
   send(command: DataApiCommand): Promise<Readonly<Record<string, unknown>>>;
+  /**
+   * Releases the SDK client an adapter owns. A runtime that constructed its adapter calls this when
+   * its work ends; a client a caller supplied without it stays open and stays the caller's.
+   */
+  destroy?(): void;
 }
 
 /** Head and body reads of the private snapshot bucket. */
@@ -123,7 +128,12 @@ export type SnapshotObjectCommandName = 'HeadObject' | 'GetObject';
 
 export interface SnapshotObjectCommand {
   readonly name: SnapshotObjectCommandName;
-  readonly input: { readonly Bucket: string; readonly Key: string };
+  readonly input: {
+    readonly Bucket: string;
+    readonly Key: string;
+    /** Exact object version to read; the source pins the body to the metadata it read. */
+    readonly VersionId?: string;
+  };
 }
 
 export interface SnapshotObject {
@@ -131,15 +141,21 @@ export interface SnapshotObject {
   readonly metadata: Readonly<Record<string, string>>;
   /** Decoded object body, streamed in arbitrary chunks. */
   readonly body: AsyncIterable<string>;
+  /** Version of the object this body belongs to, or null when the bucket reports none. */
+  readonly version: string | null;
 }
 
 export interface SnapshotObjectClient {
   head(command: SnapshotObjectCommand): Promise<SnapshotObjectHandle>;
   get(command: SnapshotObjectCommand): Promise<SnapshotObject>;
+  /** Releases the SDK client an adapter owns, exactly like {@link DataApiClient.destroy}. */
+  destroy?(): void;
 }
 
 export interface SnapshotObjectHandle {
   readonly metadata: Readonly<Record<string, string>>;
+  /** Version of the object these metadata describe, or null when the bucket reports none. */
+  readonly version: string | null;
 }
 
 /** Coordinates of the one database a runtime reaches through the RDS Data API. */
@@ -329,6 +345,9 @@ export function createRdsDataApiClient(client: RDSDataClient): DataApiClient {
           )) as unknown as Readonly<Record<string, unknown>>;
       }
     },
+    destroy() {
+      destroyClient(client);
+    },
   };
 }
 
@@ -484,16 +503,27 @@ export function createS3SnapshotClient(client: S3Client): SnapshotObjectClient {
       const response = (await client.send(
         new HeadObjectCommand({ Bucket: command.input.Bucket, Key: command.input.Key }),
       )) as HeadObjectCommandOutput;
-      return { metadata: readObjectMetadata(response.Metadata) };
+      return {
+        metadata: readObjectMetadata(response.Metadata),
+        version: readStringValue(response.VersionId),
+      };
     },
     async get(command) {
       const response = (await client.send(
-        new GetObjectCommand({ Bucket: command.input.Bucket, Key: command.input.Key }),
+        new GetObjectCommand({
+          Bucket: command.input.Bucket,
+          Key: command.input.Key,
+          ...(command.input.VersionId === undefined ? {} : { VersionId: command.input.VersionId }),
+        }),
       )) as GetObjectCommandOutput;
       return {
         metadata: readObjectMetadata(response.Metadata),
         body: decodeBody(response.Body),
+        version: readStringValue(response.VersionId),
       };
+    },
+    destroy() {
+      destroyClient(client);
     },
   };
 }
@@ -543,6 +573,12 @@ async function* decodeBody(body: unknown): AsyncGenerator<string> {
 /**
  * The configured snapshot source: one object per dataset under the configured prefix, and the
  * provider version the deployment recorded in the object's metadata when it uploaded the snapshot.
+ *
+ * The metadata read and the body read belong to one object version: the source pins the body
+ * request to the version the metadata reported, so a snapshot replaced concurrently can never
+ * publish content under another version's identity. Opening the snapshot performs the metadata
+ * read only; the transfer starts with the first read of {@link CatalogSnapshot.text} and is
+ * released when iteration ends, fails or is cancelled before it ever starts.
  */
 export function createS3SnapshotSource(options: {
   readonly client: SnapshotObjectClient;
@@ -557,23 +593,69 @@ export function createS3SnapshotSource(options: {
   const prefix = options.prefix ?? '';
   return {
     async open(request: CatalogSynchronizationRequest): Promise<CatalogSnapshot> {
+      const key = `${prefix}${request.dataset}.jsonl`;
       const command: SnapshotObjectCommand = {
         name: 'HeadObject',
-        input: { Bucket: bucket, Key: `${prefix}${request.dataset}.jsonl` },
+        input: { Bucket: bucket, Key: key },
       };
       const head = await client.head(command);
       const sourceVersion = head.metadata[SNAPSHOT_VERSION_METADATA_KEY];
       if (typeof sourceVersion !== 'string' || sourceVersion.length === 0) {
         throw new Error(`The ${request.dataset} snapshot does not record its provider version.`);
       }
-      const object = await client.get({ ...command, name: 'GetObject' });
+
+      async function* openBody(): AsyncGenerator<string> {
+        const object = await client.get({
+          name: 'GetObject',
+          input: {
+            Bucket: bucket,
+            Key: key,
+            ...(head.version === null ? {} : { VersionId: head.version }),
+          },
+        });
+        try {
+          if (object.version !== head.version) {
+            throw new Error(
+              `The ${request.dataset} snapshot changed between its metadata and its content read.`,
+            );
+          }
+          yield* decodeBody(object.body);
+        } finally {
+          releaseObjectBody(object.body);
+        }
+      }
+
       return {
         sourceName: CATALOG_SNAPSHOT_SOURCE_NAME,
         sourceVersion,
-        text: object.body,
+        text: openBody(),
       };
     },
   };
+}
+
+/**
+ * Releases one object body whose iteration ended, failed or was cancelled before the transfer
+ * finished. The deployed SDK streams own a socket, so the body is destroyed; a substitute that
+ * exposes no release is already finished or owned elsewhere, and an already released body makes
+ * this call a no-op.
+ */
+function releaseObjectBody(body: unknown): void {
+  if (typeof body !== 'object' || body === null) {
+    return;
+  }
+  for (const name of ['destroy', 'cancel', 'return'] as const) {
+    const release: unknown = Reflect.get(body, name);
+    if (typeof release !== 'function') {
+      continue;
+    }
+    try {
+      release.call(body);
+    } catch {
+      // Releasing is best effort: the consumer's own outcome is what the run reports.
+    }
+    return;
+  }
 }
 
 export interface InteractiveDeploymentOptions {
@@ -717,10 +799,29 @@ function readTransportRequest(event: unknown): TransportRequest {
     method,
     path,
     query: readQuery(record.queryStringParameters),
-    authentication: { claims: readRecordValue(claims) ?? null },
+    authentication: { claims: normalizeAuthorizerClaims(claims) },
     body,
     requestId: readStringValue(requestContext?.requestId),
   };
+}
+
+/**
+ * Claims of an HTTP API JWT authorizer: the verified token's claims, with every value delivered as
+ * text (AWS's `APIGatewayV2HTTPRequestContextAuthorizerJWTDescription`). Application's verifier
+ * reads the registered expiry as a number of seconds, so this boundary normalizes that one claim
+ * back to its JSON type and passes everything else on unchanged. A claim that does not carry a
+ * whole number of seconds stays as it arrived, and the verifier rejects the invocation.
+ */
+function normalizeAuthorizerClaims(value: unknown): Readonly<Record<string, unknown>> | null {
+  const claims = readRecordValue(value);
+  if (claims === null) {
+    return null;
+  }
+  const expiry = claims.exp;
+  if (typeof expiry !== 'string' || !/^\d+$/.test(expiry)) {
+    return claims;
+  }
+  return { ...claims, exp: Number(expiry) };
 }
 
 function readBody(event: Readonly<Record<string, unknown>>): string | null {

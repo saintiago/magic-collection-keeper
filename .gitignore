@@ -22,4 +22,5 @@ artifacts/
 public/vendor/
 public/config.json
 infra/outputs.json
+infra/service-outputs.json
 .local-secrets/

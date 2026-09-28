@@ -8,16 +8,22 @@
  * call shapes, the parameter mapping and the failure translation are exercised for real.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import { GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 
 import {
   CATALOG_SNAPSHOT_SOURCE_NAME,
   createApiGatewayHandler,
   createConsoleDiagnostics,
   createDataApiTransactor,
+  createInteractiveDeployment,
+  createRdsDataApiClient,
   createS3SnapshotSource,
+  createS3SnapshotClient,
   readCatalogJobEnvironment,
   readInteractiveEnvironment,
+  runCatalogJob,
   type DataApiCommand,
 } from '../../../src/application/deployment.js';
 import { ConfigurationError } from '../../../src/application/index.js';
@@ -266,18 +272,22 @@ describe('RDS Data API transport', () => {
 });
 
 describe('snapshot bucket source', () => {
-  it('opens the dataset object under the configured prefix and streams its text', async () => {
-    const reads: string[] = [];
+  it('pins the body to the object version its metadata described and streams its text', async () => {
+    const reads: { readonly key: string; readonly version: string | undefined }[] = [];
     const source = createS3SnapshotSource({
       client: {
         async head(command) {
-          reads.push(`head:${command.input.Key}`);
-          return { metadata: { 'source-version': '2026-09-01T00:00:00.000Z' } };
+          reads.push({ key: `head:${command.input.Key}`, version: command.input.VersionId });
+          return {
+            metadata: { 'source-version': '2026-09-01T00:00:00.000Z' },
+            version: 'object-version-1',
+          };
         },
         async get(command) {
-          reads.push(`get:${command.input.Key}`);
+          reads.push({ key: `get:${command.input.Key}`, version: command.input.VersionId });
           return {
             metadata: {},
+            version: 'object-version-1',
             body: (async function* stream() {
               yield '{"id":"printing-1"}\n';
               yield '{"id":"printing-2"}\n';
@@ -291,24 +301,114 @@ describe('snapshot bucket source', () => {
 
     const snapshot = await source.open({ dataset: 'default_cards' });
 
-    expect(reads).toEqual([
-      'head:snapshots/default_cards.jsonl',
-      'get:snapshots/default_cards.jsonl',
-    ]);
+    // Opening the snapshot reads its metadata only; the metadata and the body belong to one version.
+    expect(reads).toEqual([{ key: 'head:snapshots/default_cards.jsonl', version: undefined }]);
     expect(snapshot.sourceName).toBe(CATALOG_SNAPSHOT_SOURCE_NAME);
     expect(snapshot.sourceVersion).toBe('2026-09-01T00:00:00.000Z');
     const text: string[] = [];
     for await (const chunk of snapshot.text) {
       text.push(chunk);
     }
+    expect(reads).toEqual([
+      { key: 'head:snapshots/default_cards.jsonl', version: undefined },
+      { key: 'get:snapshots/default_cards.jsonl', version: 'object-version-1' },
+    ]);
     expect(text.join('')).toBe('{"id":"printing-1"}\n{"id":"printing-2"}\n');
+  });
+
+  it('starts no transfer for a snapshot that is never read', async () => {
+    let reads = 0;
+    const source = createS3SnapshotSource({
+      client: {
+        async head() {
+          reads += 1;
+          return { metadata: { 'source-version': 'v1' }, version: null };
+        },
+        async get() {
+          throw new Error('An unread snapshot opens no transfer.');
+        },
+      },
+      bucket: 'keeper-test-snapshots',
+      prefix: 'snapshots/',
+    });
+
+    const snapshot = await source.open({ dataset: 'default_cards' });
+    const iterator = snapshot.text[Symbol.asyncIterator]();
+    await iterator.return?.();
+
+    expect(reads).toBe(1);
+  });
+
+  it('releases the body of a transfer the caller stops reading', async () => {
+    let releases = 0;
+    const body: AsyncIterable<string> & { destroy(): void } = {
+      destroy() {
+        releases += 1;
+      },
+      async *[Symbol.asyncIterator]() {
+        yield '{"id":"printing-1"}\n';
+        yield '{"id":"printing-2"}\n';
+      },
+    };
+    const source = createS3SnapshotSource({
+      client: {
+        async head() {
+          return { metadata: { 'source-version': 'v1' }, version: null };
+        },
+        async get() {
+          return { metadata: {}, version: null, body };
+        },
+      },
+      bucket: 'keeper-test-snapshots',
+      prefix: null,
+    });
+
+    const snapshot = await source.open({ dataset: 'default_cards' });
+    for await (const chunk of snapshot.text) {
+      expect(chunk).toContain('printing-1');
+      break;
+    }
+
+    expect(releases).toBe(1);
+  });
+
+  it('refuses a body that does not belong to the version its metadata described', async () => {
+    let releases = 0;
+    const source = createS3SnapshotSource({
+      client: {
+        async head() {
+          return { metadata: { 'source-version': 'v1' }, version: 'object-version-1' };
+        },
+        async get() {
+          return {
+            metadata: {},
+            version: 'object-version-2',
+            body: {
+              destroy() {
+                releases += 1;
+              },
+              async *[Symbol.asyncIterator]() {
+                yield '{"id":"printing-of-another-version"}\n';
+              },
+            },
+          };
+        },
+      },
+      bucket: 'keeper-test-snapshots',
+      prefix: null,
+    });
+
+    const snapshot = await source.open({ dataset: 'default_cards' });
+
+    await expect(collect(snapshot.text)).rejects.toThrow(/changed/);
+    expect(releases).toBe(1);
   });
 
   it('rejects a snapshot that does not record its provider version', async () => {
     const source = createS3SnapshotSource({
       client: {
         async head() {
-          return { metadata: {} };
+          return { metadata: {}, version: null };
         },
         async get() {
           throw new Error('A snapshot without a version is never read.');
@@ -321,6 +421,15 @@ describe('snapshot bucket source', () => {
     await expect(source.open({ dataset: 'default_cards' })).rejects.toThrow(/provider version/);
   });
 });
+
+/** Reads one snapshot's text to the end, so a failure surfaces to the assertion. */
+async function collect(text: AsyncIterable<string>): Promise<string> {
+  const chunks: string[] = [];
+  for await (const chunk of text) {
+    chunks.push(chunk);
+  }
+  return chunks.join('');
+}
 
 describe('interactive HTTP API entry point', () => {
   it('maps one invocation to the transport request the boundary validates', async () => {
@@ -383,6 +492,67 @@ describe('interactive HTTP API entry point', () => {
     expect(requests[0]?.authentication).toEqual({ claims: null });
   });
 
+  it('normalizes the string expiry an HTTP API authorizer delivers', async () => {
+    const requests: TransportRequest[] = [];
+    const handler = createApiGatewayHandler({
+      async handle(request) {
+        requests.push(request);
+        return { status: 200, headers: {}, body: '{}' };
+      },
+    });
+
+    await handler({
+      rawPath: '/api/card',
+      requestContext: {
+        requestId: 'request-3',
+        http: { method: 'GET', path: '/api/card' },
+        authorizer: {
+          jwt: {
+            claims: {
+              iss: 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_keeper001',
+              aud: 'keeper-test-client',
+              sub: 'cognito-alice',
+              token_use: 'id',
+              exp: '1893456000',
+            },
+          },
+        },
+      },
+    });
+
+    expect(requests[0]?.authentication).toEqual({
+      claims: {
+        iss: 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_keeper001',
+        aud: 'keeper-test-client',
+        sub: 'cognito-alice',
+        token_use: 'id',
+        exp: 1_893_456_000,
+      },
+    });
+  });
+
+  it('passes an expiry the verifier cannot use on unchanged, so it rejects the invocation', async () => {
+    const requests: TransportRequest[] = [];
+    const handler = createApiGatewayHandler({
+      async handle(request) {
+        requests.push(request);
+        return { status: 200, headers: {}, body: '{}' };
+      },
+    });
+
+    await handler({
+      rawPath: '/api/card',
+      requestContext: {
+        http: { method: 'GET', path: '/api/card' },
+        authorizer: { jwt: { claims: { sub: 'cognito-alice', exp: 'soon' } } },
+      },
+    });
+
+    expect(requests[0]?.authentication).toEqual({
+      claims: { sub: 'cognito-alice', exp: 'soon' },
+    });
+  });
+
   it('reports an unreadable invocation as an invalid request', async () => {
     const handler = createApiGatewayHandler({
       async handle() {
@@ -418,6 +588,116 @@ describe('interactive HTTP API entry point', () => {
     expect(JSON.parse(response.body)).toEqual({
       error: { code: 'unavailable', message: 'The operation could not be completed.' },
     });
+  });
+});
+
+describe('snapshot SDK adapter', () => {
+  it('reads the object version of the metadata and pins the body request to it', async () => {
+    const sent: unknown[] = [];
+    const client = createS3SnapshotClient({
+      async send(command: unknown) {
+        sent.push(command);
+        return {
+          Metadata: { 'source-version': '2026-09-01T00:00:00.000Z' },
+          VersionId: 'object-version-1',
+          Body: undefined,
+        };
+      },
+    } as never);
+
+    const head = await client.head({
+      name: 'HeadObject',
+      input: { Bucket: 'keeper-test-snapshots', Key: 'snapshots/default_cards.jsonl' },
+    });
+    const object = await client.get({
+      name: 'GetObject',
+      input: {
+        Bucket: 'keeper-test-snapshots',
+        Key: 'snapshots/default_cards.jsonl',
+        ...(head.version === null ? {} : { VersionId: head.version }),
+      },
+    });
+
+    expect(head).toEqual({
+      metadata: { 'source-version': '2026-09-01T00:00:00.000Z' },
+      version: 'object-version-1',
+    });
+    expect(sent[0]).toBeInstanceOf(HeadObjectCommand);
+    expect(sent[1]).toBeInstanceOf(GetObjectCommand);
+    expect((sent[1] as GetObjectCommand).input).toMatchObject({
+      Bucket: 'keeper-test-snapshots',
+      Key: 'snapshots/default_cards.jsonl',
+      VersionId: 'object-version-1',
+    });
+    expect(object.version).toBe('object-version-1');
+  });
+});
+
+describe('catalog job snapshot lifecycle', () => {
+  it('opens no snapshot transfer when another publication holds the lock', async () => {
+    const client = recordingClient([
+      { formattedRecords: '[]' },
+      { transactionId: 'tx-1' },
+      { formattedRecords: '[{"locked":"false"}]' },
+      {},
+    ]);
+    let reads = 0;
+
+    const outcome = await runCatalogJob({
+      environment: catalogJobEnvironment,
+      dataApi: client,
+      snapshots: {
+        async head() {
+          return { metadata: { 'source-version': 'v1' }, version: null };
+        },
+        async get() {
+          reads += 1;
+          return {
+            metadata: {},
+            version: null,
+            body: (async function* stream() {
+              yield '{"id":"printing-1"}\n';
+            })(),
+          };
+        },
+      },
+      log: () => undefined,
+    });
+
+    // The busy run reports its outcome without opening the transfer it never consumes.
+    expect(outcome).toEqual({ ok: false, failureCode: 'busy', revision: null });
+    expect(reads).toBe(0);
+  });
+});
+
+describe('deployment-owned SDK clients', () => {
+  it('releases the SDK client each adapter wraps', () => {
+    const dataApiSdk = { send: async () => ({}), destroy: vi.fn() };
+    const snapshotsSdk = { send: async () => ({}), destroy: vi.fn() };
+
+    createRdsDataApiClient(dataApiSdk as never).destroy?.();
+    createS3SnapshotClient(snapshotsSdk as never).destroy?.();
+
+    expect(dataApiSdk.destroy).toHaveBeenCalledTimes(1);
+    expect(snapshotsSdk.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a caller-supplied client open when the runtime is disposed', () => {
+    const destroy = vi.fn();
+    const deployment = createInteractiveDeployment({
+      environment: interactiveEnvironment,
+      dataApi: {
+        async send() {
+          return {};
+        },
+        destroy,
+      },
+    });
+
+    deployment.dispose();
+
+    // A port the caller supplied stays the caller's; only the runtime's own client is released.
+    expect(destroy).not.toHaveBeenCalled();
   });
 });
 

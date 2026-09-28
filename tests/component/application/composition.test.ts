@@ -20,7 +20,7 @@ import {
   type ApplicationResources,
 } from '../../../src/application/backend.js';
 
-import { testConfiguration, testIdentityVerifier } from './harness.js';
+import { testConfiguration, testIdentityVerifier, testPrompt } from './harness.js';
 
 function resources(): ApplicationResources {
   return {
@@ -193,7 +193,7 @@ describe('application composition', () => {
       }),
     ).toThrow(TypeError);
     expect(() => createCatalogClient(undefined as never)).toThrow(TypeError);
-    expect(() => createBrowserApplication({ settings: {}, token: () => 'token' })).toThrow(
+    expect(() => createBrowserApplication({ settings: {}, prompt: testPrompt() })).toThrow(
       ConfigurationError,
     );
   });

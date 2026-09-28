@@ -380,6 +380,7 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
       recognition: { cloudEnabled: false, computeBaseUrl: null },
       capabilities: { sourceImports: false },
     },
+    identity,
     request,
     catalog,
     search,

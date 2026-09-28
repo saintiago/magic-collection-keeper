@@ -47,6 +47,16 @@ export {
   type UserInterfaceCapabilities,
 } from './internal/client.js';
 export {
+  createBrowserAuthentication,
+  createBrowserSessionStore,
+  type BrowserAccount,
+  type BrowserAuthentication,
+  type BrowserAuthenticationOptions,
+  type BrowserCredentialPrompt,
+  type BrowserIdentity,
+  type BrowserSessionStore,
+} from './internal/browser-authentication.js';
+export {
   ApplicationError,
   applicationFailureCodes,
   isApplicationFailureCode,

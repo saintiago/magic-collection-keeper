@@ -4,9 +4,10 @@
  *
  * The case packages the browser artifact with one environment's public settings, serves it the way
  * CloudFront serves it and loads it in Chromium: the page reads `config.json`, signs in against the
- * environment's app client, presents the verified account, reaches the API with the session token
- * and returns to the sign-in prompt after signing out. The artifact's own boot code runs, so a page
- * that names a private setting, a missing file or a broken bundle fails here.
+ * environment's app client through the sign-in page of this build, presents the verified account,
+ * reaches the API with the session token, recovers from a refused sign-in and returns to the
+ * signed-out page after signing out. The artifact's own boot code runs, so a page that names a
+ * private setting, a missing file or a broken bundle fails here.
  */
 
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -109,7 +110,7 @@ async function serveArtifact(route: Route): Promise<void> {
   });
 }
 
-test('the packaged browser artifact signs in and reaches the API with its session', async ({
+test('the packaged browser artifact signs in on its page and reaches the API with its session', async ({
   page,
 }) => {
   const requests: {
@@ -120,17 +121,17 @@ test('the packaged browser artifact signs in and reaches the API with its sessio
   const signIn: Record<string, unknown>[] = [];
   await installArtifactRoutes(page, requests, signIn);
 
-  await page.goto(`${artifactOrigin}/`);
+  // The visitor opens the view they want; the session starts over that destination.
+  await page.goto(`${artifactOrigin}/#/catalog`);
 
-  // The published page boots from the artifact's own config.json and presents the sign-in prompt.
-  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
-  await page.getByRole('main').getByRole('button', { name: 'Sign in' }).click();
-  const dialog = page.locator('dialog');
-  await dialog.getByLabel('Username').fill('alice@example.test');
-  await dialog.getByLabel('Password').fill('correct horse battery staple');
-  await dialog.getByRole('button', { name: 'Sign in' }).click();
+  // The published page boots from the artifact's own config.json and offers the sign-in page.
+  const signedOut = page.getByRole('main');
+  await signedOut.getByRole('button', { name: 'Sign in' }).click();
+  await fillCredentials(page, 'correct horse battery staple');
 
   await expect(page.locator('header')).toContainText('Alice');
+  // The signed-in page is the destination the visitor opened.
+  await expect(page.getByRole('main').getByRole('heading', { name: 'Catalog' })).toBeVisible();
   expect(signIn).toEqual([
     {
       AuthFlow: 'USER_PASSWORD_AUTH',
@@ -143,15 +144,60 @@ test('the packaged browser artifact signs in and reaches the API with its sessio
   ]);
 
   // A page read reaches the API with the session token the sign-in established.
-  await page.getByRole('link', { name: 'Catalog' }).click();
   await expect.poll(() => requests.length).toBeGreaterThan(0);
   expect(requests[0]?.url).toBe(`${apiOrigin}/api/search`);
   expect(requests[0]?.authorization).toBe(`Bearer ${sessionToken}`);
 
   await page.getByRole('button', { name: 'Sign out' }).click();
-  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await expect(page.getByRole('main').getByRole('button', { name: 'Sign in' })).toBeVisible();
   await expect(page.locator('header')).not.toContainText('Alice');
 });
+
+test('the sign-in page reports a refusal and offers the journey again', async ({ page }) => {
+  await installArtifactRoutes(page, [], [], { refuseFirst: true });
+  await page.goto(`${artifactOrigin}/`);
+
+  await page.getByRole('main').getByRole('button', { name: 'Sign in' }).click();
+  await fillCredentials(page, 'wrong horse battery staple');
+
+  // The refusal leaves the visitor on the page they came from, with the reason reported.
+  await expect(page.getByRole('status')).toContainText('Incorrect username or password.');
+  await expect(page.getByRole('main').getByRole('button', { name: 'Sign in' })).toBeVisible();
+
+  await page.getByRole('main').getByRole('button', { name: 'Sign in' }).click();
+  await fillCredentials(page, 'correct horse battery staple');
+
+  await expect(page.locator('header')).toContainText('Alice');
+});
+
+test('the packaged browser artifact sets an invited password on its page', async ({ page }) => {
+  await installArtifactRoutes(page, [], [], { invitation: true });
+  await page.goto(`${artifactOrigin}/`);
+
+  await page.getByRole('main').getByRole('button', { name: 'Sign in' }).click();
+  await fillCredentials(page, 'temporary-password');
+
+  // The first sign-in chooses its password on a page of its own, never in a modal window.
+  await expect(page.locator('dialog')).toHaveCount(0);
+  const region = page.getByRole('main');
+  await expect(region.getByRole('heading', { name: 'Choose a password' })).toBeVisible();
+  await expect(region.getByLabel('Username')).toHaveValue('alice@example.test');
+  await expect(region.getByLabel('Username')).not.toBeEditable();
+  await region.getByLabel('New password').fill('chosen-password-1');
+  await region.getByRole('button', { name: 'Set password and continue' }).click();
+
+  await expect(page.locator('header')).toContainText('Alice');
+});
+
+/** Fills the credential page; the credentials are a page of the artifact, never a dialog. */
+async function fillCredentials(page: Page, password: string): Promise<void> {
+  await expect(page.locator('dialog')).toHaveCount(0);
+  const region = page.getByRole('main');
+  await expect(region.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await region.getByLabel('Username').fill('alice@example.test');
+  await region.getByLabel('Password').fill(password);
+  await region.getByRole('button', { name: 'Sign in' }).click();
+}
 
 /** The environment boundary of the deployed page: sign-in, the API and the classified page. */
 async function installArtifactRoutes(
@@ -162,14 +208,42 @@ async function installArtifactRoutes(
     readonly authorization: string | null;
   }[],
   signIn: Record<string, unknown>[],
+  options: { readonly refuseFirst?: boolean; readonly invitation?: boolean } = {},
 ): Promise<void> {
   await page.route(`${artifactOrigin}/**`, serveArtifact);
+  let attempts = 0;
   await page.route(`${cognitoOrigin}/**`, async (route) => {
     if (await allowCrossOrigin(route, artifactOrigin)) {
       return;
     }
     const body = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>;
     signIn.push(body);
+    attempts += 1;
+    if (options.refuseFirst === true && attempts === 1) {
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/x-amz-json-1.1',
+        headers: { 'access-control-allow-origin': artifactOrigin },
+        body: JSON.stringify({
+          __type: 'NotAuthorizedException',
+          message: 'Incorrect username or password.',
+        }),
+      });
+      return;
+    }
+    if (options.invitation === true && body['AuthFlow'] === 'USER_PASSWORD_AUTH') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/x-amz-json-1.1',
+        headers: { 'access-control-allow-origin': artifactOrigin },
+        body: JSON.stringify({
+          ChallengeName: 'NEW_PASSWORD_REQUIRED',
+          Session: 'challenge-session',
+          ChallengeParameters: { USER_ID_FOR_SRP: 'cognito-alice' },
+        }),
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/x-amz-json-1.1',

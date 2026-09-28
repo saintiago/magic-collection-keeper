@@ -6,36 +6,32 @@
  * {@link createBrowserDeployment}: Application validates the settings, composes the authenticated
  * transport, the Catalog/Search/UserCards clients and the preserved browser recognition engines,
  * and hands the shell the capabilities it needs. The deployment supplies what only it can — the
- * sign-in against this environment's app client, the camera of this device and the page
- * implementations of this build — and receives back one shell that a replacement page implementation
- * or recognition factory could replace without touching transport code.
+ * sign-in page it presents, the camera of this device and the page implementations of this build —
+ * and receives back one shell that a replacement page implementation or recognition factory could
+ * replace without touching transport code.
  *
- * Only public settings cross into the browser; the tokens stay in the browsing session, and the
- * backend re-verifies every invocation. This module is the browser composition root: it must never
- * reach a backend entry point or a deployment module (docs/application.md#interface).
+ * Only public settings cross into the browser; the tokens stay in the browsing session of the
+ * Application-owned sign-in, the prompt is this component's presentation, and the backend
+ * re-verifies every invocation. This module is the browser composition root: it must never reach a
+ * backend entry point or a deployment module (docs/application.md#interface).
  */
 
 import {
   createBrowserApplication,
   resolvePublicSettings,
   type BrowserApplication,
+  type BrowserCredentialPrompt,
+  type BrowserSessionStore,
   type PublicApplicationSettings,
 } from '../application/index.js';
 import { createBrowsePages } from './internal/browse.js';
 import { createBrowserDevice, type BrowserDeviceOptions } from './internal/browser-device.js';
 import { createCollectionPages } from './internal/collection.js';
-import {
-  createBrowserSessionStore,
-  createCognitoAuthentication,
-  type BrowserCredentialPrompt,
-  type CognitoAuthentication,
-  type CognitoSessionStore,
-} from './internal/cognito.js';
 import type { UiDevice } from './internal/device.js';
 import type { UiIdentity } from './internal/identity.js';
 import { createImportPages } from './internal/imports.js';
 import { createOrganizationPages } from './internal/organization.js';
-import { createCredentialPrompt } from './internal/sign-in-dialog.js';
+import { createCredentialPrompt } from './internal/sign-in-page.js';
 import { createUserInterface, type UserInterface } from './internal/shell.js';
 
 export interface BrowserDeploymentOptions {
@@ -45,8 +41,8 @@ export interface BrowserDeploymentOptions {
   readonly settings: unknown;
   readonly fetch?: typeof globalThis.fetch;
   /** Session store of the sign-in; defaults to this browsing session. */
-  readonly storage?: CognitoSessionStore;
-  /** Sign-in interaction; defaults to the modal form this deployment renders. */
+  readonly storage?: BrowserSessionStore;
+  /** Sign-in interaction; defaults to the sign-in page this deployment renders. */
   readonly prompt?: BrowserCredentialPrompt;
   /** Device capability; defaults to the camera the browsing context grants. */
   readonly device?: UiDevice;
@@ -70,16 +66,6 @@ export interface BrowserDeployment {
 export function createBrowserDeployment(options: BrowserDeploymentOptions): BrowserDeployment {
   const settings = resolvePublicSettings(options?.settings);
   const root = readRoot(options?.root);
-  const document = readOwnerDocument(options?.root);
-  const sessionStorage = document.defaultView?.sessionStorage;
-  const authentication = createCognitoAuthentication({
-    settings,
-    prompt: options?.prompt ?? createCredentialPrompt(document),
-    storage:
-      options?.storage ??
-      (sessionStorage === undefined ? noStore() : createBrowserSessionStore(sessionStorage)),
-    ...(options?.fetch === undefined ? {} : { fetch: options.fetch }),
-  });
   const device = options?.device ?? createBrowserDevice(options?.deviceOptions ?? {});
   const pages = [
     ...createBrowsePages(),
@@ -90,13 +76,14 @@ export function createBrowserDeployment(options: BrowserDeploymentOptions): Brow
   let userInterface: UserInterface | null = null;
   const application = createBrowserApplication({
     settings,
-    token: () => authentication.token(),
+    prompt: options?.prompt ?? createCredentialPrompt(root),
+    ...(options?.storage === undefined ? {} : { storage: options.storage }),
     ...(options?.fetch === undefined ? {} : { fetch: options.fetch }),
     createUserInterface: (capabilities) => {
       userInterface = createUserInterface({
         root,
         capabilities,
-        identity: authentication.identity,
+        identity: capabilities.identity,
         device,
         pages,
       });
@@ -109,7 +96,7 @@ export function createBrowserDeployment(options: BrowserDeploymentOptions): Brow
   return {
     settings,
     application,
-    identity: authentication.identity,
+    identity: application.identity,
     userInterface,
     dispose() {
       userInterface?.dispose();
@@ -119,26 +106,8 @@ export function createBrowserDeployment(options: BrowserDeploymentOptions): Brow
   };
 }
 
-/** A store that keeps nothing, used when the browsing context reports no session storage. */
-function noStore(): CognitoSessionStore {
-  return {
-    read: () => null,
-    write() {
-      // Without a browsing session there is nothing to keep the tokens in.
-    },
-  };
-}
-
-function readOwnerDocument(root: Element | null | undefined): Document {
-  const document = root?.ownerDocument;
-  if (document === undefined) {
-    throw new TypeError('The browser deployment requires the element the shell renders into.');
-  }
-  return document;
-}
-
 function readRoot(root: Element | null | undefined): Element {
-  if (root === null || root === undefined) {
+  if (root === null || root === undefined || root.ownerDocument === undefined) {
     throw new TypeError('The browser deployment requires the element the shell renders into.');
   }
   return root;
@@ -146,14 +115,10 @@ function readRoot(root: Element | null | undefined): Element {
 
 export {
   createBrowserDevice,
-  createBrowserSessionStore,
-  createCognitoAuthentication,
   createCredentialPrompt,
   type BrowserCredentialPrompt,
   type BrowserDeviceOptions,
-  type CognitoAuthentication,
-  type CognitoSessionStore,
+  type BrowserSessionStore,
 };
 
 export type { BrowserMediaDevices } from './internal/browser-device.js';
-export type { CognitoAuthenticationOptions } from './internal/cognito.js';

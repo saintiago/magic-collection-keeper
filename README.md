@@ -75,9 +75,9 @@ delivers and the finite catalog job with the Dockerfile that packages it. The ma
 records the source revision, the version label and the digest of every artifact, so a rebuilt
 revision produces the same bytes and a released combination can be inspected and restored. The
 browser artifact carries no environment-specific file; the deployment publishes `config.json` from
-the service stack's public outputs (`npm run package -- --from-outputs infra/outputs.json
---environment test` projects a captured stack, `--public-settings <file>` publishes a prepared
-file), and only the settings the browser may receive are accepted. Publishing, deployment,
+the service stack's public outputs (`npm run package -- --from-outputs infra/service-outputs.json
+--environment test` projects the captured service stack, `--public-settings <file>` publishes a
+prepared file), and only the settings the browser may receive are accepted. Publishing, deployment,
 rollback and the live checks are recorded in `infra/README.md`.
 
 Synchronization is the finite catalog job of the deployed stack (docs/tech-stack.md#aws-stack): the

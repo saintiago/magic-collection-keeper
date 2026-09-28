@@ -82,7 +82,7 @@ export interface ArtifactManifest {
   readonly revision: string;
   /** Whether that revision was the whole working tree (`clean`) or carried uncommitted changes. */
   readonly workingTree: 'clean' | 'dirty';
-  /** Version label a deployment names its artifacts after. */
+  /** Version label a deployment names its artifacts after; a valid Docker/ECR image tag. */
   readonly version: string;
   readonly node: string;
   readonly platform: string;
@@ -135,7 +135,9 @@ export async function packageArtifacts(
     schema: 1,
     revision,
     workingTree: readWorkingTree(root),
-    version: `${readPackageVersion(root)}+${revision.slice(0, 12)}`,
+    // A Docker tag accepts word characters, periods and hyphens, so the release label joins the
+    // package version and the short revision with a hyphen and names the catalog image directly.
+    version: `${readPackageVersion(root)}-${revision.slice(0, 12)}`,
     node: process.version,
     platform: `${process.platform}-${process.arch}`,
     artifacts: {
