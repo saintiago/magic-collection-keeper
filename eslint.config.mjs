@@ -10,6 +10,8 @@ export default [
       'node_modules/**',
       'playwright-report/**',
       'test-results/**',
+      // Turborepo cache and the bundled packaging command it holds.
+      '.turbo/**',
     ],
   },
   js.configs.recommended,

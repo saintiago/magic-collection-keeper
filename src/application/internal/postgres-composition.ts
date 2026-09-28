@@ -25,10 +25,15 @@ export interface ApplicationResources {
   readonly readSql: UserCardsSqlTransactor;
   /** Private writer role, supplied only to the owner of private mutations. */
   readonly writeSql: UserCardsSqlTransactor;
+  /**
+   * Catalog writer credential and snapshot source of a runtime that runs synchronization, or null
+   * for a runtime that holds neither (for example the interactive deployment, which never receives
+   * the Catalog writer secret).
+   */
   readonly catalogSynchronization: {
     readonly sql: CatalogSqlTransactor;
     readonly snapshots: CatalogSnapshotSource;
-  };
+  } | null;
   readonly deckSource?: MoxfieldDeckSource | null;
 }
 
@@ -51,12 +56,17 @@ export function createPostgresApplication(
     typeof readSql?.query !== 'function' ||
     typeof readSql?.transaction !== 'function' ||
     typeof sql?.query !== 'function' ||
-    typeof sql?.transaction !== 'function' ||
-    typeof synchronization?.sql?.transaction !== 'function' ||
-    typeof synchronization?.snapshots?.open !== 'function'
+    typeof sql?.transaction !== 'function'
+  ) {
+    throw new TypeError('The PostgreSQL composition requires transaction executors.');
+  }
+  if (
+    synchronization !== null &&
+    (typeof synchronization?.sql?.transaction !== 'function' ||
+      typeof synchronization?.snapshots?.open !== 'function')
   ) {
     throw new TypeError(
-      'The PostgreSQL composition requires transaction executors and a snapshot source.',
+      'A supplied catalog synchronization requires its executor and snapshot source.',
     );
   }
   const catalog = createCatalog({ sql: readSql });
@@ -84,10 +94,13 @@ export function createPostgresApplication(
             return work(statements);
           }),
       }),
-      synchronizer: createCatalogSynchronizer({
-        sql: synchronization.sql,
-        snapshots: synchronization.snapshots,
-      }),
+      synchronizer:
+        synchronization === null
+          ? null
+          : createCatalogSynchronizer({
+              sql: synchronization.sql,
+              snapshots: synchronization.snapshots,
+            }),
     },
   });
 }

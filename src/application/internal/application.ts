@@ -29,7 +29,13 @@ export interface ApplicationComponents {
   readonly userCards: UserCards;
   readonly search: Search;
   readonly sourceImports: SourceImportOperations | null;
-  readonly synchronizer: CatalogSynchronizer;
+  /**
+   * Finite catalog synchronization the runtime composes, or null when this runtime serves
+   * requests only. The interactive deployment holds no Catalog writer credential, so it never
+   * receives the synchronization capability; a runtime without it reports the job entry point as
+   * unavailable instead of running it with another component's privileges.
+   */
+  readonly synchronizer: CatalogSynchronizer | null;
 }
 
 export interface ApplicationDependencies {
@@ -75,10 +81,15 @@ export function createApplication(dependencies: ApplicationDependencies): Applic
     typeof components.catalog?.listCardPrintings !== 'function' ||
     typeof components.search?.execute !== 'function' ||
     typeof components.search?.counts !== 'function' ||
-    typeof components.synchronizer?.synchronize !== 'function' ||
     !components.userCards
   ) {
     throw new TypeError('createApplication requires compatible component contracts.');
+  }
+  if (
+    components.synchronizer !== null &&
+    typeof components.synchronizer?.synchronize !== 'function'
+  ) {
+    throw new TypeError('A supplied catalog synchronizer requires its synchronize operation.');
   }
   for (const operation of [
     'readCopies',
@@ -134,6 +145,20 @@ export function createApplication(dependencies: ApplicationDependencies): Applic
   ): Promise<CatalogRevision> {
     assertServing(disposed);
     const startedAt = Date.now();
+    if (synchronizer === null) {
+      const failure = new ApplicationError(
+        'unavailable',
+        'This runtime does not run catalog synchronization.',
+      );
+      recordDiagnostic(diagnostics, {
+        operation: 'catalog.synchronize',
+        requestId: null,
+        outcome: 'failed',
+        failureCode: failure.code,
+        durationMs: Date.now() - startedAt,
+      });
+      throw failure;
+    }
     try {
       const revision = await synchronizer.synchronize(request);
       recordDiagnostic(diagnostics, {

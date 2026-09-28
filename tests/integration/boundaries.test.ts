@@ -67,6 +67,7 @@ describe('component import boundaries', () => {
         'allowed-providers-of-catalog: src/catalog/index.ts -> src/recognition/index.ts',
         'no-circular: src/catalog/index.ts -> src/recognition/index.ts',
         'no-backend-in-ui: src/ui/index.ts -> src/application/backend.ts',
+        'no-backend-in-ui: src/ui/index.ts -> src/application/deployment.ts',
         // Application reads Search internals instead of its public entry point.
         'no-internals-of-search: src/application/index.ts -> src/search/internal/query.ts',
         // Application reads UserInterface internals instead of its public entry point.

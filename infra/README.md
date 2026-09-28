@@ -60,6 +60,76 @@ database, storage, registry, identity, compute and delivery services it touches,
 Logs delivery permissions (`logs:CreateLogDelivery`, `logs:PutResourcePolicy` and their siblings)
 that the HTTP API stage needs for its access log.
 
+## Packaging and publication
+
+`npm run package` builds the three artifacts one deployment publishes
+(docs/operations.md#packaging-and-deployment) from the committed lockfile:
+
+| Artifact             | Contents                                                                                                           | Published to                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- |
+| `artifacts/backend/` | `api.zip` with `index.mjs`, the interactive entry point and every dependency it reaches.                           | The exported artifact bucket, then the service stack. |
+| `artifacts/browser/` | `index.html`, `app.js`, the preserved browser recognition modules and the runtime assets a prepared build carries. | The exported browser bucket, then CloudFront.         |
+| `artifacts/catalog/` | `job.mjs`, the finite job, and the Dockerfile that packages it.                                                    | The exported catalog repository, pinned by digest.    |
+
+`artifacts/manifest.json` records the source revision, whether that revision was the whole working
+tree, the version label (`<package version>+<short revision>`) and the byte size and SHA-256 of
+every artifact, so a released combination can be inspected and the exact artifact of one revision
+restored. Packaging is deterministic: the same revision and lockfile produce the same bytes, and
+`tests/integration/packaging.test.ts` rebuilds the artifacts and compares them. The backend package
+carries its dependencies, so the Lambda runtime supplies only Node.js; the catalog image starts from
+the Node.js base image the deployment pins by digest, because image tags are not reproducible.
+
+The browser artifact carries no environment-specific file. Its `config.json` is written when the
+deployment publishes it, from the service stack's public outputs only: `--from-outputs` projects a
+captured stack, `--public-settings` publishes a prepared file, and either form is validated against
+the public settings schema, which accepts no resource, credential or private setting.
+
+The preserved browser recognition engines stay loadable modules: the workers they start and the
+ONNX runtime and catalog they resolve next to themselves are reached by URL, so the delivery build
+copies the preserved modules beside `app.js` and copies the prepared `vendor/` assets when they
+exist. Preparing those model and runtime bytes is the recognition packaging step
+(docs/operations.md#recognition-packaging); a build without them still delivers the rest of the
+UserInterface, and the capture views report recognition as unavailable.
+
+```sh
+# 1. Build the artifacts of this revision; record artifacts/manifest.json beside the release.
+npm run package -- --out artifacts
+
+# 2. Publish the interactive package; keep the object version the function will name.
+aws s3api put-object --region us-east-1 \
+  --bucket <artifact-bucket> --key releases/<version>/api.zip \
+  --body artifacts/backend/api.zip --query VersionId --output text
+
+# 3. Build and push the finite job image, then read the digest the stack pins.
+docker pull node:24-slim
+docker inspect --format '{{index .RepoDigests 0}}' node:24-slim     # the base digest to pass in
+docker build --build-arg NODE_BASE_IMAGE=node@sha256:<digest> \
+  -f artifacts/catalog/Dockerfile -t <catalog-repository>:<version> artifacts/catalog
+docker push <catalog-repository>:<version>
+aws ecr describe-images --region us-east-1 --repository-name keeper-<environment>-catalog \
+  --image-ids imageTag=<version> --query 'imageDetails[0].imageDigest' --output text
+
+# 4. Publish the browser artifact with this environment's public settings, then invalidate it.
+npm run package -- --out artifacts --from-outputs infra/outputs.json --environment <environment>
+aws s3 sync artifacts/browser/ s3://<browser-bucket>/ --delete
+aws cloudfront create-invalidation --distribution-id <distribution-id> --paths '/*'
+
+# 5. Upload the provider snapshot the finite job streams, naming its provider version.
+aws s3api put-object --region us-east-1 \
+  --bucket <snapshot-bucket> --key snapshots/default_cards.jsonl \
+  --body <default_cards.jsonl> --metadata source-version=<scryfall-updated-at>
+```
+
+The finite job reads `${SnapshotPrefix}${dataset}.jsonl` from the snapshot bucket and requires the
+`source-version` metadata, which is the provider version Catalog compares before it republishes;
+the default dataset is Scryfall's `default_cards` list. The job runs as an explicit task, never as a
+service or a schedule (see Catalog synchronization below).
+
+Keep the previous `api.zip` version, image digest and packaged `browser/` directory with their
+manifest before replacing them, because that is what a rollback restores. Each artifact is
+immutable: the repositories accept no tag overwrite, the artifact bucket keeps every object
+version, and the browser bucket keeps replaced versions for 30 days.
+
 ## Create
 
 Validate the definitions and inspect the change plan before executing anything:
@@ -89,10 +159,10 @@ aws cloudformation describe-stacks --region us-east-1 \
   --stack-name keeper-test-foundation --query 'Stacks[0].Outputs' > infra/outputs.json
 ```
 
-Package the artifacts the deployment needs (the packaging step owns their construction): push the
-interactive bundle to the exported artifact bucket, push the recognition and catalog images to the
-exported repositories by digest, and record the bundle key and object version. Then create the
-service stack, where `RecognitionImageUri` and `CatalogJobImageUri` must name those repositories:
+Package and publish the artifacts first (see Packaging and publication above): the interactive
+package goes to the exported artifact bucket, the recognition and catalog images to the exported
+repositories by digest. Then create the service stack with the recorded artifact identities, where
+`RecognitionImageUri` and `CatalogJobImageUri` must name those repositories:
 
 ```sh
 aws cloudformation create-change-set --region us-east-1 \
@@ -115,11 +185,12 @@ aws cloudformation wait stack-create-complete --region us-east-1 \
   --stack-name keeper-test-service
 ```
 
-Finish the environment with the steps that are not part of the stack:
+Finish the environment with the steps that are not part of the stack (the browser sync repeats the
+publication above so an environment that was created without a browser artifact is completed):
 
 ```sh
-# Upload the packaged browser bundle to the exported browser bucket, then publish it.
-aws s3 sync <browser-bundle-directory>/ "s3://<browser-bucket>/" --delete
+# Upload the packaged browser artifact with the environment's public settings, then publish it.
+aws s3 sync artifacts/browser/ "s3://<browser-bucket>/" --delete
 aws cloudfront create-invalidation --distribution-id <distribution-id> --paths '/*'
 
 # Notify an operator when an alarm fires.
@@ -166,9 +237,13 @@ repositories are immutable, so a new release pushes a new tag and updates the st
 A browser bundle replacement needs a CloudFront invalidation, because `/index.html` and hashed
 assets stay cached until they expire.
 
-Artifact-pinned updates roll back by updating the service stack to the previous digest, bundle key
-and object version; the previous bundle also stays in the bucket under its version. The browser
-bundle is restored by re-uploading the retained previous version and invalidating again.
+Artifact-pinned updates roll back by updating the service stack to the previous release's
+`ApiCodeKey`, `ApiCodeVersion` and `CatalogJobImageUri`, which that release's `manifest.json`
+records; the previous package stays in the artifact bucket under its object version and the previous
+image stays in the repository, so no artifact has to be rebuilt. The browser artifact is restored by
+re-uploading the retained packaged directory (or the bucket's previous object versions) and
+invalidating the distribution again. The catalog job starts explicitly, so a rollback takes effect
+on its next run.
 
 CloudFormation refuses to change or remove an export while another stack imports it, so every
 foundation parameter that an exported value carries is blocked until the importing service stack is
@@ -245,14 +320,24 @@ not billed amounts, is what these estimates describe.
 Local checks prove template validity and the documented shape, nothing more:
 
 ```sh
+npm run package                                        # every artifact of this revision
+npm run test:integration -- packaging                  # artifact contents, digests and settings
 npm run lint:infrastructure                             # cfn-lint over every template
 npm run test:integration -- infrastructure-templates    # documented boundary cases
 ```
+
+Packaging is verified locally: the same revision is rebuilt and compared byte for byte, the
+interactive package is loaded the way the Lambda loads it, the finite job is executed the way the
+task runs it, and only public settings are accepted beside the browser bundle. That is artifact
+evidence, not deployed evidence.
 
 A valid template does not prove deployed authorization. Before cutover, check the changed
 boundaries in an isolated environment and record the results separately from these local checks:
 
 - Change plan: `describe-change-set` shows only the expected resource actions.
+- Artifacts: the deployed function's code object version and the task definition's image digest
+  match the release's `manifest.json`, and the published `config.json` carries exactly the public
+  settings the deployment projected from the stack's outputs.
 - Identity and routing: the API rejects a request without a token (401) and with a token of another
   pool, another app client or an expired session; a fresh token from this environment's app client
   reaches the documented route; and `POST /api/recognize`, `POST /api/recognize-independent` and
