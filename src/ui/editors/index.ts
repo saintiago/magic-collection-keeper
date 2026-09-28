@@ -114,3 +114,12 @@ export {
   type UiSourceImportEditor,
   type UiSourceImportEditorOptions,
 } from './internal/imports.js';
+export {
+  createTagListEditor,
+  createTagViewEditor,
+  type UiTagEditorContext,
+  type UiTagListEditor,
+  type UiTagListEditorOptions,
+  type UiTagViewEditor,
+  type UiTagViewEditorOptions,
+} from './internal/tag-editors.js';

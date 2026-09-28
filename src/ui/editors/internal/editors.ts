@@ -43,6 +43,14 @@ import {
   type UiSourceImportEditor,
   type UiSourceImportEditorOptions,
 } from './imports.js';
+import {
+  createTagListEditor,
+  createTagViewEditor,
+  type UiTagListEditor,
+  type UiTagListEditorOptions,
+  type UiTagViewEditor,
+  type UiTagViewEditorOptions,
+} from './tag-editors.js';
 
 export interface EditorsOptions {
   /**
@@ -75,6 +83,10 @@ export interface Editors {
   importSource(options: UiSourceImportEditorOptions): UiSourceImportEditor;
   /** The pending review and confirmation editor of the Import activity. */
   importReview(options: UiImportReviewEditorOptions): UiImportReviewEditor;
+  /** The tags page editor: the account's tag window with its create and rename controls. */
+  tagList(options: UiTagListEditorOptions): UiTagListEditor;
+  /** The tag view editor: one tag's associations, label and add search. */
+  tagView(options: UiTagViewEditorOptions): UiTagViewEditor;
 }
 
 /** The default Editors module of the browser application. */
@@ -92,5 +104,7 @@ export function createEditors(options: EditorsOptions): Editors {
     importManual: (editorOptions) => createManualImportEditor(editorOptions),
     importSource: (editorOptions) => createSourceImportEditor(editorOptions),
     importReview: (editorOptions) => createImportReviewEditor(editorOptions),
+    tagList: (editorOptions) => createTagListEditor(editorOptions),
+    tagView: (editorOptions) => createTagViewEditor(editorOptions),
   };
 }
