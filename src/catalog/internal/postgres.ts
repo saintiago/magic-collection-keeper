@@ -3,61 +3,24 @@ import { z } from 'zod';
 import { CatalogError } from './errors.js';
 import type { CatalogSqlExecutor, CatalogSqlRow, CatalogSqlValue } from './executor.js';
 import {
-  cardColors,
-  CATALOG_LIMITS,
-  finishes,
   type CardName,
   type CardRecord,
   type CatalogRevision,
   type PrintingRecord,
 } from './model.js';
+import {
+  cardJsonSchema,
+  cardNameJsonSchema,
+  parseJsonText,
+  printingJsonSchema,
+  revisionFromJson,
+  revisionJsonExpression,
+  revisionJsonSchema,
+  type CardJson,
+  type CardNameJson,
+  type PrintingJson,
+} from './records.js';
 import type { CardPrintingsData, CatalogReadStore, ResolvedCatalogData } from './store.js';
-
-const identifierLength = CATALOG_LIMITS.maxIdentifierLength;
-
-const revisionColumn = `json_build_object(
-    'revision_id', revision.revision_id,
-    'source_name', revision.source_name,
-    'source_version', revision.source_version,
-    'published_at', revision.published_at
-  )::text`;
-
-const revisionJsonSchema = z.object({
-  revision_id: z.string().min(1).max(identifierLength),
-  source_name: z.string().min(1).max(200),
-  source_version: z.string().min(1).max(200),
-  published_at: z.string().min(1),
-});
-
-const cardJsonSchema = z.object({
-  card_id: z.string().min(1).max(identifierLength),
-  name: z.string().min(1).max(300),
-  rules_text: z.string().nullable(),
-  type_line: z.string().nullable(),
-  colors: z.array(z.enum(cardColors)),
-  color_identity: z.array(z.enum(cardColors)),
-  mana_value: z.number().nullable(),
-});
-
-const cardNameJsonSchema = z.object({
-  card_id: z.string().min(1).max(identifierLength),
-  language: z.string().min(1).max(20),
-  name: z.string().min(1).max(300),
-});
-
-const printingJsonSchema = z.object({
-  printing_id: z.string().min(1).max(identifierLength),
-  card_id: z.string().min(1).max(identifierLength),
-  edition: z.string().min(1).max(32),
-  collector_number: z.string().min(1).max(32),
-  language: z.string().min(1).max(20),
-  finishes: z.array(z.enum(finishes)).min(1),
-  physical: z.boolean(),
-  image_small: z.string().nullable(),
-  image_normal: z.string().nullable(),
-  image_large: z.string().nullable(),
-  image_art_crop: z.string().nullable(),
-});
 
 interface NamedPlaceholders {
   readonly list: string;
@@ -103,7 +66,7 @@ function resolveStatement(
   const branches = [
     `select 'revision' as row_kind,
   0 as row_position,
-  ${revisionColumn} as payload
+  ${revisionJsonExpression} as payload
 from catalog.published_revision as revision`,
   ];
   if (cardIds.length > 0) {
@@ -160,7 +123,7 @@ function listPrintingsStatement(
 select
   'revision' as row_kind,
   0 as row_position,
-  ${revisionColumn} as payload,
+  ${revisionJsonExpression} as payload,
   case when exists (select 1 from catalog.cards where card_id = :card_present_id)
        then 'true' else 'false' end as card_exists
 from catalog.published_revision as revision
@@ -196,34 +159,6 @@ async function readRows(
     throw new CatalogError('unavailable', 'The catalog database could not be read.', { cause });
   }
 }
-
-function parseJsonText<T>(schema: z.ZodType<T>, value: CatalogSqlValue | undefined): T {
-  if (typeof value !== 'string') {
-    throw new CatalogError('unavailable', 'The catalog returned a result that is not readable.');
-  }
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(value);
-  } catch (cause) {
-    throw new CatalogError('unavailable', 'The catalog returned unreadable result data.', {
-      cause,
-    });
-  }
-  const parsed = schema.safeParse(decoded);
-  if (!parsed.success) {
-    throw new CatalogError(
-      'unavailable',
-      'The catalog data does not match its declared read contract.',
-      { cause: parsed.error },
-    );
-  }
-  return parsed.data;
-}
-
-type RevisionJson = z.infer<typeof revisionJsonSchema>;
-type CardJson = z.infer<typeof cardJsonSchema>;
-type CardNameJson = z.infer<typeof cardNameJsonSchema>;
-type PrintingJson = z.infer<typeof printingJsonSchema>;
 
 interface GroupedRows {
   readonly revision: readonly CatalogSqlRow[];
@@ -264,27 +199,6 @@ function groupRows(rows: readonly CatalogSqlRow[]): GroupedRows {
   return grouped;
 }
 
-function revisionFromJson(json: RevisionJson): {
-  readonly revisionId: string;
-  readonly sourceName: string;
-  readonly sourceVersion: string;
-  readonly publishedAt: string;
-} {
-  const publishedAt = new Date(json.published_at);
-  if (Number.isNaN(publishedAt.getTime())) {
-    throw new CatalogError(
-      'unavailable',
-      'The published catalog revision has an unreadable publication time.',
-    );
-  }
-  return {
-    revisionId: json.revision_id,
-    sourceName: json.source_name,
-    sourceVersion: json.source_version,
-    publishedAt: publishedAt.toISOString(),
-  };
-}
-
 function readRecords<T>(rows: readonly CatalogSqlRow[], schema: z.ZodType<T>): T[] {
   return rows.map((row) => parseJsonText(schema, row.payload));
 }
@@ -304,7 +218,7 @@ function revisionFromRows(rows: GroupedRows): CatalogRevision {
 export async function readPublishedRevision(
   sql: CatalogSqlExecutor,
 ): Promise<CatalogRevision | null> {
-  const statement = `select ${revisionColumn} as payload
+  const statement = `select ${revisionJsonExpression} as payload
 from catalog.published_revision as revision`;
   const rows = await readRows(sql, statement, {});
   const row = rows[0];

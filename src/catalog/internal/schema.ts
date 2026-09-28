@@ -1,10 +1,11 @@
 /**
- * The published query surface of Catalog (docs/catalog.md#query-surface).
+ * The published relations of Catalog (docs/catalog.md#query-surface).
  *
- * Private tables live in `catalog_private`; consumers read only the views in `catalog`. The
- * declaration below is the provider-owned contract Search depends on: relation names, columns and
- * their meaning. `tests/integration/catalog-query-surface.test.ts` verifies the views against it,
- * so a replacement storage maps its data to exactly these relations and passes the same tests.
+ * Private tables live in `catalog_private`; the read service reads only the views in `catalog` and
+ * never the base tables. The declaration below is the provider-owned relation contract those views
+ * satisfy: relation names, columns and their meaning.
+ * `tests/integration/catalog-query-surface.test.ts` verifies the views against it, so a replacement
+ * storage maps its data to exactly these relations and passes the same tests.
  */
 
 import { CATALOG_LIMITS } from './model.js';
@@ -275,6 +276,31 @@ create index if not exists printing_card_order_index
 create index if not exists printing_identity_index
   on ${catalogPrivateSchema}.printing (edition, collector_number, language);
 
+-- The durable publication stream (docs/catalog.md#query-surface). One publication writes the
+-- changes of its candidate records, then the revision that completes them, in the same
+-- transaction. Positions only grow, so a consumer resumes from any delivered position; the
+-- revision records the authoritative published revision, and record rows carry the stable identity
+-- and the upsert or removal meaning a consumer applies.
+create table if not exists ${catalogPrivateSchema}.publication (
+  position bigint not null generated always as identity primary key,
+  revision_id text not null check (length(revision_id) between 1 and ${identifierLength}),
+  source_name text not null check (length(source_name) between 1 and 200),
+  source_version text not null check (length(source_version) between 1 and 200),
+  published_at timestamptz not null,
+  kind text not null check (kind in ('revision', 'card', 'card-name', 'printing')),
+  record_identity text,
+  removed boolean not null default false,
+  record jsonb,
+  check (kind <> 'revision' or (record_identity is null and record is null and not removed)),
+  check (kind = 'revision' or (record_identity is not null and (removed or record is not null))),
+  check (not removed or record is null),
+  unique (revision_id, kind, record_identity)
+);
+
+-- One completed revision per publication; the snapshot reports this revision's position.
+create unique index if not exists publication_revision_index
+  on ${catalogPrivateSchema}.publication (revision_id) where kind = 'revision';
+
 create or replace view ${catalogQuerySchema}.cards as
   select card_id, name, rules_text, type_line, colors, color_identity, mana_value
   from ${catalogPrivateSchema}.card;
@@ -302,14 +328,32 @@ const readerRolePattern = /^[a-z_][a-z0-9_]{0,62}$/;
  * owner applies this after `catalogSchemaSql`; base tables stay unreachable for the reader.
  */
 export function catalogReaderGrants(readerRole: string): string {
-  if (!readerRolePattern.test(readerRole)) {
-    throw new TypeError(
-      `Catalog reader role must be a lowercase PostgreSQL identifier, received "${readerRole}".`,
-    );
-  }
+  assertRole(readerRole);
   const relations = Object.values(CATALOG_QUERY_SURFACE.relations).map((relation) => relation.name);
   return [
     `grant usage on schema ${catalogQuerySchema} to "${readerRole}";`,
     `grant select on ${relations.join(', ')} to "${readerRole}";`,
   ].join('\n');
+}
+
+/**
+ * Grants trusted indexing access to the publication contract: the published records and the
+ * durable change stream, and no mutation. Application supplies this credential to an indexing
+ * runtime separately from an end-user read role (docs/data-architecture.md#access-and-deployment);
+ * the read service never needs it and never reaches the private schema.
+ */
+export function catalogPublicationGrants(role: string): string {
+  return [
+    catalogReaderGrants(role),
+    `grant usage on schema ${catalogPrivateSchema} to "${role}";`,
+    `grant select on ${catalogPrivateSchema}.publication to "${role}";`,
+  ].join('\n');
+}
+
+function assertRole(role: string): void {
+  if (!readerRolePattern.test(role)) {
+    throw new TypeError(
+      `Catalog role must be a lowercase PostgreSQL identifier, received "${role}".`,
+    );
+  }
 }

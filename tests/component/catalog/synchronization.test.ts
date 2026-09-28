@@ -859,16 +859,10 @@ function recordStatementSizes(sql: CatalogSqlTransactor): {
 } {
   const batches: { kind: string; bytes: number; records: number }[] = [];
   const kindOf = (statement: string): string | null => {
-    if (statement.includes('catalog_private.card (') && !statement.includes('card_name')) {
-      return 'card';
-    }
-    if (statement.includes('catalog_private.card_name')) {
-      return 'name';
-    }
-    if (statement.includes('catalog_private.printing (')) {
-      return 'printing';
-    }
-    return null;
+    // One batched write statement inserts the candidate records and their changes; the table it
+    // writes decides which batch the recorded parameter carries.
+    const table = /insert into catalog_private\.(card_name|card|printing)\b/.exec(statement)?.[1];
+    return table === undefined ? null : table === 'card_name' ? 'name' : table;
   };
   return {
     batches,

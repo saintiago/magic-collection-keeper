@@ -3,7 +3,7 @@
 This repository contains the approved rebuild design and the workspace harness the rebuild is built
 on. The previous application implementation has been removed. Product components from
 docs/architecture.md are rebuilt task by task: Catalog already provides its read contract, its
-atomic bulk synchronization and its published query surface with their contract tests, and
+atomic bulk synchronization and its durable snapshot/change publication with their contract tests, and
 UserCards provides physical-copy storage, tags, associations and physical locations with their
 account-scoped read surface; Search provides its normalized query model, the supported Scryfall
 subset, the request and continuation contract and its evaluation over both published query

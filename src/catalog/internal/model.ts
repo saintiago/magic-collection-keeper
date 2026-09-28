@@ -61,22 +61,35 @@ export interface CardName {
   readonly name: string;
 }
 
+/** One translated or face name published as its own record, with the card it resolves to. */
+export interface CardNameRecord extends CardName {
+  readonly cardId: CardId;
+}
+
 /**
  * Basic card information needed to identify, render and filter a playable identity without a live
  * provider request. A value the provider does not publish stays `null`; `null` is not an empty
- * string or a substitute value.
+ * string or a substitute value. Published names stay attached to the identity they resolve to, so
+ * a read assembles {@link CardRecord} aliases from their own records.
  */
-export interface CardRecord {
+export interface CardFacts {
   readonly cardId: CardId;
   /** Canonical display name; the provider's name for the playable identity. */
   readonly name: string;
-  /** Translated and face-name aliases that resolve to this same identity. */
-  readonly names: readonly CardName[];
   readonly rulesText: string | null;
   readonly typeLine: string | null;
   readonly colors: readonly CardColor[];
   readonly colorIdentity: readonly CardColor[];
   readonly manaValue: number | null;
+}
+
+/**
+ * Basic card information with the translated and face-name aliases that resolve to this same
+ * identity, as identity lookups return it.
+ */
+export interface CardRecord extends CardFacts {
+  /** Translated and face-name aliases that resolve to this same identity. */
+  readonly names: readonly CardName[];
 }
 
 /** Image references, not image data or loading behaviour. */
