@@ -167,6 +167,17 @@
         "Target": { "Fn::Sub": "integrations/${RecognitionIntegration}" }
       }
     },
+    "RecognitionSourceRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": { "Ref": "HttpApi" },
+        "RouteKey": "GET /api/recognition/source",
+        "AuthorizationType": "JWT",
+        "AuthorizationScopes": [],
+        "AuthorizerId": { "Ref": "JwtAuthorizer" },
+        "Target": { "Fn::Sub": "integrations/${RecognitionIntegration}" }
+      }
+    },
     "DefaultStage": {
       "Type": "AWS::ApiGatewayV2::Stage",
       "Properties": {
@@ -262,9 +273,9 @@
                 "Fn::Sub": "keeper-${Environment}-database-reader-secret-arn"
               }
             },
-            "KEEPER_DATABASE_WRITER_SECRET_ARN": {
+            "KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN": {
               "Fn::ImportValue": {
-                "Fn::Sub": "keeper-${Environment}-database-writer-secret-arn"
+                "Fn::Sub": "keeper-${Environment}-usercards-writer-secret-arn"
               }
             },
             "KEEPER_SNAPSHOT_BUCKET": {
@@ -288,7 +299,7 @@
     "ApiFunctionRole": {
       "Type": "AWS::IAM::Role",
       "Properties": {
-        "Description": "Interactive API runtime: transaction-capable RDS Data API access, the two database secret references and its own log group",
+        "Description": "Interactive API runtime: transaction-capable RDS Data API access, the published-view reader secret, the UserCards writer secret and its own log group",
         "AssumeRolePolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [
@@ -337,7 +348,7 @@
                     },
                     {
                       "Fn::ImportValue": {
-                        "Fn::Sub": "keeper-${Environment}-database-writer-secret-arn"
+                        "Fn::Sub": "keeper-${Environment}-usercards-writer-secret-arn"
                       }
                     }
                   ]
@@ -478,6 +489,17 @@
         }
       }
     },
+    "RecognitionSourcePermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": { "Ref": "RecognitionFunction" },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/GET/api/recognition/source"
+        }
+      }
+    },
     "EcsCluster": {
       "Type": "AWS::ECS::Cluster",
       "Properties": {
@@ -528,10 +550,10 @@
                 }
               },
               {
-                "Name": "KEEPER_DATABASE_WRITER_SECRET_ARN",
+                "Name": "KEEPER_DATABASE_CATALOG_WRITER_SECRET_ARN",
                 "Value": {
                   "Fn::ImportValue": {
-                    "Fn::Sub": "keeper-${Environment}-database-writer-secret-arn"
+                    "Fn::Sub": "keeper-${Environment}-catalog-writer-secret-arn"
                   }
                 }
               },
@@ -559,7 +581,7 @@
     "CatalogTaskRole": {
       "Type": "AWS::IAM::Role",
       "Properties": {
-        "Description": "Finite catalog job: read the configured snapshot prefix, write catalog revisions through the RDS Data API and log to its own group",
+        "Description": "Finite catalog job: read the configured snapshot prefix, write catalog revisions through the RDS Data API with the Catalog writer secret and log to its own group",
         "AssumeRolePolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [
@@ -648,12 +670,12 @@
                   }
                 },
                 {
-                  "Sid": "WriterSecret",
+                  "Sid": "CatalogWriterSecret",
                   "Effect": "Allow",
                   "Action": "secretsmanager:GetSecretValue",
                   "Resource": {
                     "Fn::ImportValue": {
-                      "Fn::Sub": "keeper-${Environment}-database-writer-secret-arn"
+                      "Fn::Sub": "keeper-${Environment}-catalog-writer-secret-arn"
                     }
                   }
                 },

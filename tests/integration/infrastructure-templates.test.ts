@@ -24,6 +24,7 @@ type Json = Readonly<Record<string, unknown>>;
 
 interface Parameter {
   readonly Type: string;
+  readonly Default?: unknown;
   readonly AllowedValues?: readonly unknown[];
   readonly AllowedPattern?: string;
 }
@@ -173,6 +174,39 @@ function referencesAlarmTopic(action: unknown): boolean {
   return importedName(imported) === 'keeper-${Environment}-alarm-topic-arn';
 }
 
+/** Routes whose target is the named integration of the template. */
+function routesForIntegration(
+  template: Template,
+  integration: string,
+): readonly (readonly [string, Resource])[] {
+  return resourcesOfType(template, 'AWS::ApiGatewayV2::Route').filter(
+    ([, route]) =>
+      (route.Properties?.Target as Json | undefined)?.['Fn::Sub'] ===
+      `integrations/\${${integration}}`,
+  );
+}
+
+/** The runtime environment variables of one Lambda function. */
+function lambdaEnvironment(template: Template, functionName: string): Json {
+  const environment = template.Resources[functionName]?.Properties?.Environment as Json | undefined;
+  return (environment?.Variables ?? {}) as Json;
+}
+
+/** The runtime environment variables of the first container of a task definition. */
+function containerEnvironment(task: Resource | undefined): Json {
+  const containers = (task?.Properties?.ContainerDefinitions ?? []) as readonly Json[];
+  const variables: Record<string, unknown> = {};
+  for (const entry of (containers[0]?.Environment ?? []) as readonly Json[]) {
+    if (typeof entry.Name === 'string') variables[entry.Name] = entry.Value;
+  }
+  return variables;
+}
+
+/** One foundation export reference as the templates express it. */
+function importValue(name: string): Json {
+  return { 'Fn::ImportValue': { 'Fn::Sub': name } };
+}
+
 /** Subnets whose route table carries a route off the VPC. */
 function routableSubnets(template: Template): readonly string[] {
   const routeTables = new Set(
@@ -243,10 +277,115 @@ describe('rebuild infrastructure templates', () => {
       expect(route.Properties?.AuthorizationType, name).toBe('JWT');
       expect(route.Properties?.AuthorizerId, name).toEqual({ Ref: 'JwtAuthorizer' });
     }
-    const recognitionRoutes = routes.filter(([, route]) =>
-      String(route.Properties?.RouteKey ?? '').includes('/api/recognize'),
+    expect(
+      routesForIntegration(service, 'InteractiveIntegration').map(
+        ([, route]) => route.Properties?.RouteKey,
+      ),
+    ).toEqual(['ANY /api/{proxy+}', 'OPTIONS /{proxy+}']);
+    expect(
+      routesForIntegration(service, 'RecognitionIntegration').map(
+        ([, route]) => route.Properties?.RouteKey,
+      ),
+    ).toEqual([
+      'POST /api/recognize',
+      'POST /api/recognize-independent',
+      'GET /api/recognition/source',
+    ]);
+  });
+
+  it('routes every preserved Recognition endpoint to the container with an invocation permission', () => {
+    // The retained handler (src/recognition/python/handler.py) serves exactly these endpoints.
+    const preservedEndpoints = [
+      'POST /api/recognize',
+      'POST /api/recognize-independent',
+      'GET /api/recognition/source',
+    ] as const;
+    const permissions = resourcesOfType(service, 'AWS::Lambda::Permission').filter(
+      ([, permission]) => refName(permission.Properties?.FunctionName) === 'RecognitionFunction',
     );
-    expect(recognitionRoutes).toHaveLength(2);
+    expect(permissions).toHaveLength(preservedEndpoints.length);
+    for (const endpoint of preservedEndpoints) {
+      const [method, routePath] = endpoint.split(' ');
+      expect(
+        permissions.some(([, permission]) =>
+          String(importedName(permission.Properties?.SourceArn) ?? '').endsWith(
+            `/*/${method}${routePath}`,
+          ),
+        ),
+        endpoint,
+      ).toBe(true);
+    }
+  });
+
+  it('binds each workload to its own writer credential', () => {
+    const secretsOf = (node: unknown): readonly string[] =>
+      importNames(node).filter((name) => name.endsWith('-secret-arn'));
+    expect(new Set(secretsOf(service.Resources.ApiFunctionRole))).toEqual(
+      new Set([
+        'keeper-${Environment}-database-reader-secret-arn',
+        'keeper-${Environment}-usercards-writer-secret-arn',
+      ]),
+    );
+    expect(secretsOf(service.Resources.CatalogTaskRole)).toEqual([
+      'keeper-${Environment}-catalog-writer-secret-arn',
+    ]);
+
+    const api = lambdaEnvironment(service, 'ApiFunction');
+    expect(api.KEEPER_DATABASE_READER_SECRET_ARN).toEqual(
+      importValue('keeper-${Environment}-database-reader-secret-arn'),
+    );
+    expect(api.KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN).toEqual(
+      importValue('keeper-${Environment}-usercards-writer-secret-arn'),
+    );
+    expect(api.KEEPER_DATABASE_CATALOG_WRITER_SECRET_ARN).toBeUndefined();
+    const catalog = containerEnvironment(service.Resources.CatalogTaskDefinition);
+    expect(catalog.KEEPER_DATABASE_CATALOG_WRITER_SECRET_ARN).toEqual(
+      importValue('keeper-${Environment}-catalog-writer-secret-arn'),
+    );
+    expect(catalog.KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN).toBeUndefined();
+
+    const exports = exportNames(foundation);
+    expect(exports).toContain('keeper-${Environment}-usercards-writer-secret-arn');
+    expect(exports).toContain('keeper-${Environment}-catalog-writer-secret-arn');
+    expect(exports).not.toContain('keeper-${Environment}-database-writer-secret-arn');
+    const usernameTemplate = (logicalName: string): string => {
+      const generate = foundation.Resources[logicalName]?.Properties?.GenerateSecretString as
+        Json | undefined;
+      const template = generate?.SecretStringTemplate as Json | undefined;
+      return String(template?.['Fn::Sub'] ?? '');
+    };
+    expect(usernameTemplate('ReaderSecret')).toContain('ReaderRoleName');
+    expect(usernameTemplate('UserCardsWriterSecret')).toContain('UserCardsWriterRoleName');
+    expect(usernameTemplate('CatalogWriterSecret')).toContain('CatalogWriterRoleName');
+  });
+
+  it('accepts only VPC ranges that hold the four defined subnets', () => {
+    const cidr = foundation.Parameters?.VpcCidr;
+    const expression = new RegExp(cidr?.AllowedPattern ?? '');
+    const allocations = resourcesOfType(foundation, 'AWS::EC2::Subnet').map(([, subnet]) => {
+      const select = (subnet.Properties?.CidrBlock as Json | undefined)?.['Fn::Select'];
+      const allocation = (select as readonly unknown[] | undefined)?.[1] as Json | undefined;
+      const carve = allocation?.['Fn::Cidr'] as readonly unknown[] | undefined;
+      return { count: Number(carve?.[1]), subnetPrefix: 32 - Number(carve?.[2]) };
+    });
+    expect(allocations).toHaveLength(4);
+    for (const allocation of allocations) expect(allocation).toEqual(allocations[0]);
+    const { count, subnetPrefix } = allocations[0] ?? { count: 0, subnetPrefix: 0 };
+    expect(count).toBeGreaterThan(0);
+
+    const accepted: number[] = [];
+    for (let prefix = 8; prefix <= 32; prefix += 1) {
+      if (expression.test(`10.42.0.0/${prefix}`)) accepted.push(prefix);
+    }
+    for (const prefix of accepted) {
+      expect(2 ** (subnetPrefix - prefix), `/${prefix} holds the subnets`).toBeGreaterThanOrEqual(
+        count,
+      );
+    }
+    expect(accepted).toEqual([16, 17, 18, 19, 20, 21, 22]);
+    expect(expression.test(String(cidr?.Default ?? '')), 'the default range').toBe(true);
+    expect(expression.test('10.42.0.0/23'), '/23 is rejected').toBe(false);
+    expect(expression.test('10.42.0.0/24'), '/24 is rejected').toBe(false);
   });
 
   it('places the database in isolated subnets and reaches it only through the Data API', () => {
