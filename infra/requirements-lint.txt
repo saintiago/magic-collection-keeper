@@ -1,0 +1,2 @@
+# Pinned CloudFormation linter of the infrastructure check (npm run lint:infrastructure).
+cfn-lint==1.57.0

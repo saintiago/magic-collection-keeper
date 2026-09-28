@@ -19,6 +19,10 @@
       "inputs": ["$TURBO_DEFAULT$", "!build/**"],
       "outputs": []
     },
+    "lint:infrastructure": {
+      "cache": false,
+      "env": ["KEEPER_PYTHON"]
+    },
     "build": {
       "cache": false
     },

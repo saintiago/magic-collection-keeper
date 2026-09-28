@@ -74,6 +74,11 @@ All documents in `docs/` are relevant to the rebuild.
 - [Recognition baseline](docs/recognition-preservation.md)
 - [Implementation task inventory](docs/tasks/inventory.md)
 
+Implementation references:
+
+- [Rebuild infrastructure](infra/README.md): AWS stack definitions, deployment, retention and cost
+  assumptions.
+
 Search reference:
 
 - [Scryfall search syntax](https://scryfall.com/docs/syntax)

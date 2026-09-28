@@ -13,6 +13,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint . --cache --cache-location .turbo/eslint/.eslintcache --cache-strategy content",
     "lint:fix": "eslint . --fix",
+    "lint:infrastructure": "node scripts/lint-infrastructure.ts",
     "typecheck": "tsc --noEmit",
     "boundaries": "depcruise src",
     "test": "vitest run",
@@ -23,7 +24,7 @@
     "test:python": "node scripts/run-python-tests.ts",
     "test:recognition": "node --test tests/recognition/*.test.js",
     "install:browsers": "playwright install chromium",
-    "validate": "turbo run format:check lint typecheck boundaries build test test:python test:recognition test:browser"
+    "validate": "turbo run format:check lint typecheck boundaries lint:infrastructure build test test:python test:recognition test:browser"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",

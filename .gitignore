@@ -10,6 +10,8 @@ __pycache__/
 *.log
 *.zip
 .recognition-python/
+# Provisioned CloudFormation template-linter environment.
+.infrastructure-python/
 # Prepared recognition models and the assembled source bundle stay out of git.
 src/recognition/python/artifacts/
 # Browser ONNX runtime and catalog assets prepared next to the recognition modules.
