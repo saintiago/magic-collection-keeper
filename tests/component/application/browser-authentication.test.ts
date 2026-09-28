@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createBrowserAuthentication,
+  createBrowserApplication,
   createBrowserSessionStore,
   type BrowserCredentialPrompt,
   type BrowserSessionStore,
@@ -338,7 +339,7 @@ describe('browser authentication', () => {
       storage: store,
     });
 
-    await expect(authentication.token()).resolves.toBeNull();
+    await expect(authentication.token()).rejects.toMatchObject({ code: 'unavailable' });
     expect(authentication.identity.current()?.accountId).toBe('cognito-alice');
     expect(values.has('keeper-session')).toBe(true);
   });
@@ -386,7 +387,7 @@ describe('browser authentication', () => {
     const reported: (string | null)[] = [];
     authentication.identity.subscribe((account) => reported.push(account?.accountId ?? null));
 
-    await expect(authentication.token()).resolves.toBeNull();
+    await expect(authentication.token()).rejects.toMatchObject({ code: 'unavailable' });
     expect(authentication.identity.current()?.accountId).toBe('cognito-alice');
     expect(values.has('keeper-session')).toBe(true);
     // The provider outage reported no identity change, and the session stayed usable.
@@ -409,7 +410,7 @@ describe('browser authentication', () => {
       storage: store,
     });
 
-    await expect(authentication.token()).resolves.toBeNull();
+    await expect(authentication.token()).rejects.toMatchObject({ code: 'unavailable' });
     expect(authentication.identity.current()?.accountId).toBe('cognito-alice');
     expect(values.has('keeper-session')).toBe(true);
   });
@@ -600,4 +601,149 @@ describe('browser authentication', () => {
     expect(authentication.identity.current()).toBeNull();
     expect(values.has('keeper-session')).toBe(false);
   });
+});
+
+describe('browser application authentication lifecycle', () => {
+  const applicationSettings = {
+    ...settings,
+    recognition: { cloudEnabled: true, computeBaseUrl: 'https://compute.test.keeper.example' },
+  };
+  const paths = ['/api/search', '/api/recognize', '/api/recognize-independent'];
+  const prompt = () => promptFor({ username: 'bob', password: 'password' }).prompt;
+  const signedIn = (accountId = 'cognito-alice') =>
+    cognitoAnswer({
+      AuthenticationResult: {
+        IdToken: idToken({ sub: accountId }),
+        AccessToken: 'access',
+        RefreshToken: 'refresh',
+        ExpiresIn: 3600,
+      },
+    });
+
+  it.each(['sign-in', 'refresh'] as const)(
+    'ending the application session discards a pending %s and prevents further access',
+    async (operation) => {
+      const { store, values } = memoryStorage();
+      if (operation === 'refresh') {
+        values.set('keeper-session', session({ expiresAt: 0 }));
+      }
+      const response = deferred<Response>();
+      const started = deferred<void>();
+      const fetch = vi.fn<typeof globalThis.fetch>(() => {
+        started.resolve();
+        return response.promise;
+      });
+      const application = createBrowserApplication({
+        settings: applicationSettings,
+        prompt: prompt(),
+        storage: store,
+        fetch,
+      });
+      const pending =
+        operation === 'sign-in'
+          ? application.identity.signIn()
+          : application.request('/api/search').catch((cause: unknown) => cause);
+      await started.promise;
+      application.endSession();
+      expect(application.identity.current()).toBeNull();
+      expect(values.has('keeper-session')).toBe(false);
+      response.resolve(signedIn());
+      await pending;
+      expect(application.identity.current()).toBeNull();
+      expect(values.has('keeper-session')).toBe(false);
+      for (const path of paths) {
+        await expect(application.request(path)).rejects.toMatchObject({ code: 'unauthorized' });
+      }
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(['sign-out', 'replacement'] as const)(
+    '%s invalidates pending API and compute responses without a UI factory',
+    async (transition) => {
+      const { store, values } = memoryStorage();
+      values.set('keeper-session', session());
+      const response = deferred<Response>();
+      const started = deferred<void>();
+      let calls = 0;
+      const application = createBrowserApplication({
+        settings: applicationSettings,
+        prompt: prompt(),
+        storage: store,
+        fetch: (async (url) => {
+          if (String(url) === endpoint) return signedIn('cognito-bob');
+          calls += 1;
+          if (calls === paths.length) started.resolve();
+          if (calls > paths.length) return new Response('{"private":"Bob"}');
+          return (await response.promise).clone();
+        }) as typeof globalThis.fetch,
+      });
+      const pending = paths.map((path) =>
+        application.request(path).catch((cause: unknown) => cause),
+      );
+      await started.promise;
+      if (transition === 'sign-out') await application.identity.signOut();
+      else await application.identity.signIn();
+      response.resolve(new Response('{"private":"Alice"}'));
+      for (const result of await Promise.all(pending)) {
+        expect(result).toMatchObject({ code: 'unauthorized' });
+      }
+      expect(application.identity.current()?.accountId ?? null).toBe(
+        transition === 'sign-out' ? null : 'cognito-bob',
+      );
+      if (transition === 'replacement') {
+        await expect(application.request('/api/search')).resolves.toEqual({ private: 'Bob' });
+      }
+    },
+  );
+
+  it.each([
+    { name: 'HTTP outage', status: 500, type: 'InternalErrorException', code: 'unavailable' },
+    { name: 'network failure', status: 0, type: '', code: 'unavailable' },
+    { name: 'throttling', status: 400, type: 'TooManyRequestsException', code: 'unavailable' },
+    { name: 'HTTP throttling', status: 429, type: '', code: 'unavailable' },
+    {
+      name: 'terminal rejection',
+      status: 400,
+      type: 'NotAuthorizedException',
+      code: 'unauthorized',
+    },
+  ])(
+    'reports $name through both transports and preserves only retryable sessions',
+    async (failure) => {
+      for (const path of paths) {
+        const { store, values } = memoryStorage();
+        const stored = session({ expiresAt: 0 });
+        values.set('keeper-session', stored);
+        let failing = true;
+        const backend = vi.fn(async () => new Response('{"ok":true}'));
+        const application = createBrowserApplication({
+          settings: applicationSettings,
+          prompt: prompt(),
+          storage: store,
+          fetch: (async (url) => {
+            if (String(url) !== endpoint) return backend();
+            if (!failing) return signedIn();
+            if (failure.status === 0) throw new TypeError('network failure with private details');
+            return cognitoAnswer(
+              { __type: failure.type, message: 'private provider details' },
+              failure.status,
+            );
+          }) as typeof globalThis.fetch,
+        });
+        await expect(application.request(path)).rejects.toMatchObject({ code: failure.code });
+        expect(backend).not.toHaveBeenCalled();
+        if (failure.code === 'unavailable') {
+          expect(values.get('keeper-session')).toBe(stored);
+          expect(application.identity.current()?.accountId).toBe('cognito-alice');
+          failing = false;
+          // Refreshing the same account must not invalidate the request acquiring its token.
+          await expect(application.request(path)).resolves.toEqual({ ok: true });
+        } else {
+          expect(values.has('keeper-session')).toBe(false);
+          expect(application.identity.current()).toBeNull();
+        }
+      }
+    },
+  );
 });

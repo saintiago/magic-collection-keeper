@@ -21,6 +21,7 @@
 import { z } from 'zod';
 
 import type { PublicApplicationSettings } from './configuration.js';
+import { ApplicationError } from './failures.js';
 
 /** One verified account Application reports to the UserInterface. */
 export interface BrowserAccount {
@@ -73,7 +74,10 @@ export interface BrowserAuthenticationOptions {
 export interface BrowserAuthentication {
   /** Verified-account capability the UserInterface presents. */
   readonly identity: BrowserIdentity;
-  /** Current ID token of the session, refreshed when it is about to expire; null while signed out. */
+  /**
+   * Current ID token, refreshed before expiry; null while signed out or after terminal rejection.
+   * A retryable provider failure throws `unavailable` and keeps the session for another attempt.
+   */
   token(): Promise<string | null>;
 }
 
@@ -240,8 +244,11 @@ export function createBrowserAuthentication(
       if (cause instanceof CognitoRefusal) {
         forget();
         report();
+        return null;
       }
-      return null;
+      throw new ApplicationError('unavailable', 'The sign-in service could not be reached.', {
+        cause,
+      });
     }
     if (!owns(generation)) {
       return null;
@@ -334,8 +341,7 @@ export function createBrowserAuthentication(
           displayName: decoded.displayName,
         });
       },
-      async signOut() {
-        beginTransition();
+      signOut() {
         forget();
         report();
       },

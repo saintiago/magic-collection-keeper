@@ -16,6 +16,9 @@ import path from 'node:path';
 
 import { expect, test, type Page, type Route } from '@playwright/test';
 
+import { build } from 'esbuild';
+import type { createBrowserDeployment } from '../../src/ui/deployment.js';
+
 import { packageArtifacts } from '../../scripts/package-artifacts.js';
 
 const artifactOrigin = 'https://keeper.test';
@@ -275,3 +278,92 @@ async function installArtifactRoutes(
     });
   });
 }
+
+test('disposing a browser deployment prevents pending sign-in from restoring credentials', async ({
+  page,
+}) => {
+  const bundle = await build({
+    stdin: {
+      contents: `import { createBrowserDeployment } from './src/ui/deployment.ts';
+        globalThis.createTestDeployment = createBrowserDeployment;`,
+      resolveDir: process.cwd(),
+      loader: 'ts',
+    },
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    write: false,
+  });
+  await page.route(`${artifactOrigin}/**`, (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: '<!doctype html><div id="keeper-root"></div>',
+    }),
+  );
+  await page.goto(artifactOrigin);
+  await page.addScriptTag({ content: bundle.outputFiles[0]!.text, type: 'module' });
+  await page.waitForFunction(
+    () => typeof Reflect.get(globalThis, 'createTestDeployment') === 'function',
+  );
+  const result = await page.evaluate(
+    async ({ settings, token }) => {
+      const create = Reflect.get(
+        globalThis,
+        'createTestDeployment',
+      ) as typeof createBrowserDeployment;
+      let answer: (response: Response) => void = () => undefined;
+      let started: () => void = () => undefined;
+      const response = new Promise<Response>((resolve) => {
+        answer = resolve;
+      });
+      const requested = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      let calls = 0;
+      const deployment = create({
+        root: document.getElementById('keeper-root'),
+        settings,
+        prompt: { request: async () => ({ username: 'alice', password: 'password' }) },
+        fetch: async () => {
+          calls += 1;
+          started();
+          return response;
+        },
+      });
+      const signingIn = deployment.identity.signIn();
+      await requested;
+      deployment.dispose();
+      answer(
+        new Response(
+          JSON.stringify({
+            AuthenticationResult: {
+              IdToken: token,
+              AccessToken: 'access',
+              RefreshToken: 'refresh',
+              ExpiresIn: 3600,
+            },
+          }),
+        ),
+      );
+      await signingIn;
+      const failure = await deployment.application
+        .request('/api/search')
+        .catch((cause: unknown) => (cause as { code: string }).code);
+      return {
+        account: deployment.identity.current(),
+        stored: sessionStorage.getItem('keeper-session'),
+        root: document.getElementById('keeper-root')?.innerHTML,
+        failure,
+        calls,
+      };
+    },
+    { settings: publicSettings, token: sessionToken },
+  );
+  expect(result).toEqual({
+    account: null,
+    stored: null,
+    root: '',
+    failure: 'unauthorized',
+    calls: 1,
+  });
+});

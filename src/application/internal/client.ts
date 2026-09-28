@@ -139,7 +139,7 @@ export interface AuthenticatedRequest extends RequestTransport {
 export interface AuthenticatedRequestOptions {
   /** Base URL of the entry point; the request path is appended. */
   readonly baseUrl: string;
-  /** Supplies the current Cognito ID token, or null when the caller is signed out. */
+  /** Supplies the current ID token, null when signed out, or throws when acquisition is unavailable. */
   readonly token: () => string | null | Promise<string | null>;
   readonly fetch?: typeof globalThis.fetch;
 }
@@ -809,6 +809,16 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
           ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
         });
   const request = createEntryPointRequest(api, compute);
+  // Account isolation belongs to Application even when no UserInterface is constructed. A token
+  // refresh for the same account keeps its requests valid, including the one awaiting that token.
+  let accountId = authentication.identity.current()?.accountId ?? null;
+  authentication.identity.subscribe((account) => {
+    const nextAccountId = account?.accountId ?? null;
+    if (nextAccountId !== accountId) {
+      accountId = nextAccountId;
+      request.endSession();
+    }
+  });
   const catalog = createCatalogClient(request);
   const search = createSearchClient(request);
   const userCards = createUserCardsClient(request);
@@ -844,6 +854,7 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
     userInterface,
     endSession() {
       request.endSession();
+      void authentication.identity.signOut();
     },
   };
 }
@@ -903,7 +914,9 @@ async function readCredential(
   try {
     credential = await token();
   } catch (cause) {
-    throw new ApplicationError('unauthorized', 'Sign in to use the collection.', { cause });
+    throw new ApplicationError('unavailable', 'The sign-in service could not be reached.', {
+      cause,
+    });
   }
   if (typeof credential !== 'string' || credential.length === 0) {
     throw new ApplicationError('unauthorized', 'Sign in to use the collection.');
