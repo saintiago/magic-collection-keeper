@@ -44,6 +44,7 @@ import {
 } from '../../src/ui/index.js';
 
 import { browserAttemptStorage, unusedUserCardsClient } from './unused-usercards.js';
+import { unusedCapture } from './unused-capture.js';
 
 /** One Search request the collection view issued. */
 export interface UiCollectionSearchRequest {
@@ -280,9 +281,7 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
     search,
     userCards,
     cardList,
-    createRecognition: () => {
-      throw new Error('The collection journeys do not run recognition.');
-    },
+    capture: unusedCapture(userCards),
   };
   const shell: UserInterface = createUserInterface({
     root,

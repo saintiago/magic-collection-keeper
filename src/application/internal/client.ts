@@ -27,9 +27,11 @@ import type {
 } from '../../catalog/index.js';
 import { createSearchProgress, type SearchIndexingProgress } from '../../search/browser.js';
 import { createCardListBrowser, type CardListBrowser } from '../../card-list/index.js';
+import { createCaptureBrowser, type CaptureBrowser } from '../../capture/index.js';
 import {
   createRecognition,
   createBrowserRecognitionPipeline,
+  recognitionEngineNames,
   type Recognition,
   type RecognitionFrameFacts,
 } from '../../recognition/index.js';
@@ -719,8 +721,13 @@ export interface UserInterfaceCapabilities {
    * component's implementation or constructing its providers.
    */
   readonly cardList: CardListBrowser;
-  /** Builds the Recognition contract over the browser's preserved engines. */
-  readonly createRecognition: () => Recognition<HTMLCanvasElement>;
+  /**
+   * The Capture capability Application selected: the composed pending-import identity and the
+   * factory of the sessions that bind it over a deployment-supplied device
+   * (docs/capture.md#interface). Capture views consume this contract instead of naming the
+   * component's implementation or constructing its providers.
+   */
+  readonly capture: CaptureBrowser;
 }
 
 export interface BrowserApplicationOptions {
@@ -832,6 +839,27 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
       return progress;
     },
   });
+  const createRecognitionContract = () =>
+    options.createRecognition !== undefined
+      ? options.createRecognition({ settings, request })
+      : createRecognition<HTMLCanvasElement>({
+          createEnginePipeline: () =>
+            createBrowserRecognitionPipeline({
+              request,
+              cloudEnabled: settings.recognition.cloudEnabled,
+            }),
+          catalog,
+          inspectFrame: inspectCanvasFrame,
+        });
+  // Application selects the Capture implementation and hands the UserInterface its factory with
+  // the Recognition contract and UserCards' account-scoped staging, so the capture views bind a
+  // session to one account and one pending import instead of naming the component's wiring
+  // (docs/architecture.md#composition-and-replacement).
+  const capture = createCaptureBrowser({
+    userCards,
+    createRecognition: createRecognitionContract,
+    engines: recognitionEngineNames(settings.recognition.cloudEnabled),
+  });
   // Account isolation belongs to Application even when no UserInterface is constructed. A token
   // refresh for the same account keeps its requests valid, including the one awaiting that token;
   // leaving an account ends its UserCards scope before another account can bind, so no read or
@@ -856,18 +884,6 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
       if (nextAccountId !== null) bindProgress(nextAccountId);
     }
   });
-  const createRecognitionContract = () =>
-    options.createRecognition !== undefined
-      ? options.createRecognition({ settings, request })
-      : createRecognition<HTMLCanvasElement>({
-          createEnginePipeline: () =>
-            createBrowserRecognitionPipeline({
-              request,
-              cloudEnabled: settings.recognition.cloudEnabled,
-            }),
-          catalog,
-          inspectFrame: inspectCanvasFrame,
-        });
   const userInterface =
     typeof options.createUserInterface === 'function'
       ? options.createUserInterface({
@@ -878,7 +894,7 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
           search,
           userCards,
           cardList,
-          createRecognition: createRecognitionContract,
+          capture,
         })
       : null;
   return {

@@ -29,6 +29,7 @@ import type { SearchClient, UserInterfaceCapabilities } from '../../src/applicat
 import type { Catalog } from '../../src/catalog/index.js';
 
 import { unusedUserCards } from './unused-usercards.js';
+import { unusedCapture } from './unused-capture.js';
 
 export interface UiShellControl {
   /** Verified account the shell presents, or null while signed out. */
@@ -153,9 +154,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       catalog,
       userCards: unusedUserCards,
     }),
-    createRecognition: () => {
-      throw new Error('The shell journey does not run recognition.');
-    },
+    capture: unusedCapture(unusedUserCards),
   };
   const shell: UserInterface = createUserInterface({
     root,

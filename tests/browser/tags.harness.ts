@@ -64,6 +64,7 @@ import {
 } from '../../src/ui/index.js';
 
 import { browserAttemptStorage, unusedUserCardsClient } from './unused-usercards.js';
+import { unusedCapture } from './unused-capture.js';
 
 interface Pending {
   resolve(value: unknown): void;
@@ -399,9 +400,7 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
     search,
     userCards,
     cardList: createCardListBrowser({ progress: idleProgress, search, catalog, userCards }),
-    createRecognition: () => {
-      throw new Error('The organization journeys do not run recognition.');
-    },
+    capture: unusedCapture(userCards),
   };
   const shell: UserInterface = createUserInterface({
     root,

@@ -61,6 +61,7 @@ import {
 } from '../../src/ui/index.js';
 
 import { browserAttemptStorage, unusedUserCardsClient } from './unused-usercards.js';
+import { unusedCapture } from './unused-capture.js';
 
 interface Pending {
   resolve(value: unknown): void;
@@ -375,9 +376,7 @@ export function installImportHarness(
     search,
     userCards,
     cardList,
-    createRecognition: () => {
-      throw new Error('The Import journeys do not run recognition.');
-    },
+    capture: unusedCapture(userCards),
   };
   const shell: UserInterface = createUserInterface({
     root,

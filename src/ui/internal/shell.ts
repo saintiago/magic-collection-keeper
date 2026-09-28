@@ -18,9 +18,9 @@
  */
 
 import type { UserInterfaceCapabilities } from '../../application/index.js';
+import type { CaptureBrowserDevice } from '../../capture/index.js';
 
 import { createDialogs, type UiDialogs } from './dialogs.js';
-import type { UiDevice } from './device.js';
 import { readAccount, type UiAccount, type UiIdentity } from './identity.js';
 import { observeUiInput } from './interaction.js';
 import type { UiPageContext, UiPageDefinition, UiPageHandle } from './pages.js';
@@ -43,7 +43,7 @@ export interface UserInterfaceOptions {
   /** Verified identity and its transitions. */
   readonly identity: UiIdentity;
   /** Device capability of this deployment; absent when the UI holds no device resources. */
-  readonly device?: UiDevice;
+  readonly device?: CaptureBrowserDevice;
   /** Page implementations; a page without one presents the shell frame alone. */
   readonly pages?: readonly UiPageDefinition[];
 }
@@ -576,11 +576,11 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   }
 
   /** Device access lasts through synchronous teardown, but never into a replacement page. */
-  function pageDevice(currentGeneration: number): UiDevice {
+  function pageDevice(currentGeneration: number): CaptureBrowserDevice {
     const available = (): boolean =>
       (!disposed && generation === currentGeneration) ||
       (teardownGeneration === currentGeneration && generation === currentGeneration + 1);
-    const page: UiDevice = {
+    const page: CaptureBrowserDevice = {
       release() {
         if (available()) {
           return device.release();
@@ -796,9 +796,10 @@ function readCapabilities(value: unknown): UserInterfaceCapabilities {
   const record = readObject(value);
   const request = record?.request;
   const userCards = readObject(record?.userCards);
+  const capture = readObject(record?.capture);
   if (
     record === null ||
-    typeof record.createRecognition !== 'function' ||
+    typeof capture?.create !== 'function' ||
     readObject(record.settings) === null ||
     typeof readObject(record.catalog)?.resolve !== 'function' ||
     typeof readObject(record.search)?.execute !== 'function' ||
@@ -825,7 +826,7 @@ function readIdentity(value: unknown): UiIdentity {
   return value as UiIdentity;
 }
 
-function readDevice(value: unknown): UiDevice {
+function readDevice(value: unknown): CaptureBrowserDevice {
   if (value === undefined) {
     return { release() {} };
   }
@@ -836,7 +837,7 @@ function readDevice(value: unknown): UiDevice {
   if (record.openCamera !== undefined && typeof record.openCamera !== 'function') {
     throw new TypeError('The device capability opens the camera the capture view reads.');
   }
-  return value as UiDevice;
+  return value as CaptureBrowserDevice;
 }
 
 function readPages(value: unknown): ReadonlyMap<UiPageName, UiPageDefinition> {

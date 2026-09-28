@@ -17,8 +17,8 @@
  */
 
 import type { UserInterfaceCapabilities } from '../../application/index.js';
+import type { CaptureBrowserDevice } from '../../capture/index.js';
 
-import type { UiDevice } from './device.js';
 import type { UiDialogs } from './dialogs.js';
 import type { UiAccount } from './identity.js';
 import type { UiViewSnapshot } from './restoration.js';
@@ -31,8 +31,8 @@ export interface UiPageContext {
   readonly account: UiAccount;
   /** Public configuration, authenticated transport and component access from Application. */
   readonly capabilities: UserInterfaceCapabilities;
-  /** Device capability of this deployment. */
-  readonly device: UiDevice;
+  /** Device capability of this deployment, as Capture consumes it. */
+  readonly device: CaptureBrowserDevice;
   /** Aborted when the view closes; late results must not change the new view. */
   readonly signal: AbortSignal;
   /**

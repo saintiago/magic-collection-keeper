@@ -4,14 +4,15 @@
  * docs/user-cards.md#browser-operation-lifecycle).
  *
  * The page stages manual lines and parsed sources as pending entries, reviews a pending entry's
- * printing, finish, condition and quantity under the revision it read, stages capture observations,
- * attaches late recognition alternatives, discards entries and confirms the reviewed entries. Every
- * change is a UserCards operation: the provider-owned handle reports whether it committed, was
- * rejected or stays unknown, retains the identity an unfinished attempt needs, and recovers a
- * recorded outcome under that identity. The page presents those outcomes; it never classifies a
- * failure, invents an operation identity or infers that a lost response committed. Nothing here
- * reports ownership: a staged line, source row or capture is a candidate in review, and only a
- * confirmation creates the physical copies.
+ * printing, finish, condition and quantity under the revision it read, discards entries and
+ * confirms the reviewed entries; Capture stages the camera observations and their later
+ * alternatives through its own binding (docs/capture.md#interface). Every change is a UserCards
+ * operation: the provider-owned handle reports whether it committed, was rejected or stays unknown,
+ * retains the identity an unfinished attempt needs, and recovers a recorded outcome under that
+ * identity. The page presents those outcomes; it never classifies a failure, invents an operation
+ * identity or infers that a lost response committed. Nothing here reports ownership: a staged
+ * line, source row or capture is a candidate in review, and only a confirmation creates the
+ * physical copies.
  */
 
 import type { Finish } from '../../catalog/index.js';
@@ -26,8 +27,6 @@ import type {
   UserCardsSourceImportRequest,
 } from '../../usercards/browser.js';
 import type {
-  AttachImportCandidatesInput,
-  CaptureStageResult,
   CopyCondition,
   DiscardImportEntryInput,
   DiscardImportSessionInput,
@@ -44,7 +43,6 @@ import type {
   ListImportSessionsOptions,
   ReviewImportEntryInput,
   SourceImportResult,
-  StageCaptureInput,
   StageImportEntriesInput,
 } from '../../usercards/index.js';
 
@@ -62,9 +60,7 @@ export type UiImportClient = Pick<
   | 'stageImportEntries'
   | 'beginSourceImport'
   | 'reopenSourceImport'
-  | 'stageCaptureObservation'
   | 'reviewImportEntry'
-  | 'attachImportCandidates'
   | 'discardImportEntry'
   | 'discardImportSession'
   | 'confirmImport'
@@ -99,20 +95,10 @@ export interface UiImportAccess {
     input: UserCardsSourceImportRequest,
     signal?: AbortSignal,
   ): UserCardsOperation<'stageSourceImport', SourceImportResult>;
-  /** One capture observation, admitted, suppressed or explicitly unresolved. */
-  capture(
-    input: StageCaptureInput,
-    signal?: AbortSignal,
-  ): UserCardsOperation<'stageCaptureObservation', CaptureStageResult>;
   review(
     input: ReviewImportEntryInput,
     signal?: AbortSignal,
   ): UserCardsOperation<'reviewImportEntry', ImportEntryChangeResult>;
-  /** Late recognition alternatives of one pending entry. */
-  attach(
-    input: AttachImportCandidatesInput,
-    signal?: AbortSignal,
-  ): UserCardsOperation<'attachImportCandidates', ImportEntryChangeResult>;
   discardEntry(
     input: DiscardImportEntryInput,
     signal?: AbortSignal,
@@ -140,9 +126,7 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     'stageImportEntries',
     'beginSourceImport',
     'reopenSourceImport',
-    'stageCaptureObservation',
     'reviewImportEntry',
-    'attachImportCandidates',
     'discardImportEntry',
     'discardImportSession',
     'confirmImport',
@@ -164,9 +148,7 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     beginSource: (input, signal) => userCards.beginSourceImport(input, signal),
     reopenSource: (operationId, input, signal) =>
       userCards.reopenSourceImport(operationId, input, signal),
-    capture: (input, signal) => userCards.stageCaptureObservation(input, signal),
     review: (input, signal) => userCards.reviewImportEntry(input, signal),
-    attach: (input, signal) => userCards.attachImportCandidates(input, signal),
     discardEntry: (input, signal) => userCards.discardImportEntry(input, signal),
     discardSession: (input, signal) => userCards.discardImportSession(input, signal),
     confirm: (input, signal) => userCards.confirmImport(input, signal),
@@ -249,30 +231,6 @@ export async function stageImportLines(
 }
 
 /**
- * Stages one capture observation into review. The provider decides the admission: a repeated
- * observation is suppressed, an unresolved reading stages nothing and the same capture identity
- * may resolve later, and only an admitted observation adds a pending entry. An outcome whose
- * response was lost keeps the observation under its capture identity, and the capture view
- * recovers the recorded decision by replaying exactly that observation through the same handle
- * (docs/user-cards.md#import-and-capture-state).
- */
-export async function stageCaptureObservation(
-  access: UiImportAccess,
-  input: StageCaptureInput,
-  signal?: AbortSignal,
-): Promise<UiChangeCommit<CaptureStageResult>> {
-  return commitUiOperation(
-    access.capture(input, signal),
-    async (): Promise<CaptureStageResult | null> => null,
-    'The capture was not added to review.',
-    {
-      unknown:
-        'The staging outcome is unknown. The capture may be in review; reload the import before retrying.',
-    },
-  );
-}
-
-/**
  * What one source import whose outcome is not established reports: the account keeps the input
  * under the import's identity, so reopening that import reads the rows the provider recorded
  * (docs/user-interface.md#source-imports).
@@ -335,25 +293,6 @@ export async function retryRetainedAttempt<Kind extends string, Record>(
   return commitUiOperation(operation, async (): Promise<Record | null> => null, fallback, {
     unknown,
   });
-}
-
-/**
- * Attaches late recognition alternatives of one admitted capture. The provider keeps the reviewed
- * values and only adds alternatives it does not hold yet, so a comparison that arrived after the
- * capture was staged is reviewable without rewriting the owner's corrections
- * (docs/user-cards.md#import-and-capture-state).
- */
-export async function attachImportCandidates(
-  access: UiImportAccess,
-  input: AttachImportCandidatesInput,
-  signal?: AbortSignal,
-): Promise<UiChangeCommit<ImportEntryChangeResult>> {
-  return commitUiOperation(
-    access.attach(input, signal),
-    async (): Promise<ImportEntryChangeResult | null> => null,
-    'The later alternatives were not stored.',
-    { unknown: 'The outcome is unknown. Reload the pending import before retrying.' },
-  );
 }
 
 /**
@@ -467,24 +406,18 @@ export async function recoverConfirmation(
   return confirmationCommit(await operation.recover(signal));
 }
 
-/** Prefix of the identities this page generates for staged lines and capture sessions. */
+/** Prefix of the identities this page generates for staged lines. */
 const importIdentityPrefix = 'ui-import';
-const captureIdentityPrefix = 'ui-capture';
 
 let importSerial = 0;
 
 /**
- * One stable identity for a staged line or the capture session of one attempt. It is unique inside
- * this presentation and bounded like every identifier UserCards accepts, so a retry of the same
- * line or capture refers to its recorded staging instead of creating a second one.
+ * One stable identity for a staged line. It is unique inside this presentation and bounded like
+ * every identifier UserCards accepts, so a retry of the same line refers to its recorded staging
+ * instead of creating a second one.
  */
 export function uiImportIdentity(): string {
   return uiIdentity(importIdentityPrefix);
-}
-
-/** One stable identity for a capture session or one capture inside it. */
-export function uiCaptureIdentity(): string {
-  return uiIdentity(captureIdentityPrefix);
 }
 
 /** One bounded, unique identity of the given family. */

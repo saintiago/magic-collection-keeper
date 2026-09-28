@@ -1104,11 +1104,11 @@ describe('browser application', () => {
     expect(capabilities?.cardList.account('alice').printingImages).toBeTypeOf('function');
     expect(capabilities?.cardList.account('alice').pendingEntries).toBeTypeOf('function');
     expect(capabilities?.cardList.account('alice').tagAssociations).toBeTypeOf('function');
-    expect(Object.keys(capabilities?.createRecognition() ?? {}).sort()).toEqual([
-      'dispose',
-      'prepare',
-      'recognize',
-    ]);
+    // Application selects the Capture implementation and supplies its composed factory; the
+    // UserInterface names neither the component's wiring nor the Recognition contract behind it
+    // (docs/architecture.md#composition-and-replacement).
+    expect(capabilities?.capture.create).toBeTypeOf('function');
+    expect(capabilities?.capture.createImportId()).toBeTypeOf('string');
     expect(application.userInterface).toEqual({ constructed: true });
   });
 

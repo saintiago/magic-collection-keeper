@@ -24,10 +24,13 @@ import {
   type BrowserSessionStore,
   type PublicApplicationSettings,
 } from '../application/index.js';
+import {
+  createBrowserCaptureDevice,
+  type BrowserCaptureDeviceOptions,
+  type CaptureBrowserDevice,
+} from '../capture/index.js';
 import { createBrowsePages } from './internal/browse.js';
-import { createBrowserDevice, type BrowserDeviceOptions } from './internal/browser-device.js';
 import { createCollectionPages } from './internal/collection.js';
-import type { UiDevice } from './internal/device.js';
 import type { UiIdentity } from './internal/identity.js';
 import { createImportPages } from './internal/imports.js';
 import { createOrganizationPages } from './internal/organization.js';
@@ -45,8 +48,8 @@ export interface BrowserDeploymentOptions {
   /** Sign-in interaction; defaults to the sign-in page this deployment renders. */
   readonly prompt?: BrowserCredentialPrompt;
   /** Device capability; defaults to the camera the browsing context grants. */
-  readonly device?: UiDevice;
-  readonly deviceOptions?: BrowserDeviceOptions;
+  readonly device?: CaptureBrowserDevice;
+  readonly deviceOptions?: BrowserCaptureDeviceOptions;
 }
 
 export interface BrowserDeployment {
@@ -66,7 +69,7 @@ export interface BrowserDeployment {
 export function createBrowserDeployment(options: BrowserDeploymentOptions): BrowserDeployment {
   const settings = resolvePublicSettings(options?.settings);
   const root = readRoot(options?.root);
-  const device = options?.device ?? createBrowserDevice(options?.deviceOptions ?? {});
+  const device = options?.device ?? createBrowserCaptureDevice(options?.deviceOptions ?? {});
   const pages = [
     ...createBrowsePages(),
     ...createCollectionPages(),
@@ -114,11 +117,11 @@ function readRoot(root: Element | null | undefined): Element {
 }
 
 export {
-  createBrowserDevice,
+  createBrowserCaptureDevice as createBrowserDevice,
   createCredentialPrompt,
+  type BrowserCaptureDeviceOptions as BrowserDeviceOptions,
   type BrowserCredentialPrompt,
-  type BrowserDeviceOptions,
   type BrowserSessionStore,
 };
 
-export type { BrowserMediaDevices } from './internal/browser-device.js';
+export type { BrowserMediaDevices } from '../capture/index.js';
