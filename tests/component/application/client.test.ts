@@ -336,6 +336,7 @@ describe('catalog client', () => {
 describe('search client', () => {
   it('sends one query to the search route and keeps the page it read', async () => {
     const payload = {
+      status: 'ready',
       entries: [
         {
           entryKey: 'printing:printing-1',
@@ -352,7 +353,12 @@ describe('search client', () => {
       ],
       totalCount: 1,
       continuation: 'cursor-1',
-      revisions: { catalogRevision: 'revision-1', privateRevision: null },
+      revisions: {
+        generation: 'generation-1',
+        catalogRevision: 'revision-1',
+        catalogPosition: '1',
+        privateRevision: null,
+      },
     };
     const { fetch, calls } = jsonFetch(payload);
     const request = createAuthenticatedRequest({
@@ -1095,10 +1101,16 @@ describe('browser application', () => {
 
   it('reads Search through the entry point UserInterface received', async () => {
     const { fetch, calls } = jsonFetch({
+      status: 'ready',
       entries: [],
       totalCount: 0,
       continuation: null,
-      revisions: { catalogRevision: 'revision-1', privateRevision: null },
+      revisions: {
+        generation: 'generation-1',
+        catalogRevision: 'revision-1',
+        catalogPosition: '1',
+        privateRevision: null,
+      },
     });
     const received: UserInterfaceCapabilities[] = [];
     createBrowserApplication({

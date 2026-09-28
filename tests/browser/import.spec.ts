@@ -238,10 +238,16 @@ function printingResult(printing: PrintingRecord) {
 /** One search page of the manual entry form. */
 function searchPage(printings: readonly PrintingRecord[]) {
   return {
+    status: 'ready',
     entries: printings.map((printing) => printingResult(printing)),
     totalCount: printings.length,
     continuation: null,
-    revisions: { catalogRevision: 'imports-revision', privateRevision: 'private-1' },
+    revisions: {
+      generation: 'imports-generation',
+      catalogRevision: 'imports-revision',
+      catalogPosition: '1',
+      privateRevision: 'private-1',
+    },
   };
 }
 

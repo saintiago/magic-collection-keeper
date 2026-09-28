@@ -57,6 +57,8 @@ describe('search counts', () => {
       cards: [lightningBolt],
       printings: [m11Bolt, staBolt],
     });
+    // Counts read Search's own projection, so the published catalog is indexed first.
+    await database.index();
   });
 
   afterEach(async () => {
@@ -75,6 +77,7 @@ describe('search counts', () => {
       condition: 'NM',
       quantity,
     });
+    await database.index({ accounts: [context.accountId] });
     return created.copies.map((copy) => copy.copyId);
   }
 
@@ -84,7 +87,17 @@ describe('search counts', () => {
     label: string,
   ): Promise<string> {
     const created = await database.userCards.createTag(context, { kind, label });
+    await database.index({ accounts: [context.accountId] });
     return created.tag.tagId;
+  }
+
+  /** One association through UserCards' contract, made query-visible by an indexing pass. */
+  async function createAssociation(
+    context: TrustedUserContext,
+    input: Parameters<SearchTestDatabase['userCards']['createAssociation']>[1],
+  ): Promise<void> {
+    await database.userCards.createAssociation(context, input);
+    await database.index({ accounts: [context.accountId] });
   }
 
   async function moveCopy(
@@ -102,6 +115,7 @@ describe('search counts', () => {
       locationTagId,
       expectedRevision: copy.revision,
     });
+    await database.index({ accounts: [context.accountId] });
   }
 
   it('counts owned copies across a card’s printings and their distinct locations', async () => {
@@ -149,6 +163,9 @@ describe('search counts', () => {
   });
 
   it('answers a reference the account holds none of with an exact zero', async () => {
+    // Indexing the account first makes its empty private state explicit: counts are exact for the
+    // indexed state, and an account with no indexed state fails instead of reporting zero.
+    await database.index({ accounts: [alice.accountId] });
     const counts = await database.search.counts(
       {
         references: [
@@ -171,15 +188,24 @@ describe('search counts', () => {
     });
   });
 
+  it('fails a count of an account without indexed state instead of reporting zero', async () => {
+    await expect(
+      database.search.counts(
+        { references: [{ kind: 'card', cardId: lightningBolt.cardId }] },
+        alice,
+      ),
+    ).rejects.toMatchObject({ code: 'unavailable' });
+  });
+
   it('reports one tag’s intent covering the reference and keeps accounts apart', async () => {
     const wishlist = await createTag(alice, 'wishlist', 'To buy');
-    await database.userCards.createAssociation(alice, {
+    await createAssociation(alice, {
       tagId: wishlist,
       targetLevel: 'card',
       targetId: lightningBolt.cardId,
       quantity: 2,
     });
-    await database.userCards.createAssociation(alice, {
+    await createAssociation(alice, {
       tagId: wishlist,
       targetLevel: 'printing',
       targetId: staBolt.printingId,
@@ -188,7 +214,7 @@ describe('search counts', () => {
     const [aliceCopy] = await createCopies(alice, m11Bolt.printingId, 1);
     await createCopies(bob, m11Bolt.printingId, 1);
     const bobWishlist = await createTag(bob, 'wishlist', 'Bob buys');
-    await database.userCards.createAssociation(bob, {
+    await createAssociation(bob, {
       tagId: bobWishlist,
       targetLevel: 'printing',
       targetId: m11Bolt.printingId,

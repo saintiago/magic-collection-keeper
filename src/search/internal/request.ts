@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { TrustedUserContext } from '../../usercards/index.js';
 import { readTrustedAccountId } from './context.js';
 import { SearchError } from './errors.js';
+import type { SearchProgressRequest } from './freshness.js';
 import {
   SEARCH_LIMITS,
   canonicalizeSearchFilters,
@@ -14,6 +15,7 @@ import {
   searchSortDirections,
   type SearchFilter,
   type SearchQuery,
+  type SearchRequiredProgress,
   type SearchRequestInput,
 } from './model.js';
 import { searchCountKey, type SearchCountInput, type SearchCountReference } from './results.js';
@@ -38,6 +40,17 @@ const requestSchema = z.object({
     .nullable()
     .optional(),
   continuation: z.string().min(1).max(SEARCH_LIMITS.maxContinuationLength).nullable().optional(),
+  requiredPosition: z
+    .string()
+    .regex(/^\d{1,20}$/)
+    .nullable()
+    .optional(),
+  requiredCatalogRevision: z
+    .string()
+    .min(1)
+    .max(SEARCH_LIMITS.maxIdentifierLength)
+    .nullable()
+    .optional(),
 });
 
 /**
@@ -77,6 +90,13 @@ export function normalizeSearchRequest(
     filters: canonicalizeSearchFilters(filters),
     ordering: parsed.data.ordering ?? defaultSearchOrdering,
     pageSize: parsed.data.pageSize ?? SEARCH_LIMITS.defaultPageSize,
+    required: {
+      positions:
+        parsed.data.requiredPosition === undefined || parsed.data.requiredPosition === null
+          ? []
+          : [parsed.data.requiredPosition],
+      catalogRevision: parsed.data.requiredCatalogRevision ?? null,
+    },
   };
   if (requiresTrustedContext(query) && readTrustedAccountId(context) === null) {
     throw new SearchError(
@@ -103,6 +123,10 @@ function requestProblem(error: z.ZodError): string {
       return `A search page size from ${SEARCH_LIMITS.minPageSize} to ${SEARCH_LIMITS.maxPageSize} is required.`;
     case 'continuation':
       return 'This continuation is not readable; start the search again.';
+    case 'requiredPosition':
+      return 'A required publication position is a whole number of at most 20 digits.';
+    case 'requiredCatalogRevision':
+      return `A required catalog revision is at most ${SEARCH_LIMITS.maxIdentifierLength} characters.`;
     default:
       return 'A search request with a result level, criteria, ordering and page size is required.';
   }
@@ -127,6 +151,38 @@ const countRequestSchema = z.object({
   references: z.array(countReferenceSchema).min(1).max(SEARCH_LIMITS.maxCountReferences),
   tagId: z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength).nullable().optional(),
 });
+
+const progressRequestSchema = z.object({
+  positions: z
+    .array(z.string().regex(/^\d{1,20}$/))
+    .max(SEARCH_LIMITS.maxRequiredPositions)
+    .nullable()
+    .optional(),
+  catalogRevision: z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength).nullable().optional(),
+});
+
+/**
+ * Normalizes one progress observation (docs/search.md#freshness). The required positions stay
+ * explicit and bounded and repeated identities collapse, so one committed change is observed
+ * once; nothing here starts indexing work or changes a query's membership.
+ */
+export function normalizeSearchProgressRequest(
+  request: SearchProgressRequest,
+): SearchRequiredProgress {
+  const parsed = progressRequestSchema.safeParse(request);
+  if (!parsed.success) {
+    throw new SearchError(
+      'invalid-request',
+      `A progress observation carries up to ${SEARCH_LIMITS.maxRequiredPositions} whole-number ` +
+        `publication positions of at most ${SEARCH_LIMITS.maxPositionLength} digits and at most ` +
+        'one catalog revision.',
+    );
+  }
+  return {
+    positions: [...new Set(parsed.data.positions ?? [])],
+    catalogRevision: parsed.data.catalogRevision ?? null,
+  };
+}
 
 /** One normalized private count request: distinct references and the tag whose intent is read. */
 export interface SearchCountQuery {

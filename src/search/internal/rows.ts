@@ -17,12 +17,15 @@ import {
 
 /**
  * Reads the rows of one page statement (docs/search.md#request-and-result). The statement returns
- * one row per entry plus one row carrying the revisions and the exact count of the whole result.
- * Anything outside the declared shape is an unavailable evaluation: it is never reported as an
- * empty page or as zero entries.
+ * one row per entry plus one row carrying the indexed state and the exact count of the whole
+ * result. Anything outside the declared shape is an unavailable evaluation: it is never reported
+ * as an empty page or as zero entries. A state row without a published generation reports no
+ * revisions and no count, so an incomplete index is never presented as an empty collection
+ * (docs/search.md#freshness).
  */
 
 const identifier = z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength);
+const position = z.string().min(1).max(SEARCH_LIMITS.maxPositionLength).regex(/^\d+$/);
 
 const entryRowSchema = z.object({
   row_kind: z.literal('entry'),
@@ -39,12 +42,16 @@ const entryRowSchema = z.object({
   intended: z.number().int().min(0).nullable(),
 });
 
-const revisionRowSchema = z.object({
-  row_kind: z.literal('revision'),
+const stateRowSchema = z.object({
+  row_kind: z.literal('state'),
   row_position: z.literal(0),
-  catalog_revision: identifier,
-  private_revision: identifier.nullable(),
-  total_count: z.number().int().min(0),
+  generation: identifier.nullable(),
+  catalog_revision: identifier.nullable(),
+  catalog_position: position.nullable(),
+  private_revision: position.nullable(),
+  /** Account bound to the read transaction; non-null only inside a private query's scope. */
+  bound_account: identifier.nullable(),
+  total_count: z.number().int().min(0).nullable(),
 });
 
 const countRowSchema = z.object({
@@ -58,7 +65,7 @@ const countRowSchema = z.object({
 
 const countRevisionRowSchema = z.object({
   row_kind: z.literal('revision'),
-  private_revision: identifier,
+  private_revision: position,
 });
 
 /** Basic information of the printing one entry represents; null at card level. */
@@ -83,14 +90,17 @@ export interface SearchEntryRow {
 }
 
 export interface SearchRowsPage {
-  readonly revisions: SearchRevisions;
-  readonly totalCount: number;
+  /** Indexed state the page was evaluated against; null while none is published. */
+  readonly revisions: SearchRevisions | null;
+  /** Exact count of the whole result; null while no complete indexed state answers the query. */
+  readonly totalCount: number | null;
   readonly entries: readonly SearchEntryRow[];
 }
 
 export function readSearchRows(rows: readonly SearchSqlRow[], query: SearchQuery): SearchRowsPage {
   let revisions: SearchRevisions | null = null;
   let totalCount: number | null = null;
+  let hasState = false;
   const entries: SearchEntryRow[] = [];
   for (const row of rows) {
     if (row.row_kind === 'entry') {
@@ -101,24 +111,48 @@ export function readSearchRows(rows: readonly SearchSqlRow[], query: SearchQuery
       entries.push(entryRow(parsed.data, query));
       continue;
     }
-    const parsed = revisionRowSchema.safeParse(row);
+    const parsed = stateRowSchema.safeParse(row);
     if (!parsed.success) {
       throw unreadable();
     }
-    revisions = {
-      catalogRevision: parsed.data.catalog_revision,
-      privateRevision: parsed.data.private_revision,
-    };
+    if (hasState) {
+      // One statement reports the indexed state once; a repeated row is not a readable result.
+      throw unreadable();
+    }
+    hasState = true;
+    const { generation, catalog_revision, catalog_position } = parsed.data;
+    if (requiresTrustedContext(query) && parsed.data.bound_account === null) {
+      // A private query must run inside the account scope; rows that merely look empty would
+      // silently change membership (docs/data-architecture.md#access-and-deployment).
+      throw new SearchError(
+        'unavailable',
+        'The private projection was read without the account scope.',
+      );
+    }
+    if (generation !== null && catalog_revision !== null && catalog_position !== null) {
+      revisions = {
+        generation,
+        catalogRevision: catalog_revision,
+        catalogPosition: catalog_position,
+        privateRevision: parsed.data.private_revision,
+      };
+    } else if (generation !== null || catalog_revision !== null || catalog_position !== null) {
+      throw unreadable();
+    } else if (parsed.data.private_revision !== null) {
+      throw unreadable();
+    }
     totalCount = parsed.data.total_count;
   }
-  if (revisions === null || totalCount === null) {
-    throw new SearchError('unavailable', 'The catalog has no published revision to read.');
+  if (!hasState) {
+    throw unreadable();
   }
-  if (requiresTrustedContext(query) && revisions.privateRevision === null) {
-    throw new SearchError(
-      'unavailable',
-      'The bound account’s private-data revision could not be read.',
-    );
+  if (revisions !== null && totalCount === null) {
+    throw unreadable();
+  }
+  if (revisions === null && (totalCount !== null || entries.length > 0)) {
+    // A state row without a published generation carries no entries and no count; anything else
+    // is an inconsistent read rather than an updating result.
+    throw unreadable();
   }
   return { revisions, totalCount, entries };
 }

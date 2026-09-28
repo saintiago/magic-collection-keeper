@@ -334,10 +334,16 @@ function copyEntry(copyId: string, printingId: string, cardId = 'card-1'): Searc
 
 function searchPage(entries: readonly SearchEntry[]): SearchPage {
   return {
+    status: 'ready',
     entries,
     totalCount: entries.length,
     continuation: null,
-    revisions: { catalogRevision: 'revision-1', privateRevision: 'private-1' },
+    revisions: {
+      generation: 'generation-1',
+      catalogRevision: 'revision-1',
+      catalogPosition: '1',
+      privateRevision: 'private-1',
+    },
   };
 }
 

@@ -10,11 +10,11 @@ import {
 import {
   createSearch,
   createSearchIndexer,
+  SEARCH_ACCOUNT_SCOPE_SQL,
   type SearchSqlExecutor,
   type SearchSqlTransactor,
 } from '../../search/index.js';
 import {
-  USERCARDS_ACCOUNT_SCOPE_SQL,
   createSourceImports,
   createUserCards,
   createUserCardsPublication,
@@ -29,7 +29,10 @@ import {
 import { resolveApplicationConfiguration } from './configuration.js';
 
 export interface ApplicationResources {
-  /** Reader role: published views only, with transaction-local account scope. */
+  /**
+   * Reader role: the published Catalog views and Search's published projection, with the
+   * transaction-local account scope Search's private queries bind.
+   */
   readonly readSql: UserCardsSqlTransactor;
   /** Private writer role, supplied only to the owner of private mutations. */
   readonly writeSql: UserCardsSqlTransactor;
@@ -121,7 +124,7 @@ export function createPostgresApplication(
           work: (scoped: SearchSqlExecutor) => Promise<T>,
         ): Promise<T> =>
           readSql.transaction(async (statements) => {
-            await statements.query(USERCARDS_ACCOUNT_SCOPE_SQL, { account_id: accountId });
+            await statements.query(SEARCH_ACCOUNT_SCOPE_SQL, { account_id: accountId });
             return work(statements);
           }),
       }),

@@ -1,9 +1,10 @@
 /**
  * Search contract fixtures over the shared in-process PostgreSQL harness
- * (tests/support/postgres-database.ts): the real Catalog and UserCards schemas, the account-scope
- * binder Application supplies, and a Search instance that evaluates against them. Private rows are
- * written through UserCards' own contract, so the cases exercise the published query surfaces
- * rather than hand-written substitutes.
+ * (tests/support/postgres-database.ts): the real Catalog, UserCards and Search schemas, the
+ * binder Application supplies for Search's account-scoped projection views, and a Search instance
+ * that evaluates against its own projection. Catalog and private rows are written through the
+ * providers' own contracts and become query-visible only through a Search indexing pass, so the
+ * cases exercise the real publication-to-indexing cooperation.
  */
 
 import {
@@ -15,12 +16,13 @@ import {
 import {
   createSearch,
   createSearchIndexer,
+  SEARCH_ACCOUNT_SCOPE_SQL,
   searchSchemaSql,
   type Search,
   type SearchIndexer,
+  type SearchIndexingRequest,
 } from '../../src/search/index.js';
 import {
-  USERCARDS_ACCOUNT_SCOPE_SQL,
   createUserCards,
   createUserCardsPublication,
   usercardsSchemaSql,
@@ -43,6 +45,8 @@ export interface SearchTestDatabase extends TestDatabase {
   readonly userCardsPublication: UserCardsPublication;
   /** Search's background indexing job over both publications and its own projection storage. */
   readonly indexer: SearchIndexer;
+  /** Applies one indexing pass and fails the case when it did not catch up. */
+  index(request?: SearchIndexingRequest): Promise<void>;
 }
 
 export async function createSearchTestDatabase(): Promise<SearchTestDatabase> {
@@ -53,7 +57,7 @@ export async function createSearchTestDatabase(): Promise<SearchTestDatabase> {
     sql: database.sql,
     withAccountScope: (accountId, work) =>
       database.sql.transaction(async (statements) => {
-        await statements.query(USERCARDS_ACCOUNT_SCOPE_SQL, { account_id: accountId });
+        await statements.query(SEARCH_ACCOUNT_SCOPE_SQL, { account_id: accountId });
         return work(statements);
       }),
   });
@@ -68,5 +72,24 @@ export async function createSearchTestDatabase(): Promise<SearchTestDatabase> {
     catalog: catalogPublication,
     userCards: userCardsPublication,
   });
-  return { ...database, search, userCards, catalogPublication, userCardsPublication, indexer };
+  return {
+    ...database,
+    search,
+    userCards,
+    catalogPublication,
+    userCardsPublication,
+    indexer,
+    async index(request = {}) {
+      const result = await indexer.index(request);
+      if (!result.published || !result.caughtUp) {
+        throw new Error(
+          `The test indexing pass did not catch up: ${JSON.stringify({
+            published: result.published,
+            caughtUp: result.caughtUp,
+            unresolvedReferences: result.unresolvedReferences,
+          })}`,
+        );
+      }
+    },
+  };
 }

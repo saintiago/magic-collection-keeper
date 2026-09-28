@@ -45,10 +45,16 @@ const sessionToken = idToken({ sub: 'cognito-alice', name: 'Alice' });
 
 /** One empty catalog page as the interactive entry point reports it. */
 const searchPage = {
+  status: 'ready',
   entries: [],
   totalCount: 0,
   continuation: null,
-  revisions: { catalogRevision: 'browse-revision', privateRevision: null },
+  revisions: {
+    generation: 'browse-generation',
+    catalogRevision: 'browse-revision',
+    catalogPosition: '1',
+    privateRevision: null,
+  },
 };
 
 let artifactDirectory: string;

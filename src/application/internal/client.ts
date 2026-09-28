@@ -39,6 +39,7 @@ import type {
   SearchEntryTarget,
   SearchPage,
   SearchRequestInput,
+  SearchRevisions,
 } from '../../search/index.js';
 // UserCards follows the same rule: the collection views reach its private operations through this
 // authenticated contract, and a value import would pull the component's Node-only internals into
@@ -1061,22 +1062,39 @@ function readSearchPage(payload: unknown): SearchPage {
   }
   const totalCount = record.totalCount ?? null;
   const continuation = record.continuation ?? null;
-  const revisions = readObject(record.revisions);
-  const catalogRevision = revisions?.catalogRevision ?? null;
-  const privateRevision = revisions?.privateRevision ?? null;
+  const status = record.status;
+  const rawRevisions = record.revisions ?? null;
+  let revisions: SearchRevisions | null = null;
+  if (rawRevisions !== null) {
+    const indexed = readObject(rawRevisions);
+    const generation = indexed?.generation ?? null;
+    const catalogRevision = indexed?.catalogRevision ?? null;
+    const catalogPosition = indexed?.catalogPosition ?? null;
+    const privateRevision = indexed?.privateRevision ?? null;
+    if (
+      indexed === null ||
+      !isIdentifier(generation) ||
+      !isIdentifier(catalogRevision) ||
+      !isIdentifier(catalogPosition) ||
+      !isIdentifierOrNull(privateRevision)
+    ) {
+      throw unreadableSearch();
+    }
+    revisions = { generation, catalogRevision, catalogPosition, privateRevision };
+  }
   if (
+    (status !== 'ready' && status !== 'updating') ||
     !isSearchCountOrNull(totalCount) ||
-    (continuation !== null && typeof continuation !== 'string') ||
-    !isIdentifier(catalogRevision) ||
-    !isIdentifierOrNull(privateRevision)
+    (continuation !== null && typeof continuation !== 'string')
   ) {
     throw unreadableSearch();
   }
   return {
+    status,
     entries: read,
     totalCount,
     continuation,
-    revisions: { catalogRevision, privateRevision },
+    revisions,
   };
 }
 

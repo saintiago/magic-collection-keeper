@@ -152,6 +152,8 @@ describe('search evaluation', () => {
       cards: [lightningBolt, counterspell, llanowarElves, mysticSnake],
       printings: [m11Bolt, staBolt, germanBolt, mh2Counterspell, m11Elves, mh2Snake],
     });
+    // The cases evaluate the complete indexed result, so the published catalog is indexed first.
+    await database.index();
   });
 
   afterEach(async () => {
@@ -170,6 +172,7 @@ describe('search evaluation', () => {
       condition: 'NM',
       quantity,
     });
+    await database.index({ accounts: [context.accountId] });
     return created.copies.map((copy) => copy.copyId);
   }
 
@@ -179,7 +182,17 @@ describe('search evaluation', () => {
     label: string,
   ): Promise<string> {
     const created = await database.userCards.createTag(context, { kind, label });
+    await database.index({ accounts: [context.accountId] });
     return created.tag.tagId;
+  }
+
+  /** One association through UserCards' contract, made query-visible by an indexing pass. */
+  async function createAssociation(
+    context: TrustedUserContext,
+    input: Parameters<SearchTestDatabase['userCards']['createAssociation']>[1],
+  ): Promise<void> {
+    await database.userCards.createAssociation(context, input);
+    await database.index({ accounts: [context.accountId] });
   }
 
   async function captureSearchError(run: () => Promise<unknown>): Promise<SearchError> {
@@ -203,7 +216,10 @@ describe('search evaluation', () => {
 
       expect(page.totalCount).toBe(1);
       expect(page.continuation).toBeNull();
-      expect(page.revisions).toEqual({ catalogRevision: 'revision-1', privateRevision: null });
+      expect(page.revisions).toMatchObject({
+        catalogRevision: 'revision-1',
+        privateRevision: null,
+      });
       expect(page.entries.map((entry) => entry.card.name)).toEqual(['Lightning Bolt']);
       expect(page.entries[0]).toMatchObject({
         entryKey: 'card:oracle-lightning-bolt',
@@ -332,6 +348,8 @@ describe('search evaluation', () => {
           blankPrinting,
         ],
       });
+      // The fixture writer replaces the published snapshot; indexing rebuilds the projection from it.
+      await database.index({ rebuild: true });
       await createCopies(alice, blankPrinting.printingId, 1);
 
       const negatedRules = await database.search.execute({
@@ -465,7 +483,7 @@ describe('search evaluation', () => {
       );
 
       expect(cardLevel.totalCount).toBe(1);
-      expect(cardLevel.revisions.privateRevision).not.toBeNull();
+      expect(cardLevel.revisions?.privateRevision).not.toBeNull();
       expect(cardLevel.entries).toHaveLength(1);
       expect(cardLevel.entries[0]?.quantity).toEqual({ copies: 3, intended: null });
       // Three translated names must not multiply the card's copies.
@@ -548,19 +566,19 @@ describe('search evaluation', () => {
       const first = await createTag(alice, 'other', 'First');
       const second = await createTag(alice, 'other', 'Second');
       const both = await createTag(alice, 'other', 'Both');
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: first,
         targetLevel: 'copy',
         targetId: copies[0] as string,
         quantity: null,
       });
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: second,
         targetLevel: 'copy',
         targetId: copies[1] as string,
         quantity: null,
       });
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: both,
         targetLevel: 'copy',
         targetId: copies[0] as string,
@@ -622,13 +640,13 @@ describe('search evaluation', () => {
       const [germanCopy] = await createCopies(alice, germanBolt.printingId, 1);
       const decks = await createTag(alice, 'deck', 'Burn');
       const binder = await createTag(alice, 'other', 'Binder');
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: decks,
         targetLevel: 'printing',
         targetId: m11Bolt.printingId,
         quantity: 4,
       });
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: binder,
         targetLevel: 'copy',
         targetId: germanCopy as string,
@@ -646,7 +664,7 @@ describe('search evaluation', () => {
         alice,
       );
       const [m11Copy] = await createCopies(alice, m11Bolt.printingId, 1);
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: binder,
         targetLevel: 'copy',
         targetId: m11Copy as string,
@@ -674,13 +692,13 @@ describe('search evaluation', () => {
     it('keeps a deck requirement and its physical copies distinct', async () => {
       const [copyId] = await createCopies(alice, m11Bolt.printingId, 1);
       const deck = await createTag(alice, 'deck', 'Burn');
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: deck,
         targetLevel: 'card',
         targetId: lightningBolt.cardId,
         quantity: 4,
       });
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: deck,
         targetLevel: 'copy',
         targetId: copyId as string,
@@ -707,13 +725,13 @@ describe('search evaluation', () => {
 
     it('does not multiply an entry for several matching printing associations', async () => {
       const wishlist = await createTag(alice, 'wishlist', 'To buy');
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: wishlist,
         targetLevel: 'printing',
         targetId: m11Bolt.printingId,
         quantity: 1,
       });
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: wishlist,
         targetLevel: 'printing',
         targetId: staBolt.printingId,
@@ -737,13 +755,13 @@ describe('search evaluation', () => {
 
     it('counts only the intentions whose printing the query matches', async () => {
       const wishlist = await createTag(alice, 'wishlist', 'To buy');
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: wishlist,
         targetLevel: 'printing',
         targetId: m11Bolt.printingId,
         quantity: 1,
       });
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: wishlist,
         targetLevel: 'printing',
         targetId: germanBolt.printingId,
@@ -781,8 +799,9 @@ describe('search evaluation', () => {
         cards: [lightningBolt, counterspell, llanowarElves, mysticSnake, printlessCard],
         printings: [m11Bolt, staBolt, germanBolt, mh2Counterspell, m11Elves, mh2Snake],
       });
+      await database.index({ rebuild: true });
       const wishlist = await createTag(alice, 'wishlist', 'To buy');
-      await database.userCards.createAssociation(alice, {
+      await createAssociation(alice, {
         tagId: wishlist,
         targetLevel: 'card',
         targetId: printlessCard.cardId,
@@ -818,7 +837,7 @@ describe('search evaluation', () => {
       const deck = await createTag(alice, 'deck', 'Burn');
       const binder = await createTag(alice, 'other', 'Binder');
       for (const tagId of [deck, binder]) {
-        await database.userCards.createAssociation(alice, {
+        await createAssociation(alice, {
           tagId,
           targetLevel: 'copy',
           targetId: copyId as string,
@@ -935,6 +954,20 @@ describe('search evaluation', () => {
       expect(error.code).toBe('stale-continuation');
     });
 
+    it('keeps another account’s writes from invalidating the sequence', async () => {
+      await createCopies(alice, m11Bolt.printingId, 2);
+      const first = await database.search.execute({ resultLevel: 'copy', pageSize: 1 }, alice);
+
+      await createCopies(bob, m11Elves.printingId, 1);
+      const second = await database.search.execute(
+        { resultLevel: 'copy', pageSize: 1, continuation: first.continuation },
+        alice,
+      );
+
+      expect(second.totalCount).toBe(2);
+      expect(second.entries.map((entry) => entry.target.kind)).toEqual(['copy']);
+    });
+
     it('rejects a continuation after the catalog revision changed', async () => {
       const first = await database.search.execute({
         resultLevel: 'card',
@@ -946,6 +979,18 @@ describe('search evaluation', () => {
         cards: [lightningBolt, counterspell, llanowarElves, mysticSnake],
         printings: [m11Bolt, staBolt, germanBolt, mh2Counterspell, m11Elves, mh2Snake],
       });
+
+      // A catalog publication alone does not invalidate a continuation: the indexed generation
+      // still answers the same query (docs/search.md#consistency).
+      const stillIndexed = await database.search.execute({
+        resultLevel: 'card',
+        query: 't:creature',
+        pageSize: 1,
+        continuation: first.continuation,
+      });
+      expect(names(stillIndexed)).toEqual(['Mystic Snake']);
+
+      await database.index({ rebuild: true });
 
       const error = await captureSearchError(() =>
         database.search.execute({
@@ -976,13 +1021,23 @@ describe('search evaluation', () => {
     });
 
     it('reports an unavailable evaluation instead of an empty page', async () => {
-      await database.exec('delete from catalog_private.revision');
+      await database.exec('drop view search.cards');
 
       const error = await captureSearchError(() =>
         database.search.execute({ resultLevel: 'card', query: 't:creature' }),
       );
 
       expect(error.code).toBe('unavailable');
+    });
+
+    it('keeps the last indexed result when the provider storage is lost', async () => {
+      await database.exec('delete from catalog_private.revision');
+
+      const page = await database.search.execute({ resultLevel: 'card', query: 't:creature' });
+
+      expect(page.status).toBe('ready');
+      expect(names(page)).toEqual(['Llanowar Elves', 'Mystic Snake']);
+      expect(page.totalCount).toBe(2);
     });
   });
 });

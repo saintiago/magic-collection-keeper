@@ -8,18 +8,19 @@
  * account-scoped rules. Pending imports, review and confirmation follow the same rules: an
  * observation or parsed line is staged once, review quotes the entry revision, and a confirmation
  * under an operation identity creates the copies with their provenance or returns the recorded
- * outcome. Consumers read private copies, tags and associations through the declared query surface
- * (USERCARDS_QUERY_SURFACE), which Application binds to that account inside one read transaction;
- * pending imports have no published relation and are read through the component's own pending
- * reads. Source imports parse a pasted list, a public Moxfield deck or a reviewed Wizards
- * preconstructed list inside this boundary into the same pending entries, preserving what the
- * source published and reconciling a repeated import of the list the caller identified with what
- * that import already acquired, while another import owns its own acquisitions. Every
- * query-visible mutation also publishes its records durably through the account-scoped publication
- * contract Search consumes (createUserCardsPublication); the caller receives the change's
- * publication position, and recovering a recorded outcome returns the position it was published
- * at. Other components import UserCards through this module only; its internal modules stay
- * private to the component (docs/architecture.md, .dependency-cruiser.mjs).
+ * outcome. Consumers read private copies, tags and associations through their own operations;
+ * another component builds searchable data from the provider-owned publication contract
+ * (createUserCardsPublication) instead of reading UserCards' relations, whose views stay internal
+ * implementation choices (docs/user-cards.md#query-surface). Pending imports have no published
+ * relation and are read through the component's own pending reads. Source imports parse a pasted
+ * list, a public Moxfield deck or a reviewed Wizards preconstructed list inside this boundary into
+ * the same pending entries, preserving what the source published and reconciling a repeated import
+ * of the list the caller identified with what that import already acquired, while another import
+ * owns its own acquisitions. Every query-visible mutation also publishes its records durably
+ * through that contract; the caller receives the change's publication position, and recovering a
+ * recorded outcome returns the position it was published at. Other components import UserCards
+ * through this module only; its internal modules stay private to the component
+ * (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
 export { UserCardsError, type UserCardsFailureCode } from './internal/errors.js';
@@ -104,14 +105,9 @@ export {
 export {
   USERCARDS_ACCOUNT_SCOPE_SQL,
   USERCARDS_ACCOUNT_SETTING,
-  USERCARDS_QUERY_SURFACE,
   usercardsPublicationGrants,
   usercardsReaderGrants,
   usercardsSchemaSql,
-  type UserCardsColumnType,
-  type UserCardsQueryRelation,
-  type UserCardsQuerySurface,
-  type UserCardsRelationColumn,
 } from './internal/schema.js';
 export {
   USERCARDS_PUBLICATION_LIMITS,

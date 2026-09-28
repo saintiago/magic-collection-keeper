@@ -41,14 +41,9 @@ export {
   type PrintingReference,
 } from './internal/model.js';
 export {
-  CATALOG_QUERY_SURFACE,
   catalogReaderGrants,
   catalogPublicationGrants,
   catalogSchemaSql,
-  type CatalogColumnType,
-  type CatalogQueryRelation,
-  type CatalogQuerySurface,
-  type CatalogRelationColumn,
 } from './internal/schema.js';
 export {
   CATALOG_PUBLICATION_LIMITS,

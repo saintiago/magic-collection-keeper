@@ -290,6 +290,8 @@ describe('application entry points', () => {
         quantity: 3,
       },
     });
+    // Search answers from its own projection; the write becomes visible through its job entry point.
+    await application.indexSearch({ accounts: ['cognito-alice', 'cognito-bob'] });
     const ownedQuery = { resultLevel: 'card', criteria: [{ kind: 'owned' }] };
 
     const alice = await call({
@@ -470,6 +472,7 @@ describe('application entry points', () => {
         body: { printingId, finish: 'nonfoil', condition: null, quantity: 1 },
       });
     }
+    await application.indexSearch({ accounts: ['cognito-alice'] });
     const query = {
       resultLevel: 'card',
       criteria: [{ kind: 'owned' }],
@@ -496,6 +499,7 @@ describe('application entry points', () => {
         quantity: 1,
       },
     });
+    await application.indexSearch({ accounts: ['cognito-alice'] });
 
     const resumed = await call({
       method: 'POST',

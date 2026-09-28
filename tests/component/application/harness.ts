@@ -110,10 +110,16 @@ export interface SearchSpy {
 /** A Search contract whose evaluation the case scripts and observes. */
 export function createSearchSpy(): SearchSpy {
   const execute = vi.fn(async () => ({
+    status: 'ready' as const,
     entries: [],
     totalCount: 0,
     continuation: null,
-    revisions: { catalogRevision: testRevision.revisionId, privateRevision: null },
+    revisions: {
+      generation: 'generation-1',
+      catalogRevision: testRevision.revisionId,
+      catalogPosition: '1',
+      privateRevision: null,
+    },
   }));
   const counts = vi.fn(async () => ({
     privateRevision: 'private-revision-1',

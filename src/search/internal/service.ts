@@ -9,8 +9,26 @@ import {
 import { SearchError } from './errors.js';
 import { countsStatement, pageStatement, type SearchPageStatement } from './evaluation.js';
 import type { SearchSqlExecutor, SearchSqlRow } from './executor.js';
-import { requiresTrustedContext, type SearchQuery, type SearchRequestInput } from './model.js';
-import { normalizeSearchCountRequest, normalizeSearchRequest } from './request.js';
+import {
+  incorporatedProgress,
+  progressStatement,
+  readSearchProgressRows,
+  type SearchObservationOptions,
+  type SearchProgress,
+  type SearchProgressRequest,
+} from './freshness.js';
+import {
+  SEARCH_LIMITS,
+  requiresTrustedContext,
+  type SearchQuery,
+  type SearchRequestInput,
+  type SearchRevisions,
+} from './model.js';
+import {
+  normalizeSearchCountRequest,
+  normalizeSearchProgressRequest,
+  normalizeSearchRequest,
+} from './request.js';
 import {
   searchEntryKey,
   type SearchEntry,
@@ -23,16 +41,20 @@ import {
 import { readSearchCountRows, readSearchRows, type SearchEntryRow } from './rows.js';
 
 /**
- * Search evaluation (docs/search.md#required-query-contracts,
- * docs/search.md#evaluation-and-grouping).
+ * Search evaluation and freshness over Search's own projection
+ * (docs/search.md#required-query-contracts, docs/search.md#evaluation-and-grouping,
+ * docs/search.md#freshness).
  *
  * A request normalizes into one query before anything is read; filters and grouping then run over
  * the complete result inside one database statement, which also reports the exact total count and
- * the revisions, before the requested page boundary is applied. A private query reads the
- * account-scoped views inside the scope Application binds; a public query never touches them. Only
- * a successful evaluation returns a page: an invalid or unsupported request, missing trusted
- * context, a stale continuation and a temporary failure stay distinct failures
- * (docs/search.md#consistency).
+ * the indexed state, before the requested page boundary is applied. A private query reads the
+ * account-scoped projection views inside the scope Application binds; a public query never touches
+ * them. Only a successful evaluation returns a result: an invalid or unsupported request, missing
+ * trusted context, a stale continuation and a temporary failure stay distinct failures
+ * (docs/search.md#consistency). A result that has not incorporated a required publication position
+ * is reported as updating — with the last usable indexed result when the published generation
+ * answers the query, and without one when it does not — never as an empty collection or a failure
+ * (docs/search.md#freshness).
  */
 
 export interface Search {
@@ -47,18 +69,30 @@ export interface Search {
     request: SearchCountInput,
     context?: TrustedUserContext | null,
   ): Promise<SearchCountResult>;
+  /**
+   * Reports whether the authenticated account's indexed state incorporates known committed
+   * publication positions and an optional published catalog revision, waiting at most the
+   * requested bound. The observation creates no indexing work and never claims the index holds
+   * every current source write (docs/search.md#freshness).
+   */
+  observe(
+    request: SearchProgressRequest,
+    context?: TrustedUserContext | null,
+    options?: SearchObservationOptions,
+  ): Promise<SearchProgress>;
 }
 
 export interface SearchDependencies {
   /**
-   * Read-only executor over the published Catalog and UserCards relations, supplied by
-   * Application. Public queries read it directly; statements use `:name` placeholders.
+   * Read-only executor over Search's published projection, supplied by Application. Public reads
+   * use it directly; statements use `:name` placeholders.
    */
   readonly sql: SearchSqlExecutor;
   /**
-   * Runs `work` with the trusted account bound to UserCards' published views for one read
-   * transaction, so a private query sees one account's rows and one coherent private revision.
-   * Application binds the authenticated scope here rather than Search handling account state.
+   * Runs `work` with the trusted account bound to Search's account-scoped projection views for one
+   * read transaction, so a private query sees one account's rows and one coherent indexed
+   * position. Application binds the authenticated scope here rather than Search handling account
+   * state.
    */
   readonly withAccountScope: <T>(
     accountId: string,
@@ -104,6 +138,18 @@ export function createSearch(dependencies: SearchDependencies): Search {
     }
   }
 
+  /** Reads the indexed state of one account; without a usable account it stays public. */
+  async function readIndexedState(accountId: string | null): Promise<SearchRevisions | null> {
+    if (accountId === null) {
+      return readState(sql);
+    }
+    try {
+      return await withAccountScope(accountId, (scoped) => readState(scoped));
+    } catch (cause) {
+      throw evaluationFailure(cause);
+    }
+  }
+
   return {
     async execute(
       request: SearchRequestInput,
@@ -117,27 +163,47 @@ export function createSearch(dependencies: SearchDependencies): Search {
       const offset = cursor?.offset ?? 0;
       const rows = await readPage(query, context, pageStatement(query, offset, query.pageSize + 1));
       const page = readSearchRows(rows, query);
+      const revisions = page.revisions;
+      const usable =
+        revisions !== null &&
+        (!requiresTrustedContext(query) || revisions.privateRevision !== null);
+      if (revisions === null || !usable) {
+        if (cursor !== null) {
+          throw new SearchError(
+            'stale-continuation',
+            'The indexed search results are not available yet; start the search again.',
+          );
+        }
+        return {
+          status: 'updating',
+          entries: [],
+          totalCount: null,
+          continuation: null,
+          revisions,
+        };
+      }
       if (cursor !== null) {
         verifySearchContinuation(cursor, {
           query,
           context,
-          revisions: page.revisions,
+          revisions,
         });
       }
       const hasMore = page.entries.length > query.pageSize;
       const entries = hasMore ? page.entries.slice(0, query.pageSize) : page.entries;
       return {
+        status: incorporatedProgress(revisions, query.required) ? 'ready' : 'updating',
         entries: entries.map((entry) => searchEntry(entry, query)),
         totalCount: page.totalCount,
         continuation: hasMore
           ? encodeSearchContinuation({
               query,
               context,
-              revisions: page.revisions,
+              revisions,
               offset: offset + query.pageSize,
             })
           : null,
-        revisions: page.revisions,
+        revisions,
       };
     },
 
@@ -164,7 +230,94 @@ export function createSearch(dependencies: SearchDependencies): Search {
       }
       return readSearchCountRows(rows, query.references);
     },
+
+    /**
+     * Observes one bounded wait for incorporation. Each round reads the indexed state again, so a
+     * wait that expires reports delayed while a wait that sees the required progress reports
+     * incorporated; the read never starts indexing work and an unusable read fails as unavailable
+     * rather than reporting completion (docs/search.md#freshness).
+     */
+    async observe(
+      request: SearchProgressRequest,
+      context: TrustedUserContext | null = null,
+      options: SearchObservationOptions = {},
+    ): Promise<SearchProgress> {
+      const required = normalizeSearchProgressRequest(request);
+      const accountId = readTrustedAccountId(context);
+      if (required.positions.length > 0 && accountId === null) {
+        throw new SearchError(
+          'unauthorized',
+          'Requiring a private publication position needs authenticated context.',
+        );
+      }
+      const timeoutMs = readObservationTimeout(options?.timeoutMs);
+      const signal = options?.signal;
+      let remaining = timeoutMs;
+      for (;;) {
+        const revisions = await readIndexedState(accountId);
+        if (incorporatedProgress(revisions, required)) {
+          return { state: 'incorporated', revisions };
+        }
+        if (remaining <= 0) {
+          return { state: timeoutMs === 0 ? 'indexing' : 'delayed', revisions };
+        }
+        const delay = Math.min(SEARCH_LIMITS.observationIntervalMs, remaining);
+        await waitForInterval(delay, signal);
+        remaining -= delay;
+      }
+    },
   };
+}
+
+/** Reads the one indexed-state row of a progress statement. */
+async function readState(sql: SearchSqlExecutor): Promise<SearchRevisions | null> {
+  try {
+    return readSearchProgressRows(await sql.query(progressStatement()));
+  } catch (cause) {
+    throw evaluationFailure(cause);
+  }
+}
+
+/** The observation bound a caller requested; unbounded waits are not part of the contract. */
+function readObservationTimeout(timeoutMs: number | undefined): number {
+  if (timeoutMs === undefined) {
+    return 0;
+  }
+  if (
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 0 ||
+    timeoutMs > SEARCH_LIMITS.maxObservationTimeoutMs
+  ) {
+    throw new SearchError(
+      'invalid-request',
+      `An observation waits 0 to ${SEARCH_LIMITS.maxObservationTimeoutMs} whole milliseconds.`,
+    );
+  }
+  return timeoutMs;
+}
+
+/**
+ * Waits one observation interval. Cancelling the observation stops the wait instead of leaving it
+ * pending, and a withdrawn wait fails as unavailable: it never reports that progress completed.
+ */
+function waitForInterval(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted === true) {
+    return Promise.reject(cancelled());
+  }
+  return new Promise<void>((resolve, reject) => {
+    const finish = (outcome: () => void) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      outcome();
+    };
+    const onAbort = () => finish(() => reject(cancelled()));
+    const timer = setTimeout(() => finish(resolve), delayMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function cancelled(): SearchError {
+  return new SearchError('unavailable', 'The indexing observation was cancelled.');
 }
 
 async function readRows(

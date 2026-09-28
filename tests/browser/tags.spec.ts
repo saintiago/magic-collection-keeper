@@ -646,9 +646,15 @@ test('reports the committed part of a bulk addition and reconciles the list', as
         quantity: null,
       },
     ],
+    status: 'ready',
     totalCount: 2,
     continuation: null,
-    revisions: { catalogRevision: 'tags-revision', privateRevision: 'private-1' },
+    revisions: {
+      generation: 'tags-generation',
+      catalogRevision: 'tags-revision',
+      catalogPosition: '1',
+      privateRevision: 'private-1',
+    },
   });
 
   const results = page.locator('#tag-add-results [data-ui-entry]');
@@ -1154,9 +1160,15 @@ test('searches the catalog and adds a card to the wishlist with its intended qua
         quantity: null,
       },
     ],
+    status: 'ready',
     totalCount: 2,
     continuation: null,
-    revisions: { catalogRevision: 'tags-revision', privateRevision: 'private-1' },
+    revisions: {
+      generation: 'tags-generation',
+      catalogRevision: 'tags-revision',
+      catalogPosition: '1',
+      privateRevision: 'private-1',
+    },
   });
 
   const result = page.locator('#tag-add-results [data-ui-entry="card:card-bolt"]');

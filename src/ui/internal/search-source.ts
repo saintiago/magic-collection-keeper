@@ -337,6 +337,13 @@ function createSearchSource<Context>(
         }
         throw cause;
       }
+      if (page.status === 'updating' && page.totalCount === null) {
+        // The index has no complete result to present yet. Showing the empty result would turn a
+        // delayed projection into an empty collection, so the read stays a failure the list can
+        // retry; CardList's own updating state carries usable results until then
+        // (docs/card-list.md#loading-and-recovery, docs/search.md#freshness).
+        throw new Error('The search results are still being indexed.');
+      }
       return {
         status: 'page',
         entries: page.entries.map((entry) => searchListEntry(entry)),

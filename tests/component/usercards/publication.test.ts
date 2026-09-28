@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCatalog, type Catalog } from '../../../src/catalog/index.js';
 import {
   USERCARDS_PUBLICATION_LIMITS,
-  USERCARDS_QUERY_SURFACE,
   createUserCards,
   createUserCardsPublication,
   type TrustedUserContext,
@@ -22,6 +21,7 @@ import {
   type UserCardsSqlTransactor,
   type UserCardsSqlValue,
 } from '../../../src/usercards/index.js';
+import { USERCARDS_QUERY_SURFACE } from '../../../src/usercards/internal/schema.js';
 import { publishCatalog } from '../../support/catalog-database.js';
 import {
   captureUserCardsError,
