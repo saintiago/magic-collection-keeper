@@ -14,12 +14,135 @@ const input = { sessionId: 'import-1', entries: [{ entryId: 'entry-1', expectedR
 const receipt: ImportReceipt = {
   operationId: 'op-1',
   sessionId: 'import-1',
-  sourceKind: 'manual',
-  sourceId: 'manual',
+  sourceKind: 'pasted-list',
+  sourceId: 'import-1',
   publicationPosition: '7',
   copies: [],
 };
 const failure = (code: string) => Object.assign(new Error(code), { code });
+
+const sourceRequest = { format: 'pasted-list', text: '2 Lightning Bolt' } as const;
+const sourceResult: SourceImportResult = {
+  privateRevision: 'revision-3',
+  session: {
+    sessionId: 'import-1',
+    sourceKind: 'pasted-list',
+    sourceId: 'import-1',
+    sourceReference: null,
+    state: 'pending',
+    pendingEntries: 1,
+    confirmedEntries: 1,
+    discardedEntries: 0,
+    revision: 3,
+  },
+  rows: [],
+  staged: 1,
+};
+
+it('keeps in-flight source reconciliation observable when existing entries are confirmed first', async () => {
+  const staging = Promise.withResolvers<SourceImportResult>();
+  const storage = memoryAttemptStorage();
+  const client = {
+    ...unusedUserCardsClient(),
+    stageSourceImport: () => staging.promise,
+    confirmImport: async () => ({ ...receipt, privateRevision: 'revision-2', replayed: false }),
+  };
+  const account = createUserCardsOperations({ client, storage }).account('alice');
+  const changes: UserCardsChange[] = [];
+  account.subscribe((change) => changes.push(change));
+  const source = account.reopenSourceImport('import-1', sourceRequest);
+  const observed = source.observe();
+
+  expect((await account.confirmImport(input).observe()).state).toBe('committed');
+  expect(source.outcome().state).toBe('pending');
+  expect(account.resume('import-1')).toBe(source);
+  expect(
+    createUserCardsOperations({ client, storage }).account('alice').resume('import-1')?.request,
+  ).toEqual(sourceRequest);
+  expect(changes).toEqual([{ scope: 'copies', records: [], imports: ['import-1'], position: '7' }]);
+
+  staging.resolve(sourceResult);
+  expect(await observed).toEqual({ state: 'committed', record: sourceResult });
+  expect(changes).toEqual([
+    { scope: 'copies', records: [], imports: ['import-1'], position: '7' },
+    { scope: 'imports', records: [], imports: ['import-1'], position: null },
+  ]);
+  expect(account.retained()).toEqual([]);
+  expect(storage.values.size).toBe(0);
+});
+
+it.each([
+  'acknowledgement',
+  'automatic recovery',
+  'explicit recovery',
+  'reloaded recovery',
+] as const)(
+  'preserves unknown source reconciliation through %s of confirmation and later reload',
+  async (confirmationPath) => {
+    const storage = memoryAttemptStorage();
+    const submitted: StageSourceImportInput[] = [];
+    let receiptAvailable = confirmationPath === 'automatic recovery';
+    const client = {
+      ...unusedUserCardsClient(),
+      stageSourceImport: async (request: StageSourceImportInput) => {
+        submitted.push(request);
+        if (submitted.length === 1) throw failure('unavailable');
+        return sourceResult;
+      },
+      confirmImport: async () => {
+        if (confirmationPath !== 'acknowledgement') throw failure('unavailable');
+        return { ...receipt, privateRevision: 'revision-2', replayed: false };
+      },
+      recoverImportOperation: async (): Promise<ImportOperationRecoveryResult> => {
+        if (!receiptAvailable) throw failure('unavailable');
+        return { outcome: 'recorded', receipt };
+      },
+    };
+    const options = { client, storage, identity: () => receipt.operationId };
+    let account = createUserCardsOperations(options).account('alice');
+    const source = account.reopenSourceImport('import-1', sourceRequest);
+    expect((await source.observe()).state).toBe('unknown');
+    const changes: UserCardsChange[] = [];
+    account.subscribe((change) => changes.push(change));
+
+    let confirmation = account.confirmImport(input);
+    if (confirmationPath === 'explicit recovery' || confirmationPath === 'reloaded recovery') {
+      expect((await confirmation.observe()).state).toBe('unknown');
+      expect(changes).toEqual([]);
+      receiptAvailable = true;
+      if (confirmationPath === 'reloaded recovery') {
+        account = createUserCardsOperations(options).account('alice');
+        account.subscribe((change) => changes.push(change));
+        const retained = account.resume(confirmation.operationId);
+        if (retained?.kind !== 'confirmImport') throw new Error('Confirmation was not retained.');
+        confirmation = retained;
+      }
+      await confirmation.recover();
+    }
+    expect((await confirmation.observe()).state).toBe('committed');
+    expect(account.retained().map((attempt) => attempt.operationId)).toEqual(['import-1']);
+    expect(account.resume('import-1')?.outcome().state).toBe('unknown');
+    expect(changes).toEqual([
+      { scope: 'copies', records: [], imports: ['import-1'], position: '7' },
+    ]);
+
+    const reloaded = createUserCardsOperations(options).account('alice');
+    reloaded.subscribe((change) => changes.push(change));
+    const recovered = reloaded.resume('import-1');
+    expect(recovered?.request).toEqual(sourceRequest);
+    expect(await recovered?.recover()).toEqual({ state: 'committed', record: sourceResult });
+    expect(submitted).toEqual([
+      { ...sourceRequest, sessionId: 'import-1' },
+      { ...sourceRequest, sessionId: 'import-1' },
+    ]);
+    expect(changes).toEqual([
+      { scope: 'copies', records: [], imports: ['import-1'], position: '7' },
+      { scope: 'imports', records: [], imports: ['import-1'], position: null },
+    ]);
+    expect(reloaded.retained()).toEqual([]);
+    expect(storage.values.size).toBe(0);
+  },
+);
 
 it.each(['committed', 'rejected'] as const)(
   'keeps a %s confirmation stable through recovery, retry and account release',

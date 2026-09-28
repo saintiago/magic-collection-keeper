@@ -744,7 +744,6 @@ export function createUserCardsOperations(
             // (docs/application.md#construction-and-request-boundary).
             recorded: (callSignal) => recordedConfirmation(operationId, callSignal),
             change: (confirmation) => confirmedChange(confirmation),
-            settled: (confirmation) => forgetSourceImport(confirmation.sessionId),
             retry: 'recorded',
           }),
         }).handle;
@@ -1021,7 +1020,6 @@ export function createUserCardsOperations(
                 client.confirmImport({ ...input, operationId: record.operationId }, callSignal),
               recorded: (callSignal) => recordedConfirmation(record.operationId, callSignal),
               change: (receipt) => confirmedChange(receipt),
-              settled: (receipt) => forgetSourceImport(receipt.sessionId),
               retry: 'recorded',
               reattached: true,
             },
@@ -1096,10 +1094,9 @@ export function createUserCardsOperations(
     }
 
     /**
-     * Releases the source-import identity one established session change resolved: a committed
-     * confirmation or an explicitly discarded import ends the import a source input composed, so
-     * the next submission of that input composes a new list. A confirmation whose own outcome is
-     * not established stays retained until its recorded receipt or its absence decides it.
+     * Abandons the retained source attempt after an explicit discard of its import. Confirmation
+     * only settles its reviewed entries: separate staging must retain its own recovery context
+     * until its outcome is established or the import is explicitly abandoned.
      */
     function forgetSourceImport(sessionId: string): void {
       let changed = false;
