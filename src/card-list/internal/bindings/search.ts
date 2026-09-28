@@ -24,16 +24,23 @@ import type {
   SearchCriterion,
   SearchEntry,
   SearchPage,
+  SearchProgress,
+  SearchProgressRequest,
   SearchRequestInput,
   SearchResultLevel,
+  SearchObservationOptions,
 } from '../../../search/index.js';
 import type { Finish } from '../../../catalog/index.js';
+import { SEARCH_LIMITS } from '../../../search/browser.js';
+import { SEARCH_PROGRESS_DEFAULT_WINDOW_MS } from '../../../search/browser.js';
 
 import type {
   CardListEntry,
   CardListEntryImage,
   CardListEntryOwnership,
   CardListFragmentReader,
+  CardListObservation,
+  CardListObservationRequest,
   CardListSource,
   CardListSourceRequest,
   CardListTarget,
@@ -46,6 +53,16 @@ import type {
  */
 export interface CardListSearchRead {
   execute(request: SearchRequestInput, signal?: AbortSignal): Promise<SearchPage>;
+  /**
+   * Search's bounded freshness capability (docs/search.md#freshness). It establishes the explicit
+   * committed positions the answer names; a read that cannot establish every position it required
+   * reports its page as still updating instead of caught up. Optional: without it a list rechecks
+   * through a read and a multi-position requirement is never reported as incorporated.
+   */
+  observe?(
+    request: SearchProgressRequest,
+    options: SearchObservationOptions,
+  ): Promise<SearchProgress>;
 }
 
 /** The private counts read a list binding consumes. */
@@ -182,6 +199,7 @@ function createSearchSource<Context>(
   if (typeof search?.execute !== 'function') {
     throw new TypeError('A CardList query is read through the Search contract.');
   }
+  const observe = search.observe;
   return {
     async load(request: CardListSourceRequest<Context>) {
       let page: SearchPage;
@@ -208,13 +226,26 @@ function createSearchSource<Context>(
         }
         throw cause;
       }
+      // The page's own status answers the one position the request carried. Every further known
+      // committed position is established through Search's own bounded observation, so a page that
+      // incorporated an older position never clears a newer one that is still indexing
+      // (docs/search.md#freshness).
+      const current =
+        page.status === 'ready' &&
+        (await requiredIncorporated(search, request.required.positions, request.signal));
       return {
         status: 'page',
         entries: page.entries.map((entry) => searchEntryOf(entry)),
         continuation: page.continuation,
-        current: page.status === 'ready',
+        current,
       };
     },
+    ...(typeof observe === 'function'
+      ? {
+          observe: (request: CardListObservationRequest) =>
+            observeSearchProgress(search, request.positions, request.signal),
+        }
+      : {}),
     // Every committed change may alter the membership, ordering or quantities of a query, so a
     // Search-backed list reacquires its result for any notification it is handed.
     affects: () => true,
@@ -222,8 +253,9 @@ function createSearchSource<Context>(
 }
 
 /**
- * Position a read must have incorporated: the latest known committed position, because a newer
- * publication position incorporates the earlier ones of the same account.
+ * Position the query request itself waits for. Search accepts one required position per query, so
+ * the binding names the most recently reported one for its own wait and establishes the whole set
+ * separately: notification order never proves which positions the indexed generation holds.
  */
 function requiredPosition(request: CardListSourceRequest<unknown>): string | null {
   const positions = request.required.positions;
@@ -232,6 +264,72 @@ function requiredPosition(request: CardListSourceRequest<unknown>): string | nul
   }
   const latest = positions[positions.length - 1];
   return typeof latest === 'string' && latest.length > 0 ? latest : null;
+}
+
+/**
+ * Whether the provider established every required position. A single position is answered exactly
+ * by the query's own status; further positions are read through Search's bounded observation in
+ * bounded batches. Without the observation capability a multi-position requirement is never
+ * reported as incorporated, because no provider read established it.
+ */
+async function requiredIncorporated(
+  search: CardListSearchRead,
+  positions: readonly string[],
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (positions.length === 0 || positions.length === 1) {
+    return true;
+  }
+  if (typeof search.observe !== 'function') {
+    return false;
+  }
+  for (const batch of positionBatches(positions)) {
+    const observed = await search.observe({ positions: batch }, { timeoutMs: 0, signal });
+    if (observed.state !== 'incorporated') {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * One bounded observation of the awaited positions through Search's freshness capability. Each
+ * batch is observed within the declared window; incorporation of one batch never stands for
+ * another, so the observation reports incorporated only once every batch is established.
+ */
+export async function observeSearchProgress(
+  search: CardListSearchRead,
+  positions: readonly string[],
+  signal: AbortSignal,
+): Promise<CardListObservation> {
+  const observe = search.observe;
+  if (typeof observe !== 'function' || positions.length === 0) {
+    return 'delayed';
+  }
+  let observed: CardListObservation = 'incorporated';
+  for (const batch of positionBatches(positions)) {
+    const progress = await observe(
+      { positions: batch },
+      { timeoutMs: SEARCH_PROGRESS_DEFAULT_WINDOW_MS, signal },
+    );
+    if (progress.state === 'failed') {
+      return 'failed';
+    }
+    if (progress.state !== 'incorporated') {
+      observed = 'delayed';
+    }
+  }
+  return observed;
+}
+
+/** Bounded batches of explicit positions, as the provider's observation capability accepts them. */
+function positionBatches(positions: readonly string[]): readonly (readonly string[])[] {
+  const bound = SEARCH_LIMITS.maxRequiredPositions;
+  const batches: string[][] = [];
+  for (let index = 0; index < positions.length; index += bound) {
+    batches.push(positions.slice(index, index + bound));
+  }
+  return batches;
 }
 
 /**

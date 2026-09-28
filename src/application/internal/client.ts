@@ -25,6 +25,7 @@ import type {
   ListCardPrintingsOptions,
   PrintingRecord,
 } from '../../catalog/index.js';
+import { createCardListBrowser, type CardListBrowser } from '../../card-list/index.js';
 import {
   createRecognition,
   createBrowserRecognitionPipeline,
@@ -39,7 +40,10 @@ import type {
   SearchCountResult,
   SearchEntry,
   SearchEntryTarget,
+  SearchObservationOptions,
   SearchPage,
+  SearchProgress,
+  SearchProgressRequest,
   SearchRequestInput,
   SearchRevisions,
 } from '../../search/index.js';
@@ -262,6 +266,16 @@ export interface SearchClient {
    * enriches presented entries without changing which entries a query selected.
    */
   counts(request: SearchCountInput, signal?: AbortSignal): Promise<SearchCountResult>;
+  /**
+   * Reports whether the account's indexed state incorporates the explicit committed positions and
+   * the published catalog revision, waiting at most the requested bound. The capability creates no
+   * indexing work and never claims the index holds every current source write
+   * (docs/search.md#freshness).
+   */
+  observe(
+    request: SearchProgressRequest,
+    options?: SearchObservationOptions,
+  ): Promise<SearchProgress>;
 }
 
 /** Builds the Search contract the UserInterface queries through the interactive entry point. */
@@ -287,6 +301,60 @@ export function createSearchClient(request: RequestTransport): SearchClient {
       });
       return readSearchCountResult(payload);
     },
+
+    async observe(
+      input: SearchProgressRequest,
+      options: SearchObservationOptions = {},
+    ): Promise<SearchProgress> {
+      const payload = await request(applicationRoutes.searchProgress, {
+        method: 'POST',
+        body: JSON.stringify({
+          positions: input.positions ?? [],
+          catalogRevision: input.catalogRevision ?? null,
+          ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+        }),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      return readSearchProgress(payload);
+    },
+  };
+}
+
+/**
+ * One bounded observation as the browser reads it. A response outside the declared shape is
+ * unavailable, never incorporation: a status that cannot be read must not clear awaited progress
+ * (docs/search.md#freshness).
+ */
+function readSearchProgress(payload: unknown): SearchProgress {
+  const record = readObject(payload);
+  const state = record?.state;
+  if (
+    record === null ||
+    (state !== 'incorporated' && state !== 'indexing' && state !== 'delayed' && state !== 'failed')
+  ) {
+    throw new ApplicationError('unavailable', 'The indexing status could not be read.');
+  }
+  const rawRevisions = record.revisions ?? null;
+  if (rawRevisions === null) {
+    return { state, revisions: null };
+  }
+  const indexed = readObject(rawRevisions);
+  const generation = indexed?.generation ?? null;
+  const catalogRevision = indexed?.catalogRevision ?? null;
+  const catalogPosition = indexed?.catalogPosition ?? null;
+  const privateRevision = indexed?.privateRevision ?? null;
+  if (
+    indexed === null ||
+    !isIdentifier(generation) ||
+    !isIdentifier(catalogRevision) ||
+    !isIdentifier(catalogPosition) ||
+    !isIdentifierOrNull(privateRevision)
+  ) {
+    throw new ApplicationError('unavailable', 'The indexing status could not be read.');
+  }
+  return {
+    state,
+    revisions: { generation, catalogRevision, catalogPosition, privateRevision },
   };
 }
 
@@ -643,6 +711,13 @@ export interface UserInterfaceCapabilities {
   readonly search: SearchClient;
   /** UserCards' browser operation facade: private reads, retained operations and invalidations. */
   readonly userCards: UserCardsOperations;
+  /**
+   * The CardList capability Application selected: its factory and the provider bindings of the
+   * lists the pages describe (docs/architecture.md#composition-and-replacement,
+   * docs/card-list.md#interface). Pages and views consume this contract instead of naming the
+   * component's implementation or constructing its providers.
+   */
+  readonly cardList: CardListBrowser;
   /** Builds the Recognition contract over the browser's preserved engines. */
   readonly createRecognition: () => Recognition<HTMLCanvasElement>;
 }
@@ -729,6 +804,11 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
           ),
         }),
   });
+  // Application selects the CardList implementation and hands the UserInterface its factory with
+  // the provider bindings of the authenticated clients, so pages describe their lists instead of
+  // naming the component or constructing Search, Catalog or UserCards bindings
+  // (docs/architecture.md#composition-and-replacement).
+  const cardList = createCardListBrowser({ search, catalog, userCards });
   // Account isolation belongs to Application even when no UserInterface is constructed. A token
   // refresh for the same account keeps its requests valid, including the one awaiting that token;
   // leaving an account ends its UserCards scope before another account can bind, so no read or
@@ -741,6 +821,7 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
       const ended = accountId;
       accountId = nextAccountId;
       if (ended !== null) {
+        cardList.endAccount(ended);
         userCards.release(ended);
       }
       request.endSession();
@@ -767,6 +848,7 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
           catalog,
           search,
           userCards,
+          cardList,
           createRecognition: createRecognitionContract,
         })
       : null;

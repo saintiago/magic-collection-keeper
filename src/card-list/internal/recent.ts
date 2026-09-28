@@ -64,17 +64,40 @@ export function createRecentActivity(
         // The recorded activity is this source's authoritative read; a committed publication
         // position never changes the local history, so no change reacquires it.
         affects: () => false,
-        load() {
+        load(request) {
+          // The recorded activity is the source's own sequence, so its page bound and
+          // continuation obey the same contract as every other source: a bounded page, and a
+          // continuation while further recorded cards remain (docs/card-list.md#interface).
+          const recorded = accounts.get(account) ?? [];
+          const start = readContinuation(request.continuation, recorded.length);
+          const page = recorded.slice(start, start + request.pageSize);
+          const next = start + page.length;
           return Promise.resolve({
             status: 'page',
-            entries: accounts.get(account) ?? [],
-            continuation: null,
+            entries: page,
+            continuation: next < recorded.length ? String(next) : null,
             current: true,
           });
         },
       };
     },
   };
+}
+
+/**
+ * First recorded entry one page presents. The continuation is this source's own opaque offset into
+ * its account-local history; a value it never produced starts the history from its beginning
+ * instead of presenting another account's entries.
+ */
+function readContinuation(value: string | null, length: number): number {
+  if (value === null) {
+    return 0;
+  }
+  if (!/^\d+$/.test(value)) {
+    return 0;
+  }
+  const offset = Number(value);
+  return Number.isSafeInteger(offset) && offset >= 0 && offset < length ? offset : 0;
 }
 
 function readAccountId(value: unknown): string {

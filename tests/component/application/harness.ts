@@ -105,6 +105,7 @@ export interface SearchSpy {
   readonly contract: Search;
   readonly execute: Mock;
   readonly counts: Mock;
+  readonly observe: Mock;
 }
 
 /** A Search contract whose evaluation the case scripts and observes. */
@@ -125,7 +126,16 @@ export function createSearchSpy(): SearchSpy {
     privateRevision: 'private-revision-1',
     counts: new Map(),
   }));
-  return { execute, counts, contract: { execute, counts } as unknown as Search };
+  const observe = vi.fn(async () => ({
+    state: 'incorporated' as const,
+    revisions: {
+      generation: 'generation-1',
+      catalogRevision: testRevision.revisionId,
+      catalogPosition: '1',
+      privateRevision: '1',
+    },
+  }));
+  return { execute, counts, observe, contract: { execute, counts, observe } as unknown as Search };
 }
 
 export interface UserCardsSpy {

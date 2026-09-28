@@ -32,13 +32,11 @@
  */
 
 import type { SearchClient } from '../../application/index.js';
-import type { CardRecord, Catalog, Finish, PrintingRecord } from '../../catalog/index.js';
+import type { Catalog, Finish, PrintingRecord } from '../../catalog/index.js';
 import { recognitionEngineNames } from '../../recognition/index.js';
 import type {
   ConfirmImportEntryInput,
   CopyCondition,
-  ImportEntry,
-  ImportEntryListResult,
   ImportReceipt,
   ImportSession,
   ImportSessionListResult,
@@ -52,16 +50,16 @@ import type {
 
 import { createCaptureControls, type UiCaptureReviewChange } from './capture.js';
 import {
-  catalogQuerySource,
   cardListEntryKey,
-  isInvalidatedContinuation,
   readableSearchPage,
+  resolvePrintings,
   type CardListCatalogQuery,
   type CardListEntry,
   type CardListFragmentReader,
   type CardListOperationOutcome,
+  type CardListPendingEntries,
+  type CardListPendingRecord,
   type CardListRetained,
-  type CardListSource,
   type CardListTarget,
   type CardListTool,
   type CardListToolRequest,
@@ -116,15 +114,6 @@ const uiSourceFormats = ['pasted-list', 'moxfield', 'wizards-precon'] as const;
 /** The Import page: manual entry beside the pending review and confirmation of one import. */
 export function createImportPages(): readonly UiPageDefinition[] {
   return [importPage()];
-}
-
-/** One pending entry as the page interprets it: its stored record and the catalog record it names. */
-interface UiPendingRecord {
-  readonly entry: ImportEntry;
-  /** Printing the entry names, or null while the entry is unresolved. */
-  readonly printing: PrintingRecord | null;
-  /** Card of the printing, used to render the entry's basic information. */
-  readonly card: CardRecord | null;
 }
 
 /** Unsaved review input of one entry, kept outside the rendered controls. */
@@ -398,8 +387,12 @@ function importPage(): UiPageDefinition {
       let sessionsRead = 0;
       /** Session record the pending entries were read with; its revision guards a discard. */
       let session: ImportSession | null = null;
-      /** Stored records of the presented pending entries, keyed by their entry key. */
-      const records = new Map<string, UiPendingRecord>();
+      /**
+       * CardList binding of the presented import: it owns the pending-entry read, its translation
+       * and the provider records the review's editors read under an entry's own key
+       * (docs/card-list.md#required-interfaces-and-source-bindings).
+       */
+      let pendingEntries: CardListPendingEntries | null = null;
       /**
        * Reviewed revision of every explicitly selected entry the page has read, kept while the
        * selection names it so a confirmation covers entries outside the loaded window
@@ -408,6 +401,11 @@ function importPage(): UiPageDefinition {
       const selectedRevisions = readSelectedRevisions(restored?.selection);
       /** Per-entry messages the page presents, kept across the redraws of their editor. */
       const messages = new Map<string, string>();
+      /**
+       * Editor the page currently presents per entry. A redraw replaces the editor's controls, so
+       * a message reported after an operation reaches the controls the page presents now.
+       */
+      const editors = new Map<string, UiImportEditor>();
       /** Printings one row's own search offered, keyed by entry identity. */
       const printings = new Map<string, readonly PrintingRecord[]>();
       /** Current search per entry; editing its query or leaving its session retires the request. */
@@ -688,10 +686,11 @@ function importPage(): UiPageDefinition {
         }
         sessionId = next;
         printingSearches.clear();
-        records.clear();
         selectedRevisions.clear();
         messages.clear();
+        editors.clear();
         session = null;
+        pendingEntries = null;
         discard.disabled = true;
         paintSessions();
         if (next === null) {
@@ -709,21 +708,69 @@ function importPage(): UiPageDefinition {
         restoredState: CardListRetained<string> | undefined,
       ): void {
         pending?.dispose();
+        const bindings = context.capabilities.cardList.account(context.account.accountId);
+        const entries = bindings.pendingEntries();
+        pendingEntries = entries;
         pending = createCardListView({
           container: pendingHost,
-          source: pendingSource(),
+          create: context.capabilities.cardList.create,
+          source: entries.source,
           context: presentedSession,
           accountId: context.account.accountId,
           pageSize: constraints.pages.imports.default,
           restored: restoredState,
           fragments: { tools: pendingToolsReader() },
           tools: [confirmTool()],
+          // A committed change of the presented import reacquires its entries through the binding;
+          // the page never patches a row after an operation it drove.
+          changes: bindings.changes(),
           presentation: {
             renderEntry: (entry) => entryContent(entry),
             renderFragment: (kind, entry) => (kind === 'tools' ? entryEditor(entry) : null),
           },
           signal: context.signal,
         });
+        observePendingEntries(pending);
+      }
+
+      /**
+       * Follows the presented pending entries: the session record the binding read keeps the
+       * page's provenance and discard state current, and every explicitly selected entry keeps the
+       * revision its confirmation quotes even after the row leaves the loaded window
+       * (docs/user-interface.md#state-ownership-and-restoration).
+       */
+      function observePendingEntries(list: UiCardList<string>): void {
+        const read = (): void => {
+          const binding = pendingEntries;
+          if (binding === null || closed) {
+            return;
+          }
+          const readSession = binding.session();
+          if (
+            readSession !== null &&
+            readSession.sessionId === sessionId &&
+            readSession !== session
+          ) {
+            adoptSession(readSession);
+          }
+          const selected = new Set(list.selection);
+          for (const key of selected) {
+            const record = binding.record(key);
+            if (record !== null && !selectedRevisions.has(key)) {
+              selectedRevisions.set(key, {
+                entryId: record.entry.entryId,
+                revision: record.entry.revision,
+              });
+            }
+          }
+          for (const key of [...selectedRevisions.keys()]) {
+            if (!selected.has(key)) {
+              selectedRevisions.delete(key);
+            }
+          }
+        };
+        list.subscribe(read);
+        read();
       }
 
       /** Composes the catalog result list of the manual entry search. */
@@ -732,7 +779,8 @@ function importPage(): UiPageDefinition {
       ): void {
         results = createCardListView<CardListCatalogQuery>({
           container: resultsHost,
-          source: catalogQuerySource(search),
+          create: context.capabilities.cardList.create,
+          source: context.capabilities.cardList.account(context.account.accountId).catalogQuery(),
           context: { text: query.value.trim(), level: 'printing', owned: false, finish: null },
           accountId: context.account.accountId,
           pageSize: UI_LIMITS.importPrintings,
@@ -1105,7 +1153,7 @@ function importPage(): UiPageDefinition {
         }
         // Reading the pending entries shows whether a staging committed even though its response
         // was lost (docs/user-interface.md#capture-and-review).
-        void reconcileImport();
+        void reconcileImport(reported === null);
         paintManualRecovery();
         return reported ?? { status: 'committed', message: stagedMessage(inReview) };
       }
@@ -1173,11 +1221,17 @@ function importPage(): UiPageDefinition {
         }
         manualStatus.textContent =
           message ?? (inReview === 0 ? stagedMessage(0) : stagedMessage(inReview));
-        void reconcileImport();
+        // The committed lines were reacquired by their change notifications; only an unresolved
+        // outcome needs the page's own read of the entries.
+        void reconcileImport(message !== null);
       }
 
-      /** Reloads the pending sessions and entries after a change that may have committed. */
-      async function reconcileImport(): Promise<void> {
+      /**
+       * Reloads the pending sessions a page owns, and the presented entries when no committed
+       * change covers them: the page never repairs a list the change notification already
+       * reacquires (docs/card-list.md#loading-and-recovery).
+       */
+      async function reconcileImport(refreshEntries = true): Promise<void> {
         await readSessions(null, false);
         if (closed) {
           return;
@@ -1194,7 +1248,9 @@ function importPage(): UiPageDefinition {
           present(defaultSessionId(sessions));
           return;
         }
-        pending?.refresh();
+        if (refreshEntries) {
+          pending?.refresh();
+        }
       }
 
       /**
@@ -1225,7 +1281,8 @@ function importPage(): UiPageDefinition {
           return;
         }
         adoptSession(change.session);
-        pending?.refresh();
+        // A committed capture change reacquires the pending entries through CardList's own change
+        // invalidation; the page owns no repair read of the list.
       }
 
       /** One row's basic information: the printing it will create and its reviewed values. */
@@ -1239,8 +1296,8 @@ function importPage(): UiPageDefinition {
        * save the review or discard the entry (docs/user-interface.md#capture-and-review).
        */
       function entryEditor(entry: CardListEntry): Node | null {
-        const record = records.get(entry.key);
-        if (record === undefined) {
+        const record = pendingRecord(entry.key);
+        if (record === null) {
           return null;
         }
         const controls = document.createElement('span');
@@ -1251,6 +1308,7 @@ function importPage(): UiPageDefinition {
         );
         controls.append(status);
         const editor: UiImportEditor = { controls, entry, status };
+        editors.set(entry.key, editor);
         // The row keeps the reviewed values the page read until the list presents the new ones.
         paintEditor(editor);
         return controls;
@@ -1263,8 +1321,8 @@ function importPage(): UiPageDefinition {
        * (docs/user-interface.md#state-ownership-and-restoration).
        */
       function paintEditor(editor: UiImportEditor): void {
-        const record = records.get(editor.entry.key);
-        if (record === undefined) {
+        const record = pendingRecord(editor.entry.key);
+        if (record === null) {
           editor.controls.replaceChildren(editor.status);
           return;
         }
@@ -1373,7 +1431,7 @@ function importPage(): UiPageDefinition {
       }
 
       /** The reviewed values one entry exposes before its confirmation is decided. */
-      function reviewedContent(record: UiPendingRecord): Node {
+      function reviewedContent(record: CardListPendingRecord): Node {
         const entry = record.entry;
         const values = document.createElement('span');
         values.dataset.uiImportReview = entry.entryId;
@@ -1416,8 +1474,8 @@ function importPage(): UiPageDefinition {
 
       /** Searches the catalog for printings one entry's review may choose instead. */
       async function findPrintings(editor: UiImportEditor, text: string): Promise<void> {
-        const record = records.get(editor.entry.key);
-        if (record === undefined) {
+        const record = pendingRecord(editor.entry.key);
+        if (record === null) {
           return;
         }
         const entryId = record.entry.entryId;
@@ -1453,7 +1511,8 @@ function importPage(): UiPageDefinition {
         } finally {
           if (current()) {
             printingSearches.delete(entryId);
-            // The row may have been redrawn while the search ran; update its current editor.
+            // The row may have been redrawn while the search ran; drawing its tools fragment again
+            // presents the choices now known to the page.
             pending?.reloadFragment(editor.entry.key, 'tools');
           }
         }
@@ -1468,8 +1527,8 @@ function importPage(): UiPageDefinition {
         editor: UiImportEditor,
         submitted: Readonly<UiReviewDraft>,
       ): Promise<void> {
-        const record = records.get(editor.entry.key);
-        if (record === undefined) {
+        const record = pendingRecord(editor.entry.key);
+        if (record === null) {
           return;
         }
         const printingId = submitted.printingId.length > 0 ? submitted.printingId : null;
@@ -1538,12 +1597,9 @@ function importPage(): UiPageDefinition {
             drafts.delete(record.entry.entryId);
           }
           report(editor, 'Review saved.');
-          adoptEntry(outcome.record.entry, outcome.record.session);
-          if (outcome.record.session.sessionId === sessionId) {
-            // The stored values and the printing the entry now names are read again, so the row
-            // presents what the review committed rather than the values it started from.
-            pending?.refresh();
-          }
+          adoptEntry(outcome.record.session);
+          // The committed review reacquires the stored values and the printing the entry now names
+          // through CardList's own change invalidation; the page owns no repair read of the list.
           return;
         }
         report(editor, outcome.message ?? 'The review was not saved.');
@@ -1559,8 +1615,8 @@ function importPage(): UiPageDefinition {
 
       /** Discards one pending entry after a brief confirmation; no copy is created. */
       async function removeEntry(editor: UiImportEditor): Promise<void> {
-        const record = records.get(editor.entry.key);
-        if (record === undefined) {
+        const record = pendingRecord(editor.entry.key);
+        if (record === null) {
           return;
         }
         const accepted = await context.dialogs.confirm({
@@ -1588,7 +1644,7 @@ function importPage(): UiPageDefinition {
         } else {
           report(editor, outcome.message ?? 'The entry was not discarded.');
         }
-        await reconcileImport();
+        await reconcileImport(outcome.status !== 'committed');
       }
 
       /** Discards every pending entry of the presented import after a brief confirmation. */
@@ -1626,18 +1682,21 @@ function importPage(): UiPageDefinition {
           forgetPresentedEntries();
           paintConfirmation();
         }
-        await reconcileImport();
+        await reconcileImport(outcome.status !== 'committed');
       }
 
       /** Drops the drafts, searches and messages of the presented import's loaded entries. */
       function forgetPresentedEntries(): void {
-        for (const [key, record] of records) {
+        for (const key of pendingEntries?.keys() ?? []) {
+          const record = pendingRecord(key);
+          if (record === null) {
+            continue;
+          }
           drafts.delete(record.entry.entryId);
           printings.delete(record.entry.entryId);
           printingSearches.delete(record.entry.entryId);
           messages.delete(key);
         }
-        records.clear();
         selectedRevisions.clear();
       }
 
@@ -1731,7 +1790,7 @@ function importPage(): UiPageDefinition {
         }
         const message = confirmationMessage(copies, note);
         reviewStatus.textContent = message;
-        void reconcileImport();
+        void reconcileImport(false);
         return { status: 'committed', message };
       }
 
@@ -1749,8 +1808,11 @@ function importPage(): UiPageDefinition {
         }
       }
 
-      /** Takes the committed entry and session into the page's own view of them. */
-      function adoptEntry(entry: ImportEntry, changed: ImportSession): void {
+      /**
+       * Takes the committed session into the page's own view of it; the entry's stored values and
+       * the records its review quotes are reacquired by the list from the same committed change.
+       */
+      function adoptEntry(changed: ImportSession): void {
         if (changed.sessionId !== sessionId) {
           // The review committed in an import the page no longer presents: its listed counts
           // follow the report, while the presented import's own state stays untouched
@@ -1758,14 +1820,7 @@ function importPage(): UiPageDefinition {
           adoptSession(changed);
           return;
         }
-        const key = cardListEntryKey({ kind: 'pending', entryId: entry.entryId });
-        const record = records.get(key);
-        if (record !== undefined) {
-          records.delete(key);
-          records.set(key, { ...record, entry });
-        }
         adoptSession(changed);
-        pending?.reloadFragment(key, 'tools');
       }
 
       /** Updates the presented session counts after a change that reported them. */
@@ -1794,8 +1849,8 @@ function importPage(): UiPageDefinition {
 
       /** The reviewed revision of one selected entry: the record the page read or its kept one. */
       function reviewedRevision(key: string, entryId: string): number | null {
-        const record = records.get(key);
-        if (record !== undefined && record.entry.entryId === entryId) {
+        const record = pendingRecord(key);
+        if (record !== null && record.entry.entryId === entryId) {
           return record.entry.revision;
         }
         const kept = selectedRevisions.get(key);
@@ -1809,9 +1864,9 @@ function importPage(): UiPageDefinition {
       function selectionContext(): ReadonlyMap<string, UiSelectedReview> {
         const context = new Map<string, UiSelectedReview>();
         for (const key of pending?.selection ?? []) {
-          const record = records.get(key);
+          const record = pendingRecord(key);
           const known =
-            record === undefined
+            record === null
               ? selectedRevisions.get(key)
               : { entryId: record.entry.entryId, revision: record.entry.revision };
           if (known !== undefined) {
@@ -1819,6 +1874,11 @@ function importPage(): UiPageDefinition {
           }
         }
         return context;
+      }
+
+      /** The provider record of one pending entry key this visit's binding read, or null. */
+      function pendingRecord(key: string): CardListPendingRecord | null {
+        return pendingEntries?.record(key) ?? null;
       }
 
       /** Shows the recovery control while a confirmation's outcome is not yet established. */
@@ -1858,7 +1918,7 @@ function importPage(): UiPageDefinition {
           forgetConfirmed(outstanding);
           const message = confirmationMessage(outcome.record.copies.length, outcome.message);
           reviewStatus.textContent = message;
-          void reconcileImport();
+          void reconcileImport(false);
           return;
         }
         reviewStatus.textContent = outcome.message ?? 'The confirmation outcome could not be read.';
@@ -1868,13 +1928,13 @@ function importPage(): UiPageDefinition {
       function report(editor: UiImportEditor, message: string): void {
         messages.set(editor.entry.key, message);
         boundByWindow(messages);
-        editor.status.textContent = message;
+        (editors.get(editor.entry.key) ?? editor).status.textContent = message;
       }
 
       /** Drops the message of one entry when its owner edits the reviewed values again. */
       function clearMessage(editor: UiImportEditor): void {
         messages.delete(editor.entry.key);
-        editor.status.textContent = '';
+        (editors.get(editor.entry.key) ?? editor).status.textContent = '';
       }
 
       /**
@@ -1882,7 +1942,7 @@ function importPage(): UiPageDefinition {
        * owner first edits one of them: reviewing a single attribute keeps every other stored value
        * of that entry (docs/user-interface.md#capture-and-review).
        */
-      function draftFor(record: UiPendingRecord): UiReviewDraft {
+      function draftFor(record: CardListPendingRecord): UiReviewDraft {
         const entry = record.entry;
         const existing = drafts.get(entry.entryId);
         if (existing !== undefined) {
@@ -1908,7 +1968,10 @@ function importPage(): UiPageDefinition {
               request.keys.map((key) => ({
                 key,
                 status: 'ready' as const,
-                values: records.has(key) || selectedRevisions.has(key) ? ['confirm-import'] : [],
+                values:
+                  pendingRecord(key) !== null || selectedRevisions.has(key)
+                    ? ['confirm-import']
+                    : [],
               })),
             );
           },
@@ -1953,181 +2016,8 @@ function importPage(): UiPageDefinition {
           },
         };
       }
-
-      /**
-       * The pending entries of one session through the list boundary: each entry keeps its own
-       * identity as a pending target and is enriched with the catalog record its printing names.
-       * An entry the catalog cannot resolve stays explicitly unresolved instead of presenting
-       * another card's information. The page composes this read with the provider records its
-       * review holds (the revision and stored values a confirmation or correction quotes), so the
-       * source stays here while CardList owns the window, selection, enrichment and restoration
-       * built on the list protocol it produces (docs/card-list.md#interface).
-       */
-      function pendingSource(): CardListSource<string> {
-        return {
-          // Only a change that names the presented import may change its entries; a change of
-          // another import or of the account's copies reacquires nothing here.
-          affects: (change, presented) =>
-            change.imports.includes(presented) || change.scope === 'catalog',
-          async load(request) {
-            let page: ImportEntryListResult;
-            try {
-              page = await access.entries(
-                {
-                  sessionId: request.context,
-                  pageSize: request.pageSize,
-                  ...(request.continuation === null ? {} : { continuation: request.continuation }),
-                },
-                request.signal,
-              );
-            } catch (cause) {
-              if (request.continuation !== null && isInvalidatedContinuation(cause)) {
-                // The session's private revision changed after the continuation was read: the
-                // list restarts the pending entries from their first page instead of repeating a
-                // continuation the provider keeps refusing (docs/user-cards.md#interface).
-                return { status: 'invalidated' };
-              }
-              throw cause;
-            }
-            const read = await resolvePending(catalog, page.entries);
-            const presented = request.context;
-            if (request.signal.aborted || closed || presented !== sessionId) {
-              // A withdrawn request, or a response of an import the review no longer presents,
-              // cannot change the page's own records or the session it presents
-              // (docs/user-interface.md#pages-and-navigation).
-              return {
-                status: 'page',
-                entries: read.map((record) => pendingListEntry(entryKeyOf(record), record)),
-                continuation: page.continuation,
-                current: true,
-              };
-            }
-            const selected = new Set(pending?.selection ?? []);
-            for (const record of read) {
-              const key = entryKeyOf(record);
-              records.delete(key);
-              records.set(key, record);
-            }
-            for (const key of selected) {
-              const record = records.get(key);
-              if (record !== undefined) {
-                // The confirmation needs the revision the page read even after the row leaves the
-                // loaded window (docs/user-interface.md#state-ownership-and-restoration).
-                selectedRevisions.set(key, {
-                  entryId: record.entry.entryId,
-                  revision: record.entry.revision,
-                });
-              }
-            }
-            for (const key of [...selectedRevisions.keys()]) {
-              if (!selected.has(key)) {
-                selectedRevisions.delete(key);
-              }
-            }
-            boundByWindow(records);
-            adoptSession(page.session);
-            return {
-              status: 'page',
-              entries: read.map((record) => pendingListEntry(entryKeyOf(record), record)),
-              continuation: page.continuation,
-              current: true,
-            };
-          },
-        };
-      }
     },
   };
-}
-
-/** One pending entry as the list boundary presents it, with the catalog record it names. */
-function pendingListEntry(key: string, record: UiPendingRecord): CardListEntry {
-  const printing = record.printing;
-  return {
-    key,
-    target: { kind: 'pending', entryId: record.entry.entryId },
-    // The reviewed quantity is pending input, not an owned copy count, so the entry carries no
-    // quantity context and the review presents its own value.
-    quantity: null,
-    basic:
-      printing === null || record.card === null
-        ? null
-        : {
-            card: {
-              cardId: record.card.cardId,
-              name: record.card.name,
-              matchedName: null,
-            },
-            printing: {
-              printingId: printing.printingId,
-              edition: printing.edition,
-              collectorNumber: printing.collectorNumber,
-              language: printing.language,
-            },
-          },
-  };
-}
-
-/** Entry key of one pending record, taken from its own identity. */
-function entryKeyOf(record: UiPendingRecord): string {
-  return cardListEntryKey({ kind: 'pending', entryId: record.entry.entryId });
-}
-
-/** Resolves the printings and cards the pending entries name through Catalog. */
-async function resolvePending(
-  catalog: Catalog,
-  entries: readonly ImportEntry[],
-): Promise<readonly UiPendingRecord[]> {
-  const printingIds = entries.flatMap((entry) =>
-    entry.printingId === null ? [] : [entry.printingId],
-  );
-  const printings = await resolvePrintings(catalog, printingIds);
-  const cardIds = [...new Set([...printings.values()].map((printing) => printing.cardId))];
-  const cards = await resolveCards(catalog, cardIds);
-  return entries.map((entry) => {
-    const printing = entry.printingId === null ? null : (printings.get(entry.printingId) ?? null);
-    const card = printing === null ? null : (cards.get(printing.cardId) ?? null);
-    return { entry, printing, card };
-  });
-}
-
-/** Printings one pending entry may name, resolved through Catalog in bounded batches. */
-async function resolvePrintings(
-  catalog: Catalog,
-  printingIds: readonly string[],
-): Promise<ReadonlyMap<string, PrintingRecord>> {
-  const printings = new Map<string, PrintingRecord>();
-  const distinct = [...new Set(printingIds)];
-  const batchSize = UI_LIMITS.catalogResolveBatch;
-  for (let index = 0; index < distinct.length; index += batchSize) {
-    const batch = distinct.slice(index, index + batchSize);
-    const resolution = await catalog.resolve(
-      batch.map((printingId) => ({ kind: 'printing' as const, printingId })),
-    );
-    for (const printing of resolution.printings.values()) {
-      printings.set(printing.printingId, printing);
-    }
-  }
-  return printings;
-}
-
-/** Cards the pending entries reach, resolved through Catalog in bounded batches. */
-async function resolveCards(
-  catalog: Catalog,
-  cardIds: readonly string[],
-): Promise<ReadonlyMap<string, CardRecord>> {
-  const cards = new Map<string, CardRecord>();
-  const distinct = [...new Set(cardIds)];
-  const batchSize = UI_LIMITS.catalogResolveBatch;
-  for (let index = 0; index < distinct.length; index += batchSize) {
-    const batch = distinct.slice(index, index + batchSize);
-    const resolution = await catalog.resolve(
-      batch.map((cardId) => ({ kind: 'card' as const, cardId })),
-    );
-    for (const card of resolution.cards.values()) {
-      cards.set(card.cardId, card);
-    }
-  }
-  return cards;
 }
 
 /**
@@ -2438,7 +2328,7 @@ function conditionOptions(): readonly UiSelectOption[] {
  * (docs/user-interface.md#capture-and-review).
  */
 function knownPrinting(
-  record: UiPendingRecord,
+  record: CardListPendingRecord,
   found: readonly PrintingRecord[],
   printingId: string,
 ): PrintingRecord | null {
@@ -2456,7 +2346,7 @@ function knownPrinting(
  */
 function printingSelect(
   document: Document,
-  record: UiPendingRecord,
+  record: CardListPendingRecord,
   found: readonly PrintingRecord[],
   value: string,
 ): HTMLSelectElement {

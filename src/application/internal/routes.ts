@@ -11,10 +11,14 @@
 import { z } from 'zod';
 
 import type { Catalog, CatalogReference, CatalogResolution } from '../../catalog/index.js';
+import { SEARCH_LIMITS } from '../../search/index.js';
 import type {
   Search,
   SearchCountInput,
   SearchCountResult,
+  SearchObservationOptions,
+  SearchProgress,
+  SearchProgressRequest,
   SearchRequestInput,
 } from '../../search/index.js';
 import type {
@@ -72,6 +76,20 @@ const pageQuerySchema = z.object({
   continuation: z.string().min(1).optional(),
 });
 
+/**
+ * One bounded observation of committed indexing progress
+ * (docs/search.md#freshness). Positions stay opaque strings the authenticated account published;
+ * the bound is the caller's explicit wait and stays within the provider's declared maximum.
+ */
+const searchProgressSchema = z.object({
+  positions: z
+    .array(z.string().min(1).max(SEARCH_LIMITS.maxPositionLength))
+    .max(SEARCH_LIMITS.maxRequiredPositions)
+    .optional(),
+  catalogRevision: z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength).nullable().optional(),
+  timeoutMs: z.number().int().min(0).max(SEARCH_LIMITS.maxObservationTimeoutMs).optional(),
+});
+
 /** The whole interactive surface, in one place so both runtimes and the tests share it. */
 export function createRoutes(dependencies: RouteDependencies): readonly Route[] {
   const { catalog, search, userCards, sourceImports } = dependencies;
@@ -111,6 +129,28 @@ export function createRoutes(dependencies: RouteDependencies): readonly Route[] 
       access: 'authenticated',
       call: async ({ body, context }) =>
         searchCountPayload(await search.counts(body as unknown as SearchCountInput, context)),
+    },
+    {
+      // Committed positions are account-private and the observation waits at most the caller's
+      // explicit bound; it creates no indexing work and never resubmits a mutation
+      // (docs/search.md#freshness).
+      operation: 'search.progress',
+      method: 'POST',
+      path: applicationRoutes.searchProgress,
+      access: 'authenticated',
+      call: async ({ body, context }) => {
+        const parsed = searchProgressSchema.safeParse(body ?? {});
+        if (!parsed.success) {
+          throw new ApplicationError('invalid-request', 'The indexing observation is invalid.');
+        }
+        const request: SearchProgressRequest = {
+          positions: parsed.data.positions ?? [],
+          catalogRevision: parsed.data.catalogRevision ?? null,
+        };
+        const options: SearchObservationOptions =
+          parsed.data.timeoutMs === undefined ? {} : { timeoutMs: parsed.data.timeoutMs };
+        return searchProgressPayload(await search.observe(request, context, options));
+      },
     },
     {
       // The preserved browser engines hydrate a candidate through their own envelope; the new
@@ -452,6 +492,11 @@ function searchCountPayload(result: SearchCountResult): unknown {
     privateRevision: result.privateRevision,
     counts: [...result.counts].map(([key, count]) => ({ key, ...count })),
   };
+}
+
+/** One bounded observation as the browser reads it; revisions stay the provider's own values. */
+function searchProgressPayload(result: SearchProgress): unknown {
+  return { state: result.state, revisions: result.revisions };
 }
 
 function tagReadPayload(result: TagReadResult): unknown {

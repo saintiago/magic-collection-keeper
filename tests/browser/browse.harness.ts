@@ -26,6 +26,7 @@ import type {
   CatalogResolution,
   PrintingRecord,
 } from '../../src/catalog/index.js';
+import { createCardListBrowser } from '../../src/card-list/index.js';
 import type { SearchPage, SearchRequestInput } from '../../src/search/index.js';
 import {
   createBrowsePages,
@@ -165,6 +166,7 @@ export function installBrowseHarness(
       });
     },
     counts: () => Promise.reject(new Error('The browsing journeys read no private counts.')),
+    observe: () => Promise.reject(new Error('The browsing journeys observe no progress.')),
   };
   const catalog: Catalog = {
     resolve(references) {
@@ -178,6 +180,19 @@ export function installBrowseHarness(
       return Promise.reject(new Error('The browsing journeys read printings through resolve.'));
     },
   };
+  // Application's own account lifecycle: leaving an account releases its local activity before
+  // another account can present it (docs/architecture.md#runtime-boundaries).
+  const cardList = createCardListBrowser({ search, catalog, userCards: unusedUserCards });
+  let presentedAccount: string | null = account?.accountId ?? null;
+  identity.subscribe((next) => {
+    const nextAccountId = next?.accountId ?? null;
+    if (nextAccountId !== presentedAccount) {
+      if (presentedAccount !== null) {
+        cardList.endAccount(presentedAccount);
+      }
+      presentedAccount = nextAccountId;
+    }
+  });
   const capabilities: UserInterfaceCapabilities = {
     settings: {
       environment: 'test',
@@ -193,6 +208,7 @@ export function installBrowseHarness(
     // The browsing journeys present no private record, so the contract is only present to satisfy
     // the capabilities Application supplies.
     userCards: unusedUserCards,
+    cardList,
     createRecognition: () => {
       throw new Error('The browsing journeys do not run recognition.');
     },

@@ -216,7 +216,10 @@ cancellation signal, and only the request the user still waits for may replace t
 refresh keeps the usable entries presented. Its own bindings translate Search queries, a card's
 published printings, a tag's associations, an import's pending entries and the account's recent
 activity into that protocol; a committed local change marks affected content stale and reacquires
-it through its source until the reported publication position is incorporated.
+it through its source until the reported publication position is incorporated, which the list
+observes through Search's own bounded freshness capability instead of polling. Application selects
+the implementation and supplies the pages one capability with the factory, the provider bindings
+and the account lifecycle, so no page or view names the component's own wiring.
 The rendered window and every fragment batch are bounded. Paging keeps selected targets and their
 tool availability separately, so selection cannot hide later results. Other enrichment retires when
 an entry leaves the window, and changed entries retire reads that can no longer answer for them.

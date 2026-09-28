@@ -30,6 +30,7 @@ import type {
   PrintingRecord,
 } from '../../src/catalog/index.js';
 import type { SearchPage, SearchRequestInput } from '../../src/search/index.js';
+import { createCardListBrowser } from '../../src/card-list/index.js';
 import type {
   ConfirmImportInput,
   DiscardImportEntryInput,
@@ -285,6 +286,9 @@ export function installImportHarness(
     counts() {
       return Promise.reject(new Error('The Import page reads no private counts.'));
     },
+    observe() {
+      return Promise.reject(new Error('The Import page observes no indexing progress.'));
+    },
   };
   const scriptedUserCards: UserCardsBrowserClient = {
     ...unusedUserCardsClient,
@@ -343,12 +347,14 @@ export function installImportHarness(
   });
   // Application ends the UserCards scope of the account it leaves, so no retained attempt or read
   // of that account reaches the account that signs in next (docs/architecture.md#runtime-boundaries).
+  const cardList = createCardListBrowser({ search, catalog, userCards });
   let scopedAccountId: string | null = account?.accountId ?? null;
   listeners.add((next) => {
     const nextAccountId = next?.accountId ?? null;
     if (nextAccountId !== scopedAccountId) {
       if (scopedAccountId !== null) {
         userCards.release(scopedAccountId);
+        cardList.endAccount(scopedAccountId);
       }
       scopedAccountId = nextAccountId;
     }
@@ -366,6 +372,7 @@ export function installImportHarness(
     catalog,
     search,
     userCards,
+    cardList,
     createRecognition: () => {
       throw new Error('The Import journeys do not run recognition.');
     },

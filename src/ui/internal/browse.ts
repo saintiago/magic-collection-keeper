@@ -17,14 +17,7 @@
  * leaves it (docs/user-interface.md#capture-and-review).
  */
 
-import {
-  catalogQuerySource,
-  createRecentActivity,
-  printingImagesReader,
-  usercardsChanges,
-  type CardListCatalogQuery,
-  type CardListRecentActivity,
-} from '../../card-list/index.js';
+import type { CardListCatalogQuery } from '../../card-list/index.js';
 
 import { createCardListView } from './card-list.js';
 import { UI_LIMITS } from './limits.js';
@@ -51,40 +44,22 @@ import {
 
 /**
  * The browsing pages Application's capabilities present: Home and the catalog/search page. They
- * share one bounded store of recent card activity, so a card the account opens in the catalog
- * appears on Home and no other account ever sees it.
+ * share the CardList capability's account-scoped activity, so a card the account opens in the
+ * catalog appears on Home and no other account ever sees it.
  */
 export function createBrowsePages(): readonly UiPageDefinition[] {
-  const recent = createRecentActivity();
-  return [
-    withRecentCleanup(homePage(recent), recent),
-    withRecentCleanup(catalogPage(recent), recent),
-  ];
-}
-
-/**
- * One browsing page of the shared recent activity. The shell reports the account it leaves to every
- * page implementation, so the activity ends with that account even when the page presented at that
- * moment is another one, and neither another account nor a later sign-in of the same account reads
- * it again (docs/user-interface.md#capture-and-review).
- */
-function withRecentCleanup(
-  definition: UiPageDefinition,
-  recent: CardListRecentActivity,
-): UiPageDefinition {
-  return {
-    ...definition,
-    accountEnded: (accountId) => recent.clear(accountId),
-  };
+  return [homePage(), catalogPage()];
 }
 
 /** Home: the search entry that opens the catalog and the account's recent card activity. */
-function homePage(recent: CardListRecentActivity): UiPageDefinition {
+function homePage(): UiPageDefinition {
   return {
     page: 'home',
     mount(container, context) {
       const document = container.ownerDocument;
       const accountId = context.account.accountId;
+      const bindings = context.capabilities.cardList.account(accountId);
+      const recent = bindings.recent();
       const restored = readPageState(context.restored?.state);
       const input = searchInput(document, 'home-search');
       const form = searchForm(document, input);
@@ -107,13 +82,14 @@ function homePage(recent: CardListRecentActivity): UiPageDefinition {
 
       const list = createCardListView({
         container: listHost,
-        source: recent.source(accountId),
+        create: context.capabilities.cardList.create,
+        source: recent.source,
         context: accountId,
         accountId,
         pageSize: UI_LIMITS.recentCards,
         restored: readListState<string>(restored),
         presentation: openEntryPresentation(document, 'home-result', (entry) =>
-          recent.record(accountId, entry),
+          recent.record(entry),
         ),
         signal: context.signal,
       });
@@ -127,7 +103,7 @@ function homePage(recent: CardListRecentActivity): UiPageDefinition {
 }
 
 /** Catalog and search: the query of the presented view and the CardList that presents its entries. */
-function catalogPage(recent: CardListRecentActivity): UiPageDefinition {
+function catalogPage(): UiPageDefinition {
   return {
     page: 'catalog',
     mount(container, context) {
@@ -164,23 +140,22 @@ function catalogPage(recent: CardListRecentActivity): UiPageDefinition {
       listHost.id = 'catalog-results';
       container.append(form, heading, refresh, listHost);
 
+      const bindings = context.capabilities.cardList.account(context.account.accountId);
+      const recent = bindings.recent();
       const list = createCardListView<CardListCatalogQuery>({
         container: listHost,
-        source: catalogQuerySource(context.capabilities.search),
+        create: context.capabilities.cardList.create,
+        source: bindings.catalogQuery(),
         context: catalogQueryOf(view),
         accountId: context.account.accountId,
         // A committed private change can alter an owned-only query, so the list reacquires the
         // result through Search with the position the change reported.
-        changes: usercardsChanges(
-          context.capabilities.userCards.account(context.account.accountId),
-        ),
+        changes: bindings.changes(),
         pageSize: UI_LIMITS.catalogPage,
         restored: readListState<CardListCatalogQuery>(restored),
-        ...(view.level === 'printing'
-          ? { fragments: { images: printingImagesReader(context.capabilities.catalog) } }
-          : {}),
+        ...(view.level === 'printing' ? { fragments: { images: bindings.printingImages() } } : {}),
         presentation: openEntryPresentation(document, 'catalog-result', (entry) =>
-          recent.record(context.account.accountId, entry),
+          recent.record(entry),
         ),
         signal: context.signal,
       });

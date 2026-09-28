@@ -173,6 +173,7 @@ describe('collection search access', () => {
         return Promise.resolve(pages);
       },
       counts: () => Promise.reject(new Error('The list source reads no private counts.')),
+      observe: () => Promise.reject(new Error('The list source observes no progress.')),
     };
     const catalog = {
       resolve: () =>
@@ -260,6 +261,7 @@ describe('collection search access', () => {
     const search: SearchClient = {
       execute: () => Promise.reject(new Error('The images reader runs no query.')),
       counts: () => Promise.reject(new Error('The images reader reads no private counts.')),
+      observe: () => Promise.reject(new Error('The images reader observes no progress.')),
     };
     const access = {
       source: createCollectionQuerySource(search),

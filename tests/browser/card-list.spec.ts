@@ -154,15 +154,17 @@ async function settlePage(
   id: number,
   entries: readonly UiListEntry[],
   continuation: string | null = null,
+  freshness: { readonly current?: boolean } = {},
 ): Promise<void> {
   await page.evaluate(
     (input) => {
       (globalThis as unknown as GlobalControl).keeperCardListControl.settlePage(input.id, {
         entries: input.entries,
         continuation: input.continuation,
+        ...(input.current === undefined ? {} : { current: input.current }),
       });
     },
-    { id, entries, continuation },
+    { id, entries, continuation, current: freshness.current },
   );
 }
 
@@ -187,6 +189,30 @@ async function invalidatePage(page: Page, id: number): Promise<void> {
 async function fragmentRequests(page: Page): Promise<readonly UiCardListFragmentRequest[]> {
   return page.evaluate(() =>
     (globalThis as unknown as GlobalControl).keeperCardListControl.fragmentRequests(),
+  );
+}
+
+async function observationRequests(
+  page: Page,
+): Promise<readonly import('./card-list.harness.js').UiCardListObservationRequest[]> {
+  return page.evaluate(() =>
+    (globalThis as unknown as GlobalControl).keeperCardListControl.observationRequests(),
+  );
+}
+
+async function settleObservation(
+  page: Page,
+  id: number,
+  state: 'incorporated' | 'delayed' | 'failed',
+): Promise<void> {
+  await page.evaluate(
+    (input) => {
+      (globalThis as unknown as GlobalControl).keeperCardListControl.settleObservation(
+        input.id,
+        input.state,
+      );
+    },
+    { id, state },
   );
 }
 
@@ -295,7 +321,15 @@ async function lastRequest(page: Page, list: string): Promise<UiCardListPageRequ
   return last;
 }
 
-function copy(copyId: string, printingId: string, name = 'Lightning Bolt'): UiListEntry {
+function copy(
+  copyId: string,
+  printingId: string,
+  name = 'Lightning Bolt',
+  quantity: { readonly copies: number | null; readonly intended: number | null } = {
+    copies: 1,
+    intended: null,
+  },
+): UiListEntry {
   return {
     key: `copy:${copyId}`,
     target: { kind: 'copy', copyId },
@@ -303,7 +337,7 @@ function copy(copyId: string, printingId: string, name = 'Lightning Bolt'): UiLi
       card: { cardId: `card-${printingId}`, name, matchedName: null },
       printing: { printingId, edition: 'BLB', collectorNumber: '1', language: 'en' },
     },
-    quantity: { copies: 1, intended: null },
+    quantity,
   };
 }
 
@@ -386,6 +420,7 @@ test('loads bounded pages and presents basic information with the entries', asyn
   expect(await state(page, 'a')).toEqual({
     entries: ['copy:1', 'copy:2'],
     selection: [],
+    unavailableSelection: [],
     hasMore: true,
     loading: false,
     error: null,
@@ -657,13 +692,16 @@ test('keeps the selection through enrichment and refinement and acts through a t
   await expect(page.locator('#list-a [data-ui-outcome]')).toHaveText('The tag changed.');
   expect(await state(page, 'a')).toMatchObject({ selection: ['copy:1', 'copy:2'] });
 
-  // A refinement keeps the selection of the keys the new result still holds.
+  // A refinement keeps every explicit selection identity, including one the new result no longer
+  // presents: the user selected that copy, and the list never silently drops or substitutes it
+  // (docs/card-list.md#selection-and-restoration).
   await refine(page, 'a', 'refined');
   const refined = (await pageRequests(page))[1]!;
   await settlePage(page, refined.id, [copy('1', 'printing-1'), copy('5', 'printing-5'), card('1')]);
   expect(await state(page, 'a')).toMatchObject({
     entries: ['copy:1', 'copy:5', 'card:1'],
-    selection: ['copy:1'],
+    // The identity the window no longer presents comes first, then the presented ones in order.
+    selection: ['copy:2', 'copy:1'],
   });
   await expect(page.locator('#list-a [data-ui-select="card:1"]')).not.toBeChecked();
   // The entry kept its enriched fragment; the entry that arrived with the new result reads it.
@@ -675,6 +713,142 @@ test('keeps the selection through enrichment and refinement and acts through a t
   ).toHaveText('Loading images…');
   const enriched = (await fragmentRequests(page)).at(-1)!;
   expect(enriched.keys).toEqual(['copy:5']);
+});
+
+test('renders refreshed quantities and the consumer’s own content for the fresh snapshot', async ({
+  page,
+}) => {
+  await openLists(page);
+  await install(page, 'a', { pageSize: 1, customEntry: true });
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, [
+    copy('1', 'printing-1', 'Lightning Bolt', { copies: 1, intended: null }),
+  ]);
+  await expect(page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-custom-entry]')).toHaveText(
+    'copies 1 intended none',
+  );
+
+  // A successful refresh that only changed the quantities still re-renders the entry: the view
+  // presents the snapshot it now holds instead of content it rendered from the previous one
+  // (docs/card-list.md#interface).
+  await refresh(page, 'a');
+  const refreshed = (await pageRequests(page))[1]!;
+  await settlePage(page, refreshed.id, [
+    copy('1', 'printing-1', 'Lightning Bolt', { copies: 7, intended: 2 }),
+  ]);
+  await expect(page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-custom-entry]')).toHaveText(
+    'copies 7 intended 2',
+  );
+});
+
+test('presents an updating empty result as indexing instead of a successful emptiness', async ({
+  page,
+}) => {
+  await openLists(page);
+  await install(page, 'a', { pageSize: 2, changes: true });
+  const first = await onlyRequest(page, 'a');
+  await settlePage(page, first.id, []);
+  const status = page.locator('#list-a [data-ui-status]');
+  await expect(status).toHaveText('No entries');
+
+  // A committed change reaches the list before the index holds its entry: the usable indexed
+  // result is empty, but it is awaiting indexing rather than a successful emptiness.
+  await page.evaluate(() => {
+    (globalThis as unknown as GlobalControl).keeperCardListControl.changed('a', {
+      scope: 'copies',
+      records: [],
+      imports: [],
+      position: '5',
+    });
+  });
+  const read = (await pageRequests(page)).at(-1)!;
+  expect(read).toMatchObject({ continuation: null });
+  await settlePage(page, read.id, [], null, { current: false });
+
+  await expect(status).toHaveAttribute('data-ui-freshness', 'indexing');
+  await expect(status).toHaveText('Results are still being indexed.');
+  await expect(status).not.toHaveText('No entries');
+});
+
+test('observes awaited indexing, exposes a delay and recovers it through retry', async ({
+  page,
+}) => {
+  await openLists(page);
+  await install(page, 'a', { pageSize: 2, changes: true, observations: true });
+  await settlePage(page, (await onlyRequest(page, 'a')).id, [card('1')]);
+
+  // A committed change the index has not incorporated is observed through the source's own
+  // bounded freshness capability instead of waiting for another user action.
+  await page.evaluate(() => {
+    (globalThis as unknown as GlobalControl).keeperCardListControl.changed('a', {
+      scope: 'copies',
+      records: [],
+      imports: [],
+      position: '5',
+    });
+  });
+  const read = (await pageRequests(page)).at(-1)!;
+  await settlePage(page, read.id, [card('1')], null, { current: false });
+  const observation = (await observationRequests(page)).at(-1)!;
+  expect(observation.positions).toEqual(['5']);
+
+  await settleObservation(page, observation.id, 'delayed');
+  const status = page.locator('#list-a [data-ui-status]');
+  await expect(status).toHaveAttribute('data-ui-freshness', 'delayed');
+  await expect(status).toHaveText(
+    'Results are still being indexed; this is taking longer than expected.',
+  );
+
+  // Checking again starts no write, observes the same positions and refreshes the generation once
+  // the provider established them.
+  await page.locator('#list-a [data-ui-retry]').click();
+  const retry = (await observationRequests(page)).at(-1)!;
+  expect(retry.positions).toEqual(['5']);
+  await settleObservation(page, retry.id, 'incorporated');
+  const refreshed = (await pageRequests(page)).at(-1)!;
+  expect(refreshed.required).toEqual([]);
+  await settlePage(page, refreshed.id, [card('1'), card('2')]);
+  await expect(status).toHaveAttribute('data-ui-freshness', 'current');
+  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(2);
+});
+
+test('exposes a selected identity the source replaced as unavailable until reselected', async ({
+  page,
+}) => {
+  await openLists(page);
+  await install(page, 'a', {
+    pageSize: 2,
+    fragments: ['tools'],
+    tools: [{ id: 'move', label: 'Move' }],
+  });
+  await settlePage(page, (await onlyRequest(page, 'a')).id, [card('1')]);
+  const answered = new Set<number>();
+  await answerToolReads(page, 'a', answered);
+  await page.locator('#list-a [data-ui-select="card:1"]').check();
+  await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeEnabled();
+
+  // The source presents another typed target under the selected key.
+  await refresh(page, 'a');
+  await settlePage(page, (await pageRequests(page)).at(-1)!.id, [
+    { ...card('1'), target: { kind: 'printing', printingId: 'printing-1' } },
+  ]);
+  await answerToolReads(page, 'a', answered);
+
+  // The action never switches to the replacement row silently: the selection keeps the identity
+  // the user chose and reports the presented entry as unavailable.
+  await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeDisabled();
+  await expect(page.locator('#list-a [data-ui-status]')).toContainText('select it again');
+  expect((await state(page, 'a')).unavailableSelection).toEqual(['card:1']);
+
+  // Reselecting the presented entry adopts its identity explicitly.
+  await page.locator('#list-a [data-ui-select="card:1"]').uncheck();
+  await page.locator('#list-a [data-ui-select="card:1"]').check();
+  await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeEnabled();
+  await page.locator('#list-a [data-ui-tool="move"]').click();
+  expect((await toolRequests(page)).at(-1)).toMatchObject({
+    selection: ['card:1'],
+    targets: ['printing:printing-1'],
+  });
 });
 
 test('presents equivalent copies as one group without losing individual copies', async ({
@@ -735,6 +909,7 @@ test('keeps two lists independent in query, window, selection and failure state'
   expect(await state(page, 'b')).toEqual({
     entries: ['copy:2', 'copy:3'],
     selection: [],
+    unavailableSelection: [],
     hasMore: false,
     loading: false,
     error: null,
@@ -1258,7 +1433,7 @@ for (const kind of ['images', 'ownership', 'tags', 'tools'] as const) {
   });
 }
 
-test('retires selected tool reads when a replacement result arrives', async ({ page }) => {
+test('keeps the explicit selection through a replacement result', async ({ page }) => {
   await openLists(page);
   await install(page, 'a', {
     pageSize: 100,
@@ -1281,41 +1456,28 @@ test('retires selected tool reads when a replacement result arrives', async ({ p
       await page.locator('#list-a [data-ui-group-select]').check();
     }
   }
-  expect((await state(page, 'a')).selection).toEqual(
-    Array.from({ length: 100 }, (_, index) => `copy:${index + 1}`),
-  );
+  expect((await state(page, 'a')).selection).toEqual([
+    ...Array.from({ length: 100 }, (_, index) => `copy:${index + 1}`),
+  ]);
   const oldRead = (await fragmentRequests(page)).findLast((read) => read.keys.includes('copy:1'))!;
   expect(oldRead.aborted).toBe(false);
   await refine(page, 'a', 'corrected');
   await settlePage(page, (await pageRequests(page)).at(-1)!.id, [copy('1', 'corrected-printing')]);
-  expect((await state(page, 'a')).selection).toEqual(['copy:1']);
+  // The explicit selection stays the copies the user chose; the replacement result decides what
+  // is presented, never which identities an action covers (docs/card-list.md#selection-and-restoration).
+  expect((await state(page, 'a')).selection).toEqual([
+    ...Array.from({ length: 99 }, (_, index) => `copy:${index + 2}`),
+    'copy:1',
+  ]);
   expect((await fragmentRequests(page)).find((read) => read.id === oldRead.id)!.aborted).toBe(true);
-  const freshRead = (await fragmentRequests(page)).at(-1)!;
-  expect(freshRead.keys).toEqual(['copy:1']);
-  await settleFragment(
-    page,
-    oldRead.id,
-    oldRead.keys.map((key) => ({ key, status: 'ready', values: ['move'] })),
-  );
-  await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeDisabled();
-  await settleFragment(page, freshRead.id, [{ key: 'copy:1', status: 'ready', values: ['move'] }]);
-  // The other selected targets are unavailable in the replacement result. Fresh availability for
-  // one entry cannot authorize a subset of the selection: the user must explicitly change it.
-  await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeDisabled();
-  expect((await capture(page, 'a')).selection).toHaveLength(100);
-  expect(
-    await page.evaluate(() =>
-      (globalThis as unknown as GlobalControl).keeperCardListControl.invoke('a', 'move'),
-    ),
-  ).toBeNull();
-  await page.evaluate(() => {
-    (globalThis as unknown as GlobalControl).keeperCardListControl.clearSelection('a');
-  });
-  await page.locator('#list-a [data-ui-select="copy:1"]').check();
+  // The changed entry's availability is read again; every further read the list queues for the
+  // selection and the presented window is answered, so the whole explicit selection is available.
+  await answerToolReads(page, 'a', new Set([oldRead.id]));
+  await expect(page.locator('#list-a [data-ui-tool="move"]')).toBeEnabled();
   await page.locator('#list-a [data-ui-tool="move"]').click();
   expect((await toolRequests(page)).at(-1)).toMatchObject({
-    selection: ['copy:1'],
-    targets: ['copy:1'],
+    selection: [...Array.from({ length: 99 }, (_, index) => `copy:${index + 2}`), 'copy:1'],
+    targets: [...Array.from({ length: 99 }, (_, index) => `copy:${index + 2}`), 'copy:1'],
   });
 });
 
@@ -1347,6 +1509,7 @@ test('restores the retained window, selection and local focus from its own sourc
     position: { continuation: 'cursor-1', offset: 0 },
     selection: ['card:2'],
     selectedTargets: [],
+    awaiting: [],
     scrollTop: 0,
     focus: { control: 'select', key: 'card:2' },
   });
@@ -1979,6 +2142,7 @@ test('restores the typed targets of the selection its retained window retired', 
   expect(captured.selection).toEqual(['card:0', 'card:599']);
   expect(captured.selectedTargets).toEqual([
     { key: 'card:0', target: { kind: 'card', cardId: '0' } },
+    { key: 'card:599', target: { kind: 'card', cardId: '599' } },
   ]);
   await close(page, 'a');
 
@@ -2003,7 +2167,10 @@ test('restores the typed targets of the selection its retained window retired', 
   expect(await state(page, 'a')).toMatchObject({ selection: ['card:0', 'card:599'] });
   expect(await capture(page, 'a')).toMatchObject({
     selection: ['card:0', 'card:599'],
-    selectedTargets: [{ key: 'card:0', target: { kind: 'card', cardId: '0' } }],
+    selectedTargets: [
+      { key: 'card:0', target: { kind: 'card', cardId: '0' } },
+      { key: 'card:599', target: { kind: 'card', cardId: '599' } },
+    ],
   });
 
   // Tool availability is read again for the retired target, exactly as for a presented entry.
@@ -2287,7 +2454,12 @@ for (const availability of [false, true]) {
     const retained = await capture(page, 'a');
     await close(page, 'a');
     const answered = new Set((await fragmentRequests(page)).map((read) => read.id));
-    await install(page, 'a', { ...options, restored: retained });
+    // A retained visit can name a selection before its later entries arrived: neither key has an
+    // explicit target yet, so no invocation may act on a subset of it.
+    await install(page, 'a', {
+      ...options,
+      restored: { ...retained, selectedTargets: [] },
+    });
     await settlePage(page, (await lastRequest(page, 'a')).id, [card('1'), card('2')], 'next');
     await answerToolReads(page, 'a', answered);
     expect((await capture(page, 'a')).selection).toEqual(['card:1', 'card:4']);

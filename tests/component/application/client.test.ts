@@ -1092,6 +1092,18 @@ describe('browser application', () => {
     expect(capabilities?.userCards.account).toBeTypeOf('function');
     expect(capabilities?.userCards.account('alice').readCopies).toBeTypeOf('function');
     expect(capabilities?.userCards.account('alice').correctCopy).toBeTypeOf('function');
+    // Application selects the CardList implementation and supplies its provider bindings and the
+    // account lifecycle; the UserInterface never names the component's own factory
+    // (docs/architecture.md#composition-and-replacement).
+    expect(capabilities?.cardList.create).toBeTypeOf('function');
+    expect(capabilities?.cardList.account('alice').catalogQuery).toBeTypeOf('function');
+    expect(capabilities?.cardList.account('alice').collectionQuery).toBeTypeOf('function');
+    expect(capabilities?.cardList.account('alice').pickerQuery).toBeTypeOf('function');
+    expect(capabilities?.cardList.account('alice').changes).toBeTypeOf('function');
+    expect(capabilities?.cardList.account('alice').recent().source.load).toBeTypeOf('function');
+    expect(capabilities?.cardList.account('alice').printingImages).toBeTypeOf('function');
+    expect(capabilities?.cardList.account('alice').pendingEntries).toBeTypeOf('function');
+    expect(capabilities?.cardList.account('alice').tagAssociations).toBeTypeOf('function');
     expect(Object.keys(capabilities?.createRecognition() ?? {}).sort()).toEqual([
       'dispose',
       'prepare',

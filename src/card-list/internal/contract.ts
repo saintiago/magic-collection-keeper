@@ -223,7 +223,32 @@ export interface CardListSource<Context = unknown> {
    * reacquired for every notification (docs/card-list.md#loading-and-recovery).
    */
   affects?(change: CardListChange, context: Context): boolean;
+  /**
+   * One bounded observation of committed positions the list still awaits incorporation of
+   * (docs/search.md#freshness). The list calls it after a usable result reports that it has not
+   * incorporated every named position: `incorporated` resolves once the provider established
+   * every position, `delayed` when the bounded wait ended without establishing them and `failed`
+   * when indexing is known to have failed. A rejected observation is unavailable, never
+   * completion. A source whose reads are already authoritative omits the hook.
+   */
+  observe?(request: CardListObservationRequest): Promise<CardListObservation>;
 }
+
+/** Explicit committed positions one bounded observation asks the provider to establish. */
+export interface CardListObservationRequest {
+  /** Account-scoped publication positions still awaiting indexing. */
+  readonly positions: readonly string[];
+  /** Cancelling it withdraws the observation; a withdrawn wait establishes nothing. */
+  readonly signal: AbortSignal;
+}
+
+/**
+ * Outcome of one bounded observation (docs/search.md#freshness). `incorporated` means the
+ * provider established every named position; `delayed` that its bounded wait ended without
+ * establishing them; `failed` that an indexing failure is known. An observation that cannot
+ * answer at all rejects, and the list reports that as unavailable.
+ */
+export type CardListObservation = 'incorporated' | 'delayed' | 'failed';
 
 /** Source position of the first entry of one list window (docs/card-list.md#selection-and-restoration). */
 export interface CardListPosition {
@@ -318,6 +343,13 @@ export interface CardListSelection {
    * substitutes an identity (docs/card-list.md#selection-and-restoration).
    */
   readonly targets: readonly CardListTarget[];
+  /**
+   * Keys whose presented entry no longer carries the identity the selection holds — the source
+   * replaced the target under the same key. The listed targets are the identities the selection
+   * keeps; they are not acted on until the user explicitly selects the presented entry again
+   * (docs/card-list.md#selection-and-restoration).
+   */
+  readonly unavailable: readonly string[];
 }
 
 /** One presented tool of a snapshot and whether the explicit selection may invoke it now. */
@@ -373,7 +405,18 @@ export interface CardListSnapshot<Context = unknown> {
    * (docs/card-list.md#interface, docs/card-list.md#loading-and-recovery).
    */
   readonly awaiting: readonly string[];
+  /**
+   * How the awaited committed changes stand: `current` while none wait, `indexing` while the list
+   * observes them, `delayed` when a bounded observation ended without incorporation, `failed`
+   * when indexing is known to have failed and `unavailable` when the status could not be read.
+   * The last three are explicit and recoverable through `retry` or `refresh`; none of them is an
+   * empty or failed result (docs/card-list.md#loading-and-recovery).
+   */
+  readonly freshness: CardListIndexingStatus;
 }
+
+/** Status of the committed changes a presented result still awaits (docs/search.md#freshness). */
+export type CardListIndexingStatus = 'current' | 'indexing' | 'delayed' | 'failed' | 'unavailable';
 
 /**
  * Extent of the presentation's viewport. A consumer reports the range it can present and the
@@ -470,11 +513,15 @@ export interface CardList<Context = unknown> {
   demand(request: CardListViewportDemand): void;
   /** Starts a new result for `context`; usable content stays until the fresh page arrives. */
   refine(context: Context): void;
-  /** Reloads the active result from its first page, keeping the window until it arrives. */
+  /**
+   * Reloads the active result from its first page, keeping the window until it arrives, and
+   * rechecks the committed changes it still awaits (docs/card-list.md#loading-and-recovery).
+   */
   refresh(): void;
   /**
-   * Repeats the failed request of the active result — the position a temporary failure kept, or
-   * the first page of a sequence whose restart failed; never another query's continuation.
+   * Recovers the active result: it repeats the failed request — the position a temporary failure
+   * kept, or the first page of a sequence whose restart failed — or observes and refreshes the
+   * committed changes still awaiting indexing; never another query's continuation.
    */
   retry(): void;
   /**

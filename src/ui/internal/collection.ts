@@ -19,9 +19,6 @@
  */
 
 import {
-  collectionQuerySource,
-  printingImagesReader,
-  usercardsChanges,
   type CardListCollectionQuery,
   type CardListFragmentReader,
   type CardListFragmentResult,
@@ -98,22 +95,22 @@ function collectionPage(): UiPageDefinition {
 
       const account = context.capabilities.userCards.account(context.account.accountId);
       const copies = createCopyAccess(account);
+      const bindings = context.capabilities.cardList.account(context.account.accountId);
       const list = createCardListView<CardListCollectionQuery>({
         container: listHost,
-        source: collectionQuerySource(context.capabilities.search),
+        create: context.capabilities.cardList.create,
+        source: bindings.collectionQuery(),
         context: collectionQueryOf(view),
         accountId: context.account.accountId,
         // A committed change of the account's copies makes this result stale: the list reacquires
         // it through Search instead of a page patching the presented rows.
-        changes: usercardsChanges(account),
+        changes: bindings.changes(),
         pageSize: UI_LIMITS.catalogPage,
         restored: readListState<CardListCollectionQuery>(restored),
         fragments: {
           // A printing entry names the printing its image belongs to; a physical copy is presented
           // with the printing of its group, so only the printing level loads images.
-          ...(view.level === 'printing'
-            ? { images: printingImagesReader(context.capabilities.catalog) }
-            : {}),
+          ...(view.level === 'printing' ? { images: bindings.printingImages() } : {}),
           tools: copyToolsReader(),
         },
         tools: [

@@ -31,6 +31,7 @@ import type {
   PrintingRecord,
 } from '../../src/catalog/index.js';
 import type { SearchPage, SearchRequestInput } from '../../src/search/index.js';
+import { createCardListBrowser } from '../../src/card-list/index.js';
 import type { SearchCount, SearchCountResult } from '../../src/search/index.js';
 import type {
   Association,
@@ -320,6 +321,9 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
       }
       return begin(countsRequests, request, signal) as Promise<SearchCountResult>;
     },
+    observe() {
+      return Promise.reject(new Error('The organization journeys observe no progress.'));
+    },
   };
   const scriptedUserCards: UserCardsBrowserClient = {
     ...unusedUserCardsClient,
@@ -375,6 +379,10 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
       return begin(setCopyLocationRequests, input, signal) as Promise<CopyLocationResult>;
     },
   };
+  const userCards = createUserCardsOperations({
+    client: scriptedUserCards,
+    storage: browserAttemptStorage(),
+  });
   const capabilities: UserInterfaceCapabilities = {
     settings: {
       environment: 'test',
@@ -387,10 +395,8 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
     request,
     catalog,
     search,
-    userCards: createUserCardsOperations({
-      client: scriptedUserCards,
-      storage: browserAttemptStorage(),
-    }),
+    userCards,
+    cardList: createCardListBrowser({ search, catalog, userCards }),
     createRecognition: () => {
       throw new Error('The organization journeys do not run recognition.');
     },

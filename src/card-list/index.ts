@@ -27,6 +27,29 @@ export { CARD_LIST_LIMITS } from './internal/limits.js';
 export { createCardList, groupCardListEntries } from './internal/list.js';
 export { createRecentActivity, type CardListRecentActivity } from './internal/recent.js';
 export {
+  createCardListBrowser,
+  type CardListAccountBindings,
+  type CardListBrowser,
+  type CardListBrowserOptions,
+  type CardListRecentBinding,
+} from './internal/browser.js';
+export {
+  pendingEntriesBinding,
+  pendingEntryKey,
+  pendingListEntry,
+  type CardListPendingEntries,
+  type CardListPendingEntriesRead,
+  type CardListPendingRecord,
+} from './internal/bindings/pending.js';
+export {
+  associationKey,
+  associationListEntry,
+  referenceOfAssociation,
+  tagAssociationsBinding,
+  type CardListTagAssociations,
+  type CardListTagAssociationsRead,
+} from './internal/bindings/associations.js';
+export {
   catalogQueryRequest,
   catalogQuerySource,
   cardListEntryKey,
@@ -35,18 +58,19 @@ export {
   collectionQuerySource,
   entryOwnershipReader,
   isInvalidatedContinuation,
+  observeSearchProgress,
   pickerQuerySource,
   readFailureCode,
   readableSearchPage,
   searchCounts,
   searchEntryOf,
-  type CardListCatalogQuery,
-  type CardListCollectionQuery,
   type CardListCountsAccess,
   type CardListCountsRead,
   type CardListEntryCounts,
-  type CardListPickerQuery,
   type CardListSearchRead,
+  type CardListCatalogQuery,
+  type CardListCollectionQuery,
+  type CardListPickerQuery,
 } from './internal/bindings/search.js';
 export {
   cardPrintingsSource,
@@ -79,6 +103,9 @@ export {
   type CardListFragmentResult,
   type CardListFragmentState,
   type CardListGroup,
+  type CardListIndexingStatus,
+  type CardListObservation,
+  type CardListObservationRequest,
   type CardListOperationOutcome,
   type CardListOptions,
   type CardListPage,

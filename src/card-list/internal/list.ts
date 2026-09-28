@@ -48,14 +48,15 @@ import {
   type CardListFragmentReader,
   type CardListFragmentState,
   type CardListGroup,
+  type CardListIndexingStatus,
   type CardListOperationOutcome,
   type CardListOptions,
   type CardListPage,
   type CardListPosition,
   type CardListPositionReport,
-  type CardListRequiredProgress,
   type CardListRestoration,
   type CardListRetained,
+  type CardListSelection,
   type CardListSnapshot,
   type CardListTool,
   type CardListToolRequest,
@@ -68,6 +69,7 @@ import {
   readDemand,
   readFragments,
   readFragmentResults,
+  readObservation,
   readMessage,
   readObject,
   readOutcome,
@@ -120,13 +122,24 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     selected.add(key);
   }
   /**
-   * Explicit targets survive paging and restoration; only their tool availability remains part of
-   * fragment work.
+   * Explicit identities of the selection, independent of the loaded window: the target one entry
+   * key was selected at. Paging, refinement and refresh never substitute them for whatever the
+   * source presents under the same key; only an explicit selection (or reselection) recaptures
+   * one (docs/card-list.md#selection-and-restoration).
    */
-  const retiredSelection = new Map<string, CardListEntry['target']>();
+  const selectionTargets = new Map<string, CardListEntry['target']>();
+  /** Selected keys whose entry has not been presented yet, so no identity is captured for them. */
+  const pendingSelection = new Set<string>();
+  /** Selected keys whose presented entry carries another identity than the selection holds. */
+  const unavailableSelection = new Set<string>();
   for (const selectedTarget of restored?.selectedTargets ?? []) {
     if (selected.has(selectedTarget.key)) {
-      retiredSelection.set(selectedTarget.key, selectedTarget.target);
+      selectionTargets.set(selectedTarget.key, selectedTarget.target);
+    }
+  }
+  for (const key of selected) {
+    if (!selectionTargets.has(key)) {
+      pendingSelection.add(key);
     }
   }
   /**
@@ -167,10 +180,27 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
   /** Logical position the presentation reported; the list never reads a DOM object itself. */
   let reportedScrollTop = 0;
   let reportedFocus: CardListFocus | null = null;
-  /** Committed positions the presented result still awaits incorporation of. */
-  let awaiting: readonly string[] = [];
+  /**
+   * Committed positions the presented result still awaits incorporation of. A restored visit keeps
+   * the requirements its history entry held, so returning to a page never turns a known stale
+   * result into an apparently current one (docs/card-list.md#loading-and-recovery).
+   */
+  let awaiting: readonly string[] = [...(restored?.awaiting ?? [])];
+  /** How the awaited committed changes stand; never `current` while a position is awaited. */
+  let freshness: CardListIndexingStatus = awaiting.length === 0 ? 'current' : 'indexing';
+  /** The bounded observation of the awaited positions in flight, or null when none is. */
+  let observation: { readonly id: number; readonly controller: AbortController } | null = null;
+  let observationSequence = 0;
   /** Entries the viewport demanded, as far as the list has acquired them. */
   let demandedEntries = 0;
+  /**
+   * Entries the presentation demanded while the first page of the active generation is still
+   * outstanding. A demand reported for the incoming generation survives its load; the extent the
+   * previous generation was acquired to does not, because the fresh sequence starts over.
+   */
+  let pendingDemand = 0;
+  /** Whether the active generation's first page is still outstanding. */
+  let firstPagePending = false;
   /** Entries the active sequence has supplied, including those the window bound retired. */
   let acquiredEntries = 0;
   /** Whether the last appended page added nothing, so acquiring stops until a new demand. */
@@ -197,6 +227,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     signal?.addEventListener('abort', () => dispose());
     const start = kept?.position ?? null;
     startRequest(start?.continuation ?? null, start?.offset ?? 0);
+    startObservation();
   }
 
   return {
@@ -275,7 +306,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       context: activeContext,
       entries: entriesSnapshot,
       groups: groupWindow(entries),
-      selection: { keys: selectedKeys(), targets: selectedTargets() },
+      selection: selectionReport(),
       tools: [...tools].map(([id, definition]) => ({
         id,
         label: definition.label,
@@ -289,6 +320,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       acquired: acquiredEntries,
       generation: windowGeneration,
       awaiting: [...awaiting],
+      freshness,
     };
   }
 
@@ -300,6 +332,16 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
    */
   function actionContext(): CardListToolSelection {
     return { keys: selectedKeys(), targets: selectedTargets() };
+  }
+
+  /** The selection the snapshot reports: explicit keys, their identities and conflicting ones. */
+  function selectionReport(): CardListSelection {
+    const keys = selectedKeys();
+    return {
+      keys,
+      targets: selectedTargets(),
+      unavailable: keys.filter((key) => unavailableSelection.has(key)),
+    };
   }
 
   /** Lifecycle of this visit's restoration; it stays the same promise for the list's lifetime. */
@@ -320,6 +362,9 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     if (disposed) {
       return;
     }
+    if (nextContinuation === null) {
+      firstPagePending = true;
+    }
     pending?.abort();
     generation += 1;
     const current = generation;
@@ -328,6 +373,9 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     loading = true;
     error = null;
     failed = null;
+    // The positions this request must incorporate are fixed when it starts: a change arriving
+    // while it is outstanding extends the required progress instead of being cleared with it.
+    const required = [...awaiting];
     publish();
     let request: Promise<unknown>;
     try {
@@ -336,7 +384,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
         pageSize,
         continuation: nextContinuation,
         signal: controller.signal,
-        required: requiredProgress(),
+        required: { positions: required },
       });
     } catch (cause) {
       settleFailure(
@@ -348,7 +396,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       return;
     }
     Promise.resolve(request).then(
-      (read) => settleRead(current, nextContinuation, offset, read),
+      (read) => settleRead(current, nextContinuation, offset, required, read),
       (cause) =>
         settleFailure(
           current,
@@ -357,14 +405,6 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
           readMessage(cause, 'The list could not load.'),
         ),
     );
-  }
-
-  /**
-   * Committed progress a read should incorporate. A query source passes the positions to its
-   * provider's freshness read; a source whose reads are already authoritative ignores them.
-   */
-  function requiredProgress(): CardListRequiredProgress {
-    return { positions: [...awaiting] };
   }
 
   /**
@@ -379,6 +419,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     current: number,
     requested: string | null,
     offset: number,
+    required: readonly string[],
     value: unknown,
   ): void {
     if (disposed || current !== generation) {
@@ -394,6 +435,9 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       // beginning of the result rather than from the continuation the source rejected, and the
       // rejected sequence leaves nothing a later visit could be sent back to.
       pending = null;
+      // The replacement sequence may carry other private values than the rejected one, so the
+      // enrichment of the window it replaces is read again through the list's own bindings.
+      staleFragments();
       forgetSequence();
       startRequest(null);
       return;
@@ -402,13 +446,14 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       settleFailure(current, requested, offset, read.problem);
       return;
     }
-    settlePage(current, requested, offset, read.page);
+    settlePage(current, requested, offset, required, read.page);
   }
 
   function settlePage(
     current: number,
     requested: string | null,
     offset: number,
+    required: readonly string[],
     page: CardListPage,
   ): void {
     if (disposed || current !== generation) {
@@ -434,11 +479,14 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       // another exposes its selected keys as they are found again.
       staleWindow = false;
       restartPosition = null;
-      setWindow(presented, kept !== null);
+      setWindow(presented);
       acquiredEntries = presented.length;
-      // The replacement begins a new sequence: a demand the previous sequence had not reached is
-      // superseded with it, and the presentation demands its range again for the new result.
-      demandedEntries = 0;
+      // A demand the presentation reported while this first page was outstanding stays part of
+      // the active generation: the list acquires the extent the viewport asked for instead of
+      // leaving it underfilled until an unrelated interaction repeats the demand.
+      demandedEntries = pendingDemand;
+      pendingDemand = 0;
+      firstPagePending = false;
       stalled = false;
     } else {
       const added = appendWindow(presented);
@@ -449,18 +497,38 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     rememberPositions(requested, supplied);
     continuation = page.continuation;
     continues = continuation !== null;
-    // The result is current once the source incorporated the positions the read required; an
-    // updating page keeps them labelled instead of presenting content as caught up.
-    if (page.current) {
-      awaiting = [];
+    // The result is current once the source incorporated the positions this read required; an
+    // updating page keeps them labelled instead of presenting content as caught up. Only the
+    // positions this answer actually established leave the requirement: a change that arrived
+    // while it was outstanding stays awaited until its own read or observation establishes it.
+    if (page.current && required.length > 0) {
+      const established = new Set(required);
+      awaiting = awaiting.filter((position) => !established.has(position));
     }
+    noteFreshness();
     publish();
     requestFragments();
+    startObservation();
     if (kept !== null) {
       restoreWindow(baseline);
       return;
     }
     acquireDemanded();
+  }
+
+  /**
+   * Reconciles the reported freshness with the awaited positions: current without them, indexing
+   * while none of the explicit outcomes (delayed, failed, unavailable) stands. The list observes
+   * again from `startObservation` whenever work can still progress.
+   */
+  function noteFreshness(): void {
+    if (awaiting.length === 0) {
+      freshness = 'current';
+      return;
+    }
+    if (freshness === 'current') {
+      freshness = 'indexing';
+    }
   }
 
   /**
@@ -538,14 +606,8 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     return { scrollTop: window.scrollTop, focus: window.focus };
   }
 
-  /** Replaces the window; entries the new result no longer holds leave it. */
-  function setWindow(next: readonly CardListEntry[], keepingTargets = false): void {
-    // A replacement result exposes selected keys as they are found again, as with other retained
-    // selection keys; only paging and a retained window being re-acquired carry explicit action
-    // context beyond the presented window.
-    if (!keepingTargets) {
-      clearRetiredSelection();
-    }
+  /** Replaces the window; entries the new result no longer holds leave it, their selection stays. */
+  function setWindow(next: readonly CardListEntry[]): void {
     applyWindow(next);
   }
 
@@ -559,7 +621,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     const combined = [...entries, ...added];
     for (const entry of combined.slice(0, -CARD_LIST_LIMITS.window)) {
       if (selected.has(entry.key)) {
-        retiredSelection.set(entry.key, entry.target);
+        captureSelectionTarget(entry);
       }
     }
     applyWindow(combined);
@@ -604,7 +666,8 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     const window = kept;
     const retainedInteraction = {
       selection: [...selected],
-      selectedTargets: [...retiredSelection].map(([key, target]) => ({ key, target })),
+      selectedTargets: [...selectionTargets].map(([key, target]) => ({ key, target })),
+      awaiting: [...awaiting],
       // While the retained window is still loading the presentation holds no applied offset: the
       // state keeps the retained one unless the user scrolled it or took the interaction over.
       scrollTop:
@@ -638,14 +701,17 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
    */
   function applyWindow(next: readonly CardListEntry[]): void {
     const previous = new Map(entries.map((entry) => [entry.key, entryIdentity(entry)] as const));
+    const previousWindow = windowKeys;
     entries = next.slice(-CARD_LIST_LIMITS.window);
     windowKeys = new Set(entries.map((entry) => entry.key));
     for (const key of windowKeys) {
-      if (retiredSelection.delete(key)) {
-        // An entry returning to the window may have changed while it was away.
+      if (selectionTargets.has(key) && !previousWindow.has(key)) {
+        // A selected identity that returns to the window may have changed while it was away; its
+        // availability is read again instead of answering for the previous presentation.
         invalidateFragment(key, 'tools');
       }
     }
+    reconcileSelection();
     const identities = new Map(entries.map((entry) => [entry.key, entryIdentity(entry)] as const));
     for (const [key, identity] of previous) {
       if (identities.get(key) === identity) {
@@ -655,6 +721,32 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     }
     retireObsoleteFragments();
     publish();
+  }
+
+  /**
+   * Reconciles the explicit selection with the window the source now presents: a selected key
+   * whose entry arrives for the first time captures its identity, and a presented entry that no
+   * longer carries the identity the selection holds marks it unavailable instead of substituting
+   * the replacement (docs/card-list.md#selection-and-restoration). An entry that left the window
+   * keeps the identity it was selected at.
+   */
+  function reconcileSelection(): void {
+    for (const entry of entries) {
+      if (!selected.has(entry.key)) {
+        continue;
+      }
+      if (pendingSelection.delete(entry.key)) {
+        selectionTargets.set(entry.key, entry.target);
+        unavailableSelection.delete(entry.key);
+        continue;
+      }
+      const chosen = selectionTargets.get(entry.key);
+      if (chosen !== undefined && !sameTarget(chosen, entry.target)) {
+        unavailableSelection.add(entry.key);
+      } else if (chosen !== undefined) {
+        unavailableSelection.delete(entry.key);
+      }
+    }
   }
 
   /**
@@ -673,7 +765,11 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       requestFragments();
       publish();
     }
-    demandedEntries = Math.max(demandedEntries, read.entries);
+    if (firstPagePending) {
+      pendingDemand = Math.max(pendingDemand, read.entries);
+    } else {
+      demandedEntries = Math.max(demandedEntries, read.entries);
+    }
     stalled = false;
     acquireDemanded();
   }
@@ -705,7 +801,11 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
 
   function refresh(): void {
     abandonRestoration();
+    // An explicit refresh rechecks the enrichment too: a committed change the list was not told
+    // about may have altered counts, tags or offered tools (docs/card-list.md#loading-and-recovery).
+    staleFragments();
     startRequest(null);
+    startObservation();
   }
 
   function refine(next: Context): void {
@@ -714,20 +814,36 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     }
     abandonRestoration();
     activeContext = next;
+    // The new description supersedes the extent the previous sequence was acquired to; a demand
+    // reported while the fresh page is outstanding is kept for the new generation.
+    demandedEntries = 0;
+    cancelObservation();
     // The presented window belongs to the previous query until the fresh page arrives: it is kept
     // as usable content, but paging it with the new context would mix two result sequences.
     staleWindow = true;
     publish();
     startRequest(null);
+    startObservation();
   }
 
   function retry(): void {
-    if (disposed || failed === null) {
+    if (disposed) {
       return;
     }
-    // A retry repeats the failed request of the same result, so a restoration still under way keeps
-    // acquiring the retained window and the intended state stays retained until it is presented.
-    startRequest(failed.continuation, failed.offset);
+    if (failed !== null) {
+      // A retry repeats the failed request of the same result, so a restoration still under way
+      // keeps acquiring the retained window and the intended state stays retained until it is
+      // presented.
+      startRequest(failed.continuation, failed.offset);
+      return;
+    }
+    if (awaiting.length > 0) {
+      // A delayed, failed or unavailable observation is explicitly recoverable: checking again
+      // starts no business write and never resets the presented content.
+      freshness = 'indexing';
+      publish();
+      startObservation();
+    }
   }
 
   /**
@@ -740,10 +856,30 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     if (disposed || !sourceAffected(change)) {
       return;
     }
-    if (change.position !== null && !awaiting.includes(change.position)) {
-      awaiting = [...awaiting, change.position];
+    const position = readChangePosition(change);
+    if (position !== null && !awaiting.includes(position)) {
+      awaiting = [...awaiting, position].slice(-CARD_LIST_LIMITS.awaitingPositions);
     }
+    noteFreshness();
+    // Local committed changes mark affected data stale: the source read reacquires entries, basic
+    // information and quantities, and the enrichment is read again through the list's own bindings
+    // instead of a page repairing rows (docs/card-list.md#loading-and-recovery).
+    reacquireFragments();
     startRequest(null);
+    startObservation();
+  }
+
+  /** The bounded publication position one notification names, or null when it names none. */
+  function readChangePosition(change: CardListChange): string | null {
+    const position = change.position;
+    if (
+      typeof position !== 'string' ||
+      position.length === 0 ||
+      position.length > CARD_LIST_LIMITS.position
+    ) {
+      return null;
+    }
+    return position;
   }
 
   /** Whether one notification touches the sequence this list reads. */
@@ -753,6 +889,126 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       return affects(change, activeContext) === true;
     }
     return true;
+  }
+
+  /**
+   * Observes the awaited committed positions through the source's own bounded freshness
+   * capability. Starting with empty awaiting work, without the capability or with an observation
+   * already in flight does nothing; an observation that cannot answer reports unavailable and is
+   * recovered explicitly through `retry` or `refresh` (docs/card-list.md#loading-and-recovery).
+   */
+  function startObservation(): void {
+    const observe = source.observe;
+    if (
+      disposed ||
+      observation !== null ||
+      awaiting.length === 0 ||
+      typeof observe !== 'function'
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    observationSequence += 1;
+    const id = observationSequence;
+    const positions = [...awaiting];
+    observation = { id, controller };
+    let pending: unknown;
+    try {
+      pending = observe({ positions, signal: controller.signal });
+    } catch (cause) {
+      settleObservation(id, positions, null, cause);
+      return;
+    }
+    Promise.resolve(pending).then(
+      (state) => settleObservation(id, positions, state, null),
+      (cause) => settleObservation(id, positions, null, cause),
+    );
+  }
+
+  /** Withdraws the observation in flight, if any; its late answer never reports afterwards. */
+  function cancelObservation(): void {
+    const active = observation;
+    if (active === null) {
+      return;
+    }
+    observation = null;
+    active.controller.abort();
+  }
+
+  /**
+   * Accepts one observation: incorporated positions leave the requirement and the presented
+   * generation is read again, a delay or failure is exposed as such, and an unreadable or
+   * withdrawn answer is unavailable. The list never infers incorporation from notification order.
+   */
+  function settleObservation(
+    id: number,
+    positions: readonly string[],
+    value: unknown,
+    cause: unknown,
+  ): void {
+    const active = observation;
+    if (disposed || active === null || active.id !== id) {
+      return;
+    }
+    observation = null;
+    const state = cause === null || cause === undefined ? readObservation(value) : null;
+    if (state === 'incorporated') {
+      const established = new Set(positions);
+      awaiting = awaiting.filter((position) => !established.has(position));
+      noteFreshness();
+      publish();
+      // The indexed state advanced: the presented generation is re-read from its source, and a
+      // change that arrived while this observation waited extends the required progress.
+      startRequest(null);
+      startObservation();
+      return;
+    }
+    if (awaiting.length === 0) {
+      freshness = 'current';
+    } else if (state === 'failed') {
+      freshness = 'failed';
+    } else if (state === 'delayed') {
+      freshness = 'delayed';
+    } else {
+      freshness = 'unavailable';
+    }
+    publish();
+  }
+
+  /**
+   * Marks the enrichment of the active window stale: the settled page reads the kinds the
+   * presentation demands again through the list's own bindings, so the values a read answered
+   * before the change never answer for the fresh window. The presented value stays visible while
+   * the fresh read is outstanding instead of collapsing a row the user is editing, and entries
+   * without a value show as loading (docs/card-list.md#loading-and-recovery).
+   */
+  function staleFragments(): void {
+    for (const kind of cardListFragmentKinds) {
+      if (!readers.has(kind) || !demandedKinds.has(kind)) {
+        continue;
+      }
+      const queue = fragmentQueue(kind);
+      for (const key of fragmentRequestKeys(kind)) {
+        if (fragmentState(key, kind) === null) {
+          setFragmentState(key, kind, { status: 'loading' });
+        }
+        queue.pending.add(key);
+      }
+    }
+    publish();
+  }
+
+  /**
+   * Reads the enrichment of the active window again through the list's own bindings: a committed
+   * change marks counts, tags and tool availability stale, and the fresh answer replaces the one
+   * the change invalidated (docs/card-list.md#loading-and-recovery).
+   */
+  function reacquireFragments(): void {
+    for (const kind of cardListFragmentKinds) {
+      if (readers.has(kind) && demandedKinds.has(kind)) {
+        reloadFragments(kind);
+      }
+    }
   }
 
   /**
@@ -823,10 +1079,26 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       return;
     }
     if (selectedNow) {
+      // An explicit selection (or reselection) captures the identity the source presents now; a
+      // key selected before its entry arrived captures it when the entry arrives.
+      const entry = entries.find((candidate) => candidate.key === key);
+      if (entry === undefined) {
+        pendingSelection.add(key);
+      } else {
+        selectionTargets.set(key, entry.target);
+        pendingSelection.delete(key);
+        unavailableSelection.delete(key);
+      }
       selected.add(key);
     } else {
       selected.delete(key);
-      if (retiredSelection.delete(key)) {
+      pendingSelection.delete(key);
+      unavailableSelection.delete(key);
+      // Only the tool availability a retired selected target still needs is invalidated: the
+      // fragment of a presented entry belongs to the row, not to the selection.
+      const retired = selectionTargets.has(key) && !windowKeys.has(key);
+      selectionTargets.delete(key);
+      if (retired) {
         invalidateFragment(key, 'tools');
         retireObsoleteFragments();
       }
@@ -846,9 +1118,24 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
         throw new TypeError('A group selection names bounded entry keys.');
       }
       if (selectedNow) {
+        const entry = entries.find((candidate) => candidate.key === key);
+        if (entry === undefined) {
+          pendingSelection.add(key);
+        } else {
+          selectionTargets.set(key, entry.target);
+          pendingSelection.delete(key);
+          unavailableSelection.delete(key);
+        }
         selected.add(key);
       } else {
         selected.delete(key);
+        pendingSelection.delete(key);
+        unavailableSelection.delete(key);
+        const retired = selectionTargets.has(key) && !windowKeys.has(key);
+        selectionTargets.delete(key);
+        if (retired) {
+          invalidateFragment(key, 'tools');
+        }
       }
     }
     publish();
@@ -859,38 +1146,67 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       return;
     }
     selected.clear();
-    clearRetiredSelection();
+    clearSelectionTargets();
     retireObsoleteFragments();
     publish();
   }
 
-  function clearRetiredSelection(): void {
-    for (const key of retiredSelection.keys()) {
-      invalidateFragment(key, 'tools');
+  function clearSelectionTargets(): void {
+    for (const key of selectionTargets.keys()) {
+      if (!windowKeys.has(key)) {
+        invalidateFragment(key, 'tools');
+      }
     }
-    retiredSelection.clear();
+    selectionTargets.clear();
+    pendingSelection.clear();
+    unavailableSelection.clear();
   }
 
-  /** Selected result keys, including explicit targets retained when paging retires their rows. */
+  /**
+   * Selected result keys with an explicit identity: the identities the presented window no longer
+   * holds first, then the presented ones in result order, so the report is stable whatever order
+   * the user selected in. A key the list holds without a target yet is not part of the report, and
+   * `toolAvailable` refuses a selection that names one, so an invocation never acts on a subset.
+   */
   function selectedKeys(): readonly string[] {
-    return [
-      ...retiredSelection.keys(),
-      ...entries.filter((entry) => selected.has(entry.key)).map((entry) => entry.key),
-    ];
+    const beyondWindow = [...selectionTargets.keys()].filter(
+      (key) => selected.has(key) && !windowKeys.has(key),
+    );
+    const presented = entries
+      .filter((entry) => selected.has(entry.key) && selectionTargets.has(entry.key))
+      .map((entry) => entry.key);
+    return [...beyondWindow, ...presented];
   }
 
-  /** Typed targets of the selection, aligned with its keys and including retired entries. */
+  /** Typed targets of the selection, aligned with its keys and independent of the window. */
   function selectedTargets(): readonly CardListEntry['target'][] {
-    const chosen = new Map(entries.map((entry) => [entry.key, entry.target] as const));
-    return selectedKeys().map((key) => retiredSelection.get(key) ?? chosen.get(key)!);
+    return selectedKeys().map((key) => selectionTargets.get(key)!);
+  }
+
+  /** Captures one presented entry's identity for a selection that holds only its key. */
+  function captureSelectionTarget(entry: CardListEntry): void {
+    if (!selected.has(entry.key)) {
+      return;
+    }
+    if (!selectionTargets.has(entry.key) || pendingSelection.has(entry.key)) {
+      selectionTargets.set(entry.key, entry.target);
+      pendingSelection.delete(entry.key);
+      unavailableSelection.delete(entry.key);
+      return;
+    }
+    if (!sameTarget(selectionTargets.get(entry.key)!, entry.target)) {
+      unavailableSelection.add(entry.key);
+    }
   }
 
   /** Whether one tool acts on the whole selection: every selected entry reports it available. */
   function toolAvailable(id: string): boolean {
     const keys = selectedKeys();
     // A selection can name entries whose targets have not arrived yet, including later pages of a
-    // restored window. Neither the control nor programmatic invocation may act on just a subset.
-    if (keys.length === 0 || keys.length !== selected.size) {
+    // restored window, and a presented entry may no longer carry the identity the selection holds.
+    // Neither the control nor programmatic invocation may act on just a subset or on a
+    // replacement (docs/card-list.md#selection-and-restoration).
+    if (keys.length === 0 || keys.length !== selected.size || unavailableSelection.size > 0) {
       return false;
     }
     if (!readers.has('tools')) {
@@ -983,10 +1299,16 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
    * target the window no longer presents.
    */
   function fragmentRequestKeys(kind: CardListFragmentKind): ReadonlySet<string> {
-    if (kind !== 'tools' || retiredSelection.size === 0) {
+    const beyondWindow = selectionOutsideWindow();
+    if (kind !== 'tools' || beyondWindow.length === 0) {
       return windowKeys;
     }
-    return new Set([...windowKeys, ...retiredSelection.keys()]);
+    return new Set([...windowKeys, ...beyondWindow]);
+  }
+
+  /** Selected keys whose explicit identity is outside the presented window. */
+  function selectionOutsideWindow(): readonly string[] {
+    return [...selectionTargets.keys()].filter((key) => !windowKeys.has(key));
   }
 
   function reloadFragment(key: string, kind: CardListFragmentKind): void {
@@ -1122,7 +1444,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
 
   /** Only tool availability is needed beyond the presented window, for explicit selected targets. */
   function fragmentKeyActive(key: string, kind: CardListFragmentKind): boolean {
-    return windowKeys.has(key) || (kind === 'tools' && retiredSelection.has(key));
+    return windowKeys.has(key) || (kind === 'tools' && selectionTargets.has(key));
   }
 
   function fragmentState(key: string, kind: CardListFragmentKind): CardListFragmentState | null {
@@ -1143,7 +1465,9 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
   /** Retires enrichment, keeping only tool availability needed for a selected target. */
   function invalidateFragments(key: string): void {
     for (const kind of cardListFragmentKinds) {
-      if (kind !== 'tools' || !retiredSelection.has(key)) {
+      const keepForRetiredSelection =
+        kind === 'tools' && selectionTargets.has(key) && !windowKeys.has(key);
+      if (!keepForRetiredSelection) {
         invalidateFragment(key, kind);
       }
     }
@@ -1194,7 +1518,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
    * so the entries that still wait for that kind are not blocked behind withdrawn work. The entries
    * that are still wanted are read again under a fresh token.
    */
-  function retireObsoleteFragments(): void {
+  function retireObsoleteFragments(repump = true): void {
     for (const [kind, queue] of fragmentQueues) {
       const active = queue.active;
       if (active === null || !fragmentReadObsolete(kind, active)) {
@@ -1208,7 +1532,9 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
           queue.pending.add(key);
         }
       }
-      pumpFragments(kind);
+      if (repump) {
+        pumpFragments(kind);
+      }
     }
   }
 
@@ -1237,6 +1563,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     unsubscribeChanges?.();
     kept = null;
     settled?.reject(new Error('The list was disposed before its retained window was presented.'));
+    cancelObservation();
     generation += 1;
     pending?.abort();
     pending = null;
@@ -1253,9 +1580,30 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     fragmentStates.clear();
     fragmentTokens.clear();
     selected.clear();
-    retiredSelection.clear();
+    selectionTargets.clear();
+    pendingSelection.clear();
+    unavailableSelection.clear();
     listeners.clear();
     published = null;
+  }
+}
+
+/** Whether two entries carry the same typed target, independently of their other information. */
+function sameTarget(left: CardListEntry['target'], right: CardListEntry['target']): boolean {
+  return left.kind === right.kind && targetIdentityOf(left) === targetIdentityOf(right);
+}
+
+/** Identity one typed target names; the key of the entry that carries it. */
+function targetIdentityOf(target: CardListEntry['target']): string {
+  switch (target.kind) {
+    case 'card':
+      return target.cardId;
+    case 'printing':
+      return target.printingId;
+    case 'copy':
+      return target.copyId;
+    case 'pending':
+      return target.entryId;
   }
 }
 

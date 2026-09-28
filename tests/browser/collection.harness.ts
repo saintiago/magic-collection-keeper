@@ -31,6 +31,7 @@ import type {
   PrintingRecord,
 } from '../../src/catalog/index.js';
 import type { SearchPage, SearchRequestInput } from '../../src/search/index.js';
+import { createCardListBrowser } from '../../src/card-list/index.js';
 import type { CopyId, PhysicalCopy } from '../../src/usercards/index.js';
 import {
   createCollectionPages,
@@ -212,6 +213,7 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
       });
     },
     counts: () => Promise.reject(new Error('The collection journeys read no private counts.')),
+    observe: () => Promise.reject(new Error('The collection journeys observe no progress.')),
   };
   const catalog: Catalog = {
     resolve(references) {
@@ -257,6 +259,11 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
       });
     },
   };
+  const userCards = createUserCardsOperations({
+    client: scriptedUserCards,
+    storage: browserAttemptStorage(),
+  });
+  const cardList = createCardListBrowser({ search, catalog, userCards });
   const capabilities: UserInterfaceCapabilities = {
     settings: {
       environment: 'test',
@@ -269,10 +276,8 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
     request,
     catalog,
     search,
-    userCards: createUserCardsOperations({
-      client: scriptedUserCards,
-      storage: browserAttemptStorage(),
-    }),
+    userCards,
+    cardList,
     createRecognition: () => {
       throw new Error('The collection journeys do not run recognition.');
     },

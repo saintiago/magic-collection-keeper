@@ -14,26 +14,18 @@
  * renders as text.
  */
 
-import type { CardRecord, Catalog, PrintingRecord } from '../../catalog/index.js';
-import type {
-  Association,
-  AssociationListResult,
-  AssociationTargetLevel,
-  PhysicalCopy,
-  Tag,
-} from '../../usercards/index.js';
+import type { PrintingRecord } from '../../catalog/index.js';
+import type { Association, AssociationTargetLevel, Tag } from '../../usercards/index.js';
 import {
+  associationKey,
   cardListEntryKey,
-  entryOwnershipReader,
   isInvalidatedContinuation,
-  pickerQuerySource,
   readFailureCode,
-  searchCounts,
+  referenceOfAssociation,
   type CardListEntry,
   type CardListFragmentReader,
   type CardListPickerQuery,
-  type CardListSource,
-  type CardListTarget,
+  type CardListTagAssociations,
 } from '../../card-list/index.js';
 
 import {
@@ -556,7 +548,6 @@ function tagViewPage(): UiPageDefinition {
       const access = createTagAccess(
         context.capabilities.userCards.account(context.account.accountId),
       );
-      const counts = searchCounts(context.capabilities.search);
       const presented = Promise.withResolvers<void>();
       // A page whose presentation the shell never awaits must still not surface a rejection.
       presented.promise.catch(() => {});
@@ -630,8 +621,12 @@ function tagViewPage(): UiPageDefinition {
 
       /** Tag the page presents; null until it is read or after a failed read. */
       let tag: Tag | null = null;
-      /** Associations the presented rows interpret, keyed by their entry key. */
-      const records = new Map<string, Association>();
+      /**
+       * CardList binding of the presented tag: it owns the association read, its translation and
+       * the provider records the editors review under an association's own key
+       * (docs/card-list.md#required-interfaces-and-source-bindings).
+       */
+      let associationRecords: CardListTagAssociations | null = null;
       /** Editors of the presented association rows, redrawn as their choices or records change. */
       const editors = new Map<string, UiAssociationEditor>();
       /** Printings offered to refine a card-level association, keyed by card identity. */
@@ -739,22 +734,25 @@ function tagViewPage(): UiPageDefinition {
           addForm.append(controlLabel(document, 'Intended quantity', quantity));
         }
         addForm.append(addSubmit);
+        const bindings = context.capabilities.cardList.account(context.account.accountId);
+        const associationBinding = bindings.tagAssociations(tagId);
+        associationRecords = associationBinding;
         const list = createCardListView({
           container: associationsHost,
-          source: associationSource({
-            access,
-            catalog: context.capabilities.catalog,
-            records,
-            onWindow: associationWindow,
-          }),
+          create: context.capabilities.cardList.create,
+          source: associationBinding.source,
           context: tagId,
           accountId: context.account.accountId,
           pageSize: access.constraints.pages.associations.default,
           restored: readListState<string>(retainedAssociations),
           fragments: {
-            ownership: entryOwnershipReader(counts, associationReferenceOf, () => tagId),
+            ownership: associationBinding.ownership,
             tags: associationReader(),
           },
+          // A committed change of the account's associations, tags or copies reacquires the
+          // presented records through the binding; the page never patches a row after an
+          // operation it drove.
+          changes: bindings.changes(),
           presentation: {
             renderEntry: (entry) => associationEntry(document, entry),
             renderFragment: (kind, entry, values) => {
@@ -762,13 +760,17 @@ function tagViewPage(): UiPageDefinition {
                 return associationEditor(entry);
               }
               return kind === 'ownership'
-                ? ownershipContent(values as UiEntryOwnership, records.get(entry.key)?.quantity)
+                ? ownershipContent(
+                    values as UiEntryOwnership,
+                    associationRecord(entry.key)?.quantity,
+                  )
                 : null;
             },
           },
           signal: context.signal,
         });
         associations = list;
+        observeAssociations(list);
         if (location) {
           // A location view offers every destination the account has, so the move control reads
           // the account's location tags page by page
@@ -835,11 +837,8 @@ function tagViewPage(): UiPageDefinition {
           }
         }
         renameStatus.textContent = outcome.message ?? 'Renamed the tag.';
-        if (outcome.status === 'committed') {
-          // The tag's own revision advanced: the association sequence reads its private records
-          // again instead of paging a continuation the change invalidated.
-          associations?.refresh();
-        }
+        // A committed rename reacquires the association sequence through CardList's own change
+        // invalidation; the page owns no repair read of its lists.
         if (outcome.status === 'conflict') {
           const reread = await readTag(access, current.tagId, context.signal).catch(() => null);
           if (!closed && reread !== null) {
@@ -939,6 +938,10 @@ function tagViewPage(): UiPageDefinition {
           ensureAddList(next);
           return;
         }
+        // A search the owner submits re-reads the private counts of its result: the account's
+        // ownership and intentions may have moved since the result was presented, and the counts
+        // are not part of the query generation that decides membership
+        // (docs/user-interface.md#browsing-and-organization).
         refreshCounts();
         addList.refine(next);
       }
@@ -949,15 +952,21 @@ function tagViewPage(): UiPageDefinition {
         }
         addList = createCardListView<CardListPickerQuery>({
           container: addHost,
-          source: pickerQuerySource(context.capabilities.search),
+          create: context.capabilities.cardList.create,
+          source: context.capabilities.cardList.account(context.account.accountId).pickerQuery(),
           context: next,
           accountId: context.account.accountId,
           pageSize: UI_LIMITS.catalogPage,
           restored: readListState<CardListPickerQuery>(retainedResults),
           fragments: {
-            ownership: entryOwnershipReader(counts, undefined, () => tagId),
+            ownership: context.capabilities.cardList
+              .account(context.account.accountId)
+              .ownership(tagId),
             tools: addToolsReader(),
           },
+          // A committed association or copy change may alter the intended quantity or membership
+          // this picker presents; the list reacquires it through its own bindings.
+          changes: context.capabilities.cardList.account(context.account.accountId).changes(),
           presentation: {
             renderFragment: (kind, _entry, values) =>
               kind === 'ownership' ? ownershipContent(values as UiEntryOwnership) : null,
@@ -980,11 +989,13 @@ function tagViewPage(): UiPageDefinition {
                   });
                   const outcome = await base.tool.invoke(request);
                   if (outcome.committed > 0 || outcome.status === 'unknown') {
-                    // Writes committed or stay uncertain: the association list reads them again, so
-                    // a partial addition is visible instead of presented as an unchanged result
+                    // A committed write reacquires the association list through its own change
+                    // notification; an uncertain one is read again explicitly, so a partial
+                    // addition is visible instead of presented as an unchanged result
                     // (docs/user-interface.md#browsing-and-organization).
-                    refreshCounts();
-                    associations?.refresh();
+                    if (outcome.committed === 0) {
+                      associations?.refresh();
+                    }
                   }
                   return outcome;
                 },
@@ -1000,8 +1011,8 @@ function tagViewPage(): UiPageDefinition {
       function associationEntry(document: Document, entry: CardListEntry): Node {
         const content = document.createElement('span');
         content.append(cardListBasicContent(document, entry));
-        const association = records.get(entry.key);
-        if (association !== undefined) {
+        const association = associationRecord(entry.key);
+        if (association !== null) {
           const level = document.createElement('span');
           level.dataset.uiAssociationLevel = association.targetLevel;
           level.textContent = ` ${uiAssociationLevelLabel(association.targetLevel)}`;
@@ -1036,15 +1047,6 @@ function tagViewPage(): UiPageDefinition {
         return content;
       }
 
-      /** The presented target of one association row, or null when the row holds no association. */
-      function associationReferenceOf(key: string): CardListTarget | null {
-        const association = records.get(key);
-        if (association === undefined) {
-          return null;
-        }
-        return referenceOfAssociation(association);
-      }
-
       /** The fragment reader that carries one row's association to its own editor. */
       function associationReader(): CardListFragmentReader<
         readonly { tagId: string; name: string }[]
@@ -1053,8 +1055,8 @@ function tagViewPage(): UiPageDefinition {
           read(request) {
             return Promise.resolve(
               request.keys.map((key) => {
-                const association = records.get(key);
-                return association === undefined
+                const association = associationRecord(key);
+                return association === null
                   ? {
                       key,
                       status: 'failed' as const,
@@ -1078,15 +1080,15 @@ function tagViewPage(): UiPageDefinition {
        * (docs/user-interface.md#browsing-and-organization).
        */
       function associationEditor(entry: CardListEntry): Node | null {
-        if (!records.has(entry.key) || tag === null) {
+        const current = associationRecord(entry.key);
+        if (current === null || tag === null) {
           return null;
         }
         const controls = document.createElement('span');
         controls.dataset.uiAssociation = entry.key;
-        const association = records.get(entry.key);
         const status = statusLine(
           document,
-          `tag-association-status-${encodeURIComponent(association?.associationId ?? entry.key)}`,
+          `tag-association-status-${encodeURIComponent(current.associationId)}`,
         );
         controls.append(status);
         const editor: UiAssociationEditor = { controls, entry, status, refresh: () => {} };
@@ -1104,9 +1106,9 @@ function tagViewPage(): UiPageDefinition {
        * docs/user-interface.md#state-ownership-and-restoration).
        */
       function paintEditor(editor: UiAssociationEditor): void {
-        const association = records.get(editor.entry.key);
+        const association = associationRecord(editor.entry.key);
         const current = tag;
-        if (association === undefined || current === null) {
+        if (association === null || current === null) {
           return;
         }
         if (
@@ -1428,7 +1430,10 @@ function tagViewPage(): UiPageDefinition {
         if (closed) {
           return;
         }
-        if (outcome.status === 'committed' || outcome.status === 'unknown') {
+        if (outcome.status === 'unknown') {
+          // The commit is not established, so no change notification reacquires the presented
+          // records: the page reads the private state again for its own review
+          // (docs/user-cards.md#persistence-and-recovery).
           refreshCounts();
         }
         if (outcome.status === 'committed') {
@@ -1442,7 +1447,6 @@ function tagViewPage(): UiPageDefinition {
             keepAssociation(outcome.record as Association);
           }
           report(outcome.message ?? 'Saved.');
-          associations?.refresh();
           return;
         }
         if (!review) {
@@ -1514,8 +1518,8 @@ function tagViewPage(): UiPageDefinition {
        */
       function adoptAssociation(next: Association): Association {
         const key = associationKey(next);
-        const current = records.get(key);
-        if (current !== undefined && next.revision < current.revision) {
+        const current = associationRecord(key);
+        if (current !== null && next.revision < current.revision) {
           return current;
         }
         keepAssociation(next);
@@ -1534,8 +1538,9 @@ function tagViewPage(): UiPageDefinition {
 
       function keepAssociation(next: Association): void {
         const key = associationKey(next);
-        if ((records.get(key)?.revision ?? 0) <= next.revision) {
-          records.set(key, next);
+        const current = associationRecords?.record(key);
+        if ((current?.revision ?? 0) <= next.revision) {
+          associationRecords?.adopt(next);
         }
       }
 
@@ -1660,7 +1665,7 @@ function tagViewPage(): UiPageDefinition {
       /** Redraws the presented association editors, so they follow the choices now known. */
       function repaintEditors(cardId?: string): void {
         for (const editor of editors.values()) {
-          const association = records.get(editor.entry.key);
+          const association = associationRecord(editor.entry.key);
           if (
             cardId === undefined ||
             (association?.targetLevel === 'card' && association.targetId === cardId)
@@ -1671,24 +1676,34 @@ function tagViewPage(): UiPageDefinition {
       }
 
       /**
-       * Accepts the window of association keys the list now presents: rows the window no longer
-       * holds release their editors. The unsaved drafts stay under their own bound, so an edit a
-       * retired row held survives paging — and a restart of the sequence — without retaining every
-       * visited association
-       * (docs/user-interface.md#state-ownership-and-restoration).
+       * Follows the window of association keys the list presents: rows the window no longer holds
+       * release their editors. The unsaved drafts stay under their own bound, so an edit a retired
+       * row held survives paging — and a restart of the sequence — without retaining every visited
+       * association (docs/user-interface.md#state-ownership-and-restoration).
        */
-      function associationWindow(presentedKeys: ReadonlySet<string>, fromStart: boolean): void {
-        if (fromStart) {
-          // A replacement window adopts current private state. Even unchanged rows and search
-          // candidates can have different counts; supersede reads from before this reload.
-          refreshCounts();
-        }
-        for (const key of editors.keys()) {
-          if (!presentedKeys.has(key)) {
-            editors.delete(key);
+      function observeAssociations(list: UiCardList<string>): void {
+        list.subscribe((snapshot) => {
+          const presented = new Set(snapshot.entries.map((entry) => entry.entry.key));
+          for (const key of [...editors.keys()]) {
+            if (!presented.has(key)) {
+              editors.delete(key);
+            }
           }
-        }
-        boundDrafts(drafts);
+          boundDrafts(drafts);
+        });
+        // A read that begins the association sequence again adopts current private state: even
+        // unchanged rows and the search candidates can carry other counts than the sequence it
+        // replaces (docs/user-interface.md#browsing-and-organization).
+        associationRecords?.subscribe((read) => {
+          if (read.replaced) {
+            refreshCounts();
+          }
+        });
+      }
+
+      /** The provider record of one presented association key this visit's binding read, or null. */
+      function associationRecord(key: string): Association | null {
+        return associationRecords?.record(key) ?? null;
       }
 
       /**
@@ -1746,264 +1761,9 @@ interface UiLocationOffer {
   readonly loading: boolean;
   readonly error: string | null;
 }
-
-/**
- * The source of one tag view's association list: the tag's associations with resolved basics and
- * independently loaded private counts. The page composes this read with the provider records its
- * editors hold (the association revision, level and intended quantity a change quotes), so the
- * source stays here while CardList owns the window, selection, enrichment and restoration built on
- * the list protocol it produces (docs/card-list.md#interface). The list reports the window it accumulated, so
- * the page releases the editors of rows that left it, and a continuation the provider rejects as
- * stale is reported as an invalidated sequence: the list reads the sequence again from its first
- * page instead of repeating an unusable cursor forever, and the page keeps the drafts and
- * selection of the rows it presented (docs/user-interface.md#list-boundary,
- * docs/user-interface.md#browsing-and-organization).
- */
-function associationSource(options: {
-  readonly access: UiTagAccess;
-  readonly catalog: Catalog;
-  readonly records: Map<string, Association>;
-  readonly onWindow: (presentedKeys: ReadonlySet<string>, fromStart: boolean) => void;
-}): CardListSource<string> {
-  /** Keys of the window the list presents, bounded like the list's own working set. */
-  const presented: string[] = [];
-  return {
-    // A committed change of the account's associations, tags or copies may change this sequence,
-    // so the list reacquires it through this same read.
-    affects: () => true,
-    async load(request) {
-      let page: AssociationListResult;
-      try {
-        page = await options.access.associations(
-          request.context,
-          {
-            pageSize: request.pageSize,
-            ...(request.continuation === null ? {} : { continuation: request.continuation }),
-          },
-          request.signal,
-        );
-      } catch (cause) {
-        if (
-          !request.signal.aborted &&
-          request.continuation !== null &&
-          isInvalidatedContinuation(cause)
-        ) {
-          // The account's private revision the continuation was read at changed: the list restarts
-          // the sequence from its first page, so the page never repeats the unusable cursor.
-          return { status: 'invalidated' };
-        }
-        throw cause;
-      }
-      request.signal.throwIfAborted();
-      const observed = page.associations.map((association) => {
-        const current = options.records.get(associationKey(association));
-        return current !== undefined && current.revision > association.revision
-          ? current
-          : association;
-      });
-      const entries = await associationEntries(
-        observed,
-        options.access,
-        options.catalog,
-        request.signal,
-      );
-      request.signal.throwIfAborted();
-      if (
-        observed.some(
-          (association) =>
-            (options.records.get(associationKey(association))?.revision ?? 0) >
-            association.revision,
-        )
-      ) {
-        throw new Error('An association changed while loading. Retry to read its current state.');
-      }
-      for (const association of observed) {
-        options.records.set(associationKey(association), association);
-      }
-      if (request.continuation === null) {
-        presented.length = 0;
-      }
-      presented.push(...entries.map((entry) => entry.key));
-      if (presented.length > UI_LIMITS.listWindow) {
-        presented.splice(0, presented.length - UI_LIMITS.listWindow);
-      }
-      const window = new Set(presented);
-      for (const key of options.records.keys()) {
-        if (!window.has(key)) {
-          options.records.delete(key);
-        }
-      }
-      options.onWindow(window, request.continuation === null);
-      return { status: 'page', entries, continuation: page.continuation, current: true };
-    },
-  };
-}
-
-/** Resolve basic entries without publishing state or waiting for optional counts. */
-async function associationEntries(
-  associations: readonly Association[],
-  access: UiTagAccess,
-  catalog: Catalog,
-  signal: AbortSignal,
-): Promise<readonly CardListEntry[]> {
-  const copies = await readAssociationCopies(associations, access, signal);
-  const printingIds = new Set<string>();
-  for (const association of associations) {
-    if (association.targetLevel === 'printing') {
-      printingIds.add(association.targetId);
-    }
-    const copy = copies.get(association.targetId);
-    if (association.targetLevel === 'copy' && copy !== undefined) {
-      printingIds.add(copy.printingId);
-    }
-  }
-  const printings = await resolvePrintings(catalog, [...printingIds]);
-  const cardIds = new Set<string>();
-  for (const association of associations) {
-    if (association.targetLevel === 'card') {
-      cardIds.add(association.targetId);
-    }
-  }
-  for (const printing of printings.values()) {
-    cardIds.add(printing.cardId);
-  }
-  const cards = await resolveCards(catalog, [...cardIds]);
-  return associations.map((association) =>
-    associationListEntry(associationKey(association), association, copies, printings, cards),
-  );
-}
-
-/** The presented target of one association. */
-function referenceOfAssociation(association: Association): CardListTarget {
-  switch (association.targetLevel) {
-    case 'card':
-      return { kind: 'card', cardId: association.targetId };
-    case 'printing':
-      return { kind: 'printing', printingId: association.targetId };
-    case 'copy':
-      return { kind: 'copy', copyId: association.targetId };
-  }
-}
-
-/** One association as the list boundary presents it: its typed target and resolved basics. */
-function associationListEntry(
-  key: string,
-  association: Association,
-  copies: ReadonlyMap<string, PhysicalCopy>,
-  printings: ReadonlyMap<string, PrintingRecord>,
-  cards: ReadonlyMap<string, CardRecord>,
-): CardListEntry {
-  const target: CardListTarget =
-    association.targetLevel === 'card'
-      ? { kind: 'card', cardId: association.targetId }
-      : association.targetLevel === 'printing'
-        ? { kind: 'printing', printingId: association.targetId }
-        : { kind: 'copy', copyId: association.targetId };
-  const copy =
-    association.targetLevel === 'copy' ? (copies.get(association.targetId) ?? null) : null;
-  const printing =
-    association.targetLevel === 'printing'
-      ? (printings.get(association.targetId) ?? null)
-      : copy === null
-        ? null
-        : (printings.get(copy.printingId) ?? null);
-  const cardId = association.targetLevel === 'card' ? association.targetId : printing?.cardId;
-  const card = cardId === undefined ? null : (cards.get(cardId) ?? null);
-  const resolved = card !== null && (association.targetLevel === 'card' || printing !== null);
-  return {
-    key,
-    target,
-    basic: resolved
-      ? {
-          card: {
-            cardId: (card as CardRecord).cardId,
-            name: (card as CardRecord).name,
-            matchedName: null,
-          },
-          printing:
-            printing === null
-              ? null
-              : {
-                  printingId: printing.printingId,
-                  edition: printing.edition,
-                  collectorNumber: printing.collectorNumber,
-                  language: printing.language,
-                },
-        }
-      : null,
-    quantity: null,
-  };
-}
-
-/** Stable key of one association entry; the row's editor looks the record up under it. */
-function associationKey(association: Association): string {
-  return `association:${association.associationId}`;
-}
-
 /** Location tags of one page of the account's tags; other kinds are not move destinations. */
 function locationTagsOf(tags: readonly Tag[]): readonly Tag[] {
   return tags.filter((candidate) => kindOf(candidate.kind) === 'location');
-}
-
-/** Copies the copy-targeted associations name, read in the bounded batches a private read accepts. */
-async function readAssociationCopies(
-  associations: readonly Association[],
-  access: UiTagAccess,
-  signal: AbortSignal,
-): Promise<ReadonlyMap<string, PhysicalCopy>> {
-  const ids = [
-    ...new Set(
-      associations
-        .filter((association) => association.targetLevel === 'copy')
-        .map((association) => association.targetId),
-    ),
-  ];
-  const copies = new Map<string, PhysicalCopy>();
-  const batchSize = access.constraints.batch.references;
-  for (let index = 0; index < ids.length; index += batchSize) {
-    const batch = ids.slice(index, index + batchSize);
-    const read = await access.readCopies(batch, signal);
-    for (const copy of read.copies.values()) {
-      copies.set(copy.copyId, copy);
-    }
-  }
-  return copies;
-}
-
-/** Printings the associations name, resolved through Catalog in bounded batches. */
-async function resolvePrintings(
-  catalog: Catalog,
-  printingIds: readonly string[],
-): Promise<ReadonlyMap<string, PrintingRecord>> {
-  const printings = new Map<string, PrintingRecord>();
-  for (let index = 0; index < printingIds.length; index += UI_LIMITS.catalogResolveBatch) {
-    const batch = printingIds.slice(index, index + UI_LIMITS.catalogResolveBatch);
-    const resolution = await catalog.resolve(
-      batch.map((printingId) => ({ kind: 'printing' as const, printingId })),
-    );
-    for (const printing of resolution.printings.values()) {
-      printings.set(printing.printingId, printing);
-    }
-  }
-  return printings;
-}
-
-/** Cards the associations reach, resolved through Catalog in bounded batches. */
-async function resolveCards(
-  catalog: Catalog,
-  cardIds: readonly string[],
-): Promise<ReadonlyMap<string, CardRecord>> {
-  const cards = new Map<string, CardRecord>();
-  for (let index = 0; index < cardIds.length; index += UI_LIMITS.catalogResolveBatch) {
-    const batch = cardIds.slice(index, index + UI_LIMITS.catalogResolveBatch);
-    const resolution = await catalog.resolve(
-      batch.map((cardId) => ({ kind: 'card' as const, cardId })),
-    );
-    for (const card of resolution.cards.values()) {
-      cards.set(card.cardId, card);
-    }
-  }
-  return cards;
 }
 
 /** Target level one add-list entry key names, or null when the key is not readable. */

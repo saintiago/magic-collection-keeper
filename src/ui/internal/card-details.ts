@@ -26,7 +26,7 @@ import type {
   Finish,
   PrintingRecord,
 } from '../../catalog/index.js';
-import { cardPrintingsSource, readFailureCode } from '../../card-list/index.js';
+import { readFailureCode } from '../../card-list/index.js';
 import type { PhysicalCopy } from '../../usercards/index.js';
 
 import { createCardListView, type UiCardList } from './card-list.js';
@@ -265,9 +265,11 @@ export function createCardDetailsPage(): UiPageDefinition {
       function cardContent(card: CardRecord): UiLevelPresentation {
         const host = document.createElement('div');
         host.id = 'card-printings';
+        const bindings = context.capabilities.cardList.account(context.account.accountId);
         const list = createCardListView({
           container: host,
-          source: cardPrintingsSource(catalog, card),
+          create: context.capabilities.cardList.create,
+          source: bindings.cardPrintings(card),
           context: card.cardId,
           accountId: context.account.accountId,
           pageSize: UI_LIMITS.printingPage,

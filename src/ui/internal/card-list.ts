@@ -17,7 +17,6 @@
 
 import {
   cardListFragmentKinds,
-  createCardList,
   type CardList,
   type CardListChangeSource,
   type CardListEntry,
@@ -55,6 +54,13 @@ export interface UiCardListPresentation {
 export interface UiCardListOptions<Context = unknown> {
   /** Element the view renders into; it replaces the content and leaves with the page. */
   readonly container: HTMLElement;
+  /**
+   * Application-selected CardList implementation: the view describes the list it presents and the
+   * supplied factory constructs it. Pages hand over the capability they received, so no UI module
+   * names the component's own factory and a replacement needs no UI change
+   * (docs/architecture.md#composition-and-replacement).
+   */
+  readonly create: UiCardListFactory;
   /** Source of the entries, their continuation and the query context. */
   readonly source: CardListOptions<Context>['source'];
   /** Query context of the active result. */
@@ -77,12 +83,19 @@ export interface UiCardListOptions<Context = unknown> {
   readonly signal?: AbortSignal;
 }
 
+/** Creates one headless list over the description a page supplies. */
+export type UiCardListFactory = <Context>(options: CardListOptions<Context>) => CardList<Context>;
+
 /** One mounted list of the UserInterface: the component list plus its rendered presentation. */
 export interface UiCardList<Context = unknown> {
+  /** Current snapshot of the list, as the component publishes it. */
+  snapshot(): CardListSnapshot<Context>;
   /** Entries of the loaded window, in source order. */
   readonly entries: readonly CardListEntry[];
   /** Selected keys in result order, including entries retired by paging beyond the window. */
   readonly selection: readonly string[];
+  /** Selected keys whose presented entry no longer carries the identity the selection holds. */
+  readonly unavailableSelection: readonly string[];
   /** Whether the active result continues past the loaded window and may be paged now. */
   readonly hasMore: boolean;
   /** Whether a window request is in flight. */
@@ -111,12 +124,15 @@ export interface UiCardList<Context = unknown> {
   clearSelection(): void;
   /** Invokes one tool for the explicit selection; null when nothing was invoked. */
   invoke(toolId: string): Promise<CardListOperationOutcome | null>;
+  /** Observes the list's own snapshots; the returned call stops delivery. */
+  subscribe(listener: (snapshot: CardListSnapshot<Context>) => void): () => void;
   /** Releases the view and the list behind it. */
   dispose(): void;
 }
 
 /** One rendered entry and the elements the view updates in place. */
 interface EntryRow {
+  readonly row: HTMLLIElement;
   readonly checkbox: HTMLInputElement;
   readonly fragments: Map<CardListFragmentKind, HTMLElement>;
 }
@@ -174,7 +190,7 @@ export function createCardListView<Context>(
   section.append(toolbar, outcomeLine, entriesHost, statusLine, moreButton, retryButton);
   container.replaceChildren(section);
 
-  const list = createCardList<Context>({
+  const list = options.create<Context>({
     source: options?.source,
     context: options?.context,
     accountId: options?.accountId,
@@ -190,6 +206,7 @@ export function createCardListView<Context>(
   let renderedStructure = '';
   let renderedSelection = '';
   let renderedGeneration = -1;
+  let renderedEntries = new Map<string, string>();
   let renderedFragments = new Map<string, CardListFragmentState>();
   let invocation: Promise<CardListOperationOutcome | null> | null = null;
   let disposed = false;
@@ -227,11 +244,15 @@ export function createCardListView<Context>(
   render(list.snapshot());
 
   return {
+    snapshot: () => list.snapshot(),
     get entries() {
       return list.snapshot().entries.map((entry) => entry.entry);
     },
     get selection() {
       return [...list.snapshot().selection.keys];
+    },
+    get unavailableSelection() {
+      return [...list.snapshot().selection.unavailable];
     },
     get hasMore() {
       return list.snapshot().hasMore;
@@ -258,6 +279,7 @@ export function createCardListView<Context>(
     setSelected: (key, selected) => list.setSelected(key, selected),
     clearSelection: () => list.clearSelection(),
     invoke,
+    subscribe: (listener) => list.subscribe(listener),
     dispose,
   };
 
@@ -291,14 +313,34 @@ export function createCardListView<Context>(
       return;
     }
     const structure = structureOf(snapshot);
-    const structureChanged = structure !== renderedStructure;
-    if (structureChanged || snapshot.generation !== renderedGeneration) {
+    const generationChanged = snapshot.generation !== renderedGeneration;
+    renderedGeneration = snapshot.generation;
+    if (structure !== renderedStructure) {
       renderedStructure = structure;
-      renderedGeneration = snapshot.generation;
       renderedFragments = new Map();
       renderedSelection = '';
-      if (structureChanged) {
-        renderWindow(snapshot);
+      renderedEntries = new Map(
+        snapshot.entries.map((entry) => [entry.entry.key, entrySignature(entry.entry)] as const),
+      );
+      renderWindow(snapshot);
+    } else {
+      // The window and its grouping stayed; an entry whose snapshot changed is rendered again in
+      // place, so current quantities and the consumer's own content reach the DOM without
+      // discarding the rest of the presentation (docs/card-list.md#interface).
+      for (const entrySnapshot of snapshot.entries) {
+        const key = entrySnapshot.entry.key;
+        const signature = entrySignature(entrySnapshot.entry);
+        if (renderedEntries.get(key) === signature) {
+          continue;
+        }
+        renderedEntries.set(key, signature);
+        renderEntryInPlace(entrySnapshot);
+      }
+      if (generationChanged) {
+        // The source supplied the window again: content a consumer renders from outside the
+        // snapshot — provider records, kept drafts — may have changed with it, so every fragment
+        // is drawn again from the state the list now holds (docs/card-list.md#interface).
+        renderedFragments.clear();
       }
     }
     renderFragments(snapshot);
@@ -307,18 +349,46 @@ export function createCardListView<Context>(
     renderStatus(snapshot);
   }
 
-  /** Identity of the rendered window and its grouping; fragment values are not part of it. */
+  /** Identity of the rendered window and its grouping; entry content is not part of it. */
   function structureOf(snapshot: CardListSnapshot<Context>): string {
     return JSON.stringify([
       snapshot.groups.map((group) => [group.key, group.printingId, group.keys]),
       snapshot.entries.map((entry) => [
         entry.entry.key,
-        entry.entry.target,
-        entry.entry.basic,
         // The kinds an entry presents decide which slots exist; their states are drawn in place.
         [...entry.fragments.keys()].sort(),
       ]),
     ]);
+  }
+
+  /**
+   * Everything a rendered entry presents: its identity, basic information and quantity context.
+   * The signature decides when the consumer's own entry content is rendered again.
+   */
+  function entrySignature(entry: CardListEntry): string {
+    return JSON.stringify([entry.key, entry.target, entry.basic, entry.quantity]);
+  }
+
+  /**
+   * Renders one entry again under the same window, keeping the keyboard focus of the control the
+   * user holds and the rest of the rendered window untouched.
+   */
+  function renderEntryInPlace(entrySnapshot: CardListEntrySnapshot): void {
+    const key = entrySnapshot.entry.key;
+    const previous = rows.get(key);
+    if (previous === undefined) {
+      return;
+    }
+    const focus = readEntryFocus();
+    const replacement = renderRow(entrySnapshot);
+    previous.row.replaceWith(replacement);
+    for (const kind of cardListFragmentKinds) {
+      // The replaced row carries fresh slots, so their states are painted again.
+      renderedFragments.delete(fragmentSlotKey(key, kind));
+    }
+    // The replaced checkbox carries no checked state; the selection is drawn again with it.
+    renderedSelection = '';
+    restoreEntryFocus(focus);
   }
 
   function renderWindow(snapshot: CardListSnapshot<Context>): void {
@@ -418,7 +488,7 @@ export function createCardListView<Context>(
       }
       row.append(host);
     }
-    rows.set(entry.key, { checkbox, fragments });
+    rows.set(entry.key, { row, checkbox, fragments });
     return row;
   }
 
@@ -426,7 +496,7 @@ export function createCardListView<Context>(
   function renderFragments(snapshot: CardListSnapshot<Context>): void {
     for (const entrySnapshot of snapshot.entries) {
       for (const [kind, state] of entrySnapshot.fragments) {
-        const slotKey = `${entrySnapshot.entry.key}\u0000${kind}`;
+        const slotKey = fragmentSlotKey(entrySnapshot.entry.key, kind);
         if (renderedFragments.get(slotKey) === state) {
           continue;
         }
@@ -562,21 +632,46 @@ export function createCardListView<Context>(
     section.setAttribute('aria-busy', snapshot.loading ? 'true' : 'false');
     moreButton.hidden = !snapshot.hasMore;
     moreButton.disabled = snapshot.loading;
-    retryButton.hidden = snapshot.error === null;
+    // A delayed, failed or unavailable indexing status is explicit and recoverable: checking
+    // again starts no business write and never resets the presented content
+    // (docs/card-list.md#loading-and-recovery).
+    retryButton.hidden =
+      snapshot.error === null &&
+      snapshot.freshness !== 'delayed' &&
+      snapshot.freshness !== 'failed' &&
+      snapshot.freshness !== 'unavailable';
     if (snapshot.error !== null) {
       statusLine.textContent = snapshot.error;
+      statusLine.dataset.uiFreshness = snapshot.freshness;
       return;
     }
-    if (snapshot.entries.length === 0) {
+    statusLine.dataset.uiFreshness = snapshot.freshness;
+    const parts: string[] = [];
+    // Freshness is presented independently of the number of entries: an empty result that still
+    // awaits known committed changes is updating, never a successful empty result
+    // (docs/card-list.md#loading-and-recovery).
+    if (snapshot.freshness === 'indexing') {
+      parts.push('Results are still being indexed.');
+    } else if (snapshot.freshness === 'delayed') {
+      parts.push('Results are still being indexed; this is taking longer than expected.');
+    } else if (snapshot.freshness === 'failed') {
+      parts.push('Indexing failed; retry to check the results again.');
+    } else if (snapshot.freshness === 'unavailable') {
+      parts.push('The indexing status is unavailable; retry to check again.');
+    } else if (snapshot.entries.length === 0) {
       // An updating result without usable entries is a retryable read, so this state only shows
-      // while that read is pending or empty.
-      statusLine.textContent = snapshot.loading ? 'Loading…' : 'No entries';
-      return;
+      // while that read is pending or the result is a successful empty one.
+      parts.push(snapshot.loading ? 'Loading…' : 'No entries');
     }
-    // Usable content that awaits incorporation stays labelled as updating instead of presenting
-    // itself as a caught-up result.
-    statusLine.textContent =
-      snapshot.awaiting.length === 0 ? '' : 'Results are still being indexed.';
+    if (snapshot.selection.unavailable.length > 0) {
+      const unavailable = snapshot.selection.unavailable.length;
+      parts.push(
+        unavailable === 1
+          ? '1 selected entry changed; select it again to act on the presented entry.'
+          : `${unavailable} selected entries changed; select them again to act on the presented entries.`,
+      );
+    }
+    statusLine.textContent = parts.join(' ');
   }
 
   function renderOutcome(outcome: CardListOperationOutcome | null): void {
@@ -816,6 +911,11 @@ function fragmentLabel(kind: CardListFragmentKind): string {
     case 'tools':
       return 'tools';
   }
+}
+
+/** Identity of one rendered fragment slot inside its entry's row. */
+function fragmentSlotKey(key: string, kind: CardListFragmentKind): string {
+  return `${key}\u0000${kind}`;
 }
 
 /** What a definitive empty fragment presents. */

@@ -73,6 +73,7 @@ describe('list source recovery over Search', () => {
       execute: (request: Parameters<SearchClient['execute']>[0]) =>
         database.search.execute(request, null),
       counts: () => Promise.reject(new Error('The list source reads no private counts.')),
+      observe: (request) => database.search.observe(request, null),
     } satisfies SearchClient;
     source = catalogQuerySource(search);
   });
