@@ -35,6 +35,8 @@ import { verifyPreparedRecognition } from '../../scripts/recognition-manifests.j
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const revision = '0123456789abcdef0123456789abcdef01234567';
 const python = process.env['KEEPER_PYTHON'] ?? 'python3';
+const catalogSnapshot =
+  'src/recognition/python/artifacts/catalog/catalog-v2/snapshots/milo1--scryfall--mtg/metadata/version-27';
 
 function digest(content: string | Uint8Array): string {
   return createHash('sha256').update(content).digest('hex');
@@ -171,13 +173,29 @@ async function createPreparedCheckout(workspace: string): Promise<PreparedChecko
   }
 
   // The prepared catalog snapshot version 27 the engines search offline.
-  const embeddings = Buffer.from('pinned catalog embeddings');
+  // A gzip-compressed, little-endian float16 matrix, as written by the retained downloader.
+  const embeddings = gzipSync(Buffer.alloc(4 * 128 * 2));
+  const catalogEmbedding = {
+    model: embedding,
+    dimensions: 128,
+    dtype: 'float16',
+    byte_order: 'little',
+    layout: 'row-major',
+  };
+  const catalogDescriptor = {
+    game: 'magic-the-gathering',
+    source: 'scryfall',
+    profile: 'default',
+    description: 'Synthetic packaging catalog.',
+    result_identifier: 'scryfall_card',
+    recommended: true,
+  };
   const catalogRecords = [
     {
       id: 'printing-1',
       identifiers: { scryfall_oracle: 'oracle-1' },
       name: 'Alpha Bolt',
-      finishes: ['nonfoil', 'foil'],
+      finishes: ['foil', 'nonfoil'],
       metadata: { set: 'tst', collector_number: '1', lang: 'en' },
     },
     {
@@ -194,7 +212,13 @@ async function createPreparedCheckout(workspace: string): Promise<PreparedChecko
       finishes: ['foil'],
       metadata: { set: 'tst', collector_number: '3', lang: 'en' },
     },
-    { id: 'printing-4', identifiers: { scryfall_oracle: 'oracle-4' }, name: 'Delta Mox' },
+    {
+      id: 'printing-4',
+      identifiers: { scryfall_oracle: 'oracle-4' },
+      name: 'Delta Mox',
+      finishes: [],
+      metadata: null,
+    },
   ];
   const records = gzipSync(
     Buffer.from(`${catalogRecords.map((record) => JSON.stringify(record)).join('\n')}\n`),
@@ -216,21 +240,30 @@ async function createPreparedCheckout(workspace: string): Promise<PreparedChecko
       ),
     ),
   );
-  const snapshot =
-    'src/recognition/python/artifacts/catalog/catalog-v2/snapshots/milo1--scryfall--mtg/metadata/version-27';
-  await write(root, `${snapshot}/embeddings.f16.gz`, embeddings);
-  await write(root, `${snapshot}/records.jsonl.gz`, records);
+  const catalogAssets = {
+    embeddings: {
+      filename: 'embeddings.f16.gz',
+      sha256: digest(embeddings),
+      size: embeddings.byteLength,
+    },
+    records: { filename: 'records.jsonl.gz', sha256: digest(records), size: records.byteLength },
+  };
+  await write(root, `${catalogSnapshot}/embeddings.f16.gz`, embeddings);
+  await write(root, `${catalogSnapshot}/records.jsonl.gz`, records);
   await write(
     root,
-    `${snapshot}/snapshot.json`,
+    `${catalogSnapshot}/snapshot.json`,
     `${JSON.stringify(
       {
+        schema: 2,
+        catalog_key: artifactManifest.catalog.key,
+        family: 'milo1',
+        version: 27,
+        metadata_loaded: true,
         rows: 4,
-        embedding: { model: embedding, dimensions: 128 },
-        assets: {
-          embeddings: { filename: 'embeddings.f16.gz', sha256: digest(embeddings) },
-          records: { filename: 'records.jsonl.gz', sha256: digest(records) },
-        },
+        embedding: catalogEmbedding,
+        descriptor: catalogDescriptor,
+        assets: catalogAssets,
       },
       null,
       2,
@@ -238,7 +271,43 @@ async function createPreparedCheckout(workspace: string): Promise<PreparedChecko
   );
   // The committed catalog pin and the feed the preparation caches for offline loading.
   const feed = Buffer.from(
-    `${JSON.stringify({ checked_at: '2026-09-08T12:11:38Z', families: { milo1: {} } }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        checked_at: '2026-09-08T12:11:38Z',
+        families: {
+          milo1: {
+            embedding: catalogEmbedding,
+            catalogs: {
+              'scryfall/mtg': {
+                public_name: 'scryfall-mtg',
+                descriptor: catalogDescriptor,
+                current_version: 27,
+                rows: 4,
+                source_updated_at: '2026-09-08T12:11:38Z',
+                base: {
+                  version: 27,
+                  rows: 4,
+                  source_updated_at: '2026-09-08T12:11:38Z',
+                  assets: Object.fromEntries(
+                    Object.entries(catalogAssets).map(([kind, asset]) => [
+                      kind,
+                      {
+                        url: `https://example.test/${asset.filename}`,
+                        size: asset.size,
+                        sha256: asset.sha256,
+                      },
+                    ]),
+                  ),
+                },
+                updates: {},
+              },
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
   );
   await write(root, 'src/recognition/python/catalog-feed.json', feed);
   await write(root, 'src/recognition/python/artifacts/catalog/catalog-v2/feed.json', feed);
@@ -670,6 +739,55 @@ describe('packaging the retained recognition assets', () => {
         revision,
       }),
     ).rejects.toThrow(/catalog-feed\.json/);
+  });
+
+  it.each([
+    { field: 'version', value: 26, error: /pinned catalog key and version/ },
+    { field: 'version', value: undefined, error: /pinned catalog key and version/ },
+    { field: 'schema', value: 999, error: /supported schema/ },
+    { field: 'schema', value: undefined, error: /supported schema/ },
+    { field: 'catalog_key', value: 'milo1/other/mtg', error: /pinned catalog key and version/ },
+    { field: 'family', value: 'other', error: /pinned feed/ },
+    { field: 'metadata_loaded', value: false, error: /required metadata/ },
+    { field: 'embedding.dtype', value: 'float32', error: /pinned feed/ },
+    { field: 'embedding.dimensions', value: 64, error: /pinned feed/ },
+    { field: 'descriptor', value: undefined, error: /pinned feed/ },
+    { field: 'descriptor.source', value: 'other', error: /pinned feed/ },
+    { field: 'assets.embeddings.size', value: 1, error: /embeddings.*integrity check/ },
+    { field: 'assets.records.size', value: 1, error: /records.*integrity check/ },
+    { field: 'assets.embeddings.size', value: undefined, error: /embeddings size/ },
+    { field: 'assets.records.size', value: undefined, error: /records size/ },
+    { field: 'assets.extra', value: {}, error: /exactly embeddings and records/ },
+    { field: 'assets.records.filename', value: '../records.jsonl.gz', error: /local asset/ },
+  ])('refuses catalog receipt $field=$value before packaging', async ({ field, value, error }) => {
+    const tampered = await cloneCheckout(prepared, workspace, `receipt-${field}-${String(value)}`);
+    const file = path.join(tampered, catalogSnapshot, 'snapshot.json');
+    const receipt = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    const keys = field.split('.');
+    const key = keys.pop()!;
+    let parent = receipt;
+    for (const part of keys) parent = parent[part] as Record<string, unknown>;
+    parent[key] = value;
+    await writeFile(file, JSON.stringify(receipt));
+    const outDir = path.join(tampered, 'release');
+    await expect(packageRecognition({ outDir, repoRoot: tampered, revision })).rejects.toThrow(
+      error,
+    );
+    expect(existsSync(outDir)).toBe(false);
+  });
+
+  it('refuses an embedding matrix with valid integrity fields but the wrong decoded shape', async () => {
+    const tampered = await cloneCheckout(prepared, workspace, 'wrong-matrix-shape');
+    const file = path.join(tampered, catalogSnapshot, 'snapshot.json');
+    const receipt = JSON.parse(await readFile(file, 'utf8')) as {
+      assets: { embeddings: { size: number; sha256: string } };
+    };
+    const content = gzipSync(Buffer.alloc(2));
+    receipt.assets.embeddings.size = content.byteLength;
+    receipt.assets.embeddings.sha256 = digest(content);
+    await writeFile(path.join(tampered, catalogSnapshot, 'embeddings.f16.gz'), content);
+    await writeFile(file, JSON.stringify(receipt));
+    await expect(verifyPreparedRecognition(tampered)).rejects.toThrow(/matrix shape/);
   });
 
   it('refuses a browser manifest without the pinned upstream identity', async () => {

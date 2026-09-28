@@ -262,6 +262,17 @@ async function verifyCatalog(
     );
   }
   const descriptor = readRecord(await readJsonFile(snapshot), 'catalog snapshot descriptor');
+  // CatalogV2Downloader._load_snapshot requires schema 2; the directory name alone does not
+  // establish the identity returned by the retained loader.
+  if (descriptor['schema'] !== 2) {
+    throw new Error('The catalog snapshot does not use the supported schema 2.');
+  }
+  if (descriptor['version'] !== pinned.version || descriptor['catalog_key'] !== pinned.key) {
+    throw new Error('The catalog snapshot does not carry the pinned catalog key and version.');
+  }
+  if (descriptor['metadata_loaded'] !== true) {
+    throw new Error('The catalog snapshot does not contain the required metadata.');
+  }
   if (readPositiveInteger(descriptor, 'rows', 'catalog snapshot rows') !== pinned.rows) {
     throw new Error(`The prepared catalog does not carry the pinned ${pinned.rows} rows.`);
   }
@@ -270,13 +281,46 @@ async function verifyCatalog(
     throw new Error('The prepared catalog does not use the pinned embedding model.');
   }
   const dimensions = readPositiveInteger(embedding, 'dimensions', 'catalog embedding dimensions');
+  const feed = readRecord(
+    await readJsonFile(path.join(pythonRoot, 'catalog-feed.json')),
+    'catalog feed',
+  );
+  const families = readRecord(feed['families'], 'catalog feed families');
+  const [familyName, ...localKey] = pinned.key.split('/');
+  const family = readRecord(families[familyName ?? ''], 'catalog feed family');
+  const catalogs = readRecord(family['catalogs'], 'catalog feed catalogs');
+  const selection = readRecord(catalogs[localKey.join('/')], 'catalog feed selection');
+  if (
+    descriptor['family'] !== familyName ||
+    canonical(embedding) !== canonical(family['embedding']) ||
+    canonical(descriptor['descriptor']) !== canonical(selection['descriptor'])
+  ) {
+    throw new Error(
+      'The catalog snapshot identity, embedding or descriptor differs from the pinned feed.',
+    );
+  }
   const assets = readRecord(descriptor['assets'], 'catalog snapshot assets');
+  if (canonical(Object.keys(assets).sort()) !== canonical(['embeddings', 'records'])) {
+    throw new Error('The catalog snapshot must contain exactly embeddings and records assets.');
+  }
   const verified: Record<string, { file: string; sha256: string }> = {};
   for (const kind of ['embeddings', 'records'] as const) {
     const entry = readRecord(assets[kind], `catalog snapshot ${kind}`);
     const filename = readString(entry, 'filename', `catalog snapshot ${kind} filename`);
+    if (path.posix.basename(filename) !== filename) {
+      throw new Error(`The catalog snapshot ${kind} filename must name a local asset.`);
+    }
     const digest = readDigest(entry, 'sha256', `catalog snapshot ${kind} sha256`);
-    await expectDigest(path.join(path.dirname(snapshot), filename), digest);
+    const bytes = readPositiveInteger(entry, 'size', `catalog snapshot ${kind} size`);
+    const content = await readFile(path.join(path.dirname(snapshot), filename));
+    if (content.byteLength !== bytes || sha256(content) !== digest) {
+      throw new Error(`The catalog snapshot ${kind} fails its size or SHA-256 integrity check.`);
+    }
+    // The same compressed matrix is delivered to both engines. Its decoded shape must match
+    // the receipt, as required by the retained Python loader and browser worker.
+    if (kind === 'embeddings' && gunzipSync(content).byteLength !== pinned.rows * dimensions * 2) {
+      throw new Error('The catalog snapshot embeddings do not match the declared matrix shape.');
+    }
     verified[kind] = { file: filename, sha256: digest };
   }
   const embeddings = verified['embeddings'];
