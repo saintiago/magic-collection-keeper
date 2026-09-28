@@ -958,6 +958,34 @@ test('cancels outstanding work when the page closes and drops its late results',
   await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(0);
 });
 
+test('releases the presentation with its page instead of leaving it observing input', async ({
+  page,
+}) => {
+  await openLists(page);
+  // The window input and document focus observers the view installs are invisible to the page.
+  // The DevTools protocol counts them, so a closed page that kept its presentation is observable.
+  const client = await page.context().newCDPSession(page);
+  const observerCount = async (): Promise<number> => {
+    const counted = await client.send('Runtime.evaluate', {
+      expression: [
+        "['wheel', 'touchstart', 'pointerdown', 'keydown']",
+        '.reduce((total, type) => total + (getEventListeners(window)[type]?.length ?? 0), 0)',
+        "+ (getEventListeners(document)['focusin']?.length ?? 0)",
+      ].join(''),
+      includeCommandLineAPI: true,
+      returnByValue: true,
+    });
+    return counted.result.value as number;
+  };
+  const before = await observerCount();
+  await install(page, 'a', { pageSize: 2 });
+  await settlePage(page, (await onlyRequest(page, 'a')).id, [copy('1', 'printing-1')]);
+  expect(await observerCount()).toBeGreaterThan(before);
+
+  await close(page, 'a');
+  await expect.poll(observerCount).toBe(before);
+});
+
 /** One fragment answer per key: the controlled reader resolved them as definitively empty. */
 function absent(keys: readonly string[]): readonly UiFragmentResult<unknown>[] {
   return keys.map((key) => ({ key, status: 'absent', values: null }));

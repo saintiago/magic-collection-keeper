@@ -257,6 +257,14 @@ export function createCardListView<Context>(
     );
   }
   render(list.snapshot());
+  // The view is mounted for the lifetime of the page that supplies the signal: closing that page
+  // releases the presentation together with the list behind it, so no rendered DOM, focus
+  // listener or window input observer outlives the view (docs/ui/card-views.md#interface).
+  if (options.signal?.aborted === true) {
+    dispose();
+  } else {
+    options.signal?.addEventListener('abort', () => dispose(), { once: true });
+  }
 
   return {
     snapshot: () => list.snapshot(),
