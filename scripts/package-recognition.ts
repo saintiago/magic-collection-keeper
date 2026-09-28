@@ -21,6 +21,7 @@ import {
   readPackageVersion,
   readRevision,
   readWorkingTree,
+  recognitionArtifactLayout,
   repoRoot,
   type ArtifactFile,
 } from './packaging-support.js';
@@ -39,12 +40,7 @@ import {
 export const recognitionBaseImage =
   'public.ecr.aws/lambda/python:3.12@sha256:2710e8cf77565a70da6f65717645e417074bc15c9e3c2a11f236d5a5398183ba';
 
-/** Paths of the recognition artifact inside the packaging output directory. */
-export const recognitionArtifactLayout = {
-  directory: 'recognition',
-  dockerfile: 'recognition/Dockerfile',
-  manifest: 'recognition/manifest.json',
-} as const;
+export { recognitionArtifactLayout };
 
 /** The prepared assets the image carries inside its `artifacts/` directory. */
 const imageArtifactFiles = [

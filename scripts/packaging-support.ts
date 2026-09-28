@@ -1,8 +1,9 @@
 /**
  * Helpers shared by the packaging commands (scripts/package-artifacts.ts,
  * scripts/package-recognition.ts). They belong to no single command: they describe the checkout a
- * release is built from and the bytes of one artifact, and they hold no command-line behavior of
- * their own, so importing them never runs a packaging step.
+ * release is built from, the paths of one packaging output directory and the bytes of one
+ * artifact. They hold no command-line behavior of their own, so importing them never runs a
+ * packaging step.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -33,6 +34,26 @@ export interface ArtifactFile {
   readonly bytes: number;
   readonly sha256: string;
 }
+
+/** Paths of the packaging output directory one release publishes (scripts/package-artifacts.ts). */
+export const artifactLayout = {
+  backendArchive: 'backend/api.zip',
+  backendEntry: 'backend/index.mjs',
+  browserDirectory: 'browser',
+  browserEntry: 'browser/app.js',
+  browserPage: 'browser/index.html',
+  browserSettings: 'browser/config.json',
+  catalogEntry: 'catalog/job.mjs',
+  catalogDockerfile: 'catalog/Dockerfile',
+  manifest: 'manifest.json',
+} as const;
+
+/** Paths of the packaged recognition image context beside that directory. */
+export const recognitionArtifactLayout = {
+  directory: 'recognition',
+  dockerfile: 'recognition/Dockerfile',
+  manifest: 'recognition/manifest.json',
+} as const;
 
 /** The checked-out revision; packaging without one produces artifacts nothing can restore. */
 export function readRevision(root: string = repoRoot): string {
