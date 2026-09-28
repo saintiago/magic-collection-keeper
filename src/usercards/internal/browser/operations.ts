@@ -511,9 +511,15 @@ export function createUserCardsOperations(
       return scope;
     },
     release(accountId) {
-      // Only an account whose scope this facade composed has anything to release; a later access
-      // composes a fresh scope, so the account stays usable after it signs in again.
-      accounts.get(readIdentityText(accountId))?.release();
+      const id = readIdentityText(accountId);
+      const scope = accounts.get(id);
+      if (scope !== undefined) {
+        scope.release();
+      } else {
+        // Sign-out can precede the first access after reload; persisted attempts still belong to
+        // the ended account even when this facade has not composed its scope.
+        releaseStoredAttempts(storage, id);
+      }
     },
   };
 
@@ -534,18 +540,23 @@ export function createUserCardsOperations(
       request: AttemptRequest<Kind, Record>,
       mode: 'begin' | 'reattach' | 'transient' | 'refused' = 'transient',
     ): Attempt<Kind, Record> {
-      const attempt = createAttempt(request, emit, () => {
-        // An established outcome is nothing to resume: the attempt leaves the account's scope so a
-        // later submission of the same input composes an operation of its own
-        // (docs/user-cards.md#import-state-and-identity).
-        outstanding.delete(attempt as unknown as Attempt<string, unknown>);
-        if (
-          attempts.get(attempt.operationId) === (attempt as unknown as Attempt<string, unknown>)
-        ) {
-          attempts.delete(attempt.operationId);
-          writeStoredAttempts();
-        }
-      });
+      const attempt = createAttempt(
+        request,
+        () => !released,
+        emit,
+        () => {
+          // An established outcome is nothing to resume: the attempt leaves the account's scope so a
+          // later submission of the same input composes an operation of its own
+          // (docs/user-cards.md#import-state-and-identity).
+          outstanding.delete(attempt as unknown as Attempt<string, unknown>);
+          if (
+            attempts.get(attempt.operationId) === (attempt as unknown as Attempt<string, unknown>)
+          ) {
+            attempts.delete(attempt.operationId);
+            writeStoredAttempts();
+          }
+        },
+      );
       if (mode === 'refused') {
         // An attempt this facade refuses before dispatch belongs to no scope state at all.
         return attempt;
@@ -631,9 +642,9 @@ export function createUserCardsOperations(
             SourceImportResult
           >;
         }
-        // The consumer carries the identity of an existing import, so re-reading that import needs
-        // no retained attempt; a lost response is re-read under the same identity again.
-        return tracked(sourceAttempt(input, id, signal), 'transient').handle;
+        // Reconciliation can stage new rows: retain its submitted input and the existing import
+        // identity before dispatch, just as for a new source import.
+        return tracked(sourceAttempt(input, id, signal), 'begin').handle;
       },
 
       stageCaptureObservation(input, signal) {
@@ -880,6 +891,9 @@ export function createUserCardsOperations(
       },
 
       release() {
+        if (released) {
+          return;
+        }
         released = true;
         // Every handle of this account is fenced, not only the retained ones: a transient change
         // still in flight belongs to this account as well and must not report into the next one.
@@ -1204,6 +1218,7 @@ type RecordedOutcome<Record> =
 /** Creates one tracked operation without dispatching it. */
 function createAttempt<Kind extends string, Record>(
   request: AttemptRequest<Kind, Record>,
+  scopeIsLive: () => boolean,
   emit: (change: UserCardsChange) => void,
   established: () => void,
 ): Attempt<Kind, Record> {
@@ -1282,38 +1297,47 @@ function createAttempt<Kind extends string, Record>(
   };
   return attempt;
 
-  /** Dispatches one call, under the attempt's identity and with the caller's signal. */
-  function dispatch(signal: AbortSignal | undefined): Promise<UserCardsOperationOutcome<Record>> {
-    if (disposed || outcome.state === 'committed' || outcome.state === 'rejected') {
-      // An ended scope disposes its attempts, an established outcome stays what this handle
-      // reports, and a resolved identity is nothing left to dispatch: none of them sends a request.
+  /** Every write and recorded read shares this scope fence and in-flight action slot. */
+  function runExclusive(
+    run: () => Promise<UserCardsOperationOutcome<Record>>,
+  ): Promise<UserCardsOperationOutcome<Record>> {
+    if (
+      !scopeIsLive() ||
+      disposed ||
+      outcome.state === 'committed' ||
+      outcome.state === 'rejected'
+    ) {
       return Promise.resolve(outcome);
     }
-    const run = request.run;
-    if (run === undefined) {
-      return Promise.resolve(outcome);
+    if (running !== null) {
+      return running;
     }
-    // One attempt dispatches at most one request at a time: a call made while the attempt is in
-    // flight observes that dispatch instead of racing it with a second one, so an authoritative
-    // result is never discarded by a later refusal (docs/user-cards.md#browser-operation-lifecycle).
-    const open = running;
-    if (open !== null) {
-      return open;
-    }
-    // The slot is filled before the dispatch can finish, so it is released only by the dispatch
-    // that owns it and a later call starts a dispatch of its own.
-    const slot: { promise: Promise<UserCardsOperationOutcome<Record>> | null } = { promise: null };
-    const started = perform(run, signal, slot);
-    slot.promise = started;
-    running = started;
-    return started;
+    // Claim the slot before invoking provider code, including synchronous failures or reentry.
+    const slot = Promise.withResolvers<UserCardsOperationOutcome<Record>>();
+    running = slot.promise;
+    void run().then(
+      (result) => {
+        running = null;
+        slot.resolve(result);
+      },
+      (cause: unknown) => {
+        running = null;
+        slot.reject(cause);
+      },
+    );
+    return slot.promise;
   }
 
-  /** Runs one dispatch to its outcome and releases the attempt for a later explicit retry. */
+  /** Dispatches one call, under the attempt's identity and with the caller's signal. */
+  function dispatch(signal: AbortSignal | undefined): Promise<UserCardsOperationOutcome<Record>> {
+    const run = request.run;
+    return run === undefined ? Promise.resolve(outcome) : runExclusive(() => perform(run, signal));
+  }
+
+  /** Runs one dispatch to its outcome. */
   async function perform(
     run: (signal: AbortSignal | undefined) => Promise<Record>,
     signal: AbortSignal | undefined,
-    slot: { promise: Promise<UserCardsOperationOutcome<Record>> | null },
   ): Promise<UserCardsOperationOutcome<Record>> {
     const current = (generation += 1);
     outcome = { state: 'pending' };
@@ -1330,9 +1354,6 @@ function createAttempt<Kind extends string, Record>(
     }
     if (!disposed && current === generation) {
       finishWaiting();
-    }
-    if (running === slot.promise) {
-      running = null;
     }
     return outcome;
   }
@@ -1392,20 +1413,19 @@ function createAttempt<Kind extends string, Record>(
   }
 
   /** Reads the operation's recorded outcome through its operation identity. */
-  async function readRecorded(
+  function readRecorded(
     signal: AbortSignal | undefined,
   ): Promise<UserCardsOperationOutcome<Record>> {
     const recorded = request.recorded;
-    if (recorded === undefined || disposed || outcome.state === 'committed') {
-      return outcome;
-    }
-    const open = running;
-    if (open !== null) {
-      // A dispatch of this attempt is still in flight: recovering observes what it establishes
-      // instead of racing it with a read whose answer could predate that dispatch
-      // (docs/user-cards.md#browser-operation-lifecycle).
-      return open;
-    }
+    return recorded === undefined
+      ? Promise.resolve(outcome)
+      : runExclusive(() => performRecorded(recorded, signal));
+  }
+
+  async function performRecorded(
+    recorded: (signal: AbortSignal | undefined) => Promise<RecordedOutcome<Record>>,
+    signal: AbortSignal | undefined,
+  ): Promise<UserCardsOperationOutcome<Record>> {
     const current = (generation += 1);
     outcome = { state: 'pending' };
     startWaiting();

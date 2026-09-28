@@ -842,7 +842,7 @@ describe('UserCards browser operations', () => {
     expect(await reopened.observe()).toMatchObject({ state: 'committed' });
     expect(requested).toEqual(['import-9']);
 
-    // An identity that is not retained composes no resumable state; the consumer already knows it.
+    // The acknowledged reconciliation has no unfinished attempt left to resume.
     expect(account.retained()).toEqual([]);
   });
 
