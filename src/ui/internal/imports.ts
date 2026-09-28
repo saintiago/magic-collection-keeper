@@ -1957,7 +1957,9 @@ function importPage(): UiPageDefinition {
         return created;
       }
 
-      /** Whether each presented entry's stored revision is known for a confirmation. */
+      /** Only records in the current read sequence establish pending availability.
+       * Retained selected revisions are action context, not evidence of continued existence.
+       */
       function pendingToolsReader(): CardListFragmentReader<readonly string[]> {
         return {
           read(request) {
@@ -1965,10 +1967,7 @@ function importPage(): UiPageDefinition {
               request.keys.map((key) => ({
                 key,
                 status: 'ready' as const,
-                values:
-                  pendingRecord(key) !== null || selectedRevisions.has(key)
-                    ? ['confirm-import']
-                    : [],
+                values: pendingRecord(key) !== null ? ['confirm-import'] : [],
               })),
             );
           },

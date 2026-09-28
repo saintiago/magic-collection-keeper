@@ -2562,3 +2562,43 @@ for (const reuseEditor of [false, true]) {
     });
   }
 }
+
+for (const takeover of ['none', 'focus', 'keyboard'] as const) {
+  test(`restores a specific editor after changed basics and delayed fragments (takeover: ${takeover})`, async ({
+    page,
+  }) => {
+    const errors = await openLists(page);
+    await install(page, 'a', { fragments: ['ownership'], editorFragment: true });
+    await settlePage(page, (await onlyRequest(page, 'a')).id, [copy('1', 'old')]);
+    await settleFragment(page, (await fragmentRequests(page)).at(-1)!.id, [
+      { key: 'copy:1', status: 'ready', values: { owned: 1, locations: 1, intended: null } },
+    ]);
+    const field = page.locator('#entry-editor');
+    await field.fill('unsaved draft');
+    await field.evaluate((node: HTMLInputElement) => node.setSelectionRange(2, 6, 'backward'));
+    await refresh(page, 'a');
+    await settlePage(page, (await lastRequest(page, 'a')).id, [copy('1', 'new')]);
+    await expect(field).toHaveCount(0);
+    if (takeover === 'focus') await page.locator('#list-a [data-ui-select]').focus();
+    if (takeover === 'keyboard') await page.keyboard.press('Tab');
+    const chosen = await page.evaluate(() => document.activeElement?.outerHTML);
+    await settleFragment(page, (await fragmentRequests(page)).at(-1)!.id, [
+      { key: 'copy:1', status: 'ready', values: { owned: 2, locations: 1, intended: null } },
+    ]);
+    if (takeover === 'none') {
+      await expect(field).toBeFocused();
+      await expect(field).toHaveValue('unsaved draft');
+      expect(
+        await field.evaluate((node: HTMLInputElement) => [
+          node.selectionStart,
+          node.selectionEnd,
+          node.selectionDirection,
+        ]),
+      ).toEqual([2, 6, 'backward']);
+    } else {
+      await expect(field).not.toBeFocused();
+      expect(await page.evaluate(() => document.activeElement?.outerHTML)).toBe(chosen);
+    }
+    expect(errors).toEqual([]);
+  });
+}

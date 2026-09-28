@@ -11,6 +11,7 @@ import { createSearchProgress } from '../../../src/search/browser.js';
 
 import { describe, expect, it } from 'vitest';
 
+import type { ImportEntry } from '../../../src/usercards/index.js';
 import type { SearchClient } from '../../../src/application/index.js';
 import type { Catalog, CatalogReference } from '../../../src/catalog/index.js';
 import { SearchError, normalizeSearchRequest, searchEntryKey } from '../../../src/search/index.js';
@@ -504,6 +505,7 @@ it('checks copy existence in provider-sized batches before offering tools', asyn
 
 describe('pending-import and tag-association bindings', () => {
   it('translates one import’s pending entries and keeps their provider records', async () => {
+    let entryIds = ['entry-1', 'entry-2'];
     const requests: { readonly sessionId: string; readonly pageSize?: number }[] = [];
     const binding = pendingEntriesBinding({
       entries: {
@@ -522,34 +524,36 @@ describe('pending-import and tag-association bindings', () => {
               sourceReference: null,
               revision: 3,
             },
-            entries: [
-              {
-                entryId: 'entry-1',
-                sessionId: input.sessionId,
-                position: 0,
-                state: 'pending',
-                printingId: 'printing-1',
-                finish: 'nonfoil',
-                condition: 'NM',
-                quantity: 2,
-                candidates: [],
-                sourceLine: null,
-                revision: 4,
-              },
-              {
-                entryId: 'entry-2',
-                sessionId: input.sessionId,
-                position: 1,
-                state: 'pending',
-                printingId: null,
-                finish: null,
-                condition: null,
-                quantity: 1,
-                candidates: [],
-                sourceLine: null,
-                revision: 1,
-              },
-            ],
+            entries: (
+              [
+                {
+                  entryId: 'entry-1',
+                  sessionId: input.sessionId,
+                  position: 0,
+                  state: 'pending',
+                  printingId: 'printing-1',
+                  finish: 'nonfoil',
+                  condition: 'NM',
+                  quantity: 2,
+                  candidates: [],
+                  sourceLine: null,
+                  revision: 4,
+                },
+                {
+                  entryId: 'entry-2',
+                  sessionId: input.sessionId,
+                  position: 1,
+                  state: 'pending',
+                  printingId: null,
+                  finish: null,
+                  condition: null,
+                  quantity: 1,
+                  candidates: [],
+                  sourceLine: null,
+                  revision: 1,
+                },
+              ] satisfies readonly ImportEntry[]
+            ).filter((entry) => entryIds.includes(entry.entryId)),
             continuation: 'next',
           });
         },
@@ -618,6 +622,18 @@ describe('pending-import and tag-association bindings', () => {
     expect(binding.record('pending:entry-2')?.printing).toBeNull();
     expect(binding.keys()).toEqual(['pending:entry-1', 'pending:entry-2']);
     expect(binding.session()).toMatchObject({ sessionId: 'manual', revision: 3 });
+    entryIds = ['entry-2'];
+    const request = {
+      context: 'manual',
+      pageSize: 50,
+      signal: new AbortController().signal,
+      required: { positions: [] },
+    };
+    await binding.source.load({ ...request, continuation: 'next' });
+    expect(binding.record('pending:entry-1')).not.toBeNull();
+    await binding.source.load({ ...request, continuation: null });
+    expect(binding.record('pending:entry-1')).toBeNull();
+    expect(binding.keys()).toEqual(['pending:entry-2']);
     expect(
       binding.source.affects?.(
         { scope: 'imports', records: [], imports: ['other'], position: null },

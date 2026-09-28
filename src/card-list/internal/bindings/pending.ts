@@ -52,7 +52,7 @@ export interface CardListPendingRecord {
 export interface CardListPendingEntries {
   /** The list source of one import's pending entries; the list context is the import identity. */
   readonly source: CardListSource<string>;
-  /** The record of one presented entry key, or null when no read of this visit produced it. */
+  /** The record of one entry in the current read sequence, or null when it is not held. */
   record(key: string): CardListPendingRecord | null;
   /** Key of every pending entry this binding still holds a record for. */
   keys(): readonly string[];
@@ -108,6 +108,9 @@ export function pendingEntriesBinding(options: {
         request.signal.throwIfAborted();
         const resolved = await resolvePendingRecords(catalog, page.entries, request.signal);
         request.signal.throwIfAborted();
+        // A replacement establishes a new sequence. Historical records and selected revisions
+        // cannot establish that an omitted entry still exists in the pending result.
+        if (request.continuation === null) records.clear();
         for (const record of resolved) {
           const key = pendingEntryKey(record.entry);
           records.delete(key);

@@ -213,6 +213,13 @@ export function createCardListView<Context>(
   let renderedFragments = new Map<string, CardListFragmentState>();
   let invocation: AbortController | null = null;
   let disposed = false;
+  let pendingEditorFocus: (() => boolean) | null = null;
+  const editorInteraction = new AbortController();
+  const cancelEditorFocus = (): void => {
+    pendingEditorFocus = null;
+  };
+  observeUiInput(document.defaultView, cancelEditorFocus, editorInteraction.signal);
+  document.addEventListener('focusin', cancelEditorFocus, { signal: editorInteraction.signal });
 
   section.addEventListener('click', onClick);
   section.addEventListener('change', onChange);
@@ -329,7 +336,7 @@ export function createCardListView<Context>(
     if (disposed) {
       return;
     }
-    const restoreFocus = preserveEditorFocus();
+    pendingEditorFocus = preserveEditorFocus() ?? pendingEditorFocus;
     const structure = structureOf(snapshot);
     const generationChanged = snapshot.generation !== renderedGeneration;
     renderedGeneration = snapshot.generation;
@@ -365,7 +372,7 @@ export function createCardListView<Context>(
     renderSelection(snapshot);
     renderTools(snapshot);
     renderStatus(snapshot);
-    restoreFocus();
+    if (pendingEditorFocus?.()) pendingEditorFocus = null;
   }
 
   /** Identity of the rendered window and its grouping; entry content is not part of it. */
@@ -710,9 +717,9 @@ export function createCardListView<Context>(
   }
 
   /** Preserve the actual editor field after all replacement fragments have mounted. */
-  function preserveEditorFocus(): () => void {
+  function preserveEditorFocus(): (() => boolean) | null {
     const active = document.activeElement;
-    if (!(active instanceof HTMLElement) || !entriesHost.contains(active)) return () => {};
+    if (!(active instanceof HTMLElement) || !entriesHost.contains(active)) return null;
     const focus = readEntryFocus();
     const row = active.closest<HTMLElement>('[data-ui-entry]');
     const path: number[] = [];
@@ -722,13 +729,15 @@ export function createCardListView<Context>(
       child = child.parentElement;
     }
     const key = row?.dataset.uiEntry;
-    const field = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+    const textField = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+    const field = textField || active instanceof HTMLSelectElement;
     const value = field ? active.value : null;
-    const start = field ? active.selectionStart : null;
-    const end = field ? active.selectionEnd : null;
-    const direction = field ? active.selectionDirection : null;
+    const start = textField ? active.selectionStart : null;
+    const end = textField ? active.selectionEnd : null;
+    const direction = textField ? active.selectionDirection : null;
     return () => {
-      if (document.activeElement === active) return;
+      if (document.activeElement === active) return true;
+      if (key !== undefined && !rows.has(key)) return true;
       let replacement: Element | null = active.id ? document.getElementById(active.id) : null;
       if (replacement === null && active.id.length === 0 && key !== undefined) {
         replacement = rows.get(key)?.row ?? null;
@@ -738,16 +747,22 @@ export function createCardListView<Context>(
       if (replacement instanceof HTMLElement && entriesHost.contains(replacement)) {
         if (
           value !== null &&
-          (replacement instanceof HTMLInputElement || replacement instanceof HTMLTextAreaElement)
+          (replacement instanceof HTMLInputElement ||
+            replacement instanceof HTMLTextAreaElement ||
+            replacement instanceof HTMLSelectElement)
         ) {
           replacement.value = value;
-          if (start !== null && end !== null)
+          if (start !== null && end !== null && !(replacement instanceof HTMLSelectElement))
             replacement.setSelectionRange(start, end, direction ?? undefined);
         }
         replacement.focus({ preventScroll: true });
-      } else {
-        restoreEntryFocus(focus);
+        return true;
       }
+      // Basic-information changes may temporarily remove the editor's fragment. Keep the
+      // precise field, draft and selection until it mounts, unless input or focus takes over.
+      if (focus === null || focus.control === 'element') return false;
+      restoreEntryFocus(focus);
+      return true;
     };
   }
 
@@ -898,6 +913,8 @@ export function createCardListView<Context>(
     invocation = null;
     unsubscribe();
     interaction.abort();
+    editorInteraction.abort();
+    pendingEditorFocus = null;
     section.removeEventListener('click', onClick);
     section.removeEventListener('change', onChange);
     container.removeEventListener('scroll', reportPosition);

@@ -1096,6 +1096,99 @@ describe('outcomes the contract keeps distinct', () => {
 });
 
 describe('review regressions', () => {
+  it('requeues a retained ready refresh when another key in its batch is invalidated', async () => {
+    const controlled = controlledSource();
+    const reads: {
+      keys: readonly string[];
+      resolve: (value: readonly unknown[]) => void;
+      signal: AbortSignal;
+    }[] = [];
+    const list = createCardList(
+      options(controlled.source, {
+        fragments: {
+          ownership: {
+            read: (request) =>
+              new Promise((resolve) =>
+                reads.push({
+                  keys: request.keys,
+                  resolve: resolve as never,
+                  signal: request.signal,
+                }),
+              ),
+          },
+        },
+      }),
+    );
+    const results = (owned: number) =>
+      ['card:1', 'card:2'].map((key) => ({
+        key,
+        status: 'ready',
+        values: { owned, locations: 1, intended: null },
+      }));
+    controlled.settle(1, { entries: [card('1'), card('2')] });
+    await settle();
+    reads[0]!.resolve(results(1));
+    await settle();
+    list.refresh();
+    controlled.settle(2, { entries: [card('1'), card('2')] });
+    await settle();
+    list.reloadFragment('card:2', 'ownership');
+    expect(reads[1]!.signal.aborted).toBe(true);
+    expect(new Set(reads[2]!.keys)).toEqual(new Set(['card:1', 'card:2']));
+    reads[2]!.resolve(results(2));
+    await settle();
+    reads[1]!.resolve(results(1));
+    await settle();
+    for (const entry of list.snapshot().entries) {
+      expect(entry.fragments.get('ownership')).toMatchObject({ values: { owned: 2 } });
+    }
+    list.dispose();
+  });
+
+  it.each(['images', 'ownership', 'tags', 'tools'] as const)(
+    'keeps an outstanding %s refresh when another page arrives',
+    async (kind) => {
+      const controlled = controlledSource();
+      const reads: { resolve: (value: readonly unknown[]) => void; signal: AbortSignal }[] = [];
+      const list = createCardList(
+        options(controlled.source, {
+          pageSize: 1,
+          fragments: {
+            [kind]: {
+              read: (request: { signal: AbortSignal }) =>
+                new Promise((resolve) =>
+                  reads.push({ resolve: resolve as never, signal: request.signal }),
+                ),
+            },
+          },
+        }),
+      );
+      const values = (version: number) =>
+        ({
+          images: [{ src: `image-${version}`, alt: 'Card' }],
+          ownership: { owned: version, locations: 1, intended: version },
+          tags: [{ tagId: 'tag', name: `Tag ${version}` }],
+          tools: [`tool-${version}`],
+        })[kind];
+      controlled.settle(1, { entries: [card('1')], continuation: 'next' });
+      await settle();
+      reads[0]!.resolve([{ key: 'card:1', status: 'ready', values: values(1) }]);
+      await settle();
+      list.refresh();
+      controlled.settle(2, { entries: [card('1')], continuation: 'next' });
+      await settle();
+      expect(list.snapshot().entries[0]?.fragments.get(kind)).toMatchObject({ values: values(1) });
+      list.demand({ entries: 2 });
+      controlled.settle(3, { entries: [card('2')] });
+      await settle();
+      expect(reads[1]!.signal.aborted).toBe(false);
+      reads[1]!.resolve([{ key: 'card:1', status: 'ready', values: values(2) }]);
+      await settle();
+      expect(list.snapshot().entries[0]?.fragments.get(kind)).toMatchObject({ values: values(2) });
+      list.dispose();
+    },
+  );
+
   it('keeps every outstanding identity across notifications and retention', async () => {
     const controlled = controlledSource();
     const list = createCardList(options(controlled.source));

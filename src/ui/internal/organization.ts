@@ -987,14 +987,11 @@ function tagViewPage(): UiPageDefinition {
                       `${access.constraints.quantity.association} before adding.`,
                   });
                   const outcome = await base.tool.invoke(request);
-                  if (outcome.committed > 0 || outcome.status === 'unknown') {
-                    // A committed write reacquires the association list through its own change
-                    // notification; an uncertain one is read again explicitly, so a partial
-                    // addition is visible instead of presented as an unchanged result
-                    // (docs/user-interface.md#browsing-and-organization).
-                    if (outcome.committed === 0) {
-                      associations?.refresh();
-                    }
+                  if (outcome.unknown > 0) {
+                    // Earlier committed notifications cannot establish a later uncertain write.
+                    // Reconcile after every unknown aggregate outcome; known commits already
+                    // reacquire the list through the binding's change notifications.
+                    associations?.refresh();
                   }
                   return outcome;
                 },

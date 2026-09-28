@@ -2830,3 +2830,57 @@ test('keeps review input typed while a source import lands in another session', 
   await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('5');
   expect(errors).toEqual([]);
 });
+
+for (const reopen of [false, true]) {
+  test(`keeps a disappeared pending selection unavailable (reopen: ${reopen})`, async ({
+    page,
+  }) => {
+    const errors = await openPendingReview(page, [entry()]);
+    await page.locator('#import-pending [data-ui-select]').check();
+    const confirm = page.locator('#import-pending [data-ui-tool="confirm-import"]');
+    await expect(confirm).toBeEnabled();
+    if (reopen) {
+      await control(page, 'navigate', { page: 'home' });
+      await control(page, 'back');
+    } else {
+      await page.click('#import-refresh');
+    }
+    const sessions = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+    await settle(page, 'settleSessions', sessions.id, [session()]);
+    const replacement = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+    await settle(page, 'settleEntries', replacement.id, {
+      session: session(),
+      entries: [entry({ entryId: 'entry-2' })],
+    });
+    await expect(page.locator('#import-pending [data-ui-entry="pending:entry-2"]')).toBeVisible();
+    await expect(confirm).toBeDisabled();
+    await expect(page.locator('#import-pending [data-ui-selection-count]')).toHaveText(
+      '1 selected',
+    );
+    await expect(page.locator('#import-pending [data-ui-status]')).toContainText(
+      '1 selected entry changed',
+    );
+    expect(await control<readonly unknown[]>(page, 'confirm')).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+}
+
+test('preserves the focused review choice and draft through a printing correction', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.click('#import-refresh');
+  const sessions = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', sessions.id, [session()]);
+  const replacement = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  const condition = page.locator('#import-review-condition-entry-1');
+  await condition.selectOption('LP');
+  await condition.focus();
+  await settle(page, 'settleEntries', replacement.id, {
+    session: session(),
+    entries: [entry({ printingId: m10.printingId, revision: 4 })],
+  });
+  await expect(condition).toBeFocused();
+  await expect(condition).toHaveValue('LP');
+  expect(errors).toEqual([]);
+});

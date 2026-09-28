@@ -1460,7 +1460,12 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
 
   /** Whether the window still waits for one entry's fragment of one kind. */
   function fragmentReadWanted(kind: CardListFragmentKind, key: string): boolean {
-    return fragmentKeyActive(key, kind) && fragmentState(key, kind)?.status === 'loading';
+    // Ready values may remain visible during a refresh. Required work lives in the pending
+    // queue and read tokens, independently of that presentation state.
+    return (
+      fragmentKeyActive(key, kind) &&
+      (fragmentToken(kind, key) !== 0 || fragmentQueues.get(kind)?.pending.has(key) === true)
+    );
   }
 
   /**
@@ -1477,8 +1482,9 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       queue.active = null;
       active.controller.abort();
       for (const key of active.keys) {
+        const wanted = fragmentReadWanted(kind, key);
         endFragmentRead(kind, key);
-        if (fragmentReadWanted(kind, key)) {
+        if (wanted) {
           queue.pending.add(key);
         }
       }
