@@ -12,6 +12,8 @@
  * component contracts.
  */
 
+import { idleProgress } from './card-list-progress.js';
+
 import {
   ApplicationError,
   inspectCanvasFrame,
@@ -23,6 +25,7 @@ import {
   createUserCardsOperations,
   type UserCardsBrowserClient,
 } from '../../src/usercards/browser.js';
+import { createCardListBrowser } from '../../src/card-list/index.js';
 // A type-only import of the Catalog public entry keeps the provider barrel, including its Node-only
 // synchronization job, out of the browser bundle (docs/application.md#interface).
 import type {
@@ -339,6 +342,9 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
     counts() {
       return Promise.reject(new Error('The capture journeys read no private counts.'));
     },
+    observe() {
+      return Promise.reject(new Error('The capture journeys observe no progress.'));
+    },
   };
 
   const scriptedUserCards: UserCardsBrowserClient = {
@@ -398,6 +404,7 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
     catalog,
     search,
     userCards,
+    cardList: createCardListBrowser({ progress: idleProgress, search, catalog, userCards }),
     createRecognition: () => {
       const recognition = createRecognition<HTMLCanvasElement>({
         createEnginePipeline: () => scriptedPipeline(),

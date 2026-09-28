@@ -12,23 +12,55 @@
  * restoration, as the page composing the list does.
  */
 
+import type {
+  UiOperationOutcome,
+  UiListAction as UiCardListTool,
+} from '../../src/ui/internal/actions.js';
+
 import {
   createCardList,
-  type UiCardList,
-  type UiCardListFragments,
-  type UiCardListState as UiCardListStateShape,
-  type UiCardListTool,
-  type UiFragmentKind,
-  type UiFragmentReader,
-  type UiFragmentResult,
-  type UiListEntry,
-  type UiListRead,
-  type UiListSource,
-  type UiOperationOutcome,
-} from '../../src/ui/index.js';
+  type CardListFragmentKind as UiFragmentKind,
+  type CardListFragmentReader as UiFragmentReader,
+  type CardListFragmentReaders as UiCardListFragments,
+  type CardListFragmentResult as UiFragmentResult,
+  type CardListRetained,
+  type CardListSource as UiListSource,
+  type CardListRead as UiListRead,
+  type CardListTarget as UiListTarget,
+  type CardListEntry as UiListEntry,
+  type CardListFocus as UiListFocus,
+  type CardListChange as UiListChange,
+} from '../../src/card-list/index.js';
+import { createCardListView, type UiCardList } from '../../src/ui/index.js';
 
-/** State one list retains for its page's history entry; the harness lists evaluate text queries. */
-type UiCardListRetainedState = UiCardListStateShape<string | null | undefined>;
+/**
+ * State one visit restores, as a journey describes it: the shape a CardList retains when it
+ * captures its query, position, window, selection and logical position. Journeys describe the
+ * state directly, and the harness hands it to the list through the component's opaque handle.
+ */
+export interface UiCardListRetainedState<Context = string | null | undefined> {
+  readonly kind?: 'card-list-retained';
+  readonly accountId?: string;
+  readonly context: Context;
+  readonly window: number;
+  readonly position: CardListPositionShape | null;
+  readonly selection: readonly string[];
+  readonly selectedTargets: readonly {
+    readonly key: string;
+    readonly target: UiListTarget;
+  }[];
+  readonly scrollTop: number;
+  readonly focus: UiListFocus | null;
+}
+
+/** Source position of one retained window. */
+export interface CardListPositionShape {
+  readonly continuation: string | null;
+  readonly offset: number;
+}
+
+/** Account every harness list belongs to, so one journey's retained state restores into it. */
+const harnessAccount = 'contract-account';
 
 /** One list the journey installs. */
 export interface UiCardListInstall {
@@ -40,12 +72,23 @@ export interface UiCardListInstall {
   readonly restored?: UiCardListRetainedState | null;
   /** Renders each entry as a link the page owns, as a browsing page does. */
   readonly openEntry?: boolean;
+  /**
+   * Renders each entry through the consumer's own content, named by the counts the snapshot
+   * carries, so a journey observes that a refreshed entry reaches the consumer's renderer.
+   */
+  readonly customEntry?: boolean;
+  readonly editorFragment?: boolean;
+  readonly reuseEditor?: boolean;
   /** Query context the list evaluates. */
   readonly context?: string;
   /** Fragment kinds the list reads; the others are not presented. */
   readonly fragments?: readonly UiFragmentKind[];
   /** Tools the list presents, in order. */
   readonly tools?: readonly { readonly id: string; readonly label: string }[];
+  /** Gives the installed list a change source a journey can deliver notifications through. */
+  readonly changes?: boolean;
+  /** Gives the installed source a bounded observation capability, as Search supplies. */
+  readonly observations?: boolean;
 }
 
 /** One page request the controlled source recorded. */
@@ -55,6 +98,16 @@ export interface UiCardListPageRequest {
   readonly context: string | null | undefined;
   readonly pageSize: number;
   readonly continuation: string | null;
+  /** Positions the read required the source to have incorporated. */
+  readonly required: readonly string[];
+  readonly aborted: boolean;
+}
+
+/** One bounded observation the installed list asked its source for. */
+export interface UiCardListObservationRequest {
+  readonly id: number;
+  readonly list: string;
+  readonly positions: readonly string[];
   readonly aborted: boolean;
 }
 
@@ -83,6 +136,8 @@ export interface UiCardListToolRequest {
 export interface UiCardListState {
   readonly entries: readonly string[];
   readonly selection: readonly string[];
+  /** Selected keys whose presented entry no longer carries the identity the selection holds. */
+  readonly unavailableSelection: readonly string[];
   readonly hasMore: boolean;
   readonly loading: boolean;
   readonly error: string | null;
@@ -107,6 +162,8 @@ export interface UiCardListControl {
   /** Aborts the page signal the list was installed with, as closing its page does. */
   close(id: string): void;
   state(id: string): UiCardListState;
+  /** One list's current snapshot, as the presentation reads it. */
+  snapshot(id: string): unknown;
   /** State the installed list retains for its page's history entry. */
   capture(id: string): UiCardListRetainedState;
   /** Lifecycle of the restoration the installed list performs, as the page reads it. */
@@ -114,7 +171,11 @@ export interface UiCardListControl {
   pageRequests(): readonly UiCardListPageRequest[];
   settlePage(
     id: number,
-    page: { readonly entries: readonly UiListEntry[]; readonly continuation?: string | null },
+    page: {
+      readonly entries: readonly UiListEntry[];
+      readonly continuation?: string | null;
+      readonly current?: boolean;
+    },
   ): void;
   /** Answers a request with the report that its sequence was invalidated and must restart. */
   invalidatePage(id: number): void;
@@ -125,6 +186,11 @@ export interface UiCardListControl {
   toolRequests(): readonly UiCardListToolRequest[];
   settleTool(id: number, outcome: UiOperationOutcome): void;
   failTool(id: number, message: string): void;
+  /** Delivers one committed-change notification to an installed list. */
+  changed(id: string, change: UiListChange): void;
+  observationRequests(): readonly UiCardListObservationRequest[];
+  settleObservation(id: number, state: 'incorporated' | 'delayed' | 'failed'): void;
+  failObservation(id: number, message: string): void;
 }
 
 interface Pending<Value> {
@@ -138,6 +204,14 @@ interface PageRecord {
   readonly context: string | null | undefined;
   readonly pageSize: number;
   readonly continuation: string | null;
+  readonly required: readonly string[];
+  isAborted(): boolean;
+}
+
+interface ObservationRecord {
+  readonly id: number;
+  readonly list: string;
+  readonly positions: readonly string[];
   isAborted(): boolean;
 }
 
@@ -158,6 +232,9 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
   const pendingFragments = new Map<number, Pending<readonly UiFragmentResult<unknown>[]>>();
   const retiredFragments = new Set<number>();
   const pendingTools = new Map<number, Pending<UiOperationOutcome>>();
+  const changeSources = new Map<string, Set<(change: UiListChange) => void>>();
+  const observations: ObservationRecord[] = [];
+  const pendingObservations = new Map<number, Pending<'incorporated' | 'delayed' | 'failed'>>();
   let sequence = 0;
 
   return {
@@ -181,17 +258,59 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       }));
       const controller = new AbortController();
       controllers.set(id, controller);
-      const installed = createCardList<string | null | undefined>({
+      const listeners = options.changes === true ? new Set<(change: UiListChange) => void>() : null;
+      if (listeners !== null) {
+        changeSources.set(id, listeners);
+      }
+      let editor: HTMLInputElement | null = null;
+      const installed = createCardListView<string | null | undefined>({
         container,
-        source: pageSource(id),
+        // The journey installs the component's own default implementation behind the factory the
+        // pages receive (docs/architecture.md#composition-and-replacement).
+        create: createCardList,
+        source: pageSource(id, options.observations === true),
         context: options.context ?? 'result',
+        accountId: harnessAccount,
         pageSize: options.pageSize ?? 2,
-        ...(options.restored === undefined ? {} : { restored: options.restored }),
+        ...(options.restored === undefined
+          ? {}
+          : {
+              restored: options.restored === null ? null : retainedHandleOf(options.restored),
+            }),
         fragments: readers as unknown as UiCardListFragments,
         tools,
-        ...(options.openEntry === true
-          ? { presentation: { renderEntry: (entry: UiListEntry) => openLink(document, entry) } }
-          : {}),
+        ...(listeners === null
+          ? {}
+          : {
+              changes: {
+                subscribe(listener: (change: UiListChange) => void) {
+                  listeners.add(listener);
+                  return () => listeners.delete(listener);
+                },
+              },
+            }),
+        ...(options.editorFragment === true
+          ? {
+              presentation: {
+                renderFragment() {
+                  if (options.reuseEditor === true && editor !== null) return editor;
+                  const field = document.createElement('input');
+                  field.id = 'entry-editor';
+                  field.value = 'provider value';
+                  editor = field;
+                  return field;
+                },
+              },
+            }
+          : options.openEntry === true
+            ? { presentation: { renderEntry: (entry: UiListEntry) => openLink(document, entry) } }
+            : options.customEntry === true
+              ? {
+                  presentation: {
+                    renderEntry: (entry: UiListEntry) => customEntry(document, entry),
+                  },
+                }
+              : {}),
         signal: controller.signal,
       });
       lists.set(id, installed);
@@ -245,13 +364,24 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       return {
         entries: installed.entries.map((entry) => entry.key),
         selection: [...installed.selection],
+        unavailableSelection: [...installed.unavailableSelection],
         hasMore: installed.hasMore,
         loading: installed.loading,
         error: installed.error,
       };
     },
+    snapshot(id) {
+      return list(id).snapshot();
+    },
     capture(id) {
-      return list(id).capture();
+      // The component's handle is opaque; the journey reads the state it recorded, without the
+      // scope a handle carries.
+      const handle = list(id).capture() as unknown as UiCardListRetainedState &
+        Readonly<Record<string, unknown>>;
+      const state: Record<string, unknown> = { ...handle };
+      delete state.kind;
+      delete state.accountId;
+      return state as unknown as UiCardListRetainedState;
     },
     restoration(id) {
       const report = restorations.get(id);
@@ -267,8 +397,33 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
         context: page.context,
         pageSize: page.pageSize,
         continuation: page.continuation,
+        required: [...page.required],
         aborted: page.isAborted(),
       }));
+    },
+    observationRequests() {
+      return observations.map((observation) => ({
+        id: observation.id,
+        list: observation.list,
+        positions: [...observation.positions],
+        aborted: observation.isAborted(),
+      }));
+    },
+    settleObservation(id, state) {
+      const pending = pendingObservations.get(id);
+      if (pending === undefined) {
+        throw new Error(`No observation ${id} is waiting.`);
+      }
+      pendingObservations.delete(id);
+      pending.resolve(state);
+    },
+    failObservation(id, message) {
+      const pending = pendingObservations.get(id);
+      if (pending === undefined) {
+        throw new Error(`No observation ${id} is waiting.`);
+      }
+      pendingObservations.delete(id);
+      pending.reject(new Error(message));
     },
     settlePage(id, page) {
       const pending = pendingPages.get(id);
@@ -280,6 +435,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
         status: 'page',
         entries: page.entries,
         continuation: page.continuation ?? null,
+        current: page.current !== false,
       });
     },
     invalidatePage(id) {
@@ -344,7 +500,24 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       pendingTools.delete(id);
       pending.reject(new Error(message));
     },
+    changed(id, change) {
+      for (const listener of changeSources.get(id) ?? []) {
+        listener(change);
+      }
+    },
   };
+
+  /** Wraps one journey's described state into the handle the component validates and restores. */
+  function retainedHandleOf(
+    state: UiCardListRetainedState,
+  ): CardListRetained<string | null | undefined> {
+    return {
+      kind: 'card-list-retained',
+      accountId: harnessAccount,
+      ...state,
+      context: state.context,
+    } as unknown as CardListRetained<string | null | undefined>;
+  }
 
   function list(id: string): UiCardList<string | null | undefined> {
     const installed = lists.get(id);
@@ -366,12 +539,26 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     return link;
   }
 
+  /** The consumer's own entry content: it presents the counts of the snapshot it was rendered for. */
+  function customEntry(document: Document, entry: UiListEntry): Node {
+    const content = document.createElement('span');
+    content.dataset.uiCustomEntry = entry.key;
+    content.textContent =
+      entry.quantity === null
+        ? 'no counts'
+        : `copies ${entry.quantity.copies ?? 'none'} intended ${entry.quantity.intended ?? 'none'}`;
+    return content;
+  }
+
   function next(): number {
     sequence += 1;
     return sequence;
   }
 
-  function pageSource(id: string): UiListSource<string | null | undefined> {
+  function pageSource(
+    id: string,
+    observationsEnabled: boolean,
+  ): UiListSource<string | null | undefined> {
     return {
       load(request) {
         const requestId = next();
@@ -385,12 +572,36 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
           context: request.context,
           pageSize: request.pageSize,
           continuation: request.continuation,
+          required: [...request.required.positions],
           isAborted: () => aborted,
         });
         return new Promise<UiListRead>((resolve, reject) => {
           pendingPages.set(requestId, { resolve, reject });
         });
       },
+      ...(observationsEnabled
+        ? {
+            observe(request: {
+              readonly positions: readonly string[];
+              readonly signal: AbortSignal;
+            }) {
+              const observationId = next();
+              let aborted = false;
+              request.signal.addEventListener('abort', () => {
+                aborted = true;
+              });
+              observations.push({
+                id: observationId,
+                list: id,
+                positions: [...request.positions],
+                isAborted: () => aborted,
+              });
+              return new Promise<'incorporated' | 'delayed' | 'failed'>((resolve, reject) => {
+                pendingObservations.set(observationId, { resolve, reject });
+              });
+            },
+          }
+        : {}),
     };
   }
 
@@ -443,7 +654,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
 }
 
 /** Target of one entry as the journeys assert it. */
-export function describeTarget(target: UiListEntry['target']): string {
+export function describeTarget(target: UiListTarget): string {
   switch (target.kind) {
     case 'card':
       return `card:${target.cardId}`;

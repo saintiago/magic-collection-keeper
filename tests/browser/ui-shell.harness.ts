@@ -8,18 +8,25 @@
  * without a backend or a production account.
  */
 
+import { idleProgress } from './card-list-progress.js';
+
+import {
+  createCardList,
+  createCardListBrowser,
+  type CardListRetained as UiCardListState,
+} from '../../src/card-list/index.js';
 import {
   createUserInterface,
-  createCardList,
+  createCardListView,
   uiHref,
   type UiAccount,
   type UiIdentity,
   type UiPageDefinition,
   type UiView,
-  type UiCardListState,
   type UserInterface,
 } from '../../src/ui/index.js';
-import type { UserInterfaceCapabilities } from '../../src/application/index.js';
+import type { SearchClient, UserInterfaceCapabilities } from '../../src/application/index.js';
+import type { Catalog } from '../../src/catalog/index.js';
 
 import { unusedUserCards } from './unused-usercards.js';
 
@@ -116,6 +123,17 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       },
     },
   );
+  // The shell fixture presents no browsing page, so the component access they read through is
+  // only present to satisfy the capabilities Application supplies.
+  const catalog: Catalog = {
+    resolve: () => Promise.reject(new Error('The shell journey reads no catalog.')),
+    listCardPrintings: () => Promise.reject(new Error('The shell journey reads no catalog.')),
+  };
+  const search: SearchClient = {
+    execute: () => Promise.reject(new Error('The shell journey runs no search.')),
+    counts: () => Promise.reject(new Error('The shell journey reads no private counts.')),
+    observe: () => Promise.reject(new Error('The shell journey observes no progress.')),
+  };
   const capabilities: UserInterfaceCapabilities = {
     settings: {
       environment: 'test',
@@ -126,17 +144,15 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     },
     identity,
     request,
-    // The shell fixture presents no browsing page, so the component access they read through is
-    // only present to satisfy the capabilities Application supplies.
-    catalog: {
-      resolve: () => Promise.reject(new Error('The shell journey reads no catalog.')),
-      listCardPrintings: () => Promise.reject(new Error('The shell journey reads no catalog.')),
-    },
-    search: {
-      execute: () => Promise.reject(new Error('The shell journey runs no search.')),
-      counts: () => Promise.reject(new Error('The shell journey reads no private counts.')),
-    },
+    catalog,
+    search,
     userCards: unusedUserCards,
+    cardList: createCardListBrowser({
+      progress: idleProgress,
+      search,
+      catalog,
+      userCards: unusedUserCards,
+    }),
     createRecognition: () => {
       throw new Error('The shell journey does not run recognition.');
     },
@@ -731,9 +747,11 @@ function listHomePage(document: Document, identity: 'identified' | 'anonymous'):
       const host = document.createElement('div');
       if (identity === 'identified') host.id = 'composed-list';
       container.append(host);
-      const list = createCardList({
+      const list = createCardListView({
         container: host,
+        create: createCardList,
         context: 'cards',
+        accountId: context.account.accountId,
         pageSize: 2,
         restored: context.restored?.state as UiCardListState<string> | undefined,
         signal: context.signal,
@@ -741,6 +759,7 @@ function listHomePage(document: Document, identity: 'identified' | 'anonymous'):
           load: () =>
             Promise.resolve({
               status: 'page' as const,
+              current: true,
               entries: [
                 {
                   key: 'card:1',
@@ -762,7 +781,9 @@ function listHomePage(document: Document, identity: 'identified' | 'anonymous'):
       });
       return {
         capture: () => list.capture(),
-        presented: () => list.restoration?.presented,
+        presented: async () => {
+          await list.restoration?.presented;
+        },
         dispose: () => list.dispose(),
       };
     },

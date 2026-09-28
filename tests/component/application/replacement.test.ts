@@ -82,6 +82,19 @@ describe('component replacement at Application', () => {
       privateRevision: 'private-revision-1',
       counts: [],
     });
+    const progress = await application.handle({
+      method: 'POST',
+      path: '/api/search/progress',
+      body: JSON.stringify({ positions: ['7'], timeoutMs: 0 }),
+      authentication: { claims: claimsFor(testAccount) },
+    });
+    expect(progress.status).toBe(200);
+    expect(search.observe).toHaveBeenCalledWith(
+      { positions: ['7'], catalogRevision: null },
+      expect.objectContaining({ accountId: testAccount }),
+      expect.objectContaining({ timeoutMs: 0 }),
+    );
+    expect(JSON.parse(progress.body)).toMatchObject({ state: 'incorporated' });
     await expect(application.synchronizeCatalog({ dataset: 'default_cards' })).resolves.toEqual(
       testRevision,
     );

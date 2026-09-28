@@ -15,6 +15,8 @@ export const applicationRoutes = {
   search: '/api/search',
   /** Private counts of explicit references; it never changes a query's membership. */
   searchCounts: '/api/search/counts',
+  /** Bounded observation of the account's committed positions awaiting indexing. */
+  searchProgress: '/api/search/progress',
   copies: '/api/collection/copies',
   copiesRead: '/api/collection/copies/read',
   copyCorrections: '/api/collection/copies/:copyId/corrections',

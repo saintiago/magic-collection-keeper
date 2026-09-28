@@ -610,104 +610,137 @@ test('allows removing an association again after a failed request', async ({ pag
   expect(errors).toEqual([]);
 });
 
-test('reports the committed part of a bulk addition and reconciles the list', async ({ page }) => {
-  const errors = await openTags(page, '#/tags/tag-wish');
-  await scriptCounts(page, []);
-  const read = await requested<readonly string[]>(page, 'readTags');
-  await settle(page, 'settleReadTags', read.id, [
-    tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
-  ]);
-  const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
-  await settle(page, 'settleListAssociations', listing.id, { associations: [] });
-
-  await page.fill('#tag-add-query', 'bolt');
-  await page.selectOption('#tag-add-level', 'card');
-  await page.fill('#tag-add-quantity', '2');
-  await page.click('#tag-add-submit');
-  const search = await requested<{ readonly request: Record<string, unknown> }>(page, 'searches');
-  await settle(page, 'settleSearch', search.id, {
-    entries: [
-      {
-        entryKey: 'card:card-bolt',
-        target: { kind: 'card', cardId: 'card-bolt' },
-        card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
-        printing: null,
-        quantity: null,
-      },
-      {
-        entryKey: 'card:card-counter',
-        target: { kind: 'card', cardId: 'card-counter' },
-        card: {
-          cardId: counterspellCard.cardId,
-          name: counterspellCard.name,
-          matchedName: null,
-        },
-        printing: null,
-        quantity: null,
-      },
-    ],
-    status: 'ready',
-    totalCount: 2,
-    continuation: null,
-    revisions: {
-      generation: 'tags-generation',
-      catalogRevision: 'tags-revision',
-      catalogPosition: '1',
-      privateRevision: 'private-1',
-    },
-  });
-
-  const results = page.locator('#tag-add-results [data-ui-entry]');
-  await results.nth(0).locator('[data-ui-select]').check();
-  await results.nth(1).locator('[data-ui-select]').check();
-  await page.click('#tag-add-results [data-ui-tool="add-to-tag"]');
-
-  // The first entry commits; the second is a duplicate the provider refuses.
-  const first = await requested<Record<string, unknown>>(page, 'createAssociation');
-  await settle(
+for (const laterOutcome of ['conflict', 'unknown'] as const) {
+  test(`reports the committed part of a bulk addition and reconciles ${laterOutcome}`, async ({
     page,
-    'settleCreateAssociation',
-    first.id,
-    association({
-      associationId: 'association-1',
-      targetLevel: 'card',
-      targetId: 'card-bolt',
-      quantity: 2,
-    }),
-  );
-  const second = await requested<Record<string, unknown>>(page, 'createAssociation', 1);
-  await settle(page, 'fail', second.id, {
-    code: 'conflict',
-    message: 'This tag already associates that target; change the existing association instead.',
-  });
+  }) => {
+    const errors = await openTags(page, '#/tags/tag-wish');
+    await scriptCounts(page, []);
+    const read = await requested<readonly string[]>(page, 'readTags');
+    await settle(page, 'settleReadTags', read.id, [
+      tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
+    ]);
+    const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
+    await settle(page, 'settleListAssociations', listing.id, { associations: [] });
 
-  // The committed portion is reported beside the failure, and the association list reads the tag
-  // again so the entry that committed is visible.
-  await expect(page.locator('#tag-add-results [data-ui-outcome]')).toHaveAttribute(
-    'data-ui-outcome-status',
-    'conflict',
-  );
-  await expect(page.locator('#tag-add-results [data-ui-outcome]')).toHaveText(
-    '1 of 2 entries were added; 1 were not. This tag already associates that target; change the ' +
-      'existing association instead.',
-  );
-  const refresh = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 1);
-  await settle(page, 'settleListAssociations', refresh.id, {
-    associations: [
+    await page.fill('#tag-add-query', 'bolt');
+    await page.selectOption('#tag-add-level', 'card');
+    await page.fill('#tag-add-quantity', '2');
+    await page.click('#tag-add-submit');
+    const search = await requested<{ readonly request: Record<string, unknown> }>(page, 'searches');
+    await settle(page, 'settleSearch', search.id, {
+      entries: [
+        {
+          entryKey: 'card:card-bolt',
+          target: { kind: 'card', cardId: 'card-bolt' },
+          card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
+          printing: null,
+          quantity: null,
+        },
+        {
+          entryKey: 'card:card-counter',
+          target: { kind: 'card', cardId: 'card-counter' },
+          card: {
+            cardId: counterspellCard.cardId,
+            name: counterspellCard.name,
+            matchedName: null,
+          },
+          printing: null,
+          quantity: null,
+        },
+      ],
+      status: 'ready',
+      totalCount: 2,
+      continuation: null,
+      revisions: {
+        generation: 'tags-generation',
+        catalogRevision: 'tags-revision',
+        catalogPosition: '1',
+        privateRevision: 'private-1',
+      },
+    });
+
+    const results = page.locator('#tag-add-results [data-ui-entry]');
+    await results.nth(0).locator('[data-ui-select]').check();
+    await results.nth(1).locator('[data-ui-select]').check();
+    await page.click('#tag-add-results [data-ui-tool="add-to-tag"]');
+
+    // The first entry commits while the second write is still outstanding.
+    const first = await requested<Record<string, unknown>>(page, 'createAssociation');
+    await settle(
+      page,
+      'settleCreateAssociation',
+      first.id,
       association({
         associationId: 'association-1',
         targetLevel: 'card',
         targetId: 'card-bolt',
         quantity: 2,
       }),
-    ],
+    );
+    const refresh = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 1);
+    await settle(page, 'settleListAssociations', refresh.id, {
+      associations: [
+        association({
+          associationId: 'association-1',
+          targetLevel: 'card',
+          targetId: 'card-bolt',
+          quantity: 2,
+        }),
+      ],
+    });
+    await settleCatalog(page, 0, { cards: [boltCard] });
+    await expect(
+      page.locator('#tag-associations [data-ui-entry="association:association-1"]'),
+    ).toContainText('Lightning Bolt');
+    // The earlier notification's refresh completed before the later outcome is known.
+    const second = await requested<Record<string, unknown>>(page, 'createAssociation', 1);
+    await settle(page, 'fail', second.id, {
+      code: laterOutcome === 'unknown' ? 'response-lost' : 'conflict',
+      message:
+        laterOutcome === 'unknown'
+          ? 'The second write did not return a successful response.'
+          : 'This tag already associates that target; change the existing association instead.',
+    });
+    await expect(page.locator('#tag-add-results [data-ui-outcome]')).toHaveAttribute(
+      'data-ui-outcome-status',
+      laterOutcome,
+    );
+    if (laterOutcome === 'conflict') {
+      await expect(page.locator('#tag-add-results [data-ui-outcome]')).toHaveText(
+        '1 of 2 entries were added; 1 were not. This tag already associates that target; change the ' +
+          'existing association instead.',
+      );
+      expect(await control<readonly unknown[]>(page, 'listAssociations')).toHaveLength(2);
+    }
+    if (laterOutcome === 'unknown') {
+      await expect(page.locator('#tag-add-results [data-ui-outcome]')).toContainText(
+        '1 of 2 entries have an unknown outcome',
+      );
+      const recovery = await requested<UiTagsAssociationListRequest>(page, 'listAssociations', 2);
+      await settle(page, 'settleListAssociations', recovery.id, {
+        associations: [
+          association({
+            associationId: 'association-1',
+            targetLevel: 'card',
+            targetId: 'card-bolt',
+            quantity: 2,
+          }),
+          association({
+            associationId: 'association-2',
+            targetLevel: 'card',
+            targetId: 'card-counter',
+            quantity: 2,
+          }),
+        ],
+      });
+      await settleCatalog(page, 1, { cards: [boltCard, counterspellCard] });
+      await expect(page.locator('#tag-associations [data-ui-entry]')).toHaveCount(2);
+      expect(await control<readonly unknown[]>(page, 'createAssociation')).toHaveLength(2);
+    }
+    expect(errors).toEqual([]);
   });
-  await settleCatalog(page, 0, { cards: [boltCard] });
-  await expect(
-    page.locator('#tag-associations [data-ui-entry="association:association-1"]'),
-  ).toContainText('Lightning Bolt');
-  expect(errors).toEqual([]);
-});
+}
 
 test('reads further printings when the exact one is not on the first page', async ({ page }) => {
   const errors = await openTags(page, '#/tags/tag-wish');
@@ -1743,7 +1776,8 @@ for (const newer of ['Next draft', ''] as const) {
   });
 }
 
-async function showBoltSearch(page: Page, index = 0): Promise<void> {
+async function showBoltSearch(page: Page): Promise<void> {
+  const index = (await control<readonly unknown[]>(page, 'searches')).length;
   await page.click('#tag-add-submit');
   const search = await requested(page, 'searches', index);
   await settle(page, 'settleSearch', search.id, {
@@ -1905,7 +1939,7 @@ test('addition and repeated search refresh unchanged candidate counts without lo
   await settleCatalog(page, 0, { cards: [boltCard] });
   await expect(result.locator('[data-ui-intended]')).toHaveText(' Intended: 4');
   await scriptCounts(page, [['card:card-bolt', { owned: 3, intended: 4, locations: 2 }]]);
-  await showBoltSearch(page, 1);
+  await showBoltSearch(page);
   await expect(result.locator('[data-ui-copies]')).toHaveText(' Copies: 3');
   await expect(result.locator('[data-ui-locations]')).toHaveText(' Locations: 2');
   await expect(result.locator('[data-ui-select]')).toBeChecked();

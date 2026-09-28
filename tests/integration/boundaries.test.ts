@@ -63,8 +63,10 @@ describe('component import boundaries', () => {
     expect(reported).toEqual(
       [
         'allowed-providers-of-application: src/application/index.ts -> src/ui/internal/page.ts',
+        'allowed-providers-of-card-list: src/card-list/internal/window.ts -> src/ui/index.ts',
         'allowed-providers-of-usercards: src/usercards/store.ts -> src/search/index.ts',
         'allowed-providers-of-catalog: src/catalog/index.ts -> src/recognition/index.ts',
+        'no-circular: src/card-list/internal/window.ts -> src/ui/index.ts',
         'no-circular: src/catalog/index.ts -> src/recognition/index.ts',
         'no-backend-in-ui: src/ui/index.ts -> src/application/backend.ts',
         'no-backend-in-ui: src/ui/index.ts -> src/application/deployment.ts',
@@ -80,6 +82,10 @@ describe('component import boundaries', () => {
         'no-internals-of-catalog: src/search/internal/query.ts -> src/catalog/internal/records.ts',
         // UserInterface reads a nested Catalog index, which is not the public entry point.
         'no-internals-of-catalog: src/ui/index.ts -> src/catalog/internal/index.ts',
+        // UserInterface reads CardList internals instead of its public entry point.
+        'no-internals-of-card-list: src/ui/index.ts -> src/card-list/internal/window.ts',
+        // CardList reads a nested Catalog module, which is not the public entry point.
+        'no-internals-of-catalog: src/card-list/index.ts -> src/catalog/internal/records.ts',
         // UserCards imports a Catalog internal type; type-only imports stay visible.
         'no-internals-of-catalog: src/usercards/store.ts -> src/catalog/internal/records.ts',
         // UserInterface reads Recognition internals instead of its public entry point.

@@ -9,8 +9,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { SearchClient } from '../../src/application/index.js';
-import { createCatalog } from '../../src/catalog/index.js';
-import { createCatalogSearchAccess, type UiCatalogQuery } from '../../src/ui/index.js';
+import {
+  catalogQuerySource,
+  type CardListCatalogQuery as UiCatalogQuery,
+} from '../../src/card-list/index.js';
 import { publishCatalog } from '../support/catalog-database.js';
 import { createSearchTestDatabase, type SearchTestDatabase } from '../support/search-database.js';
 
@@ -54,7 +56,7 @@ const query: UiCatalogQuery = { text: '', level: 'card', owned: false, finish: n
 
 describe('list source recovery over Search', () => {
   let database: SearchTestDatabase;
-  let source: ReturnType<typeof createCatalogSearchAccess>['source'];
+  let source: ReturnType<typeof catalogQuerySource>;
 
   beforeEach(async () => {
     database = await createSearchTestDatabase();
@@ -71,8 +73,9 @@ describe('list source recovery over Search', () => {
       execute: (request: Parameters<SearchClient['execute']>[0]) =>
         database.search.execute(request, null),
       counts: () => Promise.reject(new Error('The list source reads no private counts.')),
+      observe: (request) => database.search.observe(request, null),
     } satisfies SearchClient;
-    source = createCatalogSearchAccess(search, createCatalog({ sql: database.sql })).source;
+    source = catalogQuerySource(search);
   });
 
   afterEach(async () => {
@@ -85,6 +88,7 @@ describe('list source recovery over Search', () => {
       pageSize: 1,
       continuation: null,
       signal: new AbortController().signal,
+      required: { positions: [] },
     });
     if (read.status !== 'page' || read.continuation === null) {
       throw new Error('The search did not offer a further page.');
@@ -107,6 +111,7 @@ describe('list source recovery over Search', () => {
         pageSize: 1,
         continuation,
         signal: new AbortController().signal,
+        required: { positions: [] },
       }),
     ).resolves.toEqual({ status: 'invalidated' });
   });
@@ -121,6 +126,7 @@ describe('list source recovery over Search', () => {
         pageSize: 1,
         continuation,
         signal: new AbortController().signal,
+        required: { positions: [] },
       }),
     ).rejects.toMatchObject({ code: 'unavailable' });
   });

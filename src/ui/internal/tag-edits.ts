@@ -14,6 +14,8 @@
  * committed (docs/user-interface.md#browsing-and-organization).
  */
 
+import type { UiOperationOutcome, UiActionRequest } from './actions.js';
+
 import type {
   UserCardsAccountOperations,
   UserCardsConstraints,
@@ -44,7 +46,7 @@ import type {
 } from '../../usercards/index.js';
 
 import { commitUiOperation, readUiFailureMessage, type UiChangeCommit } from './failure.js';
-import type { UiEntryTarget, UiOperationOutcome, UiToolRequest } from './list.js';
+import type { CardListTarget } from '../../card-list/index.js';
 
 /**
  * Tag kinds the organization views create and edit. The values are the UserCards provider's
@@ -353,7 +355,7 @@ export interface UiAddToTagTool {
   readonly id: string;
   readonly label: string;
   readonly tool: {
-    invoke(request: UiToolRequest): Promise<UiAddOutcome>;
+    invoke(request: UiActionRequest): Promise<UiAddOutcome>;
   };
 }
 
@@ -384,7 +386,7 @@ export function addToTagTool(options: {
     id: options.id,
     label: options.label,
     tool: {
-      invoke(request: UiToolRequest): Promise<UiAddOutcome> {
+      invoke(request: UiActionRequest): Promise<UiAddOutcome> {
         return addSelection(options, request);
       },
     },
@@ -393,7 +395,7 @@ export function addToTagTool(options: {
 
 async function addSelection(
   options: Parameters<typeof addToTagTool>[0],
-  request: UiToolRequest,
+  request: UiActionRequest,
 ): Promise<UiAddOutcome> {
   const tag = options.tag();
   if (tag === null) {
@@ -429,7 +431,7 @@ async function addSelection(
 async function addTarget(
   access: UiTagAccess,
   tag: Tag,
-  target: UiEntryTarget,
+  target: CardListTarget,
   quantity: number | null,
   signal: AbortSignal,
 ): Promise<UiChangeOutcome<unknown>> {
@@ -490,7 +492,7 @@ export async function moveCopyById(
   );
 }
 
-function targetIdOf(target: Extract<UiEntryTarget, { kind: 'card' | 'printing' }>): string {
+function targetIdOf(target: Extract<CardListTarget, { kind: 'card' | 'printing' }>): string {
   return target.kind === 'card' ? target.cardId : target.printingId;
 }
 

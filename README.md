@@ -11,10 +11,11 @@ subset, the request and continuation contract and its evaluation over both publi
 surfaces, plus its rebuildable projection and the resumable background indexing that maintains it
 from the provider publications; Recognition provides its session lifecycle, its catalog-validated candidate readings and
 the execution bounds around the preserved engines; Application assembles those components behind
-validated configuration and authenticated transports, and UserInterface provides the shell the
-dedicated pages, CardList and the card tools are built on, with Home's recent card activity, the
-catalog/search browser and the collection and card-details views built over the Search, Catalog and
-UserCards contracts Application supplies.
+validated configuration and authenticated transports, CardList provides the headless list
+presentation model its bindings, window, enrichment, selection, restoration and recent activity
+are built on, and UserInterface provides the shell and the dedicated pages, with Home's recent card
+activity, the catalog/search browser and the collection and card-details views built over the
+Search, Catalog and UserCards contracts Application supplies.
 
 Start with AGENTS.md for the documentation index and engineering principles.
 The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
@@ -207,11 +208,18 @@ the entry it left and restores its query, selection, scroll and focus from bound
 state that serializes no view content; closing a view aborts its work and detaches its container, so
 a late result cannot replace the new view; and a changed account clears that private presentation
 state, ends the authenticated session so outstanding responses are rejected and releases the device
-resources. A page implementation supplies one page's content and the sources and tools its lists
-use. The shared CardList turns one supplied source into a bounded, asynchronous working set
-(docs/user-interface.md#list-boundary, docs/user-interface.md#cardlist): a page request carries the
-query context, the page size, the continuation and a cancellation signal, and only the request the
-user still waits for may replace the window, while a refresh keeps the usable entries presented.
+resources. A page implementation supplies one page's content and the tools its lists present.
+The CardList component turns one described activity into a bounded, asynchronous working set and
+publishes immutable snapshots of it (docs/card-list.md#interface): a source read carries the query
+context, the page size, the continuation, the committed positions it must have incorporated and a
+cancellation signal, and only the request the user still waits for may replace the window, while a
+refresh keeps the usable entries presented. Its own bindings translate Search queries, a card's
+published printings, a tag's associations, an import's pending entries and the account's recent
+activity into that protocol; a committed local change marks affected content stale and reacquires
+it through its source until the reported publication position is incorporated, which the list
+observes through Search's own bounded freshness capability instead of polling. Application selects
+the implementation and supplies the pages one capability with the factory, the provider bindings
+and the account lifecycle, so no page or view names the component's own wiring.
 The rendered window and every fragment batch are bounded. Paging keeps selected targets and their
 tool availability separately, so selection cannot hide later results. Other enrichment retires when
 an entry leaves the window, and changed entries retire reads that can no longer answer for them.
@@ -228,8 +236,8 @@ owned-only and finish controls its URL carries as one Search query
 (docs/search.md#scryfall-compatibility), so a reload or a shared link presents the same result; the
 entries show their basic information and quantities, printing images load and retry as their own
 fragment, an unsupported expression stays a distinct reported failure, and opening an entry records
-it and presents its card details. Both pages hand the state of their list back through CardList's
-own capture and restoration contract, so the list decides how to re-acquire the window it held. The
+it and presents its card details. Both pages hand the opaque state their list retained back through
+CardList's own restore contract, so the list decides how to re-acquire the window it held. The
 collection views build on the same boundaries (docs/user-interface.md#browsing-and-organization):
 the collection presents the account's owned cards, printings or physical copies — the level and
 text expression its URL names — with the physical-copy and intended counts the query evaluated kept

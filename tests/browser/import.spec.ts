@@ -602,6 +602,28 @@ test('recovers a lost confirmation through its recorded operation outcome', asyn
   expect(errors).toEqual([]);
 });
 
+test('rereads an already open import after an unknown staging outcome', async ({ page }) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.fill('#import-manual-query', 'Lightning Bolt');
+  await page.click('#import-manual-submit');
+  const search = await requested<Record<string, unknown>>(page, 'searches');
+  await settle(page, 'settleSearch', search.id, searchPage([m11]));
+  await page.locator('#import-results [data-ui-select]').check();
+  await page.click('#import-results [data-ui-tool="add-to-review"]');
+  const staged = await requested<Record<string, unknown>>(page, 'stage');
+  await control(page, 'fail', staged.id, { code: 'busy', message: 'Response lost after commit.' });
+  const sessions = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', sessions.id, [session()]);
+  const reread = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  await settle(page, 'settleEntries', reread.id, {
+    session: session(),
+    entries: [entry(), { ...entry(), entryId: 'new-entry' }],
+  });
+  await expect(page.locator('#import-pending [data-ui-entry="pending:new-entry"]')).toBeVisible();
+  expect(await control<unknown[]>(page, 'stage')).toHaveLength(1);
+  expect(errors).toEqual([]);
+});
+
 test('keeps one line identity when a staging response is lost and retries it explicitly', async ({
   page,
 }) => {
@@ -1225,6 +1247,10 @@ test('confirms a selected entry the loaded window no longer presents', async ({ 
     continuation: 'cursor-50',
   });
   await page.locator('#import-pending [data-ui-entry="pending:entry-1"] [data-ui-select]').check();
+  type TrackedEditor = { retiredEditor: WeakRef<Element> };
+  await page.locator('[data-ui-import-editor="pending:entry-1"]').evaluate((editor) => {
+    (globalThis as unknown as TrackedEditor).retiredEditor = new WeakRef(editor);
+  });
 
   // Paging beyond the working window retires the row of the selected entry, not the selection.
   for (let index = 1; index <= 10; index += 1) {
@@ -1243,6 +1269,12 @@ test('confirms a selected entry the loaded window no longer presents', async ({ 
   }
   await expect(page.locator('#import-pending [data-ui-entry="pending:entry-1"]')).toHaveCount(0);
   await expect(page.locator('#import-pending [data-ui-selection-count]')).toHaveText('1 selected');
+  await page.requestGC();
+  expect(
+    await page.evaluate(
+      () => (globalThis as unknown as TrackedEditor).retiredEditor.deref() === undefined,
+    ),
+  ).toBe(true);
 
   // The confirmation still quotes the revision the page read for that entry.
   await page.click('#import-pending [data-ui-tool="confirm-import"]');
@@ -2806,5 +2838,129 @@ test('keeps review input typed while a source import lands in another session', 
   const back = await requested<UiImportEntriesRequest>(page, 'entries', 2);
   await settle(page, 'settleEntries', back.id, { session: session(), entries: [entry()] });
   await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('5');
+  expect(errors).toEqual([]);
+});
+
+for (const reopen of [false, true]) {
+  test(`clears a disappeared pending selection before confirming remaining entries (reopen: ${reopen})`, async ({
+    page,
+  }) => {
+    const errors = await openPendingReview(page, [entry()]);
+    await page.locator('#import-pending [data-ui-select]').check();
+    const confirm = page.locator('#import-pending [data-ui-tool="confirm-import"]');
+    await expect(confirm).toBeEnabled();
+    if (reopen) {
+      await control(page, 'navigate', { page: 'home' });
+      await control(page, 'back');
+    } else {
+      await page.click('#import-refresh');
+    }
+    const sessions = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+    await settle(page, 'settleSessions', sessions.id, [session()]);
+    const replacement = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+    await settle(page, 'settleEntries', replacement.id, {
+      session: session(),
+      entries: [entry({ entryId: 'entry-2' })],
+    });
+    await expect(page.locator('#import-pending [data-ui-entry="pending:entry-2"]')).toBeVisible();
+    await expect(confirm).toBeDisabled();
+    await expect(page.locator('#import-pending [data-ui-selection-count]')).toHaveText(
+      '1 selected',
+    );
+    await expect(page.locator('#import-pending [data-ui-status]')).toContainText(
+      '1 selected entry changed',
+    );
+    expect(await control<readonly unknown[]>(page, 'confirm')).toHaveLength(0);
+
+    // Toggling a visible entry cannot remove the missing identity. The user must explicitly
+    // clear the selection before confirming only the entries that remain.
+    const remaining = page.locator('#import-pending [data-ui-select="pending:entry-2"]');
+    await remaining.check();
+    await remaining.uncheck();
+    await expect(confirm).toBeDisabled();
+    const clear = page.locator('#import-pending').getByRole('button', { name: 'Clear selection' });
+    await clear.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#import-pending [data-ui-selection-count]')).toHaveText(
+      '0 selected',
+    );
+    await expect(clear).toBeDisabled();
+    await expect(page.locator('#import-pending [data-ui-status]')).toBeEmpty();
+    await remaining.check();
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
+    const confirmation = await requested<Record<string, unknown>>(page, 'confirm');
+    expect(confirmation.arguments.entries).toEqual([{ entryId: 'entry-2', expectedRevision: 3 }]);
+    expect(errors).toEqual([]);
+  });
+}
+
+test('releases replaced import editor controls while preserving drafts and selected revisions', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.fill('#import-review-quantity-entry-1', '5');
+  await page.locator('#import-pending [data-ui-select]').check();
+  type TrackedEditors = { retiredEditors: WeakRef<Element>[] };
+  await page.evaluate(() => {
+    (globalThis as unknown as TrackedEditors).retiredEditors = [];
+  });
+  for (let index = 1; index <= 6; index += 1) {
+    await page.locator('[data-ui-import-editor]').evaluate((editor) => {
+      (globalThis as unknown as TrackedEditors).retiredEditors.push(new WeakRef(editor));
+    });
+    await page.click('#import-refresh');
+    const sessions = await requested<UiImportSessionsRequest>(page, 'sessions', index);
+    await settle(page, 'settleSessions', sessions.id, [session()]);
+    const replacement = await requested<UiImportEntriesRequest>(page, 'entries', index);
+    await settle(page, 'settleEntries', replacement.id, {
+      session: session(),
+      entries: [entry({ entryId: `entry-${index + 1}` })],
+    });
+    await expect(
+      page.locator(`[data-ui-import-editor="pending:entry-${index + 1}"]`),
+    ).toBeVisible();
+  }
+  await page.requestGC();
+  expect(
+    await page.evaluate(
+      () =>
+        (globalThis as unknown as TrackedEditors).retiredEditors.filter(
+          (editor) => editor.deref() !== undefined,
+        ).length,
+    ),
+  ).toBe(0);
+  await expect(page.locator('#import-pending [data-ui-selection-count]')).toHaveText('1 selected');
+
+  await page.click('#import-refresh');
+  const sessions = await requested<UiImportSessionsRequest>(page, 'sessions', 7);
+  await settle(page, 'settleSessions', sessions.id, [session()]);
+  const replacement = await requested<UiImportEntriesRequest>(page, 'entries', 7);
+  await settle(page, 'settleEntries', replacement.id, { session: session(), entries: [entry()] });
+  await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('5');
+  await expect(page.locator('#import-pending [data-ui-select]')).toBeChecked();
+  await page.click('#import-pending [data-ui-tool="confirm-import"]');
+  const confirmation = await requested<Record<string, unknown>>(page, 'confirm');
+  expect(confirmation.arguments.entries).toEqual([{ entryId: 'entry-1', expectedRevision: 3 }]);
+  expect(errors).toEqual([]);
+});
+
+test('preserves the focused review choice and draft through a printing correction', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.click('#import-refresh');
+  const sessions = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
+  await settle(page, 'settleSessions', sessions.id, [session()]);
+  const replacement = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  const condition = page.locator('#import-review-condition-entry-1');
+  await condition.selectOption('LP');
+  await condition.focus();
+  await settle(page, 'settleEntries', replacement.id, {
+    session: session(),
+    entries: [entry({ printingId: m10.printingId, revision: 4 })],
+  });
+  await expect(condition).toBeFocused();
+  await expect(condition).toHaveValue('LP');
   expect(errors).toEqual([]);
 });

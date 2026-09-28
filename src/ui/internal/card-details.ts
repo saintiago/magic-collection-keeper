@@ -26,23 +26,23 @@ import type {
   Finish,
   PrintingRecord,
 } from '../../catalog/index.js';
+import { readFailureCode } from '../../card-list/index.js';
 import type { PhysicalCopy } from '../../usercards/index.js';
 
-import { createCardList, type UiCardList } from './card-list.js';
+import { createCardListView, type UiCardList } from './card-list.js';
 import {
   correctCopy,
   createCopyAccess,
   uiCopyConditions,
   type UiCopyCorrection,
 } from './copy-edits.js';
-import { readUiFailureCode } from './failure.js';
 import { UI_LIMITS } from './limits.js';
-import type { UiListEntry, UiListSource } from './list.js';
 import {
   controlLabel,
   openEntryPresentation,
   readListState,
   readPageState,
+  restoredPresentation,
 } from './page-support.js';
 import type { UiPageDefinition } from './pages.js';
 import { uiCatalogFinishes, uiFinishLabel, uiHref, type UiView } from './routes.js';
@@ -265,10 +265,13 @@ export function createCardDetailsPage(): UiPageDefinition {
       function cardContent(card: CardRecord): UiLevelPresentation {
         const host = document.createElement('div');
         host.id = 'card-printings';
-        const list = createCardList<string>({
+        const bindings = context.capabilities.cardList.account(context.account.accountId);
+        const list = createCardListView({
           container: host,
-          source: printingsSource(card),
+          create: context.capabilities.cardList.create,
+          source: bindings.cardPrintings(card),
           context: card.cardId,
+          accountId: context.account.accountId,
           pageSize: UI_LIMITS.printingPage,
           restored: readListState<string>(restored),
           presentation: openEntryPresentation(document, 'card-printing'),
@@ -284,38 +287,7 @@ export function createCardDetailsPage(): UiPageDefinition {
             host,
             collectionLinks(card),
           ],
-          restoration: list.restoration?.presented ?? null,
-        };
-      }
-
-      /** One card's published printings as a bounded list source over the Catalog contract. */
-      function printingsSource(card: CardRecord): UiListSource<string> {
-        return {
-          async load(request) {
-            let page: CardPrintingsPage;
-            try {
-              page = await catalog.listCardPrintings(card.cardId, {
-                pageSize: request.pageSize,
-                ...(request.continuation === null ? {} : { continuation: request.continuation }),
-              });
-            } catch (cause) {
-              if (
-                request.continuation !== null &&
-                readUiFailureCode(cause) === 'stale-continuation'
-              ) {
-                // The catalog republished the printings the continuation was bound to: the list
-                // restarts the sequence from its first page instead of repeating the cursor the
-                // catalog keeps refusing (docs/catalog.md#provided-operations).
-                return { status: 'invalidated' };
-              }
-              throw cause;
-            }
-            return {
-              status: 'page',
-              entries: page.printings.map((printing) => printingEntry(card, printing)),
-              continuation: page.continuation,
-            };
-          },
+          restoration: restoredPresentation(list),
         };
       }
 
@@ -680,7 +652,7 @@ export function createCardDetailsPage(): UiPageDefinition {
                 if (
                   continuation === null ||
                   context.signal.aborted ||
-                  readUiFailureCode(cause) !== 'stale-continuation'
+                  readFailureCode(cause) !== 'stale-continuation'
                 ) {
                   throw cause;
                 }
@@ -815,24 +787,6 @@ export function createCardDetailsPage(): UiPageDefinition {
         return image;
       }
     },
-  };
-}
-
-/** One published printing as the card level's list presents it. */
-function printingEntry(card: CardRecord, printing: PrintingRecord): UiListEntry {
-  return {
-    key: printing.printingId,
-    target: { kind: 'printing', printingId: printing.printingId },
-    basic: {
-      card: { cardId: card.cardId, name: card.name, matchedName: null },
-      printing: {
-        printingId: printing.printingId,
-        edition: printing.edition,
-        collectorNumber: printing.collectorNumber,
-        language: printing.language,
-      },
-    },
-    quantity: null,
   };
 }
 

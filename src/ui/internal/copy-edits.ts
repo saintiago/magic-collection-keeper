@@ -14,6 +14,8 @@
  * (docs/user-interface.md#browsing-and-organization, docs/application.md#interface).
  */
 
+import type { UiOperationOutcome, UiActionRequest, UiListAction } from './actions.js';
+
 import type { Finish } from '../../catalog/index.js';
 import type {
   UserCardsAccountOperations,
@@ -22,9 +24,8 @@ import type {
 } from '../../usercards/browser.js';
 import type { CopyChangeResult, CopyCondition, PhysicalCopy } from '../../usercards/index.js';
 
-import type { UiCardListTool } from './card-list.js';
+import type {} from '../../card-list/index.js';
 import { readUiFailureMessage } from './failure.js';
-import type { UiOperationOutcome, UiToolRequest } from './list.js';
 
 /**
  * Conditions the copy corrections offer. The values are the UserCards provider's published
@@ -191,12 +192,12 @@ export function copyChangeTool(options: {
   change(): UiCopyChange | null;
   /** What the user must choose before the tool can act, reported when `change` names none. */
   readonly guidance: string;
-}): UiCardListTool {
+}): UiListAction {
   return {
     id: options.id,
     label: options.label,
     tool: {
-      invoke(request: UiToolRequest): Promise<UiOperationOutcome> {
+      invoke(request: UiActionRequest): Promise<UiOperationOutcome> {
         return applyCopyChange(options.access, request, options.change(), options.guidance);
       },
     },
@@ -205,7 +206,7 @@ export function copyChangeTool(options: {
 
 async function applyCopyChange(
   access: UiCopyAccess,
-  request: UiToolRequest,
+  request: UiActionRequest,
   change: UiCopyChange | null,
   guidance: string,
 ): Promise<UiOperationOutcome> {

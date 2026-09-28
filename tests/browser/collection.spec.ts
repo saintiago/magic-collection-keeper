@@ -476,7 +476,7 @@ test('the card level lists published printings and opens one printing level', as
   await expect(page.locator('#card-printings a')).toHaveCount(2);
   await expect(page.locator('#card-printings [data-ui-more]')).toBeHidden();
 
-  await page.locator('#card-printing-printing-2').click();
+  await page.locator('[id="card-printing-printing%3Aprinting-2"]').click();
   await expect(page).toHaveURL(/#\/cards\/card-1\/printing-2$/);
   await settlePrinting(page, 'printing-2', { printings: [printingRecord('printing-2')] });
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
@@ -497,7 +497,7 @@ test('returning to a card level re-presents the printing window it held', async 
   await expect(page.locator('#card-printings a')).toHaveCount(2);
 
   // A printing of the second page is opened; Back returns to the window it was opened from.
-  await page.locator('#card-printing-printing-2').click();
+  await page.locator('[id="card-printing-printing%3Aprinting-2"]').click();
   await expect(page).toHaveURL(/#\/cards\/card-1\/printing-2$/);
   await settlePrinting(page, 'printing-2', { printings: [printingRecord('printing-2')] });
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
@@ -513,7 +513,7 @@ test('returning to a card level re-presents the printing window it held', async 
   expect(restoredSecond?.options.continuation).toBe('cursor-2');
   await settlePrintings(page, restoredSecond!.id, [printingRecord('printing-2')], null);
   await expect(page.locator('#card-printings a')).toHaveCount(2);
-  await expect(page.locator('#card-printing-printing-2')).toBeFocused();
+  await expect(page.locator('[id="card-printing-printing%3Aprinting-2"]')).toBeFocused();
   expect(errors).toEqual([]);
 });
 
@@ -563,7 +563,7 @@ test('an invalidated printing continuation restarts the card printing list', asy
   expect(restart?.options.continuation).toBeUndefined();
   await expect(page.locator('#card-printings a')).toHaveCount(1);
   await settlePrintings(page, restart!.id, [printingRecord('printing-3')], null);
-  await expect(page.locator('#card-printing-printing-3')).toBeVisible();
+  await expect(page.locator('[id="card-printing-printing%3Aprinting-3"]')).toBeVisible();
   await expect(page.locator('#card-printings a')).toHaveCount(1);
   await expect(page.locator('#card-printings [data-ui-more]')).toBeHidden();
   expect(errors).toEqual([]);
@@ -585,7 +585,7 @@ test('a failed card-level restore keeps the printing window it was holding', asy
     [printingRecord('printing-2')],
     null,
   );
-  await page.locator('#card-printing-printing-2').click();
+  await page.locator('[id="card-printing-printing%3Aprinting-2"]').click();
   await settlePrinting(page, 'printing-2', { printings: [printingRecord('printing-2')] });
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
   await expect(page.locator('#printing-name')).toHaveText('Lightning Bolt');
@@ -765,11 +765,15 @@ test('bulk changes act on the explicit selected copy identities', async ({ page 
 
   await page.getByLabel('Select Lightning Bolt (M11 149)').first().check();
   await expect(page.locator('[data-ui-selection-count]')).toHaveText('2 selected');
+  await settleCopyRead(page, (await copyRead(page)).id, [
+    storedCopy({ copyId: 'copy-1' }),
+    storedCopy({ copyId: 'copy-2' }),
+  ]);
   await page.getByLabel('Finish to apply').selectOption('foil');
   await page.getByRole('button', { name: 'Apply finish' }).click();
 
   // The change reads the revision of exactly the selected copies.
-  const revisionRead = await copyRead(page);
+  const revisionRead = await copyRead(page, 1);
   expect(revisionRead.copyIds).toEqual(['copy-1', 'copy-2']);
   await settleCopyRead(page, revisionRead.id, [
     storedCopy({ copyId: 'copy-1', revision: 2 }),
@@ -811,10 +815,14 @@ for (const failure of ['conflict', 'unavailable'] as const) {
       searchPage([copyEntry('copy-1', 'printing-1'), copyEntry('copy-2', 'printing-1')]),
     );
     await page.locator('[data-ui-group-select]').check();
+    await settleCopyRead(page, (await copyRead(page)).id, [
+      storedCopy({ copyId: 'copy-1' }),
+      storedCopy({ copyId: 'copy-2' }),
+    ]);
     await page.getByLabel('Condition to apply').selectOption('DMG');
     await page.getByRole('button', { name: 'Apply condition' }).click();
 
-    const revisionRead = await copyRead(page);
+    const revisionRead = await copyRead(page, 1);
     await settleCopyRead(page, revisionRead.id, [
       storedCopy({ copyId: 'copy-1', revision: 2 }),
       storedCopy({ copyId: 'copy-2', revision: 7 }),
@@ -829,7 +837,7 @@ for (const failure of ['conflict', 'unavailable'] as const) {
 
     const outcome = page.locator('[data-ui-outcome]');
     if (failure === 'unavailable') {
-      await settleCopyRead(page, (await copyRead(page, 1)).id, [
+      await settleCopyRead(page, (await copyRead(page, 2)).id, [
         storedCopy({ copyId: 'copy-2', condition: 'DMG', revision: 8 }),
       ]);
       await expect(outcome).toHaveAttribute('data-ui-outcome-status', 'unknown');
@@ -856,7 +864,7 @@ test('leaving and returning keeps the collection selection and the unsaved copy 
   await page.getByLabel('Select Lightning Bolt (M11 149)').check();
   await page.locator('[data-ui-entry="copy:copy-1"] [data-ui-open]').click();
 
-  const read = await copyRead(page);
+  const read = await copyRead(page, 1);
   await settleCopyRead(page, read.id, [storedCopy()]);
   await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
@@ -866,7 +874,7 @@ test('leaving and returning keeps the collection selection and the unsaved copy 
   await page.locator('#copy-card-link').click();
   await expect(page).toHaveURL(/#\/cards\/card-1$/);
   await page.goBack();
-  const restoredRead = await copyRead(page, 1);
+  const restoredRead = await copyRead(page, 2);
   await settleCopyRead(page, restoredRead.id, [storedCopy()]);
   await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
   await settleCard(page, 'card-1', { cards: [cardRecord()] });

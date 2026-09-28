@@ -17,6 +17,9 @@ export {
   type SearchIndexingProgressDependencies,
   type SearchIndexingStatus,
 } from './internal/progress.js';
+// The declared bounds of a query and of an observation; a browser consumer that batches explicit
+// positions uses the same provider-owned bound the service validates against.
+export { SEARCH_LIMITS } from './internal/limits.js';
 export type {
   SearchProgress,
   SearchProgressRequest,
