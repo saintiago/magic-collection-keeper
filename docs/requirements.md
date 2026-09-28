@@ -1,6 +1,7 @@
 # Rebuild requirements
 
-Accepted means requested and queued. Local verification is distinct from production delivery.
+Accepted means requested; deferred work is outside the current rebuild queue.
+Local verification is distinct from production delivery.
 Component documents own behavioral requirements and acceptance criteria. The testing architecture
 owns verification guidance. Jira records execution status and links to those repository sections;
 it does not supply requirements needed to rebuild the service.
@@ -12,10 +13,17 @@ The old implementation and its prescribed architecture are superseded by the app
 | REBUILD-001 | Create an ordered, dependency-linked KAN implementation backlog covering the agreed architecture, with testable acceptance criteria.                                                                                          | Created and verified in Jira          | Task inventory: KAN-6 through KAN-32.                                                                                         |
 | REBUILD-002 | Remove the old application implementation and tooling; retain authoritative design and a complete separate source reference, including recognition. Do not delete owner data or AWS resources.                                | Locally verified; not deployed        | Baseline revision 128c903ff109868acc854f0ff239c8c0f925d803 in magic-keeper-old; recognition reference and reset verification. |
 | REBUILD-003 | Preserve recognition engine behavior, artifacts/manifests, fixtures and notices while allowing API/deployment boundary changes. Retained files must match their baseline and engine comparisons must pass before integration. | Baseline retained; integration queued | KAN-16, KAN-17, KAN-29.                                                                                                       |
-| MIG-001     | Migrate the owner's collection, preserving per-account ownership totals and printing/language/finish/condition, tags, intended quantities, pending entries, provenance and replay protection.                                 | Accepted / queued                     | KAN-7, KAN-30, KAN-32.                                                                                                        |
-| MIG-002     | Verify a consistent private backup by isolated restoration; dry-run reconciliation and repeat-safe conversion must pass before production migration.                                                                          | Accepted / queued; no backup claimed  | KAN-7, KAN-30.                                                                                                                |
-| MIG-003     | Surface incompatible legacy locations and unresolved identity/attributes without silent loss or invented ownership. Enforce one location per copy only after explicit reconciliation.                                         | Accepted / queued                     | KAN-7, KAN-30.                                                                                                                |
-| MIG-004     | Preserve Cognito account continuity, capture writes since the snapshot, and rehearse rollback. Production cutover requires explicit authorization and old storage is retained.                                                | Accepted / queued                     | KAN-32.                                                                                                                       |
+| MIG-001     | Migrate the owner's collection, preserving per-account ownership totals and printing/language/finish/condition, tags, intended quantities, pending entries, provenance and replay protection.                                 | Deferred until after rebuild          | KAN-7, KAN-30, KAN-32.                                                                                                        |
+| MIG-002     | Verify a consistent private backup by isolated restoration; dry-run reconciliation and repeat-safe conversion must pass before production migration.                                                                          | Deferred; no backup claimed           | KAN-7, KAN-30.                                                                                                                |
+| MIG-003     | Surface incompatible legacy locations and unresolved identity/attributes without silent loss or invented ownership. Enforce one location per copy only after explicit reconciliation.                                         | Deferred until after rebuild          | KAN-7, KAN-30.                                                                                                                |
+| MIG-004     | Preserve Cognito account continuity, capture writes since the snapshot, and rehearse rollback. Production cutover requires explicit authorization and old storage is retained.                                                | Deferred until after rebuild          | KAN-32.                                                                                                                       |
+
+## Collection migration
+
+MIG-001 through MIG-004 remain required for later migration. Their detailed design, implementation
+and rehearsal are deferred until after the rebuild. KAN-30 stays in Draft until an approved migration
+plan replaces the removed design. The old implementation is a reference, not a replacement plan.
+Rebuild verification and release preparation exclude migration work and owner-data access.
 
 ## Documentation ownership
 

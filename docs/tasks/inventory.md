@@ -16,6 +16,8 @@ record dependencies. This index groups tasks by subject and does not prescribe e
 
 ## Collection migration
 
+Deferred until after the rebuild; see [migration status](../requirements.md#collection-migration).
+
 - [KAN-7: Specify collection migration and verified backup/recovery](https://malton-family.atlassian.net/browse/KAN-7)
 - [KAN-30: Provide an explicit migration path for existing collection data](https://malton-family.atlassian.net/browse/KAN-30)
 
@@ -24,7 +26,7 @@ record dependencies. This index groups tasks by subject and does not prescribe e
 - [KAN-27: Define isolated AWS infrastructure for the rebuild](https://malton-family.atlassian.net/browse/KAN-27)
 - [KAN-28: Package backend, UI and catalog jobs for explicit deployment](https://malton-family.atlassian.net/browse/KAN-28)
 - [KAN-29: Package preserved Recognition for AWS and browser delivery](https://malton-family.atlassian.net/browse/KAN-29)
-- [KAN-32: Prepare release, migration and rollback acceptance](https://malton-family.atlassian.net/browse/KAN-32)
+- [KAN-32: Prepare release and rollback acceptance](https://malton-family.atlassian.net/browse/KAN-32)
 
 ## Recognition
 
