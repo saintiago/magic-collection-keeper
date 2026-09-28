@@ -12,6 +12,16 @@ export default [
       'test-results/**',
       // Turborepo cache and the bundled packaging command it holds.
       '.turbo/**',
+      // Prepared recognition assets, the pinned upstream clone and the build environments stay
+      // out of git (docs/operations.md#recognition-packaging) and out of linting.
+      'src/recognition/python/artifacts/**',
+      'src/recognition/python/vendor/**',
+      'src/recognition/browser/vendor/**',
+      // Generated packaging output and the ignored Python environments.
+      'artifacts/**',
+      '.recognition-python/**',
+      '.recognition-build/**',
+      '.infrastructure-python/**',
     ],
   },
   js.configs.recommended,

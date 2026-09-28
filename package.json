@@ -10,6 +10,8 @@
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('build', { recursive: true, force: true })\" && tsc --project tsconfig.build.json",
     "package": "esbuild scripts/package-artifacts.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=.turbo/packaging/package-artifacts.mjs --log-level=warning && node .turbo/packaging/package-artifacts.mjs",
+    "prepare:recognition": "esbuild scripts/prepare-recognition.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=.turbo/packaging/prepare-recognition.mjs --log-level=warning && node .turbo/packaging/prepare-recognition.mjs",
+    "package:recognition": "esbuild scripts/package-recognition.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=.turbo/packaging/package-recognition.mjs --log-level=warning && node .turbo/packaging/package-recognition.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --cache --cache-location .turbo/eslint/.eslintcache --cache-strategy content",
@@ -39,6 +41,7 @@
     "eslint": "^10.11.0",
     "globals": "^17.12.0",
     "jszip": "^3.10.2",
+    "onnxruntime-web": "1.29.0",
     "pg": "^8.23.0",
     "prettier": "^3.9.9",
     "turbo": "2.11.3",

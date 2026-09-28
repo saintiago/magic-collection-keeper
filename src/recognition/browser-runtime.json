@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "package": "onnxruntime-web",
+  "version": "1.29.0",
+  "runtime": {
+    "file": "ort-wasm-simd-threaded.wasm",
+    "bytes": 13961845,
+    "sha256": "ec8580a9d7b9476ceee52e10a7f94124e4dc71a019d666ed6d4726697c109a4d"
+  },
+  "modules": {
+    "ort.wasm.min.mjs": "14a0a63ad1a0fe8127722929fd16fb26c2e5352ea221bc9034d12daf314d0b92",
+    "ort-wasm-simd-threaded.mjs": "5a15f1fd086b3f6c2baf1f35105b8f502653b567e165cef80028870b39748747"
+  }
+}

@@ -25,9 +25,9 @@ import {
   artifactLayout,
   packageArtifacts,
   publicSettingsFromStackOutputs,
-  readRevision,
   type ArtifactManifest,
 } from '../../scripts/package-artifacts.js';
+import { readRevision } from '../../scripts/packaging-support.js';
 
 const execFileAsync = promisify(execFile);
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
