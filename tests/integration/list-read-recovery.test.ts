@@ -63,6 +63,8 @@ describe('list source recovery over Search', () => {
       cards: [bolt, elves],
       printings: [boltPrinting, elvesPrinting],
     });
+    // Search answers from its own projection, so the fixtures are indexed before the list reads.
+    await database.index();
     // The browser reaches the component contracts through Application's authenticated clients:
     // this read evaluates the public query without a trusted account, as the catalog page does.
     const search = {
@@ -97,6 +99,7 @@ describe('list source recovery over Search', () => {
       cards: [bolt, elves],
       printings: [boltPrinting, elvesPrinting],
     });
+    await database.index({ rebuild: true });
 
     await expect(
       source.load({
@@ -110,7 +113,7 @@ describe('list source recovery over Search', () => {
 
   it('keeps a temporary failure a rejection at the position it asked for', async () => {
     const continuation = await firstPage();
-    await database.exec('delete from catalog_private.revision');
+    await database.exec('drop view search.cards');
 
     await expect(
       source.load({

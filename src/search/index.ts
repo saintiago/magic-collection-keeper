@@ -8,9 +8,9 @@
  * physical-copy result level require it. A page returns stable entry keys, typed targets, basic
  * information, quantity context and an opaque continuation bound to the normalized criteria, the
  * ordering, the user and the revisions; a stale continuation requires restarting the result
- * (docs/search.md#scryfall-compatibility, docs/search.md#request-and-result). Evaluation combines
- * the provider-owned read contracts in one read-only statement: membership and grouping run over
- * the complete result before ordering and pagination, translated names keep the matched name for
+ * (docs/search.md#scryfall-compatibility, docs/search.md#request-and-result). Evaluation reads
+ * Search's own projection in one read-only statement: membership and grouping run over the
+ * complete result before ordering and pagination, translated names keep the matched name for
  * display, and copy counts and intended quantities stay distinct
  * (docs/search.md#required-query-contracts, docs/search.md#evaluation-and-grouping).
  *
@@ -18,8 +18,12 @@
  * UserCards publication contracts as resumable background work, maintains Search's own storage
  * (searchSchemaSql) and publishes a replacement generation only once every source in its scope is
  * caught up and no reference is unresolved (docs/search.md#internal-design,
- * docs/data-architecture.md#asynchronous-synchronization). Other
- * components import Search through this module only; its internal modules stay private to the
+ * docs/data-architecture.md#asynchronous-synchronization). A result reports whether it has
+ * incorporated a required committed position or published catalog revision and stays usable while
+ * indexing catches up; observe reads that progress with a bounded, cancellable wait, and
+ * createSearchProgress tracks one account's committed positions for the browser's indexing notice
+ * (docs/search.md#freshness). Other components import Search through this module or its
+ * browser-safe entry point (src/search/browser.ts) only; its internal modules stay private to the
  * component (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
@@ -31,6 +35,19 @@ export type {
 } from './internal/executor.js';
 export { SearchError, type SearchFailureCode } from './internal/errors.js';
 export { createSearch, type Search, type SearchDependencies } from './internal/service.js';
+export {
+  type SearchObservationOptions,
+  type SearchProgress,
+  type SearchProgressRequest,
+  type SearchProgressState,
+} from './internal/freshness.js';
+export {
+  SEARCH_PROGRESS_DEFAULT_WINDOW_MS,
+  createSearchProgress,
+  type SearchIndexingProgress,
+  type SearchIndexingStatus,
+  type SearchIndexingProgressDependencies,
+} from './internal/progress.js';
 export {
   SEARCH_LIMITS,
   defaultSearchOrdering,
@@ -63,6 +80,7 @@ export {
   type SearchPublicCriterion,
   type SearchQuery,
   type SearchRequestInput,
+  type SearchRequiredProgress,
   type SearchResultLevel,
   type SearchRevisions,
   type SearchRulesTextCriterion,

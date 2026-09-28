@@ -100,7 +100,12 @@ import {
   type UiSelectOption,
 } from './page-support.js';
 import { uiCatalogFinishes, uiFinishLabel } from './routes.js';
-import { createCatalogSearchAccess, uiEntryKey, type UiCatalogQuery } from './search-source.js';
+import {
+  createCatalogSearchAccess,
+  readableSearchPage,
+  uiEntryKey,
+  type UiCatalogQuery,
+} from './search-source.js';
 
 /** The one manual entry queue of an account; its lines are reviewed and confirmed like any import. */
 const manualImport = {
@@ -1994,16 +1999,22 @@ async function resolveCards(
   return cards;
 }
 
-/** Printings one review search offers for a card name or expression. */
+/**
+ * Printings one review search offers for a card name or expression. A search the index cannot
+ * answer completely yet fails as a retryable read instead of offering no printing
+ * (docs/search.md#freshness).
+ */
 async function searchPrintings(
   search: SearchClient,
   catalog: Catalog,
   text: string,
   signal: AbortSignal,
 ): Promise<readonly PrintingRecord[]> {
-  const page = await search.execute(
-    { resultLevel: 'printing', query: text, pageSize: UI_LIMITS.importPrintings },
-    signal,
+  const page = readableSearchPage(
+    await search.execute(
+      { resultLevel: 'printing', query: text, pageSize: UI_LIMITS.importPrintings },
+      signal,
+    ),
   );
   const printingIds = page.entries.flatMap((entry) =>
     entry.printing === null ? [] : [entry.printing.printingId],

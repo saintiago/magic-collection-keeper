@@ -1,91 +1,136 @@
 /**
- * Minimal contract-conforming view fixture for Search (docs/search.md#required-query-contracts).
- * Only the published relations exist, backed by tables whose names no consumer knows, and the
- * private views carry the account scope themselves. A provider that maps its storage to the same
- * relations passes the same Search cases without Search knowing its tables.
+ * Minimal contract-conforming projection fixture for Search (docs/search.md#required-query-
+ * contracts). Only Search's declared relations exist, backed by tables whose names no consumer
+ * knows and scoped by the generation and the account the projection published: a replacement
+ * implementation that maps its data to the same relations passes the same Search cases without
+ * Search knowing its storage. The two provider schemas hold decoy records, so a query that read a
+ * provider relation instead of the projection would answer with different data — the fixture
+ * proves the retirement of the cross-owner query views (docs/data-architecture.md#storage-ownership).
  */
 
-import { CATALOG_QUERY_SURFACE } from '../../src/catalog/index.js';
-import { USERCARDS_ACCOUNT_SETTING, USERCARDS_QUERY_SURFACE } from '../../src/usercards/index.js';
+import { SEARCH_ACCOUNT_SETTING, SEARCH_PROJECTION_SURFACE } from '../../src/search/index.js';
 import { createTestDatabase, type TestDatabase } from './postgres-database.js';
 
-const cardColumns = CATALOG_QUERY_SURFACE.relations.cards.columns.map((column) => column.name);
-const printingColumns = CATALOG_QUERY_SURFACE.relations.printings.columns.map(
-  (column) => column.name,
-);
-const copyColumns = USERCARDS_QUERY_SURFACE.relations.copies.columns.map((column) => column.name);
-const associationColumns = USERCARDS_QUERY_SURFACE.relations.associations.columns.map(
-  (column) => column.name,
-);
-
-const boundAccount = `nullif(current_setting('${USERCARDS_ACCOUNT_SETTING}', true), '')`;
-
 const relations = {
-  cards: CATALOG_QUERY_SURFACE.relations.cards.name,
-  cardNames: CATALOG_QUERY_SURFACE.relations.cardNames.name,
-  printings: CATALOG_QUERY_SURFACE.relations.printings.name,
-  publishedRevision: CATALOG_QUERY_SURFACE.relations.publishedRevision.name,
-  copies: USERCARDS_QUERY_SURFACE.relations.copies.name,
-  associations: USERCARDS_QUERY_SURFACE.relations.associations.name,
-  privateRevision: USERCARDS_QUERY_SURFACE.relations.privateRevision.name,
+  catalogProgress: SEARCH_PROJECTION_SURFACE.relations.catalogProgress.name,
+  accountProgress: SEARCH_PROJECTION_SURFACE.relations.accountProgress.name,
+  cards: SEARCH_PROJECTION_SURFACE.relations.cards.name,
+  cardNames: SEARCH_PROJECTION_SURFACE.relations.cardNames.name,
+  printings: SEARCH_PROJECTION_SURFACE.relations.printings.name,
+  copies: SEARCH_PROJECTION_SURFACE.relations.copies.name,
+  tags: SEARCH_PROJECTION_SURFACE.relations.tags.name,
+  associations: SEARCH_PROJECTION_SURFACE.relations.associations.name,
+  indexState: SEARCH_PROJECTION_SURFACE.relations.indexState.name,
+  accountState: SEARCH_PROJECTION_SURFACE.relations.accountState.name,
 } as const;
 
-/** Columns of one relation as a select list over a fixture table with the same column names. */
-function selectColumns(columns: readonly string[]): string {
-  return columns.join(', ');
-}
+const boundAccount = `nullif(current_setting('${SEARCH_ACCOUNT_SETTING}', true), '')`;
+const publishedGeneration = `(select state.generation_id
+   from search_fixture.replacement_state as state
+  where state.published)`;
 
 const fixtureSql = `
 create schema search_fixture;
-create schema catalog;
-create schema usercards;
+create schema search;
 
-create table search_fixture.legacy_card (
-  card_id text, name text, rules_text text, type_line text,
+-- The replacement storage behind the published projection; no consumer names these tables.
+create table search_fixture.replacement_card (
+  generation_id text, card_id text, name text, rules_text text, type_line text,
   colors text[], color_identity text[], mana_value numeric
 );
-create table search_fixture.legacy_card_name (card_id text, language text, name text);
-create table search_fixture.legacy_printing (
+create table search_fixture.replacement_card_name (
+  generation_id text, card_id text, language text, name text
+);
+create table search_fixture.replacement_printing (
+  generation_id text, printing_id text, card_id text, edition text, collector_number text,
+  language text, finishes text[], physical boolean
+);
+create table search_fixture.replacement_copy (
+  generation_id text, account_id text, copy_id text, printing_id text, finish text,
+  condition text, owned boolean, location_id text
+);
+create table search_fixture.replacement_tag (
+  generation_id text, account_id text, tag_id text, kind text, label text, system boolean
+);
+create table search_fixture.replacement_association (
+  generation_id text, account_id text, association_id text, tag_id text, target_level text,
+  target_id text, quantity integer
+);
+create table search_fixture.replacement_state (
+  generation_id text, catalog_revision text, catalog_position text, published boolean
+);
+create table search_fixture.replacement_account_state (account_id text, position text);
+create table search_fixture.catalog_evidence (generation_id text, revision_id text);
+create table search_fixture.account_evidence (generation_id text, account_id text, position text);
+create view ${relations.catalogProgress} as
+  select revision_id from search_fixture.catalog_evidence where generation_id = ${publishedGeneration};
+create view ${relations.accountProgress} with (security_barrier) as
+  select position from search_fixture.account_evidence
+  where generation_id = ${publishedGeneration} and account_id = ${boundAccount};
+
+-- Decoys of the retired cross-owner relations: a query reading these would answer differently.
+create schema catalog;
+create schema usercards;
+create table catalog.cards (
+  card_id text, name text, rules_text text, type_line text, colors text[], color_identity text[],
+  mana_value numeric
+);
+create table catalog.printings (
   printing_id text, card_id text, edition text, collector_number text, language text,
-  finishes text[], physical boolean, image_small text, image_normal text, image_large text,
-  image_art_crop text
+  finishes text[], physical boolean
 );
-create table search_fixture.legacy_revision (
-  revision_id text, source_name text, source_version text, published_at timestamptz
+create table usercards.copies (
+  copy_id text, printing_id text, finish text, condition text, owned boolean, location_id text
 );
-create table search_fixture.legacy_holding (
-  account_id text, copy_id text, printing_id text, finish text, condition text,
-  location_id text, owned boolean
-);
-create table search_fixture.legacy_listing (
-  account_id text, association_id text, tag_id text, target_level text, target_id text,
-  quantity integer
-);
-create table search_fixture.legacy_state (account_id text, revision integer);
 
 create view ${relations.cards} as
-  select ${selectColumns(cardColumns)} from search_fixture.legacy_card;
+  select card.card_id, card.name, card.rules_text, card.type_line, card.colors,
+         card.color_identity, card.mana_value
+  from search_fixture.replacement_card as card
+  where card.generation_id = ${publishedGeneration};
+
 create view ${relations.cardNames} as
-  select card_id, language, name from search_fixture.legacy_card_name;
+  select name.card_id, name.language, name.name
+  from search_fixture.replacement_card_name as name
+  where name.generation_id = ${publishedGeneration};
+
 create view ${relations.printings} as
-  select ${selectColumns(printingColumns)} from search_fixture.legacy_printing;
-create view ${relations.publishedRevision} as
-  select revision_id, source_name, source_version, published_at
-  from search_fixture.legacy_revision;
+  select printing.printing_id, printing.card_id, printing.edition, printing.collector_number,
+         printing.language, printing.finishes, printing.physical
+  from search_fixture.replacement_printing as printing
+  where printing.generation_id = ${publishedGeneration};
 
 create view ${relations.copies} with (security_barrier) as
-  select ${selectColumns(copyColumns)}
-  from search_fixture.legacy_holding where account_id = ${boundAccount};
+  select copy.copy_id, copy.printing_id, copy.finish, copy.condition, copy.owned, copy.location_id
+  from search_fixture.replacement_copy as copy
+  where copy.generation_id = ${publishedGeneration}
+    and copy.account_id = ${boundAccount};
+
+create view ${relations.tags} with (security_barrier) as
+  select tag.tag_id, tag.kind, tag.label, tag.system
+  from search_fixture.replacement_tag as tag
+  where tag.generation_id = ${publishedGeneration}
+    and tag.account_id = ${boundAccount};
+
 create view ${relations.associations} with (security_barrier) as
-  select ${selectColumns(associationColumns)}
-  from search_fixture.legacy_listing where account_id = ${boundAccount};
-create view ${relations.privateRevision} as
-  select coalesce(state.revision, 0)::text as revision
-  from (select ${boundAccount} as account_id) as bound
-  left join search_fixture.legacy_state as state on state.account_id = bound.account_id
-  where bound.account_id is not null;
+  select association.association_id, association.tag_id, association.target_level,
+         association.target_id, association.quantity
+  from search_fixture.replacement_association as association
+  where association.generation_id = ${publishedGeneration}
+    and association.account_id = ${boundAccount};
+
+create view ${relations.indexState} as
+  select state.generation_id, state.catalog_revision, state.catalog_position
+  from search_fixture.replacement_state as state
+  where state.published;
+
+create view ${relations.accountState} with (security_barrier) as
+  select state.position
+  from search_fixture.replacement_account_state as state
+  where state.account_id = ${boundAccount};
 `;
 
+/** One fixture database exposing exactly Search's declared projection relations. */
 export async function createSearchViewDatabase(): Promise<TestDatabase> {
   return createTestDatabase(fixtureSql);
 }

@@ -108,6 +108,8 @@ export interface CatalogSnapshotRequest {
 }
 
 export interface CatalogSnapshotPage {
+  /** Retained completed publications incorporated by this snapshot; identities are opaque. */
+  readonly incorporatedRevisions: readonly string[];
   /** The one published revision every record of this snapshot belongs to. */
   readonly revision: CatalogRevision;
   /**
@@ -234,6 +236,9 @@ select 'revision' as row_kind,
        null::text as record_kind
 from catalog.published_revision as revision
 union all
+select 'incorporated', 0, revision_id, null::text, null::text
+from catalog_private.publication where kind = 'revision'
+union all
 (select 'record' as row_kind,
         (row_number() over (order by kind_rank, record_key))::int as row_position,
         payload,
@@ -274,7 +279,7 @@ from page
 order by row_kind, row_position`;
 
 const snapshotRowSchema = z.object({
-  row_kind: z.enum(['revision', 'record']),
+  row_kind: z.enum(['revision', 'record', 'incorporated']),
   row_position: z.number().int().min(0),
   payload: z.string(),
   change_position: positionSchema.nullable(),
@@ -305,6 +310,7 @@ const cardNameIdentitySchema = z.tuple([
 ]);
 
 interface SnapshotData {
+  readonly incorporatedRevisions: readonly string[];
   readonly revision: CatalogRevision;
   readonly position: CatalogChangePosition;
   readonly records: readonly CatalogPublishedRecord[];
@@ -354,6 +360,7 @@ export function createCatalogPublication(
       return {
         revision: read.revision,
         position: read.position,
+        incorporatedRevisions: read.incorporatedRevisions,
         records: hasMore ? read.records.slice(0, pageSize) : read.records,
         continuation: hasMore
           ? encodeContinuation({
@@ -418,12 +425,22 @@ async function readSnapshot(
   let revision: CatalogRevision | null = null;
   let position: string | null = null;
   const records: CatalogPublishedRecord[] = [];
+  const incorporatedRevisions: string[] = [];
   for (const row of rows) {
     const parsed = snapshotRowSchema.safeParse(row);
     if (!parsed.success) {
       throw new CatalogError('unavailable', 'The catalog returned a result that is not readable.');
     }
-    if (parsed.data.row_kind === 'revision') {
+    if (parsed.data.row_kind === 'incorporated') {
+      const identity = identifierSchema.safeParse(parsed.data.payload);
+      if (!identity.success) {
+        throw new CatalogError(
+          'unavailable',
+          'The catalog returned an unreadable revision identity.',
+        );
+      }
+      incorporatedRevisions.push(identity.data);
+    } else if (parsed.data.row_kind === 'revision') {
       revision = revisionFromJson(parseJsonText(revisionJsonSchema, parsed.data.payload));
       position = parsed.data.change_position;
     } else {
@@ -439,7 +456,7 @@ async function readSnapshot(
       'The published catalog revision has no recorded publication position.',
     );
   }
-  return { revision, position, records };
+  return { revision, position, records, incorporatedRevisions };
 }
 
 async function readChanges(

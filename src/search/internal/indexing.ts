@@ -198,7 +198,12 @@ interface IndexingOptions {
  * freshness state is the position the provider acknowledged.
  */
 type PendingChange =
-  | { readonly kind: 'marker'; readonly position: string; readonly revisionId: string | null }
+  | {
+      readonly kind: 'marker';
+      readonly position: string;
+      readonly revisionId: string | null;
+      readonly write: (sql: SearchSqlExecutor) => Promise<void>;
+    }
   | {
       readonly kind: 'record';
       readonly position: string;
@@ -587,6 +592,9 @@ async function writeCatalogSnapshot(
       continuation: page.continuation,
     });
   }
+  for (const revision of new Set([revisionId, ...page.incorporatedRevisions])) {
+    await recordCatalogProgress(statements, generation, revision);
+  }
   await advanceCatalogCheckpoint(statements, generation, checkpoint, start);
   if (target.queryable) {
     await assertResolved(statements, generation);
@@ -616,6 +624,9 @@ async function writeAccountSnapshot(
       pageSize: options.pageSize,
       continuation: page.continuation,
     });
+  }
+  for (const position of new Set([checkpoint.position, ...page.incorporatedPositions])) {
+    await recordAccountProgress(statements, generation, accountId, position);
   }
   await advanceAccountCheckpoint(statements, generation, accountId, checkpoint, start);
   if (target.queryable) {
@@ -682,8 +693,8 @@ async function applyChangeBatch(
       for (const change of changes) {
         lastKind = change.kind;
         checkpoint = { ...checkpoint, position: change.position };
+        await change.write(statements);
         if (change.kind === 'record') {
-          await change.write(statements);
           continue;
         }
         if (change.revisionId !== null) {
@@ -729,6 +740,7 @@ function catalogChange(generation: string, change: CatalogChange): PendingChange
       kind: 'marker',
       position: change.position,
       revisionId: change.revision.revisionId,
+      write: (sql) => recordCatalogProgress(sql, generation, change.revision.revisionId),
     };
   }
   return {
@@ -755,7 +767,12 @@ async function readAccountChanges(
 
 function userCardsChange(generation: string, change: UserCardsChange): PendingChange {
   if (change.kind === 'revision') {
-    return { kind: 'marker', position: change.position, revisionId: null };
+    return {
+      kind: 'marker',
+      position: change.position,
+      revisionId: null,
+      write: (sql) => recordAccountProgress(sql, generation, change.accountId, change.position),
+    };
   }
   return {
     kind: 'record',
@@ -922,6 +939,20 @@ async function publishGeneration(
     }
     if ((await countUnresolvedReferences(statements, target.generation)) !== 0) {
       return false;
+    }
+    // A complete replacement includes the previously served publications. Carry their exact
+    // identities before retiring the old generation, including evidence beyond source retention.
+    for (const [table, columns] of [
+      ['catalog_progress', 'revision_id'],
+      ['account_progress', 'account_id, position'],
+    ]) {
+      await statementsQuery(
+        statements,
+        `insert into ${searchPrivateSchema}.${table} (generation_id, ${columns})
+         select cast(:generation_id as bigint), ${columns} from ${searchPrivateSchema}.${table}
+         where generation_id = cast(:served as bigint) on conflict do nothing`,
+        { generation_id: target.generation, served },
+      );
     }
     await statementsQuery(
       statements,
@@ -1285,4 +1316,30 @@ function translateIndexingFailure(cause: unknown): SearchError {
   return cause instanceof SearchError
     ? cause
     : new SearchError('unavailable', 'The search index could not be updated.', { cause });
+}
+
+async function recordCatalogProgress(
+  sql: SearchSqlExecutor,
+  generation: string,
+  revision: string,
+): Promise<void> {
+  await statementsQuery(
+    sql,
+    `insert into ${searchPrivateSchema}.catalog_progress (generation_id, revision_id)
+    values (cast(:generation as bigint), :revision) on conflict do nothing`,
+    { generation, revision },
+  );
+}
+async function recordAccountProgress(
+  sql: SearchSqlExecutor,
+  generation: string,
+  account: string,
+  position: string,
+): Promise<void> {
+  await statementsQuery(
+    sql,
+    `insert into ${searchPrivateSchema}.account_progress (generation_id, account_id, position)
+    values (cast(:generation as bigint), :account, :position) on conflict do nothing`,
+    { generation, account, position },
+  );
 }

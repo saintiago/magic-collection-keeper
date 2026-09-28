@@ -88,6 +88,13 @@ post-filtering a fetched page is not a substitute. The evaluator receives read a
 Its SQL implementation can change without changing the public query or result contract. There is no
 second query model inside a transport endpoint or a page.
 
+Freshness retains exact incorporated publication identities with each generation, learned from
+snapshot evidence and completed change markers. That evidence commits with the projection and is
+carried into complete replacement generations, including identities no longer in source retention.
+Both query and observation check membership in this evidence at the indexed state they return;
+identities never learned from a publication remain unknown. Browser progress checks explicit
+positions in bounded batches within one observation deadline and releases only confirmed batches.
+
 Indexing and queries have independent lifetimes and resource bounds. Apply complete changes and
 their checkpoints atomically, or publish a staged complete generation. Keep a consistent relationship
 between public and private facts: retain unresolved references for later indexing rather than dropping

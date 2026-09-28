@@ -1,6 +1,4 @@
-import { CATALOG_QUERY_SURFACE } from '../../catalog/index.js';
-import { USERCARDS_QUERY_SURFACE } from '../../usercards/index.js';
-
+import { incorporatedProgressSql } from './freshness.js';
 import type { SearchSqlValue } from './executor.js';
 import {
   isPrivateCriterion,
@@ -14,29 +12,25 @@ import {
   type SearchQuery,
   type SearchResultLevel,
 } from './model.js';
+import {
+  boundAccountSql,
+  privateRevisionSql,
+  projectionRelations as relations,
+} from './relations.js';
 import type { SearchCountReference } from './results.js';
 
 /**
- * One page read over the published Catalog and UserCards relations
+ * One page read over Search's own projection
  * (docs/search.md#required-query-contracts, docs/search.md#evaluation-and-grouping).
  *
- * The statement joins only the declared views: the entry's card, its printing and, for private
- * criteria, the account-scoped copies and associations. Membership, the exact total count and the
- * revisions are read in one snapshot, and the ordering adds a stable identity tie-breaker, so the
- * page boundary never depends on an unstable order. A caller-supplied predicate never reaches the
- * database: the query model is the only input and every value travels as a named parameter.
+ * The statement reads only Search's published projection relations: the entry's card, its
+ * printing, the account-scoped copies and associations, and the indexed state the result was
+ * evaluated against. Membership, the exact total count and that indexed state are read in one
+ * snapshot, and the ordering adds a stable identity tie-breaker, so the page boundary never
+ * depends on an unstable order. Search queries its own data and never joins a provider's tables or
+ * views (docs/data-architecture.md#storage-ownership); a caller-supplied predicate never reaches
+ * the database: the query model is the only input and every value travels as a named parameter.
  */
-
-/** Relations of the two published surfaces, taken from the declarations instead of repeated text. */
-const relations = {
-  cards: CATALOG_QUERY_SURFACE.relations.cards.name,
-  cardNames: CATALOG_QUERY_SURFACE.relations.cardNames.name,
-  printings: CATALOG_QUERY_SURFACE.relations.printings.name,
-  publishedRevision: CATALOG_QUERY_SURFACE.relations.publishedRevision.name,
-  copies: USERCARDS_QUERY_SURFACE.relations.copies.name,
-  associations: USERCARDS_QUERY_SURFACE.relations.associations.name,
-  privateRevision: USERCARDS_QUERY_SURFACE.relations.privateRevision.name,
-} as const;
 
 export interface SearchPageStatement {
   readonly statement: string;
@@ -44,7 +38,7 @@ export interface SearchPageStatement {
 }
 
 /**
- * One private count read over the published surfaces
+ * One private count read over Search's own projection
  * (docs/search.md#request-and-result, docs/search.md#evaluation-and-grouping).
  *
  * Every requested reference is answered exactly: the account's owned copies of it, the distinct
@@ -52,8 +46,8 @@ export interface SearchPageStatement {
  * under the same covering rule the query evaluation uses. The read takes explicit references, so a
  * caller enriches the entries it presents without changing the query that selected them; the
  * account scope of the statement's execution decides whose copies and associations are counted.
- * The statement also reports the private revision it read, and every value travels as a named
- * parameter.
+ * The statement also reports the account-scoped indexed position the counts describe, and every
+ * value travels as a named parameter.
  */
 export function countsStatement(
   references: readonly SearchCountReference[],
@@ -100,7 +94,7 @@ select
   null::int as owned,
   null::int as locations,
   null::int as intended,
-  (select revision from ${relations.privateRevision}) as private_revision`;
+  ${privateRevisionSql} as private_revision`;
   return { statement, parameters };
 }
 
@@ -251,9 +245,8 @@ export function pageStatement(
     query.ordering.field === 'name'
       ? `lower(card_name) ${query.ordering.direction === 'descending' ? 'desc' : 'asc'}, entry_id asc`
       : `mana_value ${query.ordering.direction === 'descending' ? 'desc' : 'asc'} nulls last, entry_id asc`;
-  const privateRevision = context.privateRead
-    ? `(select revision from ${relations.privateRevision})`
-    : 'null::text';
+  const privateRevision = context.privateRead ? privateRevisionSql : 'null::text';
+  const boundAccount = context.privateRead ? boundAccountSql : 'null::text';
 
   const statement = `with matched as (
   select
@@ -286,13 +279,17 @@ select
   language,
   copies,
   intended,
+  null::text as generation,
   null::text as catalog_revision,
+  null::text as catalog_position,
   null::text as private_revision,
+  null::text as bound_account,
+  null::boolean as required_incorporated,
   null::int as total_count
 from page
 union all
 select
-  'revision' as row_kind,
+  'state' as row_kind,
   0 as row_position,
   null::text as entry_id,
   null::text as card_id,
@@ -304,10 +301,17 @@ select
   null::text as language,
   null::int as copies,
   null::int as intended,
-  revision.revision_id::text as catalog_revision,
+  state.generation_id as generation,
+  state.catalog_revision as catalog_revision,
+  state.catalog_position as catalog_position,
   ${privateRevision} as private_revision,
-  (select count(*)::int from matched) as total_count
-from ${relations.publishedRevision} as revision
+  ${boundAccount} as bound_account,
+  ${incorporatedProgressSql(query.required, bind)} as required_incorporated,
+  case when state.generation_id is null
+       then null::int
+       else (select count(*)::int from matched) end as total_count
+from (values (1)) as marker (one)
+left join ${relations.indexState} as state on true
 order by row_kind desc, row_position`;
 
   parameters.page_limit = limit;

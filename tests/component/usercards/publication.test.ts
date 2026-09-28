@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCatalog, type Catalog } from '../../../src/catalog/index.js';
 import {
   USERCARDS_PUBLICATION_LIMITS,
-  USERCARDS_QUERY_SURFACE,
   createUserCards,
   createUserCardsPublication,
   type TrustedUserContext,
@@ -22,6 +21,7 @@ import {
   type UserCardsSqlTransactor,
   type UserCardsSqlValue,
 } from '../../../src/usercards/index.js';
+import { USERCARDS_QUERY_SURFACE } from '../../../src/usercards/internal/schema.js';
 import { publishCatalog } from '../../support/catalog-database.js';
 import {
   captureUserCardsError,
@@ -421,6 +421,26 @@ describe('usercards publication', () => {
         (record) => record.kind === 'association' && record.association.quantity === 4,
       ),
     ).toBe(false);
+  });
+
+  it('publishes bounded exact account incorporation evidence in snapshots', async () => {
+    const first = await createCopy(alice);
+    const foreign = await createCopy(bob);
+    const second = await createCopy(alice);
+    const page = await publication.readSnapshot({ accountId: alice.accountId, pageSize: 1 });
+    expect(page.incorporatedPositions).toEqual(
+      expect.arrayContaining([first.publicationPosition, second.publicationPosition]),
+    );
+    expect(page.incorporatedPositions).not.toContain(foreign.publicationPosition);
+    expect(page.incorporatedPositions.length).toBeLessThanOrEqual(
+      USERCARDS_PUBLICATION_LIMITS.retainedRevisions,
+    );
+    const next = await publication.readSnapshot({
+      accountId: alice.accountId,
+      pageSize: 1,
+      continuation: page.continuation!,
+    });
+    expect(next.incorporatedPositions).toEqual(page.incorporatedPositions);
   });
 
   it('scopes every snapshot and change to its own account and fails closed on foreign positions', async () => {

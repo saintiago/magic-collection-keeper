@@ -1,11 +1,12 @@
 /**
- * The published relations of Catalog (docs/catalog.md#query-surface).
+ * Catalog's own published read relations (docs/catalog.md#query-surface).
  *
  * Private tables live in `catalog_private`; the read service reads only the views in `catalog` and
- * never the base tables. The declaration below is the provider-owned relation contract those views
- * satisfy: relation names, columns and their meaning.
- * `tests/integration/catalog-query-surface.test.ts` verifies the views against it, so a replacement
- * storage maps its data to exactly these relations and passes the same tests.
+ * never the base tables. Another component builds its own searchable data from the publication
+ * contract instead of reading these views, so they stay an internal implementation choice. The
+ * declaration below is the relation contract those views satisfy: relation names, columns and their
+ * meaning. `tests/integration/catalog-query-surface.test.ts` verifies the views against it, so a
+ * replacement storage maps its data to exactly these relations and passes the same tests.
  */
 
 import { CATALOG_LIMITS } from './model.js';

@@ -1,19 +1,20 @@
 /**
- * Integration scope: the catalog query surface against real PostgreSQL semantics. A replacement
- * storage runs these same cases against its own provisioned database: the declared relations and
- * columns, read-only access for consumer roles, records and revisions read from real writes, and
- * one mutually consistent published revision. The identity constraints below exercise this
- * provider's storage mapping.
+ * Integration scope: Catalog's own published read relations against real PostgreSQL semantics. The
+ * read service and the publication are the only consumers of these views; another component builds
+ * its searchable data from the publication contract instead (docs/catalog.md#query-surface,
+ * docs/data-architecture.md#storage-ownership). A replacement storage runs these same cases against
+ * its own provisioned database: the declared relations and columns, read-only access for the
+ * provider's reader role, records and revisions read from real writes, and one mutually consistent
+ * published revision.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { catalogReaderGrants, createCatalog } from '../../src/catalog/index.js';
 import {
   CATALOG_QUERY_SURFACE,
-  catalogReaderGrants,
-  createCatalog,
   type CatalogColumnType,
-} from '../../src/catalog/index.js';
+} from '../../src/catalog/internal/schema.js';
 import {
   createCatalogTestDatabase,
   publishCatalog,

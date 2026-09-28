@@ -70,8 +70,9 @@ export interface CatalogFixture {
 
 /**
  * Replaces the published revision in one transaction for tests that need published rows without
- * provider snapshots. Read-contract cases use this fixture writer; synchronization cases publish
- * through createCatalogSynchronizer.
+ * provider snapshots. The revision and its durable publication position change together, so a
+ * consumer of the publication contract (for example Search's indexing) can read the snapshot and
+ * resume from that position; synchronization cases publish through createCatalogSynchronizer.
  */
 export async function publishCatalog(
   database: CatalogTestDatabase,
@@ -134,6 +135,23 @@ export async function publishCatalog(
          source_name = excluded.source_name,
          source_version = excluded.source_version,
          published_at = excluded.published_at`,
+      [
+        fixture.revisionId,
+        fixture.sourceName ?? 'scryfall',
+        fixture.sourceVersion ?? '2026-09-26',
+        fixture.publishedAt ?? '2026-09-26T20:00:00.000Z',
+      ],
+    );
+    // One completion marker per revision, as an atomic publication writes it
+    // (docs/catalog.md#query-surface).
+    await database.query(
+      `insert into catalog_private.publication
+         (revision_id, source_name, source_version, published_at, kind)
+       select $1, $2, $3, $4, 'revision'
+        where not exists (
+          select 1 from catalog_private.publication
+           where kind = 'revision' and revision_id = $1
+        )`,
       [
         fixture.revisionId,
         fixture.sourceName ?? 'scryfall',

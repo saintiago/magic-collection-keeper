@@ -6,10 +6,13 @@ import type { SearchRevisions } from './model.js';
 /**
  * Result contract of the Search component (docs/search.md#request-and-result).
  *
- * A page is only produced by a successful evaluation: an unavailable evaluation, invalid or
+ * A result is only produced by a successful evaluation: an unavailable evaluation, invalid or
  * unsupported criteria, unauthorized access and a stale continuation are failures, never an empty
- * page. Entries carry a stable key derived from their typed target, basic card information and the
- * quantity context the query evaluated; counts are exact when supplied and null when unavailable.
+ * result. Entries carry a stable key derived from their typed target, basic card information and
+ * the quantity context the query evaluated; counts are exact when supplied and null when
+ * unavailable. A result that has not incorporated a required publication position is reported as
+ * updating with the last usable indexed result, or without one when no complete generation answers
+ * yet — never as an empty collection (docs/search.md#freshness).
  */
 
 /** Typed reference of one entry, at the query's result level. */
@@ -76,13 +79,23 @@ export interface SearchEntry {
 }
 
 export interface SearchPage {
+  /**
+   * Whether the indexed state this result was evaluated against incorporates every required
+   * publication position (docs/search.md#freshness). `updating` is neither an empty result nor a
+   * failure: entries carry the last usable indexed result when the published generation answers
+   * the query, and are empty only when no complete indexed state answers it yet.
+   */
+  readonly status: 'ready' | 'updating';
   readonly entries: readonly SearchEntry[];
   /** Exact number of matching entries when supplied; null when the count is unavailable. */
   readonly totalCount: number | null;
   /** Opaque continuation of the next page, or null when this page ends the result. */
   readonly continuation: string | null;
-  /** Revisions this page was evaluated against; its continuation is bound to them. */
-  readonly revisions: SearchRevisions;
+  /**
+   * Indexed state this result was evaluated against; its continuation is bound to it. Null while
+   * no complete published generation answers the query.
+   */
+  readonly revisions: SearchRevisions | null;
 }
 
 /**
@@ -116,6 +129,7 @@ export interface SearchCount {
 
 /** Result of one private count read, keyed by the entry key of every requested reference. */
 export interface SearchCountResult {
+  /** Account-scoped indexed publication position the counts were read at. */
   readonly privateRevision: string;
   readonly counts: ReadonlyMap<string, SearchCount>;
 }

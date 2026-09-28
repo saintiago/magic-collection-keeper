@@ -1,19 +1,20 @@
 /**
- * The published query surface of UserCards (docs/user-cards.md#query-surface).
+ * UserCards' own published read relations (docs/user-cards.md#query-surface).
  *
- * Private tables live in `usercards_private`. An end-user consumer reads only the views in
- * `usercards`; a trusted indexing role additionally reads the durable publication stream through
- * `usercardsPublicationGrants`. Both published relations are account-scoped at the database
- * boundary: they select the account bound to the connection with `USERCARDS_ACCOUNT_SCOPE_SQL` and
- * return no rows when no account is bound, so a missing or cleared context fails closed and one
- * account's scope cannot leak into another transaction on a reused connection. Every private view
- * is a security-barrier view, so a consumer's own predicate is evaluated after the account filter
- * instead of on foreign rows. `tests/integration/usercards-query-surface.test.ts` verifies the
- * views against this declaration, so a replacement storage maps its data to exactly these
- * relations and passes the same tests; the publication stream writes the record of a change from
- * the same relations, so a change carries exactly the published record. Pending import state has
- * no published relation: it is read through the component's own pending reads and stays outside
- * the ownership relations (docs/user-cards.md#import-and-capture-state).
+ * Private tables live in `usercards_private`. The component's publication reads these views; its
+ * reader and trusted publication grants reach nothing else, and another component builds its own
+ * searchable data from the publication contract instead of reading them. Both published relations
+ * are account-scoped at the database boundary: they select the account bound to the connection with
+ * `USERCARDS_ACCOUNT_SCOPE_SQL` and return no rows when no account is bound, so a missing or cleared
+ * context fails closed and one account's scope cannot leak into another transaction on a reused
+ * connection. Every private view is a security-barrier view, so a consumer's own predicate is
+ * evaluated after the account filter instead of on foreign rows.
+ * `tests/integration/usercards-query-surface.test.ts` verifies the views against this declaration,
+ * so a replacement storage maps its data to exactly these relations and passes the same tests; the
+ * publication stream writes the record of a change from the same relations, so a change carries
+ * exactly the published record. Pending import state has no published relation: it is read through
+ * the component's own pending reads and stays outside the ownership relations
+ * (docs/user-cards.md#import-and-capture-state).
  */
 
 import { finishes } from '../../catalog/index.js';

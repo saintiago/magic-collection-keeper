@@ -232,10 +232,16 @@ function searchPage(
   options: { readonly totalCount?: number; readonly continuation?: string | null } = {},
 ): SearchPage {
   return {
+    status: 'ready',
     entries,
     totalCount: options.totalCount ?? entries.length,
     continuation: options.continuation ?? null,
-    revisions: { catalogRevision: 'browse-revision', privateRevision: null },
+    revisions: {
+      generation: 'browse-generation',
+      catalogRevision: 'browse-revision',
+      catalogPosition: '1',
+      privateRevision: null,
+    },
   };
 }
 
@@ -391,10 +397,14 @@ for (const level of ['card', 'printing'] as const) {
       const sql = {
         query: async (): Promise<readonly SearchSqlRow[]> => [
           {
-            row_kind: 'revision',
+            row_kind: 'state',
+            required_incorporated: true,
             row_position: 0,
+            generation: 'browse-generation',
             catalog_revision: 'browse-revision',
+            catalog_position: '1',
             private_revision: null,
+            bound_account: null,
             total_count: 1,
           },
           {

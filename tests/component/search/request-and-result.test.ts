@@ -18,6 +18,7 @@ import {
   type SearchFilter,
   type SearchPage,
   type SearchQuery,
+  type SearchRevisions,
 } from '../../../src/search/index.js';
 
 import { callerInput, captureSearchError } from './harness.js';
@@ -35,7 +36,18 @@ function bindingFor(query: SearchQuery) {
   return {
     query,
     context: account,
-    revisions: { catalogRevision: 'catalog-7', privateRevision: '12' },
+    revisions: indexedState(),
+  };
+}
+
+/** One indexed state a page or continuation was bound to. */
+function indexedState(overrides: Partial<SearchRevisions> = {}): SearchRevisions {
+  return {
+    generation: 'generation-1',
+    catalogRevision: 'catalog-7',
+    catalogPosition: '9',
+    privateRevision: '12',
+    ...overrides,
   };
 }
 
@@ -48,6 +60,7 @@ describe('search requests', () => {
       filters: [],
       ordering: { field: 'name', direction: 'ascending' },
       pageSize: SEARCH_LIMITS.defaultPageSize,
+      required: { positions: [], catalogRevision: null },
     });
   });
 
@@ -194,6 +207,7 @@ describe('search requests', () => {
       filters: [{ kind: 'criterion', criterion: { kind: 'tag', tagId: 'deck-7' } }],
       ordering: { field: 'manaValue', direction: 'descending' },
       pageSize: 25,
+      required: { positions: [], catalogRevision: null },
     });
   });
 
@@ -322,7 +336,7 @@ describe('search continuations', () => {
     );
     const binding = {
       query,
-      revisions: { catalogRevision: 'catalog-7', privateRevision: null },
+      revisions: indexedState({ privateRevision: null }),
     };
 
     const token = encodeSearchContinuation({ ...binding, offset: 20 });
@@ -331,7 +345,7 @@ describe('search continuations', () => {
   });
 
   it('does not let lookalike criteria resume another result sequence', () => {
-    const revisions = { catalogRevision: 'catalog-7', privateRevision: null };
+    const revisions = indexedState({ privateRevision: null });
     const left = normalizeSearchRequest(
       callerInput({ resultLevel: 'card', query: 'name:"a;name:b" or c' }),
     );
@@ -363,9 +377,11 @@ describe('search continuations', () => {
       { ...binding, query: otherQuery },
       { ...binding, query: otherOrdering },
       { ...binding, context: otherUser },
-      { ...binding, revisions: { catalogRevision: 'catalog-8', privateRevision: '12' } },
-      { ...binding, revisions: { catalogRevision: 'catalog-7', privateRevision: '13' } },
-      { ...binding, revisions: { catalogRevision: 'catalog-7', privateRevision: null } },
+      { ...binding, revisions: indexedState({ catalogRevision: 'catalog-8' }) },
+      { ...binding, revisions: indexedState({ privateRevision: '13' }) },
+      { ...binding, revisions: indexedState({ privateRevision: null }) },
+      { ...binding, revisions: indexedState({ generation: 'generation-2' }) },
+      { ...binding, revisions: indexedState({ catalogPosition: '10' }) },
     ];
 
     for (const stale of staleCases) {
@@ -401,7 +417,7 @@ describe('search continuations', () => {
 
   it('refuses to bind a private continuation without trusted context', () => {
     const query = privateQuery();
-    const revisions = { catalogRevision: 'catalog-7', privateRevision: '12' };
+    const revisions = indexedState();
 
     expect(
       captureSearchError(() => encodeSearchContinuation({ query, revisions, offset: 0 })).code,
@@ -442,9 +458,10 @@ describe('search result contract', () => {
           quantity: { copies: 2, intended: 4 },
         },
       ],
+      status: 'ready',
       totalCount: null,
       continuation: null,
-      revisions: { catalogRevision: 'catalog-7', privateRevision: '12' },
+      revisions: indexedState(),
     };
 
     expect(page.totalCount).toBeNull();

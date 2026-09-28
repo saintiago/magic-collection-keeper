@@ -124,14 +124,14 @@ advances. Application supplies the transaction-capable executor and the Catalog 
 an association or a location move is only stored once its references resolve, and each change
 commits atomically behind the revision the caller read. Tags keep stable identities with editable
 labels; card and printing associations carry the intended quantity, while copy membership identifies
-one physical copy and carries none. Copies, tags, associations and the private-data revision are read
-through the published views (docs/user-cards.md#query-surface), which filter on the account bound to
-the connection inside a read transaction and return nothing without that scope. Every query-visible
-mutation also publishes its records durably: the account-scoped snapshot/change contract Search
-consumes carries each change's stable identity, upsert or removal meaning and account-scoped
-revision, the mutation reports its publication position and a recovered outcome reports the position
-its copies were published at. UserCards also owns the pending imports behind that surface: a capture
-observation or parsed source line is staged once
+one physical copy and carries none. Copies, tags, associations and the private-data revision follow
+the account the trusted read is scoped to, and the component's own views filter on the account bound
+to the connection inside a read transaction and return nothing without that scope. Every
+query-visible mutation also publishes its records durably: the account-scoped snapshot/change
+contract another component consumes carries each change's stable identity, upsert or removal
+meaning and account-scoped revision, the mutation reports its publication position and a recovered
+outcome reports the position its copies were published at. UserCards also owns the pending imports
+behind that surface: a capture observation or parsed source line is staged once
 (consecutive accepted capture identities collapse into one entry, unresolved readings advance
 nothing), review quotes the entry revision and keeps late recognition alternatives beside the
 reviewed values, and confirmation under an account-scoped operation identity creates the individual
@@ -139,14 +139,20 @@ copies with their provenance or returns the recorded outcome, so a repeated impo
 Pending entries have no published relation and never change ownership; source-format parsing and the
 UI remain with their own tasks.
 
-Search evaluates one normalized query in a single read-only statement over the published Catalog and
-UserCards relations: membership filters, the requested grouping and translated name resolution run
-over the complete result before ordering with a stable identity tie-breaker and the page boundary,
-and the same snapshot returns the exact total count and the catalog and private revisions. Public
-queries read the Catalog views alone, while private criteria or a physical-copy result level read
-UserCards' account-scoped views inside the scope Application binds, so a missing scope fails instead
-of reading another account's rows. A continuation resumes only the same criteria, ordering, user and
-revisions; anything else is a stale continuation that restarts the result.
+Search evaluates one normalized query in a single read-only statement over its own projection:
+membership filters, the requested grouping and translated name resolution run over the complete
+result before ordering with a stable identity tie-breaker and the page boundary, and the same
+snapshot returns the exact total count and the indexed generation, catalog revision and account
+position. It reads no provider relation: Search's published projection is the only query surface,
+private rows answer only inside the account scope Application binds, and a missing scope fails
+instead of answering from rows the scope never published. A result reports whether it has
+incorporated a required committed publication position or published catalog revision; an index that
+has not caught up answers with the last usable indexed result as updating — never as an empty
+collection or a failed write — and the observation capability waits a bounded, cancellable time for
+incorporation without creating indexing work. A continuation resumes only the same criteria,
+ordering, user and indexed state; anything else is a stale continuation that restarts the result.
+The account-scoped progress capability tracks known committed positions for the shell's indexing
+notice, reporting delayed or unavailable instead of completion (docs/search.md#freshness).
 
 Search also owns its rebuildable projection and the background indexing that maintains it
 (docs/search.md#internal-design, docs/data-architecture.md#asynchronous-synchronization). Indexing

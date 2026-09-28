@@ -8,6 +8,7 @@ import {
 import type { TagId } from '../../usercards/index.js';
 
 import { SearchError } from './errors.js';
+import { SEARCH_LIMITS } from './limits.js';
 
 /**
  * Query model of the Search component (docs/search.md#scryfall-compatibility,
@@ -20,33 +21,8 @@ import { SearchError } from './errors.js';
  * field and reaches Search through trusted context only.
  */
 
-const maxIdentifierLength = 200;
-/** JSON escaping can spend six bytes on one string unit of a bound revision or reference. */
-const maxEscapedIdentifierBytes = maxIdentifierLength * 6;
-
-/**
- * Bounds that keep a query, its criteria and a page request bounded. A caller that needs more
- * entries reads further pages; Search never silently truncates a page.
- */
-export const SEARCH_LIMITS = {
-  /** Longest accepted Scryfall-compatible text expression, counted in JavaScript string units. */
-  maxQueryLength: 500,
-  /** Longest accepted name, rules-text or type value. */
-  maxTextLength: 300,
-  /** Most structured criteria one request combines, before a text expression adds its own. */
-  maxCriteria: 50,
-  /** Most explicit references one private count request covers. */
-  maxCountReferences: 200,
-  /** Longest accepted card, printing, copy or tag reference, matching the provider bounds. */
-  maxIdentifierLength,
-  /** Longest accepted edition (set) code, matching the catalog printing bound. */
-  maxEditionLength: 32,
-  /** Longest accepted continuation token (see continuation.ts). */
-  maxContinuationLength: 4 * Math.ceil((64 + 2 * maxEscapedIdentifierBytes + 64) / 3),
-  defaultPageSize: 50,
-  minPageSize: 1,
-  maxPageSize: 100,
-} as const;
+/** The declared bounds live in their own module (limits.ts); the query model republishes them. */
+export { SEARCH_LIMITS };
 
 /** Result level of a query: one playable card, one printing or one physical copy. */
 export const searchResultLevels = ['card', 'printing', 'copy'] as const;
@@ -357,6 +333,21 @@ export interface SearchQuery {
   readonly filters: readonly SearchFilter[];
   readonly ordering: SearchOrdering;
   readonly pageSize: number;
+  /** Known committed progress the answer must already incorporate (docs/search.md#freshness). */
+  readonly required: SearchRequiredProgress;
+}
+
+/**
+ * Known committed indexing progress a request requires incorporated
+ * (docs/search.md#freshness). A position is one the authenticated account published; a catalog
+ * revision is one the public catalog published. Requiring progress creates no indexing work and
+ * never changes a query's membership.
+ */
+export interface SearchRequiredProgress {
+  /** Account-scoped UserCards publication positions known to be committed. */
+  readonly positions: readonly string[];
+  /** Published catalog revision that must be incorporated; null when none is required. */
+  readonly catalogRevision: string | null;
 }
 
 /**
@@ -373,17 +364,33 @@ export interface SearchRequestInput {
   readonly pageSize?: number | null;
   /** Continuation returned by an earlier page of the same query, or absent for the first page. */
   readonly continuation?: string | null;
+  /**
+   * Committed UserCards publication position of the authenticated account the answer must have
+   * incorporated; absent when the caller requires no private progress.
+   */
+  readonly requiredPosition?: string | null;
+  /** Published catalog revision the answer must have incorporated; absent when none is required. */
+  readonly requiredCatalogRevision?: string | null;
 }
 
 /**
- * Provider revisions a page was evaluated against. A continuation is bound to them, so a changed
- * catalog or private revision invalidates it instead of implying an unchanged result
- * (docs/search.md#consistency).
+ * Indexed state a page was evaluated against: the published generation and the source revisions
+ * it holds. A continuation is bound to them, so a changed catalog or private revision invalidates
+ * it instead of implying an unchanged result (docs/search.md#consistency); the reported positions
+ * describe the indexed state without claiming the index holds every current source write
+ * (docs/search.md#freshness).
  */
 export interface SearchRevisions {
+  /** Published indexed generation the query read. */
+  readonly generation: string;
   /** Published catalog revision id the query read. */
   readonly catalogRevision: string;
-  /** Bound account's private-data revision; null when the query reads no private data. */
+  /** Catalog publication position the published generation applied through. */
+  readonly catalogPosition: string;
+  /**
+   * Bound account's indexed publication position; null when the query reads no private data or
+   * when the account has no indexed private state yet.
+   */
   readonly privateRevision: string | null;
 }
 
@@ -429,10 +436,15 @@ export function readSearchCriterion(value: unknown): SearchCriterionRead {
 
 /**
  * Whether a query reads private data and therefore needs authenticated context: a physical-copy
- * result level or any private criterion at any level (docs/search.md#request-and-result).
+ * result level, any private criterion at any level, or a required account publication position
+ * (docs/search.md#request-and-result, docs/search.md#freshness).
  */
 export function requiresTrustedContext(query: SearchQuery): boolean {
-  return query.resultLevel === 'copy' || query.filters.some(filterUsesPrivateCriterion);
+  return (
+    query.resultLevel === 'copy' ||
+    query.required.positions.length > 0 ||
+    query.filters.some(filterUsesPrivateCriterion)
+  );
 }
 
 function filterUsesPrivateCriterion(filter: SearchFilter): boolean {
@@ -532,7 +544,7 @@ function readTagCriterion(value: unknown): SearchCriterionRead {
   const tagId = typeof value === 'string' ? value : '';
   if (tagId.length === 0 || tagId.length > SEARCH_LIMITS.maxIdentifierLength) {
     return unreadable(
-      `A tag criterion needs a tag identity of 1 to ${maxIdentifierLength} characters.`,
+      `A tag criterion needs a tag identity of 1 to ${SEARCH_LIMITS.maxIdentifierLength} characters.`,
     );
   }
   return { ok: true, criterion: { kind: 'tag', tagId } };

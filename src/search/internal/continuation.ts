@@ -16,8 +16,8 @@ import {
 
 /**
  * Query, user and revisions one continuation is bound to (docs/search.md#request-and-result).
- * Evaluation resumes only when the normalized criteria and ordering, the account and the
- * revisions all match; otherwise the continuation is stale and the result must restart.
+ * Evaluation resumes only when the normalized criteria and ordering, the account and the indexed
+ * state all match; otherwise the continuation is stale and the result must restart.
  */
 export interface SearchContinuationBinding {
   readonly query: SearchQuery;
@@ -26,12 +26,17 @@ export interface SearchContinuationBinding {
   readonly revisions: SearchRevisions;
 }
 
+/** One identifier-sized field of a continuation: a revision, a generation or a position. */
+const boundRevision = z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength);
+
 const continuationPayloadSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   /** Digest of the normalized criteria, ordering and account; the raw query stays out of the token. */
   fingerprint: z.string().length(64),
-  catalogRevision: z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength),
-  privateRevision: z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength).nullable(),
+  generation: boundRevision,
+  catalogRevision: boundRevision,
+  catalogPosition: boundRevision,
+  privateRevision: boundRevision.nullable(),
   offset: z.number().int().min(0),
 });
 
@@ -52,6 +57,15 @@ export function encodeSearchContinuation(
     throw new SearchError('invalid-request', 'A continuation needs the catalog revision it read.');
   }
   if (
+    !isBoundRevision(binding.revisions.generation) ||
+    !isBoundRevision(binding.revisions.catalogPosition)
+  ) {
+    throw new SearchError(
+      'invalid-request',
+      'A continuation needs the indexed generation and position it read.',
+    );
+  }
+  if (
     requiresTrustedContext(binding.query) &&
     !isBoundRevision(binding.revisions.privateRevision)
   ) {
@@ -61,9 +75,11 @@ export function encodeSearchContinuation(
     );
   }
   const payload: SearchContinuationPayload = {
-    version: 1,
+    version: 2,
     fingerprint: searchQueryFingerprint(binding.query, accountId),
+    generation: binding.revisions.generation,
     catalogRevision: binding.revisions.catalogRevision,
+    catalogPosition: binding.revisions.catalogPosition,
     privateRevision: binding.revisions.privateRevision,
     offset: binding.offset,
   };
@@ -88,7 +104,9 @@ export interface SearchContinuationCursor {
   readonly offset: number;
   /** Digest of the query, user and ordering the continuation was issued for. */
   readonly fingerprint: string;
+  readonly generation: string;
   readonly catalogRevision: string;
+  readonly catalogPosition: string;
   readonly privateRevision: string | null;
 }
 
@@ -129,7 +147,9 @@ export function verifySearchContinuation(
   const accountId = boundAccountId(binding);
   if (
     cursor.fingerprint !== searchQueryFingerprint(binding.query, accountId) ||
+    cursor.generation !== binding.revisions.generation ||
     cursor.catalogRevision !== binding.revisions.catalogRevision ||
+    cursor.catalogPosition !== binding.revisions.catalogPosition ||
     cursor.privateRevision !== binding.revisions.privateRevision
   ) {
     throw new SearchError(

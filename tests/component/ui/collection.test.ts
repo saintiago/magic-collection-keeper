@@ -136,6 +136,7 @@ describe('collection search access', () => {
   it('presents the owned entries and quantities Search evaluated', async () => {
     const requests: unknown[] = [];
     const pages: SearchPage = {
+      status: 'ready',
       entries: [
         entry(),
         entry({
@@ -152,7 +153,12 @@ describe('collection search access', () => {
       ],
       totalCount: 2,
       continuation: 'cursor-2',
-      revisions: { catalogRevision: 'revision-1', privateRevision: 'private-1' },
+      revisions: {
+        generation: 'generation-1',
+        catalogRevision: 'revision-1',
+        catalogPosition: '1',
+        privateRevision: 'private-1',
+      },
     };
     const search: SearchClient = {
       execute(input) {

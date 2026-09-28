@@ -1,11 +1,13 @@
 /**
- * Integration scope: the UserCards query surface against real PostgreSQL semantics. A replacement
- * storage runs these same cases against its own provisioned database: the declared relations and
- * columns, read-only access for consumer roles, account scoping enforced at the database boundary,
- * consumer predicates that cannot observe the rows the scope excludes, one account's scope never
- * leaking into another transaction on a reused connection, and a private-data revision that
- * follows the account's real writes. Two synthetic accounts stand in for distinct authenticated
- * users.
+ * Integration scope: UserCards' own published read relations against real PostgreSQL semantics. The
+ * component's publication reads these views; another component builds its searchable data from the
+ * publication contract instead of reading them (docs/user-cards.md#query-surface,
+ * docs/data-architecture.md#storage-ownership). A replacement storage runs these same cases against
+ * its own provisioned database: the declared relations and columns, read-only access for the
+ * provider's roles, account scoping enforced at the database boundary, predicates that cannot
+ * observe the rows the scope excludes, one account's scope never leaking into another transaction
+ * on a reused connection, and a private-data revision that follows the account's real writes. Two
+ * synthetic accounts stand in for distinct authenticated users.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -14,14 +16,16 @@ import { createCatalog } from '../../src/catalog/index.js';
 import {
   createUserCards,
   USERCARDS_ACCOUNT_SCOPE_SQL,
-  USERCARDS_QUERY_SURFACE,
   usercardsReaderGrants,
   type PhysicalCopy,
   type TrustedUserContext,
   type UserCards,
-  type UserCardsColumnType,
   type UserCardsSqlRow,
 } from '../../src/usercards/index.js';
+import {
+  USERCARDS_QUERY_SURFACE,
+  type UserCardsColumnType,
+} from '../../src/usercards/internal/schema.js';
 import { publishCatalog } from '../support/catalog-database.js';
 import {
   createUserCardsTestDatabase,

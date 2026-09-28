@@ -5,7 +5,9 @@
  * the component's internals. Application serves a browser and a backend runtime, so its browser-safe
  * contract is src/application/index.ts and its backend compositions are src/application/backend.ts
  * and the packaged deployment composition src/application/deployment.ts. UserInterface's browser
- * entry points are src/ui/index.ts and the deployment composition src/ui/deployment.ts.
+ * entry points are src/ui/index.ts and the deployment composition src/ui/deployment.ts. Search's
+ * browser-safe contract is src/search/browser.ts; its query, count and indexing capabilities stay
+ * in src/search/index.ts.
  */
 
 export const components = ['application', 'catalog', 'recognition', 'search', 'ui', 'usercards'];
@@ -15,7 +17,7 @@ const componentEntries = {
   application: ['index', 'backend', 'deployment'],
   catalog: ['index'],
   recognition: ['index'],
-  search: ['index'],
+  search: ['index', 'browser'],
   ui: ['index', 'deployment'],
   usercards: ['index'],
 };

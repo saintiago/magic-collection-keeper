@@ -104,6 +104,7 @@ export function createCatalogPublicationFixture(
       const page = records.slice(offset, offset + pageSize);
       const next = offset + page.length;
       const result: CatalogSnapshotPage = {
+        incorporatedRevisions: [revision.revisionId],
         revision,
         position,
         records: page,
@@ -237,6 +238,7 @@ export function createUserCardsPublicationFixture(
       return {
         accountId,
         position,
+        incorporatedPositions: [position],
         records: page,
         continuation: next < records.length ? encode({ token: token(), offset: next }) : null,
       };
