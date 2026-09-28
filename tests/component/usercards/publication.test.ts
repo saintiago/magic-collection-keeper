@@ -475,6 +475,45 @@ describe('usercards publication', () => {
     ).toMatchObject({ code: 'invalid-request' });
   });
 
+  it('rejects a foreign position that falls inside the account’s retained range', async () => {
+    const first = await createCopy(alice);
+    const bobCopy = await createCopy(bob);
+    const second = await createCopy(alice);
+    expect(BigInt(bobCopy.publicationPosition) > BigInt(first.publicationPosition)).toBe(true);
+    expect(BigInt(bobCopy.publicationPosition) < BigInt(second.publicationPosition)).toBe(true);
+
+    // Bob's position sits between two of Alice's own positions, so a bound on Alice's retained
+    // range accepts it. Alice's stream never published it, and resuming there would silently skip
+    // everything Alice published before it.
+    const foreign = await captureUserCardsError(
+      publication.readChanges({
+        accountId: alice.accountId,
+        position: bobCopy.publicationPosition,
+      }),
+    );
+    expect(foreign.code).toBe('stale-continuation');
+    expect(foreign.message).toContain('read a new snapshot');
+
+    // Alice's own earlier position still resumes her complete stream, Bob resumes from his, and
+    // zero still means "before everything this account published".
+    const resumed = await changes(alice.accountId, first.publicationPosition);
+    expect(resumed.at(-1)?.position).toBe(second.publicationPosition);
+    expect(resumed.every((change) => change.accountId === alice.accountId)).toBe(true);
+    expect(
+      recordIdentities(
+        resumed.filter((change) => change.kind === 'copy'),
+        'copy',
+      ),
+    ).toEqual([second.copies[0]?.copyId]);
+    expect(await changes(bob.accountId, bobCopy.publicationPosition)).toEqual([]);
+    expect(
+      recordIdentities(
+        (await changes(alice.accountId, '0')).filter((change) => change.kind === 'copy'),
+        'copy',
+      ),
+    ).toEqual([first.copies[0]?.copyId, second.copies[0]?.copyId]);
+  });
+
   it('pages one snapshot and hands its position to the change stream without a gap', async () => {
     await createCopy();
     const deck = await userCards.createTag(alice, { kind: 'deck', label: 'Burn' });

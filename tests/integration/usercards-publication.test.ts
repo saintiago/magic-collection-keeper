@@ -16,7 +16,6 @@ import {
   createUserCardsPublication,
   usercardsPublicationGrants,
   usercardsReaderGrants,
-  type PhysicalCopy,
   type TrustedUserContext,
   type UserCards,
   type UserCardsPublication,
@@ -73,14 +72,13 @@ describe('usercards publication over real storage', () => {
     await database.close();
   });
 
-  async function createCopy(context: TrustedUserContext): Promise<PhysicalCopy> {
-    const created = await userCards.createCopies(context, {
+  function createCopy(context: TrustedUserContext) {
+    return userCards.createCopies(context, {
       printingId: m11Printing.printingId,
       finish: 'nonfoil',
       condition: 'NM',
       quantity: 1,
     });
-    return created.copies[0] as PhysicalCopy;
   }
 
   function copyIds(records: readonly UserCardsPublishedRecord[]): readonly string[] {
@@ -115,7 +113,7 @@ describe('usercards publication over real storage', () => {
         pageSize: 10,
       });
       expect(snapshot.position).toBe(association.publicationPosition);
-      expect(copyIds(snapshot.records)).toEqual([aliceCopy.copyId]);
+      expect(copyIds(snapshot.records)).toEqual([aliceCopy.copies[0]?.copyId]);
       const changes = await publication.readChanges({
         accountId: alice.accountId,
         position: '0',
@@ -154,7 +152,7 @@ describe('usercards publication over real storage', () => {
           await statements.query(USERCARDS_ACCOUNT_SCOPE_SQL, { account_id: alice.accountId });
           return statements.query('select copy_id from usercards.copies');
         }),
-      ).toEqual([{ copy_id: aliceCopy.copyId }]);
+      ).toEqual([{ copy_id: aliceCopy.copies[0]?.copyId }]);
       await expect(
         database.query('select position from usercards_private.publication'),
       ).rejects.toThrow(/permission denied/);
@@ -167,15 +165,25 @@ describe('usercards publication over real storage', () => {
   });
 
   it('publishes each account its own records and positions on a reused connection', async () => {
-    const aliceCopy = await createCopy(alice);
+    const aliceFirst = await createCopy(alice);
     const bobCopy = await createCopy(bob);
+    const aliceSecond = await createCopy(alice);
+    // Bob published between Alice's two publications, so his position sits inside her retained
+    // range and only membership in her own stream rules it out.
+    expect(BigInt(bobCopy.publicationPosition) > BigInt(aliceFirst.publicationPosition)).toBe(true);
+    expect(BigInt(bobCopy.publicationPosition) < BigInt(aliceSecond.publicationPosition)).toBe(
+      true,
+    );
 
     const aliceSnapshot = await publication.readSnapshot({ accountId: alice.accountId });
     const bobSnapshot = await publication.readSnapshot({ accountId: bob.accountId });
     expect(aliceSnapshot.position).toBe(await publishedPosition(alice.accountId));
     expect(bobSnapshot.position).toBe(await publishedPosition(bob.accountId));
-    expect(copyIds(aliceSnapshot.records)).toEqual([aliceCopy.copyId]);
-    expect(copyIds(bobSnapshot.records)).toEqual([bobCopy.copyId]);
+    expect(copyIds(aliceSnapshot.records)).toEqual([
+      aliceFirst.copies[0]?.copyId,
+      aliceSecond.copies[0]?.copyId,
+    ]);
+    expect(copyIds(bobSnapshot.records)).toEqual([bobCopy.copies[0]?.copyId]);
 
     // The same connection reads Alice again after Bob's snapshot: nothing of either read leaks
     // into the other, and both accounts resume from their own positions.
@@ -192,12 +200,13 @@ describe('usercards publication over real storage', () => {
         (change) =>
           change.kind === 'copy' &&
           change.reference.kind === 'copy' &&
-          change.reference.copyId === bobCopy.copyId,
+          change.reference.copyId === bobCopy.copies[0]?.copyId,
       ),
     ).toBe(false);
 
     // Bob's position is not part of Alice's history, so Alice's stream fails closed rather than
-    // pretending to continue from it.
+    // pretending to continue from it — even though it lies inside her retained range. Her own
+    // earlier position still resumes her complete stream.
     expect(
       await captureUserCardsError(
         publication.readChanges({
@@ -206,6 +215,13 @@ describe('usercards publication over real storage', () => {
         }),
       ),
     ).toMatchObject({ code: 'stale-continuation' });
+    const resumed = await publication.readChanges({
+      accountId: alice.accountId,
+      position: aliceFirst.publicationPosition,
+      pageSize: 100,
+    });
+    expect(resumed.position).toBe(aliceSecond.publicationPosition);
+    expect(resumed.changes.every((change) => change.accountId === alice.accountId)).toBe(true);
 
     // A fresh reader observes the same account’s records and positions.
     const reopened = createUserCardsPublication({ sql: database.sql });

@@ -6,8 +6,9 @@
  *
  * A publication continuation or change position the component can no longer resume from reports
  * `stale-continuation`: the account published another revision after a snapshot page, or the
- * retained publication history no longer carries a position. Either outcome requires reading a new
- * snapshot rather than skipping changes (docs/user-cards.md#query-surface).
+ * position is not one this account's retained publication history carries, whether expired or
+ * another account's. Either outcome requires reading a new snapshot rather than skipping changes
+ * (docs/user-cards.md#query-surface).
  */
 export type UserCardsFailureCode =
   'invalid-request' | 'not-found' | 'conflict' | 'stale-continuation' | 'unavailable';

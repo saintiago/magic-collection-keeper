@@ -278,21 +278,24 @@ union all
 order by row_kind, row_position`;
 
 /**
- * One change page plus the retained bounds of one account's stream and the position below which
- * its history was dropped, so expiry is decided against the same state the changes were read
- * from. The page takes the lowest durable positions — ordered by the stored bigint, not the text
- * the transport carries — and the result order repeats that numeric key, so positions stay in
- * order across a decimal digit boundary and across a sort that does not fit memory, and the
- * revision change that completes a mutation follows the records it completes.
+ * One change page plus the expiry floor of one account's retained history and whether the resume
+ * position is one this account published, so both are decided against the same state the changes
+ * were read from. Positions grow across every account, so a numeric bound alone admits another
+ * account's position inside this account's retained range; only membership in this account's own
+ * stream rules that out, because resuming from it would skip this account's earlier changes. The
+ * page takes the lowest durable positions — ordered by the stored bigint, not the text the
+ * transport carries — and the result order repeats that numeric key, so positions stay in order
+ * across a decimal digit boundary and across a sort that does not fit memory, and the revision
+ * change that completes a mutation follows the records it completes.
  */
 const changesPageStatement = `with bounds as (
-  select min(publication.position)::text as oldest_position,
-         max(publication.position)::text as newest_position,
-         coalesce((select state.expired_below
+  select coalesce((select state.expired_below
                      from usercards_private.account_state as state
-                    where state.account_id = :account_id), 0)::text as expired_below
-    from usercards_private.publication as publication
-   where publication.account_id = :account_id
+                    where state.account_id = :account_id), 0)::text as expired_below,
+         exists (select 1
+                   from usercards_private.publication as resumed
+                  where resumed.account_id = :account_id
+                    and resumed.position = cast(:after_position as bigint)) as position_published
 ),
 page as (
   select publication.position::text as position,
@@ -320,9 +323,8 @@ const snapshotRowSchema = z.object({
 });
 
 const boundsRowSchema = z.object({
-  oldest_position: changePositionSchema.nullable(),
-  newest_position: changePositionSchema.nullable(),
   expired_below: changePositionSchema,
+  position_published: z.boolean(),
 });
 
 const changeRowSchema = z.object({
@@ -365,9 +367,9 @@ interface SnapshotData {
 }
 
 interface ChangesData {
-  readonly oldest: string | null;
-  readonly newest: string | null;
   readonly expiredBelow: string;
+  /** Whether the account published the requested resume position; zero never needs one. */
+  readonly positionPublished: boolean;
   readonly changes: readonly UserCardsChange[];
 }
 
@@ -438,7 +440,11 @@ export function createUserCardsPublication(
             'read a new snapshot.',
         );
       }
-      if (read.newest === null ? position !== 0n : position > BigInt(read.newest)) {
+      // Zero means "before everything this account published" and needs no published position.
+      // Every other resume position must be one this account published: another account's
+      // position inside the retained range would otherwise resume mid-gap, silently skipping the
+      // changes this account published before it.
+      if (position !== 0n && !read.positionPublished) {
         throw new UserCardsError(
           'stale-continuation',
           'This position is not part of this account’s publication history; ' +
@@ -542,9 +548,8 @@ function decodeSnapshot(rows: readonly UserCardsSqlRow[]): SnapshotData {
 }
 
 function decodeChanges(accountId: string, rows: readonly UserCardsSqlRow[]): ChangesData {
-  let oldest: string | null = null;
-  let newest: string | null = null;
   let expiredBelow: string | null = null;
+  let positionPublished = false;
   const changes: UserCardsChange[] = [];
   for (const row of rows) {
     switch (row.row_kind) {
@@ -553,9 +558,8 @@ function decodeChanges(accountId: string, rows: readonly UserCardsSqlRow[]): Cha
         if (!bounds.success) {
           throw unreadable();
         }
-        oldest = bounds.data.oldest_position;
-        newest = bounds.data.newest_position;
         expiredBelow = bounds.data.expired_below;
+        positionPublished = bounds.data.position_published;
         break;
       }
       case 'change':
@@ -568,7 +572,7 @@ function decodeChanges(accountId: string, rows: readonly UserCardsSqlRow[]): Cha
   if (expiredBelow === null) {
     throw unreadable();
   }
-  return { oldest, newest, expiredBelow, changes };
+  return { expiredBelow, positionPublished, changes };
 }
 
 function decodeChange(accountId: string, row: z.infer<typeof changeRowSchema>): UserCardsChange {
