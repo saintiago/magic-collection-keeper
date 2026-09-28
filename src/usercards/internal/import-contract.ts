@@ -140,6 +140,12 @@ export interface ImportReceipt {
   readonly sessionId: ImportSessionId;
   readonly sourceKind: string;
   readonly sourceId: string;
+  /**
+   * Durable publication position that made the recorded copies visible. A recovered or replayed
+   * outcome reports the position its acquisition was published at, not the account's current one
+   * (docs/user-cards.md#query-surface).
+   */
+  readonly publicationPosition: string;
   readonly copies: readonly PhysicalCopy[];
 }
 

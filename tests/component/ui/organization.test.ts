@@ -157,7 +157,13 @@ describe('tag changes', () => {
   it('reports a committed rename and a conflict that keeps the caller’s input', async () => {
     const renamed = tag({ label: 'Burn deck', revision: 2 });
     const committed = await renameTag(
-      access({ renameTag: async () => ({ privateRevision: 'r2', tag: renamed }) }),
+      access({
+        renameTag: async () => ({
+          privateRevision: 'r2',
+          publicationPosition: '2',
+          tag: renamed,
+        }),
+      }),
       { tagId: 'tag-burn', expectedRevision: 1, label: 'Burn deck' },
     );
     expect(committed).toEqual({ status: 'committed', message: null, record: renamed });
@@ -209,7 +215,13 @@ describe('tag changes', () => {
   it('changes an association’s intended quantity and recovers a lost response by reading it', async () => {
     const changed = association({ quantity: 4, revision: 4 });
     const committed = await saveAssociation(
-      access({ changeAssociation: async () => ({ privateRevision: 'r4', association: changed }) }),
+      access({
+        changeAssociation: async () => ({
+          privateRevision: 'r4',
+          publicationPosition: '4',
+          association: changed,
+        }),
+      }),
       {
         associationId: 'association-1',
         expectedRevision: 3,
@@ -261,7 +273,13 @@ describe('tag changes', () => {
     const added = association({ revision: 1 });
     await expect(
       addAssociation(
-        access({ createAssociation: async () => ({ privateRevision: 'r1', association: added }) }),
+        access({
+          createAssociation: async () => ({
+            privateRevision: 'r1',
+            publicationPosition: '1',
+            association: added,
+          }),
+        }),
         { tagId: 'tag-to-buy', targetLevel: 'printing', targetId: 'printing-1', quantity: 2 },
       ),
     ).resolves.toEqual({ status: 'committed', message: null, record: added });
@@ -271,6 +289,7 @@ describe('tag changes', () => {
         access({
           removeAssociation: async () => ({
             privateRevision: 'r2',
+            publicationPosition: '2',
             associationId: 'association-1',
           }),
         }),
@@ -299,6 +318,7 @@ describe('copy locations', () => {
           moves.push(input);
           return {
             privateRevision: 'r6',
+            publicationPosition: '6',
             copy: { ...observed, revision: 6 },
             location: association({
               associationId: 'association-location',
@@ -356,7 +376,11 @@ describe('adding selected entries to a tag', () => {
       access: access({
         createAssociation: async (input) => {
           created.push(input);
-          return { privateRevision: 'r1', association: association({ revision: 1 }) };
+          return {
+            privateRevision: 'r1',
+            publicationPosition: '1',
+            association: association({ revision: 1 }),
+          };
         },
       }),
       tag: () => tag({ kind: 'wishlist', tagId: 'tag-to-buy' }),
@@ -408,7 +432,11 @@ describe('adding selected entries to a tag', () => {
         createAssociation: async (input) => {
           if (input.targetId === 'card-bolt') {
             committed.push(input);
-            return { privateRevision: 'r1', association: association({ revision: 1 }) };
+            return {
+              privateRevision: 'r1',
+              publicationPosition: '1',
+              association: association({ revision: 1 }),
+            };
           }
           throw new ApplicationError(
             'conflict',
@@ -451,7 +479,11 @@ describe('adding selected entries to a tag', () => {
         createAssociation: async () => {
           calls += 1;
           if (calls === 1) {
-            return { privateRevision: 'r1', association: association({ revision: 1 }) };
+            return {
+              privateRevision: 'r1',
+              publicationPosition: '1',
+              association: association({ revision: 1 }),
+            };
           }
           throw new ApplicationError('unavailable', 'The service is down.');
         },
@@ -485,7 +517,12 @@ describe('adding selected entries to a tag', () => {
       access: access({
         createAssociation: async () => {
           calls += 1;
-          if (calls === 1) return { privateRevision: 'r1', association: association() };
+          if (calls === 1)
+            return {
+              privateRevision: 'r1',
+              publicationPosition: '1',
+              association: association(),
+            };
           if (calls === 2) throw new ApplicationError('conflict', 'Already associated.');
           throw new ApplicationError('unavailable', 'Lost response.');
         },
@@ -519,7 +556,12 @@ describe('adding selected entries to a tag', () => {
         }),
         setCopyLocation: async (input) => {
           moves.push(input);
-          return { privateRevision: 'r6', copy: observed, location: null };
+          return {
+            privateRevision: 'r6',
+            publicationPosition: '6',
+            copy: observed,
+            location: null,
+          };
         },
       }),
       tag: () => tag({ kind: 'location', tagId: 'tag-binder' }),
@@ -538,7 +580,11 @@ describe('adding selected entries to a tag', () => {
       access: access({
         createAssociation: async (input) => {
           memberships.push(input);
-          return { privateRevision: 'r1', association: association({ revision: 1 }) };
+          return {
+            privateRevision: 'r1',
+            publicationPosition: '1',
+            association: association({ revision: 1 }),
+          };
         },
       }),
       tag: () => tag({ kind: 'deck', tagId: 'tag-burn' }),

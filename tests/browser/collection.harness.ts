@@ -247,7 +247,8 @@ export function installCollectionHarness(root: Element | null): UiCollectionCont
       corrections.push({ id, input: { ...input } });
       return new Promise((resolve, reject) => {
         pendingCorrections.set(id, {
-          resolve: (copies) => resolve({ privateRevision: 'private-2', copies }),
+          resolve: (copies) =>
+            resolve({ privateRevision: 'private-2', publicationPosition: '2', copies }),
           reject,
         });
       });

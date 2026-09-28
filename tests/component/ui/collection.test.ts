@@ -567,7 +567,11 @@ describe('copy access', () => {
         });
       },
       correctCopy: (input: UiCopyCorrection) =>
-        Promise.resolve({ privateRevision: 'private-2', copies: [copy({ ...input })] }),
+        Promise.resolve({
+          privateRevision: 'private-2',
+          publicationPosition: '2',
+          copies: [copy({ ...input })],
+        }),
     } as UiCopyClient;
     const access = createCopyAccess(userCards);
 

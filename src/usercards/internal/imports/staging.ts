@@ -10,7 +10,7 @@ import type {
 import { stagedLineFingerprint } from '../fingerprint.js';
 import { type ImportCandidate } from '../model.js';
 import { importSourceLinePayload } from '../rows.js';
-import { inTransaction, placeholdersFor, readRows } from '../sql.js';
+import { batches, inTransaction, placeholdersFor, readRows } from '../sql.js';
 import type {
   CaptureStageOutcome,
   ImportStageOutcome,
@@ -25,7 +25,6 @@ import type {
 } from '../store.js';
 import {
   advanceRevision,
-  batches,
   bumpSessionStatement,
   currentRevision,
   integerValue,

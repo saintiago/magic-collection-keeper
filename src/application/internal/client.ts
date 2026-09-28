@@ -287,9 +287,11 @@ export function createSearchClient(request: RequestTransport): SearchClient {
  * change is scoped to the caller at the backend boundary. Tags are read as bounded pages, a tag's
  * associations are listed under the same rule, copy corrections and association changes quote the
  * revision the caller read, and an operation that leaves records unchanged reports its failure
- * instead of an empty success. Pending imports are read as bounded session and entry pages, a
- * staged line, review or discard quotes the entry identity the caller read, and a confirmation
- * carries the operation identity a retry or recovery refers to
+ * instead of an empty success. A query-visible change carries the durable publication position
+ * its records were published at, and a recovered confirmation reports the position its copies
+ * were published at (docs/user-cards.md#query-surface). Pending imports are read as bounded
+ * session and entry pages, a staged line, review or discard quotes the entry identity the caller
+ * read, and a confirmation carries the operation identity a retry or recovery refers to
  * (docs/user-cards.md#import-and-capture-state).
  */
 export interface UserCardsClient {
@@ -1221,6 +1223,16 @@ function isIdentifier(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
+/**
+ * Reads a durable publication position: a positive decimal integer carried as text
+ * (docs/user-cards.md#query-surface). A change reported without one is unreadable, never a change
+ * whose progress a consumer could skip.
+ */
+function readPublicationPosition(record: Readonly<Record<string, unknown>> | null): string | null {
+  const position = record?.publicationPosition;
+  return typeof position === 'string' && /^[1-9][0-9]*$/.test(position) ? position : null;
+}
+
 function unreadableSearch(): ApplicationError {
   return new ApplicationError('unavailable', 'The search response could not be read.');
 }
@@ -1242,15 +1254,24 @@ function readCopyReadResult(payload: unknown): CopyReadResult {
   };
 }
 
-/** Reads one copy change: the committed copies and the private revision the change published. */
+/**
+ * Reads one copy change: the committed copies, the private revision the change published and the
+ * publication position a consumer resumes from.
+ */
 function readCopyChangeResult(payload: unknown): CopyChangeResult {
   const record = readObject(payload);
   const copies = readCopyRecords(record?.copies);
   const privateRevision = record?.privateRevision;
-  if (record === null || copies === null || !isIdentifier(privateRevision)) {
+  const publicationPosition = readPublicationPosition(record);
+  if (
+    record === null ||
+    copies === null ||
+    !isIdentifier(privateRevision) ||
+    publicationPosition === null
+  ) {
     throw unreadableCopies();
   }
-  return { privateRevision, copies };
+  return { privateRevision, publicationPosition, copies };
 }
 
 function readCopyRecords(value: unknown): PhysicalCopy[] | null {
@@ -1389,10 +1410,16 @@ function readTagChangeResult(payload: unknown): TagChangeResult {
   const record = readObject(payload);
   const tag = readTag(record?.tag);
   const privateRevision = record?.privateRevision;
-  if (record === null || tag === null || !isIdentifier(privateRevision)) {
+  const publicationPosition = readPublicationPosition(record);
+  if (
+    record === null ||
+    tag === null ||
+    !isIdentifier(privateRevision) ||
+    publicationPosition === null
+  ) {
     throw unreadableTags();
   }
-  return { privateRevision, tag };
+  return { privateRevision, publicationPosition, tag };
 }
 
 /** Reads one association record; card and printing targets carry a quantity, copy targets none. */
@@ -1478,10 +1505,16 @@ function readAssociationChangeResult(payload: unknown): AssociationChangeResult 
   const record = readObject(payload);
   const association = readAssociation(record?.association);
   const privateRevision = record?.privateRevision;
-  if (record === null || association === null || !isIdentifier(privateRevision)) {
+  const publicationPosition = readPublicationPosition(record);
+  if (
+    record === null ||
+    association === null ||
+    !isIdentifier(privateRevision) ||
+    publicationPosition === null
+  ) {
     throw unreadableAssociations();
   }
-  return { privateRevision, association };
+  return { privateRevision, publicationPosition, association };
 }
 
 /** Reads one association removal: the removed identity and the published private revision. */
@@ -1489,10 +1522,16 @@ function readAssociationRemovalResult(payload: unknown): AssociationRemovalResul
   const record = readObject(payload);
   const associationId = record?.associationId;
   const privateRevision = record?.privateRevision;
-  if (record === null || !isIdentifier(associationId) || !isIdentifier(privateRevision)) {
+  const publicationPosition = readPublicationPosition(record);
+  if (
+    record === null ||
+    !isIdentifier(associationId) ||
+    !isIdentifier(privateRevision) ||
+    publicationPosition === null
+  ) {
     throw unreadableAssociations();
   }
-  return { privateRevision, associationId };
+  return { privateRevision, publicationPosition, associationId };
 }
 
 /** Reads the new single location of one copy; an absent location is an explicit null. */
@@ -1501,16 +1540,18 @@ function readCopyLocationResult(payload: unknown): CopyLocationResult {
   const copies = readCopyRecords(record === null ? null : [record.copy]);
   const location = readAssociation(record?.location);
   const privateRevision = record?.privateRevision;
+  const publicationPosition = readPublicationPosition(record);
   if (
     record === null ||
     copies === null ||
     copies[0] === undefined ||
     !isIdentifier(privateRevision) ||
+    publicationPosition === null ||
     (record.location !== null && location === null)
   ) {
     throw unreadableCopies();
   }
-  return { privateRevision, copy: copies[0], location };
+  return { privateRevision, publicationPosition, copy: copies[0], location };
 }
 
 function unreadableTags(): ApplicationError {
@@ -1880,13 +1921,17 @@ function readImportSessionChange(payload: unknown): ImportSessionChange {
   return { privateRevision, session };
 }
 
-/** One recorded confirmation: the operation, its acquisition source and the copies it created. */
+/**
+ * One recorded confirmation: the operation, its acquisition source, the position its copies were
+ * published at and the copies it created.
+ */
 function readImportReceipt(value: unknown): ImportReceipt | null {
   const receipt = readObject(value);
   const operationId = receipt?.operationId;
   const sessionId = receipt?.sessionId;
   const sourceKind = receipt?.sourceKind;
   const sourceId = receipt?.sourceId;
+  const publicationPosition = readPublicationPosition(receipt);
   const copies = readCopyRecords(receipt?.copies);
   if (
     receipt === null ||
@@ -1894,11 +1939,12 @@ function readImportReceipt(value: unknown): ImportReceipt | null {
     !isIdentifier(sessionId) ||
     !isIdentifier(sourceKind) ||
     !isIdentifier(sourceId) ||
+    publicationPosition === null ||
     copies === null
   ) {
     return null;
   }
-  return { operationId, sessionId, sourceKind, sourceId, copies };
+  return { operationId, sessionId, sourceKind, sourceId, publicationPosition, copies };
 }
 
 /** Reads one confirmation: its receipt, whether it replayed a recorded outcome and its revision. */

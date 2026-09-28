@@ -47,6 +47,11 @@ export interface CopyReadResult {
 export interface CopyChangeResult {
   /** Private-data revision the change published. */
   readonly privateRevision: string;
+  /**
+   * Durable publication position of this change (docs/user-cards.md#query-surface): a consumer
+   * that applied the changes up to this position holds the committed change completely.
+   */
+  readonly publicationPosition: string;
   /** Committed affected copies, ordered by copy identity. */
   readonly copies: readonly PhysicalCopy[];
 }
@@ -88,6 +93,8 @@ export interface TagListResult {
 
 export interface TagChangeResult {
   readonly privateRevision: string;
+  /** Durable publication position of this change. */
+  readonly publicationPosition: string;
   readonly tag: Tag;
 }
 
@@ -150,11 +157,15 @@ export interface AssociationReadResult {
 
 export interface AssociationChangeResult {
   readonly privateRevision: string;
+  /** Durable publication position of this change. */
+  readonly publicationPosition: string;
   readonly association: Association;
 }
 
 export interface AssociationRemovalResult {
   readonly privateRevision: string;
+  /** Durable publication position of this removal. */
+  readonly publicationPosition: string;
   readonly associationId: AssociationId;
 }
 
@@ -171,6 +182,8 @@ export interface SetCopyLocationInput {
 
 export interface CopyLocationResult {
   readonly privateRevision: string;
+  /** Durable publication position of this move. */
+  readonly publicationPosition: string;
   /** Committed copy with its published revision. */
   readonly copy: PhysicalCopy;
   /** Committed location membership, or null when the copy has no location. */

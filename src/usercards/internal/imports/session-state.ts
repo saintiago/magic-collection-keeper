@@ -1,7 +1,7 @@
 /** shared persistence for private imports. See docs/user-cards.md#internal-design. */
 import { UserCardsError } from '../errors.js';
 import type { UserCardsSqlExecutor, UserCardsSqlValue } from '../executor.js';
-import { USERCARDS_LIMITS, type ImportEntry, type ImportSession } from '../model.js';
+import { type ImportEntry, type ImportSession } from '../model.js';
 import {
   importCandidatePayloadSql,
   importEntriesFromRows,
@@ -175,18 +175,6 @@ export function textValue(value: UserCardsSqlValue | undefined): string {
     return value;
   }
   throw new UserCardsError('unavailable', 'UserCards returned a result that is not readable.');
-}
-
-/**
- * Splits one change into the bounded batches the deployed write transport accepts. Every batch
- * commits inside the caller's single transaction, so the change stays atomic.
- */
-export function batches<T>(records: readonly T[]): readonly (readonly T[])[] {
-  const grouped: T[][] = [];
-  for (let start = 0; start < records.length; start += USERCARDS_LIMITS.maxRecordsPerStatement) {
-    grouped.push(records.slice(start, start + USERCARDS_LIMITS.maxRecordsPerStatement));
-  }
-  return grouped;
 }
 
 export function lockSessionStatement(accountId: string, sessionId: string): Statement {

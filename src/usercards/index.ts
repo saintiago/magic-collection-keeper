@@ -14,9 +14,12 @@
  * reads. Source imports parse a pasted list, a public Moxfield deck or a reviewed Wizards
  * preconstructed list inside this boundary into the same pending entries, preserving what the
  * source published and reconciling a repeated import of the list the caller identified with what
- * that import already acquired, while another import owns its own acquisitions. Other components
- * import UserCards through this module only; its internal modules stay private to the component
- * (docs/architecture.md, .dependency-cruiser.mjs).
+ * that import already acquired, while another import owns its own acquisitions. Every
+ * query-visible mutation also publishes its records durably through the account-scoped publication
+ * contract Search consumes (createUserCardsPublication); the caller receives the change's
+ * publication position, and recovering a recorded outcome returns the position it was published
+ * at. Other components import UserCards through this module only; its internal modules stay
+ * private to the component (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
 export { UserCardsError, type UserCardsFailureCode } from './internal/errors.js';
@@ -102,6 +105,7 @@ export {
   USERCARDS_ACCOUNT_SCOPE_SQL,
   USERCARDS_ACCOUNT_SETTING,
   USERCARDS_QUERY_SURFACE,
+  usercardsPublicationGrants,
   usercardsReaderGrants,
   usercardsSchemaSql,
   type UserCardsColumnType,
@@ -109,6 +113,25 @@ export {
   type UserCardsQuerySurface,
   type UserCardsRelationColumn,
 } from './internal/schema.js';
+export {
+  USERCARDS_PUBLICATION_LIMITS,
+  createUserCardsPublication,
+  type UserCardsAssociationRecord,
+  type UserCardsChange,
+  type UserCardsChangePosition,
+  type UserCardsChangesPage,
+  type UserCardsChangesRequest,
+  type UserCardsCopyRecord,
+  type UserCardsPublication,
+  type UserCardsPublicationDependencies,
+  type UserCardsPublishedRecord,
+  type UserCardsRecordChange,
+  type UserCardsRecordReference,
+  type UserCardsRevisionChange,
+  type UserCardsSnapshotPage,
+  type UserCardsSnapshotRequest,
+  type UserCardsTagRecord,
+} from './internal/query-publication.js';
 export {
   createUserCards,
   type AssociationChangeResult,

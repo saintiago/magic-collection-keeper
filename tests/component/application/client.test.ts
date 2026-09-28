@@ -449,6 +449,7 @@ describe('user cards client', () => {
   it('corrects one copy under the revision it read and keeps the committed record', async () => {
     const payload = {
       privateRevision: 'private-2',
+      publicationPosition: '2',
       copies: [
         {
           copyId: 'copy-1',
@@ -565,6 +566,7 @@ describe('user cards client', () => {
   it('renames a tag, changes an association and moves a copy’s location', async () => {
     const renamed = {
       privateRevision: 'private-2',
+      publicationPosition: '2',
       tag: { tagId: 'tag/1', kind: 'deck', label: 'Burn deck', system: false, revision: 2 },
     };
     const rename = jsonFetch(renamed);
@@ -590,6 +592,7 @@ describe('user cards client', () => {
 
     const changed = {
       privateRevision: 'private-3',
+      publicationPosition: '3',
       association: {
         associationId: 'association-1',
         tagId: 'tag-1',
@@ -625,6 +628,7 @@ describe('user cards client', () => {
 
     const moved = {
       privateRevision: 'private-4',
+      publicationPosition: '4',
       copy: {
         copyId: 'copy-1',
         printingId: 'printing-1',
@@ -784,6 +788,7 @@ describe('user cards client', () => {
       ],
       replayed: true,
       privateRevision: 'private-4',
+      publicationPosition: '4',
     });
     const confirmationClient = createUserCardsClient(
       createAuthenticatedRequest({

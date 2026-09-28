@@ -376,7 +376,11 @@ export function createOrganizationOperations(dependencies: {
         kind: request.data.kind,
         label: request.data.label,
       });
-      return { privateRevision: data.privateRevision, tag: data.tag };
+      return {
+        privateRevision: data.privateRevision,
+        publicationPosition: data.publicationPosition,
+        tag: data.tag,
+      };
     },
     async renameTag(context: TrustedUserContext, input: RenameTagInput): Promise<TagChangeResult> {
       const accountId = accountIdFrom(context);
@@ -404,7 +408,11 @@ export function createOrganizationOperations(dependencies: {
           'The tag changed after this revision; reload it before renaming it.',
         );
       }
-      return { privateRevision: outcome.privateRevision, tag: outcome.tag };
+      return {
+        privateRevision: outcome.privateRevision,
+        publicationPosition: outcome.publicationPosition,
+        tag: outcome.tag,
+      };
     },
     async readAssociations(
       context: TrustedUserContext,
@@ -460,7 +468,11 @@ export function createOrganizationOperations(dependencies: {
           'This tag already associates that target; change the existing association instead.',
         );
       }
-      return { privateRevision: outcome.privateRevision, association: outcome.association };
+      return {
+        privateRevision: outcome.privateRevision,
+        publicationPosition: outcome.publicationPosition,
+        association: outcome.association,
+      };
     },
     async changeAssociation(
       context: TrustedUserContext,
@@ -503,7 +515,11 @@ export function createOrganizationOperations(dependencies: {
           'The association changed after this revision; reload it before changing it.',
         );
       }
-      return { privateRevision: outcome.privateRevision, association: outcome.association };
+      return {
+        privateRevision: outcome.privateRevision,
+        publicationPosition: outcome.publicationPosition,
+        association: outcome.association,
+      };
     },
     async removeAssociation(
       context: TrustedUserContext,
@@ -548,7 +564,11 @@ export function createOrganizationOperations(dependencies: {
           'The association changed after this revision; reload it before removing it.',
         );
       }
-      return { privateRevision: outcome.privateRevision, associationId: outcome.associationId };
+      return {
+        privateRevision: outcome.privateRevision,
+        publicationPosition: outcome.publicationPosition,
+        associationId: outcome.associationId,
+      };
     },
     async setCopyLocation(
       context: TrustedUserContext,
@@ -590,6 +610,7 @@ export function createOrganizationOperations(dependencies: {
       }
       return {
         privateRevision: outcome.privateRevision,
+        publicationPosition: outcome.publicationPosition,
         copy: outcome.copy,
         location: outcome.location,
       };
