@@ -329,8 +329,15 @@ export interface CaptureStaging {
   ): CaptureStagingOperation<ImportEntryChangeResult>;
   /** Unfinished capture staging attempts of this account, oldest first. */
   retained(): readonly CaptureRetainedObservation[];
-  /** Reattaches to one retained attempt under its capture identity, or null. */
-  resume(captureId: string): CaptureRetainedOperation<CaptureStageResult> | null;
+  /**
+   * Reattaches to one retained attempt under its capture identity, or null. The attempt keeps the
+   * identity and input it was begun with; the signal is the cancellation scope of the session that
+   * recovers it, so a replay never inherits the caller scope its departure aborted.
+   */
+  resume(
+    captureId: string,
+    signal?: AbortSignal,
+  ): CaptureRetainedOperation<CaptureStageResult> | null;
 }
 
 /**

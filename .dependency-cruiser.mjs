@@ -66,16 +66,14 @@ const providers = {
   search: ['catalog', 'usercards'],
   usercards: ['catalog'],
 };
-const directionRules = components
-  .filter((component) => component !== 'ui')
-  .map((component) => ({
-    name: `allowed-providers-of-${component}`,
-    severity: 'error',
-    from: { path: `^src/${component}/` },
-    to: {
-      path: `^src/(${components.filter((target) => target !== component && !providers[component].includes(target)).join('|')})/`,
-    },
-  }));
+const directionRules = components.map((component) => ({
+  name: `allowed-providers-of-${component}`,
+  severity: 'error',
+  from: { path: `^src/${component}/` },
+  to: {
+    path: `^src/(${components.filter((target) => target !== component && !providers[component].includes(target)).join('|')})/`,
+  },
+}));
 
 /** @type {import('dependency-cruiser').IConfiguration} */
 const config = {

@@ -98,11 +98,23 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
   let presentedStatus: CaptureStatusKind | null = null;
   /** Highest event identity the view has presented; a redraw never repeats a cue. */
   let presentedEvent = 0;
+  /** Reading identity the status line presents now, so a repaint does not repeat its text. */
+  let presentedReading: string | null = null;
+  /** Whether this view already released its subscription, its session and its preview. */
+  let disposed = false;
 
   const unsubscribe = session.observe(paint);
   const stopObserving = (): void => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    options.signal.removeEventListener('abort', stopObserving);
     unsubscribe();
     session.dispose();
+    // Disposal detaches what this view attached: no stream or preview state stays on its surface
+    // (docs/ui/capture-controls.md#presentation-and-lifetime).
+    presentPreview(null);
   };
   options.signal.addEventListener('abort', stopObserving, { once: true });
   if (options.signal.aborted) {
@@ -120,10 +132,11 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
 
   return { element, stop: () => session.stop(), dispose: stopObserving };
 
-  /** Presents one published state: the preview, the status line and every new event. */
+  /** Presents one published state: the preview, the status line, the current evidence and events. */
   function paint(snapshot: CaptureSnapshot): void {
     presentPreview(snapshot.preview);
     presentStatus(snapshot);
+    presentReading(snapshot.attempt?.reading ?? null);
     for (const event of snapshot.events) {
       if (event.sequence <= presentedEvent) {
         continue;
@@ -140,6 +153,37 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       snapshot.running ||
       snapshot.status.kind === 'starting' ||
       snapshot.recoverable;
+  }
+
+  /**
+   * Presents the attempt's current provisional evidence once per reading: the candidates the
+   * reading holds and its uncertainty, without a cue and without presenting its suggestion as a
+   * certain identity (docs/ui/capture-controls.md#presentation-and-lifetime). A settled, certain
+   * reading is what its own outcome event reports, and an event the same state carries replaces
+   * this text below.
+   */
+  function presentReading(reading: CaptureReading | null): void {
+    const identity =
+      reading === null ? null : `${reading.captureId}:${reading.attempt}:${reading.revision}`;
+    if (identity === presentedReading) {
+      return;
+    }
+    presentedReading = identity;
+    if (
+      reading === null ||
+      reading.status !== 'possible' ||
+      reading.candidates.length === 0 ||
+      (!reading.provisional && !reading.uncertain)
+    ) {
+      return;
+    }
+    const names = captureNames(reading);
+    say(
+      reading.uncertain
+        ? `Reading one of ${names}. Identification is uncertain.`
+        : `Reading ${captureName(reading) ?? names}.`,
+      null,
+    );
   }
 
   /** Attaches the session's live preview to the surface this view presents. */

@@ -47,7 +47,7 @@ export function captureStaging(userCards: UserCardsAccountOperations): CaptureSt
             : [],
         );
     },
-    resume(captureId) {
+    resume(captureId, signal) {
       const attempt = userCards.resume(captureId);
       if (attempt === null || attempt.kind !== 'stageCaptureObservation') {
         return null;
@@ -56,9 +56,12 @@ export function captureStaging(userCards: UserCardsAccountOperations): CaptureSt
         operationId: captureId,
         input: attempt.request,
         // Recovery replays the identity and input the provider already owns, so a lost response
-        // returns the recorded decision instead of staging the observation again.
+        // returns the recorded decision instead of staging the observation again. The recovering
+        // caller's own scope replaces the departed one: the retained attempt keeps its identity,
+        // while the replay is cancelled with the session that dispatches it
+        // (docs/user-cards.md#browser-operation-lifecycle).
         observe: async (): Promise<CaptureOperationOutcome<CaptureStageResult>> =>
-          readOutcome(await attempt.retry()),
+          readOutcome(await attempt.retry(signal)),
       } satisfies CaptureRetainedOperation<CaptureStageResult>;
     },
   };

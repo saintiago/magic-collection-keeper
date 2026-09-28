@@ -158,7 +158,10 @@ export function createCapture<Frame>(options: CaptureOptions<Frame>): Capture {
     controller = session;
     try {
       const granted = await open.call(device);
-      if (closed || session.signal.aborted) {
+      if (closed || controller !== session) {
+        // A stop, a dispose or a later start already replaced this camera lifetime: the stream
+        // this superseded request granted is closed without touching the live one
+        // (docs/capture.md#admission-and-lifecycle).
         closeCamera(granted);
         return;
       }
@@ -175,10 +178,10 @@ export function createCapture<Frame>(options: CaptureOptions<Frame>): Capture {
       void ensurePrepared();
       schedule();
     } catch (cause) {
-      if (controller === session) {
-        controller = null;
+      if (closed || controller !== session) {
+        // A superseded acquisition never changes the state of the camera that replaced it.
+        return;
       }
-      starting = false;
       stopLive();
       status = { kind: 'failed', failure: failureMessage(cause) };
       publish();
@@ -344,7 +347,9 @@ export function createCapture<Frame>(options: CaptureOptions<Frame>): Capture {
   /**
    * Prepares the Recognition session on demand; a failed preparation is retried by the next one.
    * A failure that cannot run inference is reported without preventing the session from sampling
-   * again or from recovering an attempt that already staged something.
+   * again or from recovering an attempt that already staged something. Every continuation belongs
+   * to the camera lifetime that began it: a preparation of a released camera writes no readiness
+   * and reports no failure into the run that replaced it (docs/capture.md#admission-and-lifecycle).
    */
   async function ensurePrepared(): Promise<void> {
     const scanner = recognition;
@@ -353,8 +358,9 @@ export function createCapture<Frame>(options: CaptureOptions<Frame>): Capture {
       await preparing;
       return;
     }
-    const signal = controller?.signal;
-    preparing = Promise.resolve()
+    const cameraLifetime = controller;
+    const signal = cameraLifetime?.signal;
+    const preparation = Promise.resolve()
       // A replacement implementation could also fail without returning a promise.
       .then(() =>
         scanner.prepare({
@@ -365,22 +371,29 @@ export function createCapture<Frame>(options: CaptureOptions<Frame>): Capture {
       )
       .then(
         () => {
+          if (closed || controller !== cameraLifetime) {
+            return;
+          }
           prepared = true;
-          if (running && !closed) {
+          if (running) {
             status = { kind: 'running', failure: null };
             publish();
           }
         },
         (cause: unknown) => {
-          if (running && !closed) {
-            settleUnavailable(null, 'preparation', failureMessage(cause), false);
+          if (closed || controller !== cameraLifetime || !running) {
+            return;
           }
+          settleUnavailable(null, 'preparation', failureMessage(cause), false);
         },
       )
       .finally(() => {
-        preparing = null;
+        if (preparing === preparation) {
+          preparing = null;
+        }
       });
-    await preparing;
+    preparing = preparation;
+    await preparation;
   }
 
   /** Samples the camera and starts one attempt for a settled frame that is due. */
@@ -462,6 +475,10 @@ export function createCapture<Frame>(options: CaptureOptions<Frame>): Capture {
         return handled;
       }
       record.reading = captureReading(reading);
+      // The current evidence is observable as soon as it arrives: a pending staging request or
+      // attachment serializes its own work, never the publication of a newer reading
+      // (docs/capture.md#internal-design).
+      publish();
       const retained =
         (record.staging !== null || record.entryId !== null) &&
         reading.evidence.cardPresence === 'single' &&
@@ -691,7 +708,9 @@ export function createCapture<Frame>(options: CaptureOptions<Frame>): Capture {
     record: Attempt,
   ): Promise<CaptureOperationOutcome<CaptureStageResult>> {
     if (record.unresolved) {
-      const attempt = staging.resume(record.captureId);
+      // The replay runs under this session's cancellation scope, not the departed caller scope the
+      // retained request was begun with (docs/user-cards.md#browser-operation-lifecycle).
+      const attempt = staging.resume(record.captureId, lifecycle.signal);
       return attempt === null ? { state: 'unknown' } : attempt.observe();
     }
     const observation = record.staging;

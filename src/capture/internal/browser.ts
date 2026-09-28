@@ -35,13 +35,20 @@ export interface CaptureSessionRequest {
 
 /**
  * The Capture capability Application supplies the UserInterface: one composed import identity and
- * the factory of the sessions that bind it.
+ * the factory of the sessions that bind it, with the account teardown Application drives when a
+ * presented account ends (docs/architecture.md#runtime-boundaries).
  */
 export interface CaptureBrowser {
   /** Composes one pending-import identity a session can bind and the review can present. */
   createImportId(): string;
   /** Creates one session bound to one account and import identity over the supplied device. */
   create(request: CaptureSessionRequest): Capture;
+  /**
+   * Ends one account's capture sessions: every session created for it is disposed, so an open
+   * camera, its inference and its feedback end with the account that owns them instead of a page
+   * disposal. A session created for the account afterwards binds freshly.
+   */
+  endAccount(accountId: string): void;
 }
 
 export interface CaptureBrowserOptions {
@@ -63,22 +70,62 @@ export function createCaptureBrowser(options: CaptureBrowserOptions): CaptureBro
     throw new TypeError('createCaptureBrowser requires the UserCards browser operations.');
   }
   const identity = options.identity ?? createCaptureIdentity;
+  /** Live sessions of each presented account, so Application can end the work it leaves behind. */
+  const sessions = new Map<string, Set<Capture>>();
   return {
     createImportId: () => identity('capture-import'),
     create(request) {
-      return createCapture({
-        accountId: request.accountId,
-        importId: request.importId,
-        device: request.device,
-        createRecognition: options.createRecognition,
-        engines: options.engines,
-        // One session stages through the account-scoped facade, so its reads and retained attempts
-        // never cross into another presented account (docs/architecture.md#runtime-boundaries).
-        staging: captureStaging(options.userCards.account(request.accountId)),
-        identity: () => identity('capture'),
-        ...(options.timers === undefined ? {} : { timers: options.timers }),
-        ...(request.reviewed === undefined ? {} : { reviewed: request.reviewed }),
-      });
+      return track(
+        request.accountId,
+        createCapture({
+          accountId: request.accountId,
+          importId: request.importId,
+          device: request.device,
+          createRecognition: options.createRecognition,
+          engines: options.engines,
+          // One session stages through the account-scoped facade, so its reads and retained
+          // attempts never cross into another presented account
+          // (docs/architecture.md#runtime-boundaries).
+          staging: captureStaging(options.userCards.account(request.accountId)),
+          identity: () => identity('capture'),
+          ...(options.timers === undefined ? {} : { timers: options.timers }),
+          ...(request.reviewed === undefined ? {} : { reviewed: request.reviewed }),
+        }),
+      );
+    },
+    endAccount(accountId) {
+      const live = sessions.get(accountId);
+      if (live === undefined) {
+        return;
+      }
+      sessions.delete(accountId);
+      for (const session of [...live]) {
+        session.dispose();
+      }
     },
   };
+
+  /** Registers one session under its account; disposing it releases the registration. */
+  function track(accountId: string, session: Capture): Capture {
+    const live = sessions.get(accountId) ?? new Set<Capture>();
+    sessions.set(accountId, live);
+    const tracked: Capture = {
+      importId: session.importId,
+      accountId: session.accountId,
+      prepare: () => session.prepare(),
+      start: () => session.start(),
+      stop: () => session.stop(),
+      retry: () => session.retry(),
+      observe: (listener) => session.observe(listener),
+      dispose: () => {
+        live.delete(session);
+        if (live.size === 0 && sessions.get(accountId) === live) {
+          sessions.delete(accountId);
+        }
+        session.dispose();
+      },
+    };
+    live.add(session);
+    return tracked;
+  }
 }

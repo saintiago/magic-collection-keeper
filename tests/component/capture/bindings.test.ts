@@ -18,10 +18,17 @@ import {
   captureStaging,
   createBrowserCaptureDevice,
   createCaptureAdmission,
+  createCaptureBrowser,
   frameDifference,
+  type CaptureBrowserDevice,
+  type CaptureSnapshot,
   type CaptureVideoSurface,
 } from '../../../src/capture/index.js';
-import type { RecognitionCandidate, RecognitionReading } from '../../../src/recognition/index.js';
+import {
+  recognitionEngineNames,
+  type RecognitionCandidate,
+  type RecognitionReading,
+} from '../../../src/recognition/index.js';
 import {
   createUserCardsOperations,
   type UserCardsBrowserClient,
@@ -310,6 +317,129 @@ describe('capture staging binding', () => {
 
     expect(staging.retained()).toEqual([]);
     expect(staging.resume(scope.retained()[0]?.operationId ?? 'missing')).toBeNull();
+  });
+
+  it('replays a retained attempt under the recovering caller s cancellation scope', async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const operations = createUserCardsOperations({
+      storage: null,
+      client: client({
+        stageCaptureObservation: (_input, signal) => {
+          signals.push(signal);
+          if (signals.length === 1) {
+            return Promise.reject(new ApplicationError('unavailable', 'Response lost.'));
+          }
+          const result: CaptureStageResult = {
+            privateRevision: 'private-2',
+            outcome: 'admitted',
+            replayed: true,
+            session: session(),
+            entry: entry(),
+          };
+          return Promise.resolve(result);
+        },
+      }),
+    });
+    const staging = captureStaging(operations.account('alice'));
+    const observed: StageCaptureInput = {
+      sessionId: 'import-1',
+      captureId: 'capture-1',
+      printingId: 'printing-1',
+    };
+    // The view that dispatched the observation leaves: its caller scope is aborted, while the
+    // attempt itself stays with the account (docs/user-cards.md#browser-operation-lifecycle).
+    const departed = new AbortController();
+    await staging.stage(observed, departed.signal).observe();
+    departed.abort();
+
+    const recovering = new AbortController();
+    const resumed = staging.resume('capture-1', recovering.signal);
+    await expect(resumed?.observe()).resolves.toEqual({
+      state: 'committed',
+      record: expect.objectContaining({ outcome: 'admitted', replayed: true }),
+    });
+
+    // The replay quotes the retained identity and input, but is cancelled with its new caller
+    // instead of the scope its departure already aborted.
+    expect(signals[0]).toBe(departed.signal);
+    expect(signals[1]).toBe(recovering.signal);
+  });
+});
+
+describe('capture browser composition', () => {
+  it('ends one account s sessions and leaves another account s work running', async () => {
+    const operations = createUserCardsOperations({ storage: null, client: client() });
+    const closed: string[] = [];
+    const opened: string[] = [];
+    let identity = 0;
+    const browser = createCaptureBrowser({
+      userCards: operations,
+      createRecognition: () => ({
+        prepare: (request) =>
+          Promise.resolve({
+            sessionId: request.sessionId,
+            engines: [...request.engines],
+            versions: {},
+            timings: {},
+          }),
+        recognize: () => ({
+          initial: Promise.reject(new Error('The case runs no inference.')),
+          completion: Promise.resolve(),
+        }),
+        dispose: () => {},
+      }),
+      engines: recognitionEngineNames(false),
+      identity: () => `capture-${(identity += 1)}`,
+    });
+    const device = (accountId: string): CaptureBrowserDevice => ({
+      openCamera: () => {
+        opened.push(accountId);
+        return Promise.resolve({
+          preview: { stream: {} as MediaStream },
+          sample: () => null,
+          read: () => null,
+          close: () => {
+            closed.push(accountId);
+          },
+        });
+      },
+      release: () => {},
+    });
+    const alice = browser.create({
+      accountId: 'alice',
+      importId: 'import-1',
+      device: device('alice'),
+    });
+    const bob = browser.create({
+      accountId: 'bob',
+      importId: 'import-1',
+      device: device('bob'),
+    });
+    await alice.start();
+    await bob.start();
+    expect(opened).toEqual(['alice', 'bob']);
+
+    browser.endAccount('alice');
+
+    // Only the departed account's camera is released, and its stale capability starts no further
+    // work or delivery (docs/architecture.md#runtime-boundaries).
+    expect(closed).toEqual(['alice']);
+    await alice.start();
+    expect(opened).toEqual(['alice', 'bob']);
+    const departed: CaptureSnapshot[] = [];
+    alice.observe((snapshot) => {
+      departed.push(snapshot);
+    });
+    expect(departed).toEqual([]);
+
+    // The presented account's own session keeps running.
+    const presented: CaptureSnapshot[] = [];
+    bob.observe((snapshot) => {
+      presented.push(snapshot);
+    });
+    expect(presented.at(-1)?.running).toBe(true);
+    expect(() => browser.endAccount('carol')).not.toThrow();
+    bob.dispose();
   });
 });
 

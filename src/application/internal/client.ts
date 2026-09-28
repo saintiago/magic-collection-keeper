@@ -877,6 +877,10 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
       progress?.dispose();
       progress = null;
       if (ended !== null) {
+        // Live capture work of the departed account ends with it even when no page presented the
+        // session: Application disposes what its own composition handed out
+        // (docs/capture.md#admission-and-lifecycle, docs/architecture.md#runtime-boundaries).
+        capture.endAccount(ended);
         cardList.endAccount(ended);
         userCards.release(ended);
       }

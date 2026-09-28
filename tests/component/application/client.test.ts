@@ -24,6 +24,7 @@ import {
   readPublicSettings,
   resolveApplicationConfiguration,
 } from '../../../src/application/index.js';
+import type { CaptureSnapshot } from '../../../src/capture/index.js';
 
 import { signedInStorage, testConfiguration, testPrompt } from './harness.js';
 
@@ -1192,6 +1193,84 @@ describe('browser application', () => {
     const again = userCards?.account('cognito-alice');
     expect(again).not.toBe(alice);
     expect(again?.retained()).toEqual([]);
+  });
+
+  it('disposes the capture sessions of the account it leaves with no page presenting them', async () => {
+    const received: UserInterfaceCapabilities[] = [];
+    const releasedRecognition: string[] = [];
+    const application = createBrowserApplication({
+      settings: publicSettings(),
+      prompt: testPrompt(),
+      storage: signedInStorage(),
+      attemptStorage: null,
+      fetch: jsonFetch({ ok: true }).fetch,
+      // The session is driven headlessly here, so the case owns the recognition lifecycle the
+      // account teardown must reach instead of loading the preserved browser engines.
+      createRecognition: () => ({
+        prepare: (request) =>
+          Promise.resolve({
+            sessionId: request.sessionId,
+            engines: [...request.engines],
+            versions: {},
+            timings: {},
+          }),
+        recognize: () => ({
+          initial: Promise.reject(new Error('The case does not run inference.')),
+          completion: Promise.resolve(),
+        }),
+        dispose: (request) => {
+          releasedRecognition.push(request.sessionId);
+        },
+      }),
+      createUserInterface: (capabilities) => {
+        received.push(capabilities);
+        return null;
+      },
+    });
+    const capabilities = received[0]!;
+    const accountId = application.identity.current()!.accountId;
+    let closed = 0;
+    let released = 0;
+    let opened = 0;
+    const session = capabilities.capture.create({
+      accountId,
+      importId: capabilities.capture.createImportId(),
+      device: {
+        openCamera: () => {
+          opened += 1;
+          return Promise.resolve({
+            preview: { stream: {} as MediaStream },
+            sample: () => null,
+            read: () => null,
+            close: () => {
+              closed += 1;
+            },
+          });
+        },
+        release: () => {
+          released += 1;
+        },
+      },
+    });
+    const states: CaptureSnapshot[] = [];
+    session.observe((snapshot) => {
+      states.push(snapshot);
+    });
+    await session.start();
+    expect(states.at(-1)?.running).toBe(true);
+
+    application.endSession();
+
+    // The camera, the recognition session and the subscription end with the account even though no
+    // page disposed the view that created the session
+    // (docs/capture.md#admission-and-lifecycle, docs/architecture.md#runtime-boundaries).
+    expect(closed).toBe(1);
+    expect(released).toBe(1);
+    expect(releasedRecognition).toHaveLength(1);
+    const observed = states.length;
+    await session.start();
+    expect(opened).toBe(1);
+    expect(states.length).toBe(observed);
   });
 
   it('reads Search through the entry point UserInterface received', async () => {

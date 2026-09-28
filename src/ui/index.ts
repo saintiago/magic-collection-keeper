@@ -40,6 +40,11 @@ export {
 } from './internal/copy-edits.js';
 export { createCollectionPages } from './internal/collection.js';
 export {
+  createCaptureControls,
+  type UiCaptureControls,
+  type UiCaptureOptions,
+} from './internal/capture.js';
+export {
   cardListBasicContent,
   createCardListView,
   type UiCardList,

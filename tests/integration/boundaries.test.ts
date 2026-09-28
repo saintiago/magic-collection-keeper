@@ -65,6 +65,10 @@ describe('component import boundaries', () => {
         'allowed-providers-of-application: src/application/index.ts -> src/ui/internal/page.ts',
         'allowed-providers-of-card-list: src/card-list/internal/window.ts -> src/ui/index.ts',
         'allowed-providers-of-capture: src/capture/internal/device.ts -> src/ui/index.ts',
+        // UserInterface presents Capture: its public Capture import stays allowed, while the
+        // direct Recognition imports this fixture also carries are rejected.
+        'allowed-providers-of-ui: src/ui/index.ts -> src/recognition/index.ts',
+        'allowed-providers-of-ui: src/ui/index.ts -> src/recognition/internal/engine.ts',
         'allowed-providers-of-usercards: src/usercards/store.ts -> src/search/index.ts',
         'allowed-providers-of-catalog: src/catalog/index.ts -> src/recognition/index.ts',
         'no-circular: src/card-list/internal/window.ts -> src/ui/index.ts',

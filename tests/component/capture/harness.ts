@@ -24,6 +24,7 @@ import {
   createRecognition,
   recognitionEngineNames,
   type RecognitionEngineOutcome,
+  type RecognitionEnginePreparation,
   type RecognitionEnginePipeline,
 } from '../../../src/recognition/index.js';
 import {
@@ -132,6 +133,20 @@ export interface CaptureHarness {
     readonly frame: TestFrame;
   }[];
   camera(): { readonly opened: number; readonly released: number; readonly closed: boolean };
+  /** Suspends the next camera request until the case grants or denies it. */
+  holdCamera(): void;
+  /** Grants the oldest suspended camera request with a fresh open camera. */
+  grantCamera(): void;
+  /** Denies the oldest suspended camera request with the deployment's failure. */
+  denyCamera(message: string): void;
+  /** Suspends the next preparation until the case completes or rejects it. */
+  holdPreparation(): void;
+  /** Completes the oldest suspended preparation. */
+  completePreparation(): void;
+  /** Rejects the oldest suspended preparation with the message the runtime reported. */
+  rejectPreparation(message: string): void;
+  /** Creates another session of the same account and import, as returning to the page does. */
+  reopen(): Capture;
   /** Changes of the pending review the session reported to its page. */
   reviews(): readonly CaptureReviewChange[];
   /**
@@ -209,40 +224,65 @@ export function createCaptureHarness(options: CaptureHarnessOptions = {}): Captu
   const completions: (() => void)[] = [];
   const reviews: CaptureReviewChange[] = [];
   let preparationFailure: string | null = null;
+  let heldPreparationCount = 0;
+  let heldCameraCount = 0;
   let signature: readonly number[] | null = still;
   let frame: TestFrame | null = { width: 320, height: 240 };
   let moving = false;
   let sampleTick = 0;
   let opened = 0;
   let released = 0;
-  let closed = true;
-  const camera: CaptureCamera<TestFrame> = {
-    preview: { stream: {} as MediaStream },
-    sample: () => {
-      if (closed || signature === null) {
-        return null;
-      }
-      sampleTick += 1;
-      return moving && sampleTick % 2 === 1 ? signature.map((value) => value + 40) : signature;
-    },
-    read: () => (closed ? null : frame),
-    close: () => {
-      closed = true;
-    },
-  };
+  /** Cameras the device handed out and has not released yet, so a replacement stays separate. */
+  const liveCameras = new Set<CaptureCamera<TestFrame>>();
+  /** Camera requests the case holds open, oldest first. */
+  const heldCameras: { grant(): void; deny(message: string): void }[] = [];
+  /** Preparations the case holds open, oldest first. */
+  const heldPreparations: { complete(): void; reject(message: string): void }[] = [];
+
+  /** One open camera of the device; each request gets its own lifetime. */
+  function createCamera(): CaptureCamera<TestFrame> {
+    const camera: CaptureCamera<TestFrame> = {
+      preview: { stream: {} as MediaStream },
+      sample: () => {
+        if (!liveCameras.has(camera) || signature === null) {
+          return null;
+        }
+        sampleTick += 1;
+        return moving && sampleTick % 2 === 1 ? signature.map((value) => value + 40) : signature;
+      },
+      read: () => (liveCameras.has(camera) ? frame : null),
+      close: () => {
+        liveCameras.delete(camera);
+      },
+    };
+    liveCameras.add(camera);
+    return camera;
+  }
+
   const device: CaptureDevice<TestFrame> = {
     release: () => {
       released += 1;
+      for (const camera of [...liveCameras]) {
+        camera.close();
+      }
     },
   };
   if (options.camera !== false) {
-    device.openCamera = async () => {
+    device.openCamera = async (): Promise<CaptureCamera<TestFrame>> => {
       opened += 1;
       if (options.denial !== undefined) {
         throw new Error(options.denial);
       }
-      closed = false;
-      return camera;
+      if (heldCameraCount === 0) {
+        return createCamera();
+      }
+      heldCameraCount -= 1;
+      return new Promise<CaptureCamera<TestFrame>>((resolve, reject) => {
+        heldCameras.push({
+          grant: () => resolve(createCamera()),
+          deny: (message) => reject(new Error(message)),
+        });
+      });
     };
   }
 
@@ -308,89 +348,94 @@ export function createCaptureHarness(options: CaptureHarnessOptions = {}): Captu
     captureRequests[captureRequests.length - 1]?.fail('unavailable', 'Response lost.');
   }
 
-  const account = userCards.account('alice');
-  const capture = createCapture({
-    accountId: 'alice',
-    importId: 'import-1',
-    device,
-    staging: captureStaging(account),
-    engines: recognitionEngineNames(false),
-    createRecognition: () =>
-      createRecognition<TestFrame>({
-        createEnginePipeline: () => pipeline(),
-        catalog: {
-          resolve: (references) =>
-            Promise.resolve({
-              revision: {
-                revisionId: 'revision-1',
-                sourceName: 'fixture',
-                sourceVersion: '1',
-                publishedAt: '2026-09-01T00:00:00.000Z',
-              },
-              cards: new Map(
-                references.flatMap((reference) =>
-                  reference.kind === 'card'
-                    ? [
-                        [
-                          reference.cardId,
-                          {
-                            cardId: reference.cardId,
-                            name: reference.cardId,
-                            names: [],
-                            rulesText: null,
-                            typeLine: null,
-                            colors: [],
-                            colorIdentity: [],
-                            manaValue: null,
-                          },
-                        ] as const,
-                      ]
-                    : [],
+  /** One session of this account and import; the account's retained attempts outlive it. */
+  function openSession(): Capture {
+    const capture = createCapture({
+      accountId: 'alice',
+      importId: 'import-1',
+      device,
+      staging: captureStaging(userCards.account('alice')),
+      engines: recognitionEngineNames(false),
+      createRecognition: () =>
+        createRecognition<TestFrame>({
+          createEnginePipeline: () => pipeline(),
+          catalog: {
+            resolve: (references) =>
+              Promise.resolve({
+                revision: {
+                  revisionId: 'revision-1',
+                  sourceName: 'fixture',
+                  sourceVersion: '1',
+                  publishedAt: '2026-09-01T00:00:00.000Z',
+                },
+                cards: new Map(
+                  references.flatMap((reference) =>
+                    reference.kind === 'card'
+                      ? [
+                          [
+                            reference.cardId,
+                            {
+                              cardId: reference.cardId,
+                              name: reference.cardId,
+                              names: [],
+                              rulesText: null,
+                              typeLine: null,
+                              colors: [],
+                              colorIdentity: [],
+                              manaValue: null,
+                            },
+                          ] as const,
+                        ]
+                      : [],
+                  ),
                 ),
-              ),
-              printings: new Map(
-                references.flatMap((reference) =>
-                  reference.kind === 'printing'
-                    ? [
-                        [
-                          reference.printingId,
-                          {
-                            printingId: reference.printingId,
-                            cardId: reference.printingId.replace('printing-', 'card-'),
-                            edition: 'TST',
-                            collectorNumber: '149',
-                            language: 'en',
-                            finishes: ['nonfoil', 'foil'],
-                            physical: true,
-                            images: { small: null, normal: null, large: null, artCrop: null },
-                          },
-                        ] as const,
-                      ]
-                    : [],
+                printings: new Map(
+                  references.flatMap((reference) =>
+                    reference.kind === 'printing'
+                      ? [
+                          [
+                            reference.printingId,
+                            {
+                              printingId: reference.printingId,
+                              cardId: reference.printingId.replace('printing-', 'card-'),
+                              edition: 'TST',
+                              collectorNumber: '149',
+                              language: 'en',
+                              finishes: ['nonfoil', 'foil'],
+                              physical: true,
+                              images: { small: null, normal: null, large: null, artCrop: null },
+                            },
+                          ] as const,
+                        ]
+                      : [],
+                  ),
                 ),
-              ),
-              missing: [],
-            }),
-        },
-        inspectFrame: (received) => ({
-          width: received.width,
-          height: received.height,
-          format: 'png',
-          encodedBytes: null,
+                missing: [],
+              }),
+          },
+          inspectFrame: (received) => ({
+            width: received.width,
+            height: received.height,
+            format: 'png',
+            encodedBytes: null,
+          }),
         }),
-      }),
-    identity: () => {
-      identitySerial += 1;
-      return `capture-${identitySerial}`;
-    },
-    timers: clock,
-    reviewed: (change) => {
-      reviews.push(change);
-    },
-  });
-  capture.observe((snapshot) => {
-    states.push(snapshot);
-  });
+      identity: () => {
+        identitySerial += 1;
+        return `capture-${identitySerial}`;
+      },
+      timers: clock,
+      reviewed: (change) => {
+        reviews.push(change);
+      },
+    });
+    capture.observe((snapshot) => {
+      states.push(snapshot);
+    });
+    return capture;
+  }
+
+  const capture = openSession();
 
   function pipeline(): RecognitionEnginePipeline<TestFrame> {
     return {
@@ -400,6 +445,15 @@ export function createCaptureHarness(options: CaptureHarnessOptions = {}): Captu
           const message = preparationFailure;
           preparationFailure = null;
           return Promise.reject(new Error(message));
+        }
+        if (heldPreparationCount > 0) {
+          heldPreparationCount -= 1;
+          return new Promise<RecognitionEnginePreparation>((resolve, reject) => {
+            heldPreparations.push({
+              complete: () => resolve({ versions: { engine: 'scripted-1' } }),
+              reject: (message) => reject(new Error(message)),
+            });
+          });
         }
         return Promise.resolve({ versions: { engine: 'scripted-1' } });
       },
@@ -482,7 +536,26 @@ export function createCaptureHarness(options: CaptureHarnessOptions = {}): Captu
     attachments: () => attachmentRequests,
     preparations: () => preparations,
     recognitions: () => recognitions,
-    camera: () => ({ opened, released, closed }),
+    camera: () => ({ opened, released, closed: liveCameras.size === 0 }),
+    holdCamera: () => {
+      heldCameraCount += 1;
+    },
+    grantCamera: () => {
+      heldCameras.shift()?.grant();
+    },
+    denyCamera: (message) => {
+      heldCameras.shift()?.deny(message);
+    },
+    holdPreparation: () => {
+      heldPreparationCount += 1;
+    },
+    completePreparation: () => {
+      heldPreparations.shift()?.complete();
+    },
+    rejectPreparation: (message) => {
+      heldPreparations.shift()?.reject(message);
+    },
+    reopen: () => openSession(),
     reviews: () => reviews,
     scene: (nextSignature, nextFrame, nextMoving = false) => {
       signature = nextSignature;
