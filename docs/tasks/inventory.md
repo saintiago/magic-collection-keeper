@@ -16,7 +16,8 @@ record dependencies. This index groups tasks by subject and does not prescribe e
 
 ## Collection migration
 
-Deferred until after the rebuild; see [migration status](../requirements.md#collection-migration).
+Offline preparation is defined in [collection migration](../migration.md).
+Actual owner-data migration remains outside the rebuild queue.
 
 - [KAN-7: Specify collection migration and verified backup/recovery](https://malton-family.atlassian.net/browse/KAN-7)
 - [KAN-30: Provide an explicit migration path for existing collection data](https://malton-family.atlassian.net/browse/KAN-30)

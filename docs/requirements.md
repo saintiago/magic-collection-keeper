@@ -20,10 +20,11 @@ The old implementation and its prescribed architecture are superseded by the app
 
 ## Collection migration
 
-MIG-001 through MIG-004 remain required for later migration. Their detailed design, implementation
-and rehearsal are deferred until after the rebuild. KAN-30 stays in Draft until an approved migration
-plan replaces the removed design. The old implementation is a reference, not a replacement plan.
-Rebuild verification and release preparation exclude migration work and owner-data access.
+MIG-001 through MIG-004 remain required for actual migration. The owner authorized offline
+preparation after the rebuild; [collection migration](migration.md) owns its mapping, tools,
+verification and execution gates. Owner-data access, target loading, real backup rehearsal and
+production cutover remain separate authorized work. KAN-30 remains outside the rebuild queue.
+Rebuild verification and release preparation do not establish successful collection migration.
 
 ## Documentation ownership
 

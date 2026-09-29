@@ -56,8 +56,8 @@ Keep a repository release checklist tied to documented requirements and verifica
 [the release checklist](release-checklist.md), whose `npm run release:evidence` writes the prepared
 release's acceptance record beside `artifacts/manifest.json`. During the rebuild, prepare release
 evidence and deployment/rollback procedures using test data.
-Migration design, implementation and rehearsal follow the rebuild; see
-[migration status](requirements.md#collection-migration). They do not block rebuild verification.
+Offline [migration preparation](migration.md) follows the rebuild. Actual owner-data rehearsal and
+cutover remain separately authorized; they do not block rebuild verification.
 Rehearse deployment and rollback in a separate test environment only when execution is authorized.
 Verify reproducibility from a fresh checkout and preserve existing account identity and production
 storage during the rehearsal.

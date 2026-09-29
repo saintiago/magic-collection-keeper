@@ -8,6 +8,8 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "migration:export": "esbuild scripts/migration/export-cli.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=.turbo/migration/export.mjs --log-level=warning && node .turbo/migration/export.mjs",
+    "migration:prepare": "esbuild scripts/migration/cli.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=.turbo/migration/prepare.mjs --log-level=warning && node .turbo/migration/prepare.mjs",
     "build": "node -e \"require('node:fs').rmSync('build', { recursive: true, force: true })\" && tsc --project tsconfig.build.json",
     "package": "esbuild scripts/package-artifacts.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=.turbo/packaging/package-artifacts.mjs --log-level=warning && node .turbo/packaging/package-artifacts.mjs",
     "prepare:recognition": "esbuild scripts/prepare-recognition.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=.turbo/packaging/prepare-recognition.mjs --log-level=warning && node .turbo/packaging/prepare-recognition.mjs",
