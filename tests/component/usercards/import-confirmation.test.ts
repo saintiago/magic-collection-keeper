@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCatalog, type Catalog } from '../../../src/catalog/index.js';
 import {
   createUserCards,
+  USERCARDS_LIMITS,
   type ImportEntry,
   type TrustedUserContext,
   type UserCards,
@@ -400,6 +401,320 @@ describe('usercards import confirmation', () => {
     expect(stored).toHaveLength(1);
     expect(Number(stored[0]?.quantity)).toBe(5);
     expect(await countCopies(database, alice.accountId)).toBe(0);
+  });
+
+  it('refuses a requirement above the product bound without partial changes', async () => {
+    const deck = await createDeck();
+    // Two duplicate lines whose final requirement exceeds the product bound: the confirmation is
+    // refused as one change, so no intermediate association, receipt or entry closure remains.
+    const half = Math.ceil(USERCARDS_LIMITS.maxAssociationQuantity / 2) + 1;
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-over-bound',
+      source: { kind: 'moxfield', id: 'deck-over-bound' },
+      entries: ['over-main', 'over-side'].map((entryId) => ({
+        entryId,
+        printingId: m11Printing.printingId,
+        finish: 'foil' as const,
+        condition: 'LP' as const,
+        quantity: half,
+      })),
+    });
+    const refused = await captureUserCardsError(
+      userCards.confirmImport(alice, {
+        destination: { kind: 'tag', tagId: deck.tagId },
+        operationId: 'deck-over-bound',
+        sessionId: 'session-over-bound',
+        entries: [
+          { entryId: 'over-main', expectedRevision: 1 },
+          { entryId: 'over-side', expectedRevision: 1 },
+        ],
+      }),
+    );
+    expect(refused.code).toBe('invalid-request');
+    expect(await storedAssociations(alice.accountId)).toEqual([]);
+    expect(await userCards.recoverImportOperation(alice, 'deck-over-bound')).toEqual({
+      outcome: 'absent',
+    });
+    const pending = await userCards.listImportEntries(alice, {
+      sessionId: 'session-over-bound',
+    });
+    expect(pending.entries).toHaveLength(2);
+  });
+
+  it('records duplicate lines of one target as one final association outcome', async () => {
+    const deck = await createDeck();
+    // A deck list names the same printing in two sections and the same playable card in two
+    // card-level lines: each target is one intended quantity, however many lines carry it.
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-duplicates',
+      source: { kind: 'moxfield', id: 'deck-duplicates' },
+      entries: [
+        {
+          entryId: 'main-line',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 2,
+        },
+        {
+          entryId: 'side-line',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 3,
+        },
+        { entryId: 'card-main', quantity: 1 },
+        { entryId: 'card-side', quantity: 4 },
+      ],
+    });
+    for (const [entryId, quantity] of [
+      ['card-main', 1],
+      ['card-side', 4],
+    ] as const) {
+      await userCards.reviewImportEntry(alice, {
+        entryId,
+        expectedRevision: 1,
+        cardId: counterspell.cardId,
+        printingId: null,
+        finish: null,
+        condition: null,
+        quantity,
+      });
+    }
+
+    const confirmed = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'deck-duplicates',
+      sessionId: 'session-duplicates',
+      entries: [
+        { entryId: 'main-line', expectedRevision: 1 },
+        { entryId: 'side-line', expectedRevision: 1 },
+        { entryId: 'card-main', expectedRevision: 2 },
+        { entryId: 'card-side', expectedRevision: 2 },
+      ],
+    });
+
+    // One final outcome per target: the lines of one printing or card add up to one quantity.
+    expect(
+      confirmed.associations
+        .map((association) => [association.targetLevel, association.targetId, association.quantity])
+        .sort(),
+    ).toEqual([
+      ['card', counterspell.cardId, 5],
+      ['printing', m11Printing.printingId, 5],
+    ]);
+    expect(new Set(confirmed.associations.map((one) => one.associationId)).size).toBe(2);
+    // The immutable outcome and the stored association carry the final quantity, and the
+    // publication of the mutated records names each of them exactly once.
+    const stored = await storedAssociations(alice.accountId);
+    expect(
+      stored.map((row) => [row.target_level, row.target_id, Number(row.quantity)]).sort(),
+    ).toEqual([
+      ['card', counterspell.cardId, 5],
+      ['printing', m11Printing.printingId, 5],
+    ]);
+    expect(await userCards.recoverImportOperation(alice, 'deck-duplicates')).toEqual({
+      outcome: 'recorded',
+      receipt: {
+        operationId: 'deck-duplicates',
+        sessionId: 'session-duplicates',
+        sourceKind: 'moxfield',
+        sourceId: 'deck-duplicates',
+        destination: { kind: 'tag', tagId: deck.tagId },
+        publicationPosition: confirmed.publicationPosition,
+        copies: [],
+        associations: confirmed.associations,
+      },
+    });
+    const published = await database.query(
+      `select kind, count(*)::int as count
+         from usercards_private.publication
+        where account_id = $1 and kind <> 'revision'
+        group by kind
+        order by kind`,
+      [alice.accountId],
+    );
+    expect(published).toEqual([
+      { kind: 'association', count: 2 },
+      { kind: 'tag', count: 1 },
+    ]);
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+  });
+
+  it('keeps duplicate lines growing one existing requirement to their final quantity', async () => {
+    const deck = await createDeck();
+    await stageDeck();
+    const first = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'existing-first',
+      sessionId: 'session-deck',
+      entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+    });
+    expect(first.associations[0]).toMatchObject({ quantity: 2 });
+
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-existing-duplicates',
+      source: { kind: 'moxfield', id: 'deck-existing-duplicates' },
+      entries: [
+        {
+          entryId: 'grow-main',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 3,
+        },
+        {
+          entryId: 'grow-side',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 1,
+        },
+      ],
+    });
+    const confirmed = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'existing-duplicates',
+      sessionId: 'session-existing-duplicates',
+      entries: [
+        { entryId: 'grow-main', expectedRevision: 1 },
+        { entryId: 'grow-side', expectedRevision: 1 },
+      ],
+    });
+
+    // The recorded outcome reports the requirement after every line was applied, once.
+    expect(confirmed.associations).toEqual([
+      expect.objectContaining({
+        associationId: first.associations[0]?.associationId,
+        targetLevel: 'printing',
+        targetId: m11Printing.printingId,
+        quantity: 6,
+      }),
+    ]);
+    const stored = await storedAssociations(alice.accountId);
+    expect(stored).toHaveLength(1);
+    expect(Number(stored[0]?.quantity)).toBe(6);
+  });
+
+  it('accepts a deck requirement above 1000 and keeps accumulating it', async () => {
+    const deck = await createDeck();
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-large',
+      source: { kind: 'text', id: 'large-list' },
+      entries: [
+        {
+          entryId: 'large-line',
+          printingId: m11Printing.printingId,
+          finish: 'nonfoil',
+          condition: null,
+          quantity: 1200,
+        },
+      ],
+    });
+    const first = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'deck-large',
+      sessionId: 'session-large',
+      entries: [{ entryId: 'large-line', expectedRevision: 1 }],
+    });
+    expect(first.associations).toEqual([
+      expect.objectContaining({
+        targetLevel: 'printing',
+        targetId: m11Printing.printingId,
+        quantity: 1200,
+      }),
+    ]);
+
+    // A further accepted requirement grows the same association; the product bound is not the
+    // request batch size.
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-large-second',
+      source: { kind: 'text', id: 'large-list-second' },
+      entries: [
+        {
+          entryId: 'second-large',
+          printingId: m11Printing.printingId,
+          finish: 'nonfoil',
+          condition: null,
+          quantity: 600,
+        },
+      ],
+    });
+    const second = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'deck-large-second',
+      sessionId: 'session-large-second',
+      entries: [{ entryId: 'second-large', expectedRevision: 1 }],
+    });
+    expect(second.associations).toEqual([
+      expect.objectContaining({
+        associationId: first.associations[0]?.associationId,
+        quantity: 1800,
+      }),
+    ]);
+    expect(await storedAssociations(alice.accountId)).toHaveLength(1);
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+
+    // The recorded outcomes stay readable with their complete intended quantities.
+    expect(await userCards.recoverImportOperation(alice, 'deck-large')).toMatchObject({
+      outcome: 'recorded',
+      receipt: { associations: first.associations },
+    });
+    expect(await userCards.recoverImportOperation(alice, 'deck-large-second')).toMatchObject({
+      outcome: 'recorded',
+      receipt: { associations: second.associations },
+    });
+  });
+
+  it('returns the publication position of the request an identical replay repeats', async () => {
+    const deck = await createDeck();
+    await stageDeck();
+    const firstRequest = {
+      destination: { kind: 'tag', tagId: deck.tagId } as const,
+      operationId: 'deck-position-first',
+      sessionId: 'session-deck',
+      entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+    };
+    const first = await userCards.confirmImport(alice, firstRequest);
+
+    // A later import grows the association this outcome recorded, at a later position.
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-position-second',
+      source: { kind: 'moxfield', id: 'deck-position-second' },
+      entries: [
+        {
+          entryId: 'grow-line',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 3,
+        },
+      ],
+    });
+    const grown = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'deck-position-second',
+      sessionId: 'session-position-second',
+      entries: [{ entryId: 'grow-line', expectedRevision: 1 }],
+    });
+    expect(Number(grown.publicationPosition)).toBeGreaterThan(Number(first.publicationPosition));
+
+    // The replay repeats the earlier request, so it returns that recorded outcome, including the
+    // position it was published at, instead of a later operation's position.
+    const replay = await userCards.confirmImport(alice, {
+      ...firstRequest,
+      operationId: 'deck-position-replay',
+    });
+    expect(replay.replayed).toBe(true);
+    expect(replay.associations).toEqual(first.associations);
+    expect(replay.publicationPosition).toBe(first.publicationPosition);
+    expect(await userCards.recoverImportOperation(alice, 'deck-position-replay')).toMatchObject({
+      outcome: 'recorded',
+      receipt: {
+        publicationPosition: first.publicationPosition,
+        associations: first.associations,
+      },
+    });
   });
 
   it('refuses a changed destination under a reused operation identity', async () => {

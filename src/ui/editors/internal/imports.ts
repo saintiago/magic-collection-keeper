@@ -110,6 +110,7 @@ import {
   printingLine,
   readConditionValue,
   readDestination,
+  readDestinationChoice,
   readFinishValue,
   readManualDraft,
   readQuantity,
@@ -167,6 +168,7 @@ export interface UiImportEditorContext {
 const manualStagingNotice = 'import-manual';
 const sourceImportNotice = 'import-source';
 const reviewReadNotice = 'import-review';
+const reviewDestinationsNotice = 'import-destinations';
 const reviewConfirmNotice = 'import-confirm';
 const reviewDiscardNotice = 'import-discard';
 
@@ -708,9 +710,14 @@ export interface UiImportReviewEditorOptions extends UiImportEditorContext {
   readonly dialogs: UiDialogs;
 }
 
-/** The review editor's draft state: the presented import, its review input and its selection. */
+/**
+ * The review editor's draft state: the presented import, the destination it applies, its review
+ * input and its selection.
+ */
 export interface UiImportReviewDraft {
   readonly sessionId: string | null;
+  /** Value of the destination control the review applies; it stays with the import's other input. */
+  readonly destination: string;
   readonly review: Readonly<Record<string, UiReviewDraft>>;
   readonly selection: Readonly<Record<string, UiSelectedReview>>;
 }
@@ -814,6 +821,15 @@ export function createImportReviewEditor(
   let session: ImportSession | null = null;
   /** Tag destinations the account currently lists; an ownership destination needs none. */
   let destinationTags: readonly Tag[] = [];
+  /**
+   * Destination the review applies, as the control value it was chosen under. It stays the
+   * owner's intention while the tags are read again or leave the account's listing, so returning
+   * to the review never turns an accepted deck into an ownership action
+   * (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
+   */
+  let destinationChoice = readDestinationChoice(restored?.destination);
+  /** Whether the account's tags were read at least once, so a missing choice is explicit. */
+  let destinationsKnown = false;
   /** Read of the tag list now answering for the review; an older one never replaces it. */
   let destinationsRead = 0;
   /** Whether a deck creation is in flight, so one click creates one tag. */
@@ -861,7 +877,7 @@ export function createImportReviewEditor(
     void readSessions(sessionsContinuation, true);
   });
   refresh.addEventListener('click', () => {
-    void reconcile();
+    void refreshReview();
   });
   recover.addEventListener('click', () => {
     void recoverPendingConfirmation();
@@ -871,6 +887,7 @@ export function createImportReviewEditor(
   });
   destinationSelect.addEventListener('change', () => {
     // The presented physical attributes follow the destination the review now applies.
+    destinationChoice = destinationSelect.value;
     destinationStatus.textContent = '';
     paintReviewEditors();
   });
@@ -880,6 +897,9 @@ export function createImportReviewEditor(
   if (retainedPending !== null) {
     composePending(retainedPending.sessionId, retainedPending.list);
   }
+  // The restored destination is presented before the tags are read: the read that follows either
+  // supplies its own option or leaves it explicitly unavailable.
+  paintDestinations();
   paintConfirmation();
   if (confirmation !== null) {
     // A confirmation whose outcome the provider has not established stays recoverable through the
@@ -907,6 +927,10 @@ export function createImportReviewEditor(
     ],
     capture: () => ({
       sessionId,
+      // The destination the review applies stays with the import's other input, so returning to
+      // the review applies the action the owner chose instead of the default ownership action
+      // (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
+      destination: destinationChoice,
       // Unsaved review input stays with the entry, so leaving the view and returning to it keeps
       // the edits the user must review and retry
       // (docs/ui/architecture.md#state-ownership-and-restoration).
@@ -1105,10 +1129,23 @@ export function createImportReviewEditor(
   }
 
   /**
+   * Re-reads the destinations and the pending imports of the presented review: the explicit
+   * refresh repeats both reads instead of leaving stale destinations until the view is mounted
+   * again (docs/ui/navigation.md#error-notices).
+   */
+  async function refreshReview(): Promise<void> {
+    await refreshDestinations();
+    if (disposed) {
+      return;
+    }
+    await reconcile();
+  }
+
+  /**
    * Reads the tags a confirmation can apply its reviewed associations to. A tag the account no
-   * longer lists ends its own option; the ownership action stays available, and a destination read
-   * that fails stays visible beside the control that repeats it
-   * (docs/ui/navigation.md#error-notices).
+   * longer lists keeps the destination the review chose but presents it as unavailable instead of
+   * silently substituting ownership; a destination read that fails stays visible beside the
+   * control that repeats it (docs/ui/navigation.md#error-notices).
    */
   async function refreshDestinations(): Promise<void> {
     destinationsRead += 1;
@@ -1131,23 +1168,33 @@ export function createImportReviewEditor(
       if (disposed || read !== destinationsRead) {
         return;
       }
-      destinationStatus.textContent = `The destinations could not be read: ${readMessage(
+      const problem = `The destinations could not be read: ${readMessage(
         cause,
         'unknown failure',
       )}`;
+      destinationStatus.textContent = problem;
+      // Reading the destinations is a service read of this view: the notice keeps its failure
+      // visible with the refresh that repeats the read (docs/ui/navigation.md#error-notices).
+      reportUiFailure(options.notices, reviewDestinationsNotice, problem, {
+        label: 'Refresh the destinations',
+        run: () => {
+          void refreshReview();
+        },
+      });
       return;
     }
     if (disposed || read !== destinationsRead) {
       return;
     }
     destinationTags = tags;
+    destinationsKnown = true;
     destinationStatus.textContent = '';
+    options.notices?.dismiss(reviewDestinationsNotice);
     paintDestinations();
   }
 
   /** Draws the destination control: the explicit ownership action and the applicable tags. */
   function paintDestinations(): void {
-    const wanted = destinationSelect.value;
     const options = [
       { value: ownershipDestinationValue, label: 'Add to collection (own the cards)' },
       ...importDestinationTags(destinationTags).map((tag) => ({
@@ -1155,6 +1202,12 @@ export function createImportReviewEditor(
         label: importDestinationLabel(tag),
       })),
     ];
+    const listed = options.some((option) => option.value === destinationChoice);
+    if (!listed) {
+      // The destination the review kept is not among the ones the account lists: it stays named
+      // and selected, so confirming it needs the explicit reconciliation the guidance names.
+      options.push({ value: destinationChoice, label: 'The chosen destination is not available' });
+    }
     destinationSelect.replaceChildren(
       ...options.map((option) => {
         const element = document.createElement('option');
@@ -1163,9 +1216,13 @@ export function createImportReviewEditor(
         return element;
       }),
     );
-    destinationSelect.value = options.some((option) => option.value === wanted)
-      ? wanted
-      : ownershipDestinationValue;
+    destinationSelect.value = destinationChoice;
+    // A destination the account no longer lists stays selected and is explained instead of being
+    // replaced by another one.
+    if (destinationsKnown && !listed) {
+      destinationStatus.textContent =
+        'The chosen destination is not available. Refresh the destinations or choose another one.';
+    }
   }
 
   /**
@@ -1195,14 +1252,12 @@ export function createImportReviewEditor(
         return;
       }
       newDeck.value = '';
+      destinationChoice = destinationValue({ kind: 'tag', tagId: outcome.record.tagId });
       await refreshDestinations();
       if (disposed) {
         return;
       }
-      destinationSelect.value = destinationValue({
-        kind: 'tag',
-        tagId: outcome.record.tagId,
-      });
+      destinationSelect.value = destinationChoice;
       destinationStatus.textContent = `Deck “${outcome.record.label}” is the destination.`;
       paintReviewEditors();
     } finally {
@@ -1407,7 +1462,11 @@ export function createImportReviewEditor(
       `import-card-find-${encodeURIComponent(entry.entryId)}`,
       'Find cards',
     );
-    const chosenCardId = chosenPrinting?.cardId ?? draft?.cardId ?? entry.cardId ?? '';
+    // A printing review takes its card identity from the printing it names, while a card-level
+    // review names the playable identity itself
+    // (docs/user-cards.md#import-and-capture-state).
+    const chosenCardId =
+      chosenPrinting !== null ? chosenPrinting.cardId : (draft?.cardId ?? entry.cardId ?? '');
     const chosenCard = document.createElement('span');
     chosenCard.id = `import-review-card-${encodeURIComponent(entry.entryId)}`;
     chosenCard.dataset.uiImportChosenCard = '';
@@ -1693,6 +1752,9 @@ export function createImportReviewEditor(
     clearMessage(editor);
     const draft = draftFor(record);
     draft.printingId = printing.printingId;
+    // The chosen printing names its own card identity, so the review stops quoting the card of
+    // the printing it replaced (docs/user-cards.md#import-and-capture-state).
+    draft.cardId = '';
     const learning = learnPrinting(record.entry.entryId, printing.printingId);
     // The chosen target must reach the visible form and its Save handler before a catalog
     // read yields. The lookup enriches that choice; it does not decide which printing to save.
@@ -1874,7 +1936,10 @@ export function createImportReviewEditor(
       {
         entryId: record.entry.entryId,
         expectedRevision: record.entry.revision,
-        cardId,
+        // The resolved printing owns the card identity of a printing review; the reviewed card
+        // and printing never disagree however the draft reached its choice
+        // (docs/user-cards.md#import-and-capture-state).
+        cardId: chosenPrinting.cardId,
         printingId,
         finish: resolvedFinish,
         condition: readConditionValue(submitted.condition),
@@ -2049,7 +2114,9 @@ export function createImportReviewEditor(
     if (destination === null) {
       return {
         status: 'failed',
-        message: 'Choose the destination this confirmation applies.',
+        message: destinationSelect.value.startsWith('tag:')
+          ? 'The chosen destination is not available. Refresh the destinations and choose it again.'
+          : 'Choose the destination this confirmation applies.',
         validation: true,
       };
     }

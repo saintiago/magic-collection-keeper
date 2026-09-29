@@ -429,6 +429,18 @@ export function sourceLineText(line: ImportSourceLine): string {
 /** Destination value the review presents for the explicit ownership action. */
 export const ownershipDestinationValue = 'ownership';
 
+/**
+ * The destination control value one history entry kept, or the explicit ownership action when it
+ * kept none. A retained deck destination stays the value it named, so returning to the review
+ * restores the owner's intention instead of presenting ownership for it; the control shows it as
+ * unavailable until the account lists that tag again (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
+ */
+export function readDestinationChoice(value: unknown): string {
+  return typeof value === 'string' && value.length > 0 && value.length <= UI_LIMITS.entryKey
+    ? value
+    : ownershipDestinationValue;
+}
+
 /** Control value one confirmation destination is presented under. */
 export function destinationValue(destination: ImportDestination): string {
   return destination.kind === 'ownership' ? ownershipDestinationValue : `tag:${destination.tagId}`;
@@ -514,12 +526,16 @@ export function inBatches<Value>(
   return batches;
 }
 
-/** Whether one draft still holds exactly the reviewed input a save submitted. */
+/**
+ * Whether one draft still holds exactly the reviewed input a save submitted. A printing review
+ * derives its card identity from the printing it names, so the draft's own card identity always
+ * follows the printing a save established instead of the value the snapshot was taken with.
+ */
 export function sameReviewDraft(draft: UiReviewDraft, submitted: Readonly<UiReviewDraft>): boolean {
   return (
     draft.query === submitted.query &&
     draft.cardQuery === submitted.cardQuery &&
-    draft.cardId === submitted.cardId &&
+    (submitted.printingId.length > 0 || draft.cardId === submitted.cardId) &&
     draft.printingId === submitted.printingId &&
     draft.finish === submitted.finish &&
     draft.condition === submitted.condition &&

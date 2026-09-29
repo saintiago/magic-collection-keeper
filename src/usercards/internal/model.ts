@@ -229,10 +229,11 @@ export const USERCARDS_LIMITS = {
    * Largest intended quantity a card- or printing-level association may carry, and the largest
    * reviewed quantity one pending entry may carry: the meaning of a pending quantity follows the
    * destination its confirmation applies. It is a product bound independent of the request batch
-   * size, so a deck requirement is never capped by an incidental storage or transport batch
-   * (docs/user-cards.md#records-and-associations).
+   * size, so a deck requirement is never capped by an incidental storage or transport batch and
+   * accumulates across confirmations up to this bound
+   * (docs/user-cards.md#records-and-associations, docs/testing.md#usercards).
    */
-  maxAssociationQuantity: 1000,
+  maxAssociationQuantity: 1_000_000,
   defaultTagPageSize: 50,
   minTagPageSize: 1,
   maxTagPageSize: 100,

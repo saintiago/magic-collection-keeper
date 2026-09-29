@@ -150,6 +150,10 @@ export interface UiImportControl {
   settleCreateTag(id: number, tag: Tag): void;
   /** Answers every following tag page from this list, like the account's current tags. */
   scriptDestinationTags(tags: readonly Tag[]): void;
+  /** Fails every following destination read while a failure is set, like an unavailable provider. */
+  scriptDestinationFailure(
+    failure: { readonly code: ApplicationFailureCode; readonly message: string } | null,
+  ): void;
   settleSearch(id: number, page: SearchPage): void;
   /** Answers every following catalog resolve from this table, like the provider the page reads. */
   scriptCatalog(
@@ -191,6 +195,11 @@ const harnessRevision = {
 export interface UiImportHarnessOptions {
   /** Whether the deployment parses source imports; a journey may present one that refuses them. */
   readonly sourceImports?: boolean;
+  /** A destination read that fails from the start, so a journey can retry it explicitly. */
+  readonly failDestinationReads?: {
+    readonly code: ApplicationFailureCode;
+    readonly message: string;
+  } | null;
 }
 
 /** Installs the Import page into `root`; identity starts signed in as one account. */
@@ -226,6 +235,11 @@ export function installImportHarness(
   } | null = null;
   /** Tags every following destination page answers with, like the account's current tags. */
   let scriptedDestinationTags: readonly Tag[] = [];
+  /** Failure every following destination read rejects with, or null while they answer. */
+  let scriptedDestinationFailure: {
+    readonly code: ApplicationFailureCode;
+    readonly message: string;
+  } | null = options.failDestinationReads ?? null;
 
   /** Records one request and returns the promise the journey settles by its identity. */
   function begin<Arguments>(
@@ -388,6 +402,11 @@ export function installImportHarness(
         { pageSize: options?.pageSize ?? null, continuation: options?.continuation ?? null },
         signal,
       );
+      if (scriptedDestinationFailure !== null) {
+        return Promise.reject(
+          new ApplicationError(scriptedDestinationFailure.code, scriptedDestinationFailure.message),
+        );
+      }
       return Promise.resolve({
         privateRevision: 'private-1',
         tags: scriptedDestinationTags,
@@ -569,6 +588,9 @@ export function installImportHarness(
       })),
     scriptDestinationTags: (tags) => {
       scriptedDestinationTags = [...tags];
+    },
+    scriptDestinationFailure: (failure) => {
+      scriptedDestinationFailure = failure;
     },
     settleSearch: (id, page) => settle(id, page, (value) => value),
     scriptCatalog: (records) => {

@@ -90,7 +90,8 @@ function readReceiptStatement(accountId: string, operationId: string): Statement
  */
 function readReceiptByInputStatement(accountId: string, inputFingerprint: string): Statement {
   return {
-    statement: `select receipt.operation_id
+    statement: `select receipt.operation_id,
+              receipt.publication_position::text as publication_position
      from usercards_private.import_receipt as receipt
     where account_id = :account_id
       and input_fingerprint = :input_fingerprint
@@ -405,41 +406,6 @@ function inheritedAcquisitionPositionStatement(accountId: string, operationId: s
     where receipt.account_id = :account_id and receipt.operation_id = :operation_id`,
     parameters: { account_id: accountId, operation_id: operationId },
   };
-}
-
-/**
- * The position of an outcome that replayed already recorded associations: the newest position
- * among the recorded operations whose associations this outcome covers, so recovery returns the
- * position the associations were published at rather than the account's current one.
- */
-function inheritedAssociationPositionStatement(accountId: string, operationId: string): Statement {
-  return {
-    statement: `update usercards_private.import_receipt as receipt
-    set publication_position = recorded.position
-    from (
-      select max(source.publication_position) as position
-        from usercards_private.import_receipt_association as binding
-        join usercards_private.import_receipt as source
-          on source.account_id = binding.account_id
-         and source.operation_id = binding.operation_id
-       where binding.account_id = :account_id
-         and binding.operation_id <> :operation_id
-         and binding.association_id in (
-           select covered.association_id
-             from usercards_private.import_receipt_association as covered
-            where covered.account_id = :account_id
-              and covered.operation_id = :operation_id)
-    ) as recorded
-    where receipt.account_id = :account_id and receipt.operation_id = :operation_id`,
-    parameters: { account_id: accountId, operation_id: operationId },
-  };
-}
-
-/** The recorded position one replayed outcome inherits from the records it replayed. */
-function inheritedPositionStatement(plan: ConfirmationPlan, accountId: string): Statement {
-  return plan.destination.kind === 'tag'
-    ? inheritedAssociationPositionStatement(accountId, plan.operationId)
-    : inheritedAcquisitionPositionStatement(accountId, plan.operationId);
 }
 
 /**
@@ -858,21 +824,21 @@ function updateConfirmedAssociationStatement(
 }
 
 /**
- * Applies one tag destination to the reviewed entries. Every entry creates or grows the
- * association its reviewed target names: an entry quantity is an intended quantity, so entries
- * that review to the same target (for example a mainboard and a sideboard line of one card) add
- * up and a target the tag already requires grows by what this import now accepts. A tag
- * destination never creates copies: physical ownership changes only through the explicit
- * ownership destination (docs/user-cards.md#import-and-capture-state).
+ * One association target a tag destination reviews, with the intended quantity every reviewed
+ * entry adds to it. An entry quantity is an intended quantity, so the lines that review to one
+ * target (for example a mainboard and a sideboard line of one printing) add up to one outcome.
  */
-async function applyTagDestination(
-  statements: UserCardsSqlExecutor,
-  accountId: string,
-  tagId: string,
-  tagKind: string,
+interface ReviewedAssociationTarget {
+  readonly targetLevel: AssociationTargetLevel;
+  readonly targetId: string;
+  readonly quantity: number;
+}
+
+/** One reviewed target per identity, in the order the reviewed entries first name them. */
+function reviewedAssociationTargets(
   pending: readonly ConfirmedImportEntry[],
-): Promise<readonly Association[]> {
-  const recorded: Association[] = [];
+): readonly ReviewedAssociationTarget[] {
+  const targets = new Map<string, ReviewedAssociationTarget>();
   for (const entry of pending) {
     const targetLevel: AssociationTargetLevel =
       entry.reviewed.printingId === null ? 'card' : 'printing';
@@ -883,6 +849,35 @@ async function applyTagDestination(
         'UserCards did not report the reviewed entry target.',
       );
     }
+    const key = `${targetLevel}\u0000${targetId}`;
+    const reviewed = targets.get(key);
+    targets.set(key, {
+      targetLevel,
+      targetId,
+      quantity: (reviewed?.quantity ?? 0) + entry.reviewed.quantity,
+    });
+  }
+  return [...targets.values()];
+}
+
+/**
+ * Applies one tag destination to the reviewed entries. Every identity creates or grows the
+ * association its reviewed target names, once, by every quantity the entries add to it; a target
+ * the tag already requires grows by what this import now accepts. The single final outcome per
+ * identity is what the confirmation records and publishes, so a destination is never recorded
+ * twice with an intermediate quantity. A tag destination never creates copies: physical ownership
+ * changes only through the explicit ownership destination
+ * (docs/user-cards.md#import-and-capture-state).
+ */
+async function applyTagDestination(
+  statements: UserCardsSqlExecutor,
+  accountId: string,
+  tagId: string,
+  tagKind: string,
+  pending: readonly ConfirmedImportEntry[],
+): Promise<readonly Association[]> {
+  const recorded: Association[] = [];
+  for (const { targetLevel, targetId, quantity: reviewed } of reviewedAssociationTargets(pending)) {
     const existingRequest = storedAssociationStatement(accountId, tagId, targetLevel, targetId);
     const existing = (
       await readRows(
@@ -892,8 +887,7 @@ async function applyTagDestination(
         'The destination association could not be read.',
       )
     )[0];
-    const quantity =
-      (existing === undefined ? 0 : integerValue(existing.quantity)) + entry.reviewed.quantity;
+    const quantity = (existing === undefined ? 0 : integerValue(existing.quantity)) + reviewed;
     if (quantity > USERCARDS_LIMITS.maxAssociationQuantity) {
       throw new UserCardsError(
         'invalid-request',
@@ -1063,13 +1057,19 @@ export function createImportConfirmation(
               binding.parameters,
               'The replay outcome could not be stored.',
             );
-            // The replayed outcome reports the position its records were published at.
-            const inherited = inheritedPositionStatement(plan, accountId);
+            // The replayed outcome is the outcome of the request it repeats, so it reports that
+            // record's own publication position; a later operation that touched the same
+            // association or acquisition does not change what this request recorded.
+            const recorded = recordedPositionStatement(
+              accountId,
+              plan.operationId,
+              receiptPosition(identical.publication_position),
+            );
             await readRows(
               statements,
-              inherited.statement,
-              inherited.parameters,
-              'The recorded publication position could not be inherited.',
+              recorded.statement,
+              recorded.parameters,
+              'The recorded publication position could not be stored.',
             );
             return {
               outcome: 'confirmed' as const,
@@ -1311,7 +1311,7 @@ async function confirmOwnershipDestination(
     );
   } else {
     privateRevision = await advanceRevision(statements, accountId);
-    const inherited = inheritedPositionStatement(plan, accountId);
+    const inherited = inheritedAcquisitionPositionStatement(accountId, plan.operationId);
     await readRows(
       statements,
       inherited.statement,

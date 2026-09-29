@@ -469,6 +469,36 @@ describe('usercards source imports', () => {
     expect(await countCopies(database, alice.accountId)).toBe(0);
   });
 
+  it('keeps a source line above 1000 as its complete intended quantity', async () => {
+    // The documented acceptance scenario: a deck requirement above 1000 is a product quantity,
+    // never a request batch bound, so every supported source keeps it whole.
+    const pasted = await sourceImports.stageSourceImport(alice, {
+      format: 'pasted-list',
+      sessionId: 'past-1000-paste',
+      text: '1200 Lightning Bolt',
+    });
+    expect(pasted.staged).toBe(1);
+    const pastedLine = (
+      await userCards.listImportEntries(alice, { sessionId: pasted.session.sessionId })
+    ).entries[0];
+    expect(pastedLine?.quantity).toBe(1200);
+    expect(pastedLine?.sourceLine?.declaredQuantity).toBe(1200);
+
+    const wizards = await sourceImports.stageSourceImport(alice, {
+      format: 'wizards-precon',
+      sessionId: 'past-1000-wizards',
+      sourceId: 'wizards:mkm:deadly-disguise:regular:en',
+      reference: 'https://magic.wizards.com/en/news/feature/deadly-disguise-decklist',
+      entries: [{ name: 'Lightning Bolt', quantity: 1200 }],
+    });
+    expect(wizards.staged).toBe(1);
+    const wizardsLine = (
+      await userCards.listImportEntries(alice, { sessionId: wizards.session.sessionId })
+    ).entries[0];
+    expect(wizardsLine?.quantity).toBe(1200);
+    expect(wizardsLine?.sourceLine?.declaredQuantity).toBe(1200);
+  });
+
   it('keeps each identified import as its own list and replays only that import', async () => {
     const paste = (sessionId: string, lines: readonly string[]) => ({
       format: 'pasted-list' as const,

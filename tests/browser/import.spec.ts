@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 
+import type { ApplicationFailureCode } from '../../src/application/index.js';
 import type { CardRecord, PrintingRecord } from '../../src/catalog/index.js';
 import type {
   ImportEntry,
@@ -76,7 +77,13 @@ function importBundle(): Promise<string> {
 async function openImport(
   page: Page,
   hash: string,
-  options: { readonly sourceImports?: boolean } = {},
+  options: {
+    readonly sourceImports?: boolean;
+    readonly failDestinationReads?: {
+      readonly code: ApplicationFailureCode;
+      readonly message: string;
+    } | null;
+  } = {},
 ): Promise<string[]> {
   const errors: string[] = [];
   page.on('pageerror', (error) => {
@@ -93,7 +100,13 @@ async function openImport(
 /** Loads a fresh UserInterface into the current document, as a reload of the app does. */
 async function loadImport(
   page: Page,
-  options: { readonly sourceImports?: boolean } = {},
+  options: {
+    readonly sourceImports?: boolean;
+    readonly failDestinationReads?: {
+      readonly code: ApplicationFailureCode;
+      readonly message: string;
+    } | null;
+  } = {},
 ): Promise<void> {
   await page.evaluate((capabilities) => {
     (globalThis as unknown as { keeperImportOptions: unknown }).keeperImportOptions = capabilities;
@@ -637,6 +650,120 @@ test('accepts an unowned deck from card names and quantities without creating co
     entries: [],
   });
   await expect(page.locator('#import-pending-list')).toHaveText('No pending entries to review.');
+  expect(errors).toEqual([]);
+});
+
+test('restores the deck destination the review chose on the way back', async ({ page }) => {
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  await control(page, 'scriptDestinationTags', []);
+  await settle(page, 'settleSessions', (await requested(page, 'sessions')).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries')).id, {
+    session: session(),
+    entries: [entry()],
+  });
+
+  // The owner names the deck the list is accepted into without leaving the review.
+  await page.fill('#import-new-deck', 'Burn');
+  await page.click('#import-create-deck');
+  const creation = await requested<Record<string, unknown>>(page, 'createdTags');
+  const burn: Tag = {
+    tagId: 'tag-burn',
+    kind: 'deck',
+    label: 'Burn',
+    system: false,
+    revision: 1,
+  };
+  await control(page, 'scriptDestinationTags', [burn]);
+  await settle(page, 'settleCreateTag', creation.id, burn);
+  await expect(page.locator('#import-destination')).toHaveValue(`tag:${burn.tagId}`);
+
+  // Leaving the review and returning applies the destination the owner chose; the selected deck is
+  // never silently replaced by the ownership action.
+  await control(page, 'navigate', { page: 'home' });
+  await control(page, 'back');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-destination')).toHaveValue(`tag:${burn.tagId}`);
+  await expect(page.locator('#import-destination option:checked')).toHaveText('Deck: Burn');
+  expect(errors).toEqual([]);
+});
+
+test('repeats a failed destination read through refresh and keeps the chosen deck', async ({
+  page,
+}) => {
+  const errors = await openImport(page, '#/import', {
+    failDestinationReads: { code: 'unavailable', message: 'Offline' },
+  });
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  await settle(page, 'settleSessions', (await requested(page, 'sessions')).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries')).id, {
+    session: session(),
+    entries: [entry()],
+  });
+
+  // A destination read that failed stays visible beside the control that repeats it, and as the
+  // shell's notice with the same refresh.
+  await expect(page.locator('#import-destination-status')).toContainText(
+    'The destinations could not be read: Offline',
+  );
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:import-destinations"]');
+  await expect(notice).toContainText('The destinations could not be read');
+
+  const burn: Tag = {
+    tagId: 'tag-burn',
+    kind: 'deck',
+    label: 'Burn',
+    system: false,
+    revision: 1,
+  };
+  await control(page, 'scriptDestinationFailure', null);
+  await control(page, 'scriptDestinationTags', [burn]);
+  await page.click('#import-refresh');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-destination option[value="tag:tag-burn"]')).toHaveCount(1);
+  await expect(page.locator('#import-destination-status')).toHaveText('');
+  await expect(notice).toHaveCount(0);
+
+  // The deck the owner selected stays selected while the read it needs fails again.
+  await page.selectOption('#import-destination', `tag:${burn.tagId}`);
+  await control(page, 'scriptDestinationFailure', { code: 'unavailable', message: 'Offline' });
+  await page.click('#import-refresh');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 2)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 2)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-destination')).toHaveValue(`tag:${burn.tagId}`);
+  await expect(page.locator('#import-destination-status')).toContainText(
+    'The destinations could not be read',
+  );
+
+  // The next successful read presents a destination added since and keeps the chosen one.
+  const swamp: Tag = {
+    tagId: 'tag-swamp',
+    kind: 'deck',
+    label: 'Swamp',
+    system: false,
+    revision: 1,
+  };
+  await control(page, 'scriptDestinationFailure', null);
+  await control(page, 'scriptDestinationTags', [burn, swamp]);
+  await page.click('#import-refresh');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 3)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 3)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-destination option[value="tag:tag-swamp"]')).toHaveCount(1);
+  await expect(page.locator('#import-destination')).toHaveValue(`tag:${burn.tagId}`);
   expect(errors).toEqual([]);
 });
 
@@ -3688,6 +3815,110 @@ test('saves the chosen printing while its catalog lookup is pending', async ({ p
   await settle(page, 'settleCatalog', lookup.id, { printings: [m10] });
   await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
   await expect(choice).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test('saves the chosen printing with the identity of its own card', async ({ page }) => {
+  // The entry names another card than the printing the owner now chooses: the review must quote
+  // the printing's own card, however long its lookup takes.
+  const errors = await openPendingReview(page, [
+    entry({ cardId: 'card-other', printingId: m11.printingId, finish: 'nonfoil' }),
+  ]);
+  await page.fill('#import-printing-query-entry-1', 'Bolt');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchSlice([m10], null),
+  );
+  const reads = (await control<unknown[]>(page, 'catalogRequests')).length;
+  await control(page, 'scriptCatalog', null);
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  const lookup = await requested(page, 'catalogRequests', reads);
+  // Save resolves the printing it must quote while the earlier enrichment read stays unanswered.
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11, m10] });
+  await page.click('#import-review-save-entry-1');
+  const review = await requested<Record<string, unknown>>(page, 'review');
+  expect(review.arguments).toMatchObject({
+    cardId: boltCard.cardId,
+    printingId: m10.printingId,
+    finish: 'nonfoil',
+  });
+  // The stored review comes back authoritative, carrying the quantity this confirmation read.
+  await settle(page, 'settleReview', review.id, {
+    entry: entry({
+      cardId: boltCard.cardId,
+      printingId: m10.printingId,
+      finish: 'nonfoil',
+      quantity: 7,
+      revision: 4,
+    }),
+    session: session({ revision: 5 }),
+  });
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session({ revision: 5 }),
+    entries: [
+      entry({
+        cardId: boltCard.cardId,
+        printingId: m10.printingId,
+        finish: 'nonfoil',
+        quantity: 7,
+        revision: 4,
+      }),
+    ],
+  });
+  await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('7');
+  await settle(page, 'settleCatalog', lookup.id, {});
+  expect(errors).toEqual([]);
+});
+
+test('clears a saved review draft the resolved printing identity belongs to', async ({ page }) => {
+  // An entry that names no identity resolves through a printing choice: the saved draft leaves
+  // with its own submission instead of hiding the review the provider now holds.
+  const errors = await openPendingReview(page, [
+    entry({ cardId: null, printingId: null, finish: null, quantity: 1 }),
+  ]);
+  await page.fill('#import-printing-query-entry-1', 'Bolt');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchSlice([m10], null),
+  );
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await page.click('#import-review-save-entry-1');
+  const review = await requested<Record<string, unknown>>(page, 'review');
+  expect(review.arguments).toMatchObject({
+    cardId: boltCard.cardId,
+    printingId: m10.printingId,
+    finish: 'nonfoil',
+  });
+  await settle(page, 'settleReview', review.id, {
+    entry: entry({
+      cardId: boltCard.cardId,
+      printingId: m10.printingId,
+      finish: 'nonfoil',
+      quantity: 7,
+      revision: 4,
+    }),
+    session: session({ revision: 5 }),
+  });
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session({ revision: 5 }),
+    entries: [
+      entry({
+        cardId: boltCard.cardId,
+        printingId: m10.printingId,
+        finish: 'nonfoil',
+        quantity: 7,
+        revision: 4,
+      }),
+    ],
+  });
+  await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('7');
   expect(errors).toEqual([]);
 });
 

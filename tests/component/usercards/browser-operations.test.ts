@@ -459,7 +459,7 @@ describe('UserCards browser operations', () => {
     expect(account.constraints.batch.stageEntries).toBe(50);
     expect(account.constraints.batch.confirmEntries).toBe(50);
     expect(account.constraints.quantity.copy).toBe(100);
-    expect(account.constraints.quantity.association).toBe(1000);
+    expect(account.constraints.quantity.association).toBe(1_000_000);
     expect(account.constraints.text.sourceText).toBe(128 * 1024);
     expect(account.constraints.pages.imports).toEqual({ default: 50, min: 1, max: 100 });
 

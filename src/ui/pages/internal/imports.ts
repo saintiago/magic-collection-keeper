@@ -94,20 +94,24 @@ function importPage(): UiPageDefinition {
       container.append(...manual.nodes, ...source.nodes, capture.element, ...reviewEditor.nodes);
 
       return {
-        capture: () => ({
-          sessionId: reviewEditor.capture().sessionId,
-          manual: captureManualDraft(manual),
-          // The unsaved source input stays with the entry as well: returning to the view keeps the
-          // edits to retry, while the account keeps the identity of an import whose outcome was
-          // not reported (docs/ui/editors.md).
-          source: source.capture(),
-          review: reviewEditor.capture().review,
-          // The reviewed revisions of the explicit selection stay with the entry, so a
-          // confirmation still covers entries the loaded window no longer presents.
-          selection: reviewEditor.capture().selection,
-          results: captureResults(manual),
-          pending: reviewEditor.capturePending(),
-        }),
+        capture: () => {
+          const reviewState = reviewEditor.capture();
+          return {
+            sessionId: reviewState.sessionId,
+            manual: captureManualDraft(manual),
+            // The unsaved source input stays with the entry as well: returning to the view keeps
+            // the edits to retry, while the account keeps the identity of an import whose outcome
+            // was not reported (docs/ui/editors.md).
+            source: source.capture(),
+            // The destination, review input and explicit selection stay with the entry, so
+            // returning to the view applies and confirms the same decision.
+            destination: reviewState.destination,
+            review: reviewState.review,
+            selection: reviewState.selection,
+            results: captureResults(manual),
+            pending: reviewEditor.capturePending(),
+          };
+        },
         presented: async () => {
           const outstanding = [manual.presentation(), reviewEditor.presentation()].filter(
             (restoration): restoration is Promise<void> => restoration !== null,
