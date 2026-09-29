@@ -30,25 +30,33 @@ an applied migration, target compatibility beyond the checks below, or a success
 
 ## Legacy mapping
 
-| Legacy evidence                                                                             | Prepared representation                                                                                    |
-| ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Native inventory plus source lots, including retained lots, adjusted by manual total deltas | Effective ownership grouped by printing, language, finish and condition; one new copy per unit             |
-| Assignment overrides and later additive sources                                             | Effective locations and classifications using the pinned legacy aggregation rules                          |
-| Printing and language                                                                       | Exact target printing and matching language; unavailable or incompatible printings block preparation       |
-| `UNK` condition                                                                             | Explicit unknown condition (`null`), never assumed mint                                                    |
-| Physical deck, binder, box or other location tag                                            | A location tag and copy memberships; a physical deck does not become a planned deck                        |
-| Role/category tag on an inventory group                                                     | An `other` tag associated with that group's copies; labels do not imply wishlist or planned-deck semantics |
-| Pending import draft                                                                        | A distinct pending session and entries; equal contents do not merge different draft identities             |
-| Scan session header, batches and indexes                                                    | One pending session with ordered entries; headers are not extra cards; counts and batch indexes must agree |
-| Empty drafts and confirmed import receipts                                                  | Archived lifecycle/replay evidence; do not create ownership again                                          |
-| Original lines, lots, timestamps, operation fingerprints and capture indexes                | Retained in the private source archive, linked through legacy group/draft/row identities                   |
+| Legacy evidence                                                                             | Prepared representation                                                                                       |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Native inventory plus source lots, including retained lots, adjusted by manual total deltas | Effective ownership grouped by printing, language, finish and condition; one new copy per unit                |
+| Assignment overrides and later additive sources                                             | Effective locations and classifications using the pinned legacy aggregation rules                             |
+| Printing and language                                                                       | Exact target printing and matching language; unavailable or incompatible printings block preparation          |
+| `UNK` condition                                                                             | Explicit unknown condition (`null`), never assumed mint                                                       |
+| Legacy location tag with `kind: deck`                                                       | A deck tag; effective allocated quantities become printing-level deck associations independently of ownership |
+| Binder, box or other physical location tag                                                  | A location tag and copy memberships; deck allocations do not consume these memberships                        |
+| Role/category tag on an inventory group                                                     | An `other` tag associated with that group's copies; labels do not imply wishlist or planned-deck semantics    |
+| Pending import draft                                                                        | A distinct pending session and entries; equal contents do not merge different draft identities                |
+| Scan session header, batches and indexes                                                    | One pending session with ordered entries; headers are not extra cards; counts and batch indexes must agree    |
+| Empty drafts and confirmed import receipts                                                  | Archived lifecycle/replay evidence; do not create ownership again                                             |
+| Original lines, lots, timestamps, operation fingerprints and capture indexes                | Retained in the private source archive, linked through legacy group/draft/row identities                      |
 
 Imported source lots and native inventory can overlap in one effective group. Counting only the
 native table loses cards; counting receipts as additional acquisitions duplicates them. Planned
-quantities must not be inferred from legacy location over-allocation.
+deck quantities come from its effective allocations, including assignment overrides and later
+additive sources. Sum quantities for the same deck/printing across physical-condition groups.
+Preserve stored printing specificity. Deck quantities can exceed ownership and several decks can
+reference the same card. They do not create copies or assign a physical location.
+
+Already recorded legacy ownership (`owned_quantity`, native inventory and total deltas) is preserved
+separately. This migration obligation does not make new deck imports ownership acquisitions. A
+source URL or deck label alone is never evidence for adding owned copies.
 
 Legacy aggregates do not identify individual physical cards. New copy IDs use the source owner,
-legacy group ID and ordinal. Location allocations select these new ordinals deterministically.
+legacy group ID and ordinal. Physical binder/box allocations select these new ordinals deterministically.
 This preserves counts and attributes without claiming historical physical identity. Provenance
 remains attached to its original group/source facts; assigning a particular acquisition timestamp
 or source lot to an indistinguishable copy would invent evidence.
@@ -57,7 +65,8 @@ or source lot to an indistinguishable copy would invent evidence.
 
 Preparation fails closed for malformed/duplicate identities, unknown document spaces, missing
 source printings, orphan overrides, negative totals, incompatible target printings and inconsistent
-scan indexes. It reports location totals exceeding ownership and missing tag references.
+scan indexes. It reports physical binder/box location totals exceeding ownership and missing tag
+references. Deck requirements exceeding ownership are valid and do not block preparation.
 
 Pending tag/location intentions currently have no corresponding target entry field. Such entries
 are preserved but block the plan. Entries exceeding current confirmation limits and candidates

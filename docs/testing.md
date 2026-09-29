@@ -48,16 +48,16 @@ authorization, cancellation and retry behavior where the interface promises them
 
 ## Keeper's main risks
 
-| Owner         | Focused evidence                                                                                                                                                                                          |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Catalog       | Card-to-printing resolution, complete basic information and reads independent of live provider requests.                                                                                                  |
-| UserCards     | Stable copy identities; one physical location per copy; distinction between desired quantities and physical counts; card/printing refinement; pending entries excluded from ownership until confirmation. |
-| Search        | Mixed catalog and private filters, ordering and pagination over the complete result, without duplicate counts or another user's entries. Use real database queries.                                       |
-| UserInterface | Replaceable screen modules, accessible presentation, retained drafts, opaque history and correct intent routing.                                                                                          |
-| CardList      | Basic information before optional fragments, independent failure/recovery, bounded loading, stable selection and restoration.                                                                             |
-| Capture       | Frame-correlated admission, bounded device work, authoritative staging outcomes and feedback.                                                                                                             |
-| Recognition   | Candidate interpretation, ambiguity and failure handling; recognition output cannot grant ownership.                                                                                                      |
-| Application   | Correct component wiring, rejection of invalid identity and enforcement of private access through every applicable backend entry point.                                                                   |
+| Owner         | Focused evidence                                                                                                                                                                                                       |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Catalog       | Card-to-printing resolution, complete basic information and reads independent of live provider requests.                                                                                                               |
+| UserCards     | Stable copy identities; deck membership distinct from physical location and ownership; intended quantities independent of owned counts; card/printing refinement; import confirmation applies an explicit destination. |
+| Search        | Mixed catalog and private filters, ordering and pagination over the complete result, without duplicate counts or another user's entries. Use real database queries.                                                    |
+| UserInterface | Replaceable screen modules, accessible presentation, retained drafts, opaque history and correct intent routing.                                                                                                       |
+| CardList      | Basic information before optional fragments, independent failure/recovery, bounded loading, stable selection and restoration.                                                                                          |
+| Capture       | Frame-correlated admission, bounded device work, authoritative staging outcomes and feedback.                                                                                                                          |
+| Recognition   | Candidate interpretation, ambiguity and failure handling; recognition output cannot grant ownership.                                                                                                                   |
+| Application   | Correct component wiring, rejection of invalid identity and enforcement of private access through every applicable backend entry point.                                                                                |
 
 Keep detailed variations with their owner. Use a few system journeys to connect them: find a card
 and add it to a wishlist; review an import, confirm copies and verify persistence; assign a copy to
@@ -89,16 +89,20 @@ bulk publication, removals and gap-free snapshot/change handoff.
   distinct copies, specificity changes and atomic location moves, including concurrent moves.
   Competing claims of one tag target report a conflict, not an outage. Planned deck changes must not
   move or reserve physical copies.
+  One copy may participate in several decks. Intended deck quantities can exceed ownership.
 - **Pending imports:** verify save/reload, corrections versus late candidates, account changes and
   the A,A / A,B,A accepted-identity sequence. Unresolved candidates never advance that sequence.
 - **Confirmation and provenance:** test competing confirmation, lost response plus identical retry,
   different input under the same operation ID, stale reviewed revisions and rollback on failure.
   Count created copies and verify recorded receipts and permanent source replay protection.
+  Accept a deck from names and quantities with no printing or owned copies: verify deck associations
+  and zero ownership changes. Cover optional printing specificity, explicit ownership acquisition,
+  destination changes under a reused operation identity, publication and rollback for each outcome.
 - **Source imports:** cover each supported format with representative fixtures, invalid rows,
   unresolved identities, repeated sources, changed quantities, duplicate lines and partial parsing
   failure. Verify provenance and require review before ownership changes.
 - **Import identity:** two new imports with identical contents or source references remain separate
-  lists and can each create their confirmed copies. Retry, reopen and reconciliation within one
+  lists and each applies its explicit destination. Retry, reopen and reconciliation within one
   import preserve its identity and do not duplicate its acquisitions. Cover lost responses and
   reload for pasted lists, Moxfield and reviewed Wizards sources.
 - **Publication:** a write and its durable change record commit or roll back together. Cover complete
@@ -184,7 +188,8 @@ supplied capabilities. Module documents define replacement evidence. Focus brows
 Keep integration journeys for cooperation: filters and unsupported expressions, recent cards, set
 browsing, all detail levels, tag rename, wishlist refinement, distinct intended/owned counts and
 physical-location changes. Import journeys cover saved review reload, source reconciliation,
-confirmation/recovery and actual copy counts. Confirm that provider change invalidations refresh
+confirmation/recovery, importing an unowned deck from names and actual copy counts for ownership
+actions. Confirm that provider change invalidations refresh
 affected lists while preserving drafts. Navigation away during a write must not invent a failure or
 another import. These journeys do not replace individual provider contract tests.
 
@@ -201,7 +206,9 @@ Use representative synthetic legacy records for duplicates, missing printings, u
 overallocated/multiple locations, pending entries and replay receipts. Verify ownership conservation
 by account and printing attributes, tag/association meaning, provenance and account continuity.
 Check stable reruns, dry-run non-mutation, conflict reporting and restoration from an isolated
-backup. Collection migration and cutover occur after the rebuild; their detailed plan is deferred.
+backup. Verify legacy deck quantities remain deck associations even when they exceed ownership,
+without inventing owned copies or physical locations. [Collection migration](migration.md) owns
+the mapping and execution gates.
 
 ## Component replacement checks
 

@@ -108,7 +108,8 @@ A card has many printings; each physical copy references one printing. A physica
 quantity field. Equivalent copies can be grouped for display and bulk actions while retaining
 individual identities.
 
-A copy has at most one physical location. Planned decks refer independently to cards or printings.
+A copy's physical location is separate from its deck memberships. Decks can refer to cards,
+printings or copies, and one copy can participate in several decks without changing ownership.
 
 Catalog maintains a complete, indexed database of basic card and printing information. Reads use
 this database; provider synchronization runs independently of user queries. Basic information can
@@ -135,6 +136,9 @@ For example, a deck can require four Lightning Bolts and contain two physical co
 physical counts remain distinct. Straightforward comparisons use card identity and printing
 constraints, without stored links allocating each copy to a requirement.
 
+A deck is a deck tag, never a location. Its card or printing quantities are independent of ownership;
+a deck imported from card names needs neither printing choices nor owned copies.
+
 UserCards supports refining or broadening an association between card and printing levels while
 preserving its identity. Physical-copy membership can coexist with that intention. Views preserve
 the distinction between direct associations and derived information and avoid duplicate counts.
@@ -147,8 +151,10 @@ UserCards owns transient and saved import state, including unresolved candidates
 pending quantities and client-side operation recovery. Recognition supplies evidence; Capture admits
 eligible attempts into pending review. UserInterface presents capture and review on the Import page.
 
-The [import lifecycle](user-cards.md#import-and-capture-state) uses system tags to distinguish
-pending entries, visible only on Import, from confirmed owned copies. Sessions group entries by
+The [import lifecycle](user-cards.md#import-and-capture-state) distinguishes pending review from
+accepted data. Accepting a list applies the explicitly chosen destination: deck or other tag
+associations, or physical ownership. Importing or accepting a deck does not create owned copies.
+Sessions group entries by
 one identified import and track its progress; contents and source references describe an import
 without identifying it. UserCards owns the transition and enforces visibility through its public
 contracts. Recognition output alone does not establish ownership.
@@ -193,7 +199,7 @@ The Import page binds capture controls to one Capture session and a pending Card
 UserCards import identity. Capture owns camera work and requires affirmative geometry plus usable
 identity evidence from Recognition before staging through UserCards. Only recorded acceptance
 produces a success cue. UserCards protects reviewed fields from later readings. Editors send explicit
-review and confirmation commands; confirmation outcomes invalidate affected pending/owned reads.
+review and confirmation commands; confirmation outcomes invalidate affected pending and destination reads.
 
 ### Runtime boundaries
 

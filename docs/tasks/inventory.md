@@ -41,6 +41,7 @@ Actual owner-data migration remains outside the rebuild queue.
 
 ## UserCards
 
+- [KAN-49: Separate deck import acceptance from physical ownership](https://malton-family.atlassian.net/browse/KAN-49)
 - [KAN-10: Implement UserCards physical-copy storage and account isolation](https://malton-family.atlassian.net/browse/KAN-10)
 - [KAN-11: Implement tags, associations and physical locations](https://malton-family.atlassian.net/browse/KAN-11)
 - [KAN-12: Implement pending imports, review and idempotent confirmation](https://malton-family.atlassian.net/browse/KAN-12)

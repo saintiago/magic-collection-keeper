@@ -156,7 +156,7 @@ export function prepareMigration(raw: unknown): MigrationPlan {
           prepared.tags.push({
             tagId,
             legacyTagId: t.id,
-            kind: t.type === 'location' ? 'location' : 'other',
+            kind: t.type === 'location' ? (t.kind === 'deck' ? 'deck' : 'location') : 'other',
             label: t.label,
             system: false,
             revision: 1,
@@ -166,6 +166,7 @@ export function prepareMigration(raw: unknown): MigrationPlan {
       );
       prepared.tags.sort((a, b) => a.tagId.localeCompare(b.tagId));
       prepared.groups = projectLegacy(source);
+      const deckAssociations = new Map<string, Association>();
       for (const group of prepared.groups) {
         prepared.expected.ownedCopies += group.quantity;
         const before = issues.length;
@@ -182,11 +183,14 @@ export function prepareMigration(raw: unknown): MigrationPlan {
             'Target catalog must contain this exact paper printing, language and finish.',
           );
         }
-        if (group.locations.reduce((n, l) => n + l.quantity, 0) > group.quantity) {
+        const locations = group.locations
+          .filter((l) => tags.get(l.tag_id)?.kind !== 'deck')
+          .toSorted((a, b) => a.tag_id.localeCompare(b.tag_id));
+        if (locations.reduce((n, l) => n + l.quantity, 0) > group.quantity) {
           issue(
             group.id,
             'location-shortfall',
-            'Location quantities exceed ownership. Do not add copies or choose a location automatically.',
+            'Physical location quantities exceed ownership. Deck requirements are independent; do not invent copies or choose a physical location automatically.',
           );
         }
         for (const l of group.locations)
@@ -206,8 +210,24 @@ export function prepareMigration(raw: unknown): MigrationPlan {
             );
           }
         if (issues.length !== before) continue;
+        for (const allocation of group.locations.filter(
+          (l) => tags.get(l.tag_id)?.kind === 'deck',
+        )) {
+          const tagId = tags.get(allocation.tag_id)!.tagId;
+          const associationId = stableId(source.accountId, tagId, 'printing', group.printingId);
+          const previous = deckAssociations.get(associationId);
+          const quantity = (previous?.quantity ?? 0) + allocation.quantity;
+          if (!Number.isSafeInteger(quantity)) throw new Error('Invalid effective deck quantity.');
+          deckAssociations.set(associationId, {
+            associationId,
+            tagId,
+            targetLevel: 'printing',
+            targetId: group.printingId,
+            quantity,
+            revision: 1,
+          });
+        }
         // Copies in a legacy aggregate have no individual identity. Ordinals carry no historical claim.
-        const locations = group.locations.toSorted((a, b) => a.tag_id.localeCompare(b.tag_id));
         let locationIndex = 0,
           locationUsed = 0;
         for (let ordinal = 1; ordinal <= group.quantity; ordinal++) {
@@ -232,6 +252,11 @@ export function prepareMigration(raw: unknown): MigrationPlan {
           for (const id of group.tagIds) addMembership(prepared, tags.get(id)!.tagId, copyId);
         }
       }
+      prepared.associations.push(
+        ...[...deckAssociations.values()].sort((a, b) =>
+          a.associationId.localeCompare(b.associationId),
+        ),
+      );
       preparePending(source, prepared, catalog, issue);
     } catch (error) {
       // Never copy source values or Zod's received values into diagnostics.

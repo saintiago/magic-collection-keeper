@@ -119,10 +119,55 @@ describe('offline migration preparation', () => {
     expect(plan.issues).toEqual([]);
     expect(a.expected.ownedCopies).toBe(7); // native 3 + lot 5 - override 1, not 3+5+2.
     expect(a.copies).toHaveLength(7);
-    expect(a.tags[0]!.kind).toBe('location'); // A physical deck is not silently turned into a planned deck.
-    expect(a.associations).toHaveLength(2);
+    expect(a.tags[0]!.kind).toBe('deck');
+    expect(a.associations).toHaveLength(1);
     expect(a.groups[0]!.sources).toEqual(['source']);
-    expect(a.associations.every((r) => r.targetLevel === 'copy' && r.quantity === null)).toBe(true);
+    expect(a.associations[0]).toMatchObject({
+      targetLevel: 'printing',
+      targetId: 'bolt',
+      quantity: 2,
+    });
+  });
+
+  it('keeps deck quantities independent of ownership and combines one printing across conditions', () => {
+    const raw = fixture();
+    raw.accounts[0]!.inventory[0]!.quantity = 1;
+    raw.accounts[0]!.inventory.push({
+      id: 'second',
+      printing_id: 'bolt',
+      language: 'en',
+      finish: 'nonfoil',
+      condition: 'LP',
+      quantity: 1,
+    });
+    for (const id of ['deck-a', 'deck-b'])
+      raw.accounts[0]!.documents.push(
+        doc('tags', id, { id, type: 'location', kind: 'deck', label: id }),
+      );
+    raw.accounts[0]!.documents.push(
+      doc('assignments', 'native', {
+        locations_override: true,
+        locations: [
+          { tag_id: 'deck-a', quantity: 4 },
+          { tag_id: 'deck-b', quantity: 4 },
+        ],
+      }),
+      doc('assignments', 'second', {
+        locations_override: true,
+        locations: [{ tag_id: 'deck-a', quantity: 2 }],
+      }),
+    );
+    const plan = prepareMigration(raw),
+      a = plan.accounts[0]!;
+    expect(plan.state).toBe('prepared');
+    expect(a.copies).toHaveLength(2);
+    expect(a.expected.ownedCopies).toBe(2);
+    expect(a.associations.filter((r) => r.targetLevel === 'copy')).toHaveLength(0);
+    expect(a.associations.map((r) => r.quantity).sort()).toEqual([4, 6]);
+    expect(a.associations.every((r) => r.targetId === 'bolt' && r.targetLevel === 'printing')).toBe(
+      true,
+    );
+    expect(() => verifyPlan(plan)).not.toThrow();
   });
 
   it('preserves assignment overrides while retaining later additive source allocations', () => {
