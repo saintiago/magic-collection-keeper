@@ -132,9 +132,13 @@ Before any owner-data migration:
 2. Prepare against the intended target Catalog; resolve every blocker explicitly. Build a
    UserCards-owned loader for this plan format before attempting target writes. The loader must
    retain legacy evidence durably, create system ownership, publish normal changes and record
-   completed batches transactionally. Repeating an identical plan must return the same outcome;
-   conflicting input for a recorded migration must fail. Calling `createCopies` repeatedly does
-   not provide that guarantee. Stable proposed IDs alone do not make writes repeat-safe.
+   completed batches transactionally. Each batch commits its records, replay receipt and any
+   query-visible publication together. A retry skips completed identical batches and resumes at
+   the first missing batch; it must never duplicate ownership or publish a partial batch. The
+   loader refuses a nonempty target account and conflicting input for a recorded migration.
+   Repeating a completed identical plan returns its recorded outcome. Calling `createCopies`
+   repeatedly does not provide that guarantee. Stable proposed IDs alone do not make writes
+   repeat-safe.
 3. Rehearse in an empty, isolated target. Exercise interruption and repeat runs. Reconcile exact
    copy IDs/attributes, ownership, tags/memberships, pending state, totals and the durable archive.
    `reconcileMigration` compares a provider-contract readback; exclude system tags/memberships
