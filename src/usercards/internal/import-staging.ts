@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { type Finish } from '../../catalog/index.js';
-import { physicalFinish, resolvePrintings } from './catalog.js';
+import { pendingFinish, resolvePrintings } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';
 import { candidateTuples, fingerprint, stagedLineFingerprint } from './fingerprint.js';
@@ -132,7 +132,7 @@ export function createImportStaging(
         if (printing === undefined) {
           throw new UserCardsError('not-found', 'The printing is not available in the catalog.');
         }
-        const finish = physicalFinish(printing, entry.finish ?? null);
+        const finish = pendingFinish(printing, entry.finish ?? null);
         return {
           entryId: entry.entryId,
           cardId: printing.cardId,
@@ -212,7 +212,7 @@ export function createImportStaging(
           throw new UserCardsError('not-found', 'The printing is not available in the catalog.');
         }
         identity = printing.cardId;
-        finish = physicalFinish(printing, requestedFinish ?? null);
+        finish = pendingFinish(printing, requestedFinish ?? null);
       }
       const outcome = await store.stageCapture(accountId, {
         sessionId,
@@ -225,7 +225,7 @@ export function createImportStaging(
         }),
         identity,
         entry:
-          printingId === null || printingId === undefined || finish === null
+          printingId === null || printingId === undefined
             ? null
             : {
                 entryId: captureId,

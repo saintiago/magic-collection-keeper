@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { resolveCards, resolvePhysicalPrinting, resolvePrintings } from './catalog.js';
+import { resolveCards, resolvePrintings } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';
 import type {
@@ -72,19 +72,21 @@ export function createImportReview(
       }
       const { entryId, expectedRevision, printingId, condition, quantity } = request.data;
       let cardId = request.data.cardId ?? null;
-      let finish = request.data.finish;
+      const finish = request.data.finish;
       if (printingId !== null) {
-        // A printing review names the printing's card identity and the finish a physical copy of
-        // it carries, so the reviewed values never disagree with the catalog.
-        const resolved = await resolvePhysicalPrinting(catalog, printingId, finish);
-        if (cardId !== null && cardId !== resolved.printing.cardId) {
+        // Review records a catalog target independently of ownership. Physical eligibility and
+        // finish availability are validated by the explicit ownership confirmation.
+        const printing = (await resolvePrintings(catalog, [printingId])).get(printingId);
+        if (printing === undefined) {
+          throw new UserCardsError('not-found', 'The printing is not available in the catalog.');
+        }
+        if (cardId !== null && cardId !== printing.cardId) {
           throw new UserCardsError(
             'invalid-request',
             'The reviewed card identity and printing do not agree.',
           );
         }
-        cardId = resolved.printing.cardId;
-        finish = resolved.finish;
+        cardId = printing.cardId;
       } else {
         if (cardId === null) {
           throw new UserCardsError(

@@ -96,7 +96,7 @@ const m10Printing = {
   physical: true,
 };
 
-/** Digital-only printing: it can never carry a physical copy or a pending entry. */
+/** Digital-only printing: it can be a pending target but never a physical copy. */
 const staPrinting = {
   printingId: 'printing-sta-109-en',
   cardId: lightningBolt.cardId,
@@ -579,10 +579,10 @@ describe('usercards source imports', () => {
       line: { problem: 'The catalog does not publish this printing; choose one during review.' },
     });
     expect(result.rows[2]).toMatchObject({
-      line: { problem: 'The printing is not available in the etched finish.' },
+      line: { problem: null },
     });
     expect(result.rows[3]).toMatchObject({
-      line: { problem: 'The printing is not available as a physical card.' },
+      line: { problem: null },
     });
     expect(result.rows[5]).toMatchObject({ line: { section: 'commanders', finish: 'foil' } });
     expect(result.rows[6]).toMatchObject({
@@ -595,12 +595,19 @@ describe('usercards source imports', () => {
     expect(pending.entries.map((entry) => entry.printingId)).toEqual([
       m11Printing.printingId,
       null,
-      null,
-      null,
+      m11Printing.printingId,
+      staPrinting.printingId,
       counterspellPrinting.printingId,
       m10Printing.printingId,
     ]);
-    expect(pending.entries[0]?.finish).toBe('nonfoil');
+    expect(pending.entries.map((entry) => entry.finish)).toEqual([
+      'nonfoil',
+      null,
+      'etched',
+      'nonfoil',
+      'foil',
+      'nonfoil',
+    ]);
     // Every board the deck publishes stays reviewable; only a confirmation changes ownership, so
     // the sideboard is not withheld from review.
     expect(pending.entries.map((entry) => entry.sourceLine?.section)).toEqual([

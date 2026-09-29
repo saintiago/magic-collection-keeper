@@ -34,7 +34,7 @@ import {
   type Finish,
   type PrintingRecord,
 } from '../../catalog/index.js';
-import { physicalFinishAvailability, resolveAvailablePrintings } from './catalog.js';
+import { pendingFinish, resolveAvailablePrintings } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';
 import type { UserCardsSqlTransactor } from './executor.js';
@@ -904,8 +904,5 @@ function resolveLine(
       problem: 'The catalog does not publish this printing; choose one during review.',
     };
   }
-  const availability = physicalFinishAvailability(printing, row.finish);
-  return availability.outcome === 'unavailable'
-    ? { printingId: null, finish: null, problem: availability.problem }
-    : { printingId: row.printingId, finish: availability.finish, problem: null };
+  return { printingId: row.printingId, finish: pendingFinish(printing, row.finish), problem: null };
 }

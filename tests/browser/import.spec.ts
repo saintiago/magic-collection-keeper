@@ -653,6 +653,58 @@ test('accepts an unowned deck from card names and quantities without creating co
   expect(errors).toEqual([]);
 });
 
+for (const physical of [false, true]) {
+  test(`saves a printing-specific deck review without a physical finish (physical=${physical})`, async ({
+    page,
+  }) => {
+    const errors = await openImport(page, '#/import');
+    const printing: PrintingRecord = {
+      ...m11,
+      physical,
+      finishes: physical ? ['nonfoil'] : ['etched'],
+    };
+    await scriptCatalog(page, { cards: [boltCard], printings: [printing] });
+    await settle(page, 'settleSessions', (await requested(page, 'sessions')).id, [session()]);
+    await settle(page, 'settleEntries', (await requested(page, 'entries')).id, {
+      session: session(),
+      entries: [entry({ finish: null })],
+    });
+    await page.fill('#import-new-deck', 'Burn');
+    await page.click('#import-create-deck');
+    const creation = await requested(page, 'createdTags');
+    const burn: Tag = { tagId: 'burn', kind: 'deck', label: 'Burn', system: false, revision: 1 };
+    await control(page, 'scriptDestinationTags', [burn]);
+    await settle(page, 'settleCreateTag', creation.id, burn);
+    await expect(page.locator('#import-destination')).toHaveValue('tag:burn');
+    await expect(page.locator('#import-review-finish-entry-1')).toHaveCount(0);
+    await page.fill('#import-review-quantity-entry-1', '3');
+    await page.click('#import-review-save-entry-1');
+    const review = await requested(page, 'review');
+    expect(review.arguments).toMatchObject({
+      cardId: boltCard.cardId,
+      printingId: m11.printingId,
+      finish: null,
+      quantity: 3,
+    });
+    const reviewed = entry({ finish: null, quantity: 3, revision: 4 });
+    await settle(page, 'settleReview', review.id, {
+      entry: reviewed,
+      session: session({ revision: 5 }),
+    });
+    await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+      session: session({ revision: 5 }),
+      entries: [reviewed],
+    });
+    await selectAllRendered(page, '#import-pending');
+    await page.click('#import-pending [data-ui-tool="confirm-import"]');
+    expect((await requested(page, 'confirm')).arguments).toMatchObject({
+      destination: { kind: 'tag', tagId: 'burn' },
+      entries: [{ entryId: 'entry-1', expectedRevision: 4 }],
+    });
+    expect(errors).toEqual([]);
+  });
+}
+
 test('restores the deck destination the review chose on the way back', async ({ page }) => {
   const errors = await openImport(page, '#/import');
   await scriptCatalog(page, { cards: [boltCard], printings: [m11] });

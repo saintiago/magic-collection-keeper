@@ -343,6 +343,117 @@ describe('usercards import confirmation', () => {
     });
   });
 
+  it.each([
+    { label: 'digital printing', physical: false, finishes: ['nonfoil'], finish: null },
+    {
+      label: 'digital printing with a finish',
+      physical: false,
+      finishes: ['nonfoil'],
+      finish: 'nonfoil' as const,
+    },
+    { label: 'unavailable finish', physical: true, finishes: ['nonfoil'], finish: 'foil' as const },
+    { label: 'unspecified finish', physical: true, finishes: ['nonfoil'], finish: null },
+  ])(
+    'accepts a reviewed $label into a deck but refuses ownership',
+    async ({ physical, finishes, finish }) => {
+      await publishCatalog(database, {
+        revisionId: 'revision-2',
+        cards: [lightningBolt],
+        printings: [{ ...m11Printing, physical, finishes }],
+      });
+      const deck = await createDeck();
+      await userCards.stageImportEntries(alice, {
+        sessionId: 'review-target',
+        source: { kind: 'manual', id: 'review-target' },
+        entries: [{ entryId: 'target', quantity: 2 }],
+      });
+      const reviewed = await userCards.reviewImportEntry(alice, {
+        entryId: 'target',
+        expectedRevision: 1,
+        printingId: m11Printing.printingId,
+        finish,
+        condition: null,
+        quantity: 2,
+      });
+      expect(reviewed.entry).toMatchObject({
+        cardId: lightningBolt.cardId,
+        printingId: m11Printing.printingId,
+        finish,
+      });
+      const request = {
+        sessionId: 'review-target',
+        entries: [{ entryId: 'target', expectedRevision: reviewed.entry.revision }],
+      };
+      expect(
+        (
+          await captureUserCardsError(
+            userCards.confirmImport(alice, {
+              ...request,
+              operationId: 'ownership',
+              destination: { kind: 'ownership' },
+            }),
+          )
+        ).code,
+      ).toBe('invalid-request');
+      expect(await userCards.recoverImportOperation(alice, 'ownership')).toEqual({
+        outcome: 'absent',
+      });
+      expect(
+        (await userCards.listImportEntries(alice, { sessionId: request.sessionId })).entries[0]
+          ?.state,
+      ).toBe('pending');
+      const confirmed = await userCards.confirmImport(alice, {
+        ...request,
+        operationId: 'deck',
+        destination: { kind: 'tag', tagId: deck.tagId },
+      });
+      expect(confirmed.associations).toHaveLength(1);
+      expect(confirmed.associations[0]).toMatchObject({
+        targetLevel: 'printing',
+        targetId: m11Printing.printingId,
+        quantity: 2,
+      });
+      expect(confirmed.copies).toEqual([]);
+      expect(await countCopies(database, alice.accountId)).toBe(0);
+    },
+  );
+
+  it('accepts a printing into a deck after its reviewed finish becomes unavailable', async () => {
+    const deck = await createDeck();
+    await stageDeck();
+    await publishCatalog(database, {
+      revisionId: 'revision-2',
+      cards: [lightningBolt],
+      printings: [{ ...m11Printing, finishes: ['nonfoil'] }],
+    });
+    const request = {
+      sessionId: 'session-deck',
+      entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+    };
+    expect(
+      (
+        await captureUserCardsError(
+          userCards.confirmImport(alice, {
+            ...request,
+            operationId: 'ownership',
+            destination: { kind: 'ownership' },
+          }),
+        )
+      ).message,
+    ).toContain('not available in the foil finish');
+    const confirmed = await userCards.confirmImport(alice, {
+      ...request,
+      operationId: 'deck',
+      destination: { kind: 'tag', tagId: deck.tagId },
+    });
+    expect(confirmed.associations[0]).toMatchObject({
+      targetLevel: 'printing',
+      targetId: m11Printing.printingId,
+      quantity: 2,
+    });
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+  });
+
   it('grows an existing deck requirement and reports a repeated acceptance once', async () => {
     const deck = await createDeck();
     await stageDeck();

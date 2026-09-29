@@ -1926,8 +1926,10 @@ export function createImportReviewEditor(
     if (disposed) {
       return;
     }
-    const resolvedFinish = wantedFinish ?? firstFinish(chosenPrinting);
-    if (chosenPrinting === null || resolvedFinish === null) {
+    const resolvedFinish = ownedCopies()
+      ? (wantedFinish ?? firstFinish(chosenPrinting))
+      : wantedFinish;
+    if (chosenPrinting === null) {
       report(editor, 'The selected printing is unavailable. Find its printing before saving.');
       return;
     }

@@ -63,7 +63,7 @@ const m10Printing = {
   physical: true,
 };
 
-/** Digital-only printing: it cannot carry a physical copy or a pending entry. */
+/** Digital-only printing: it cannot carry a physical copy, but can be a reviewed target. */
 const staPrinting = {
   printingId: 'printing-sta-109-en',
   cardId: lightningBolt.cardId,
@@ -343,6 +343,38 @@ describe('usercards pending imports', () => {
       ),
     );
   });
+
+  it.each([
+    { printing: staPrinting, finish: null },
+    { printing: m10Printing, finish: 'foil' as const },
+  ])(
+    'preserves $printing.printingId during manual and capture staging regardless of physical attributes',
+    async ({ printing, finish }) => {
+      const manual = await userCards.stageImportEntries(alice, {
+        sessionId: 'manual',
+        source: { kind: 'manual', id: 'manual' },
+        entries: [
+          { entryId: 'manual-entry', printingId: printing.printingId, finish, quantity: 1 },
+        ],
+      });
+      const captured = stagedEntry(
+        await userCards.stageCaptureObservation(alice, {
+          sessionId: 'capture',
+          captureId: 'capture-entry',
+          printingId: printing.printingId,
+          finish,
+        }),
+      );
+      for (const entry of [manual.entries[0], captured]) {
+        expect(entry).toMatchObject({
+          cardId: printing.cardId,
+          printingId: printing.printingId,
+          finish,
+        });
+      }
+      expect(await countCopies(database, alice.accountId)).toBe(0);
+    },
+  );
 
   it('keeps review corrections against late recognition alternatives', async () => {
     const entry = stagedEntry(await stageCapture('session-1', 'capture-1', m11Printing.printingId));
@@ -963,21 +995,6 @@ describe('usercards pending imports', () => {
       await invalid(userCards.listImportSessions(callerInput(undefined) as TrustedUserContext)),
     ).toBe('invalid-request');
 
-    // A digital-only printing cannot be staged as a physical pending entry.
-    const digital = await captureUserCardsError(
-      stageCapture('session-1', 'capture-1', staPrinting.printingId),
-    );
-    expect(digital.code).toBe('invalid-request');
-    // A finish the printing does not offer is refused.
-    const wrongFinish = await captureUserCardsError(
-      userCards.stageCaptureObservation(alice, {
-        sessionId: 'session-1',
-        captureId: 'capture-1',
-        printingId: m10Printing.printingId,
-        finish: 'foil',
-      }),
-    );
-    expect(wrongFinish.code).toBe('invalid-request');
     // Alternatives must resolve in the published catalog.
     const unknownCandidate = await captureUserCardsError(
       userCards.attachImportCandidates(alice, {

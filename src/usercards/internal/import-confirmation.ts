@@ -102,7 +102,12 @@ export function createImportConfirmation(
       const printings = await resolveReviewedTargets(catalog, verified);
       const reviewed: ConfirmedImportEntry[] = verified.map(({ requested, entry }) => {
         let finish = entry.finish;
-        if (entry.state === 'pending' && entry.printingId !== null && entry.finish !== null) {
+        if (
+          destination.kind === 'ownership' &&
+          entry.state === 'pending' &&
+          entry.printingId !== null &&
+          entry.finish !== null
+        ) {
           const printing = printings.get(entry.printingId);
           if (printing === undefined) {
             throw new UserCardsError('not-found', 'The printing is not available in the catalog.');

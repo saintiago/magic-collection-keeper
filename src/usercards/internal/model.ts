@@ -149,7 +149,7 @@ export interface ImportEntry {
   readonly cardId: string | null;
   /** Reviewed printing reference; `null` for a card-level review or an unresolved entry. */
   readonly printingId: PrintingId | null;
-  /** Reviewed finish; `null` while the entry carries no physical printing. */
+  /** Optional reviewed finish; physical eligibility is required only for ownership confirmation. */
   readonly finish: Finish | null;
   /** Reviewed physical condition; `null` while the condition is unknown. */
   readonly condition: CopyCondition | null;

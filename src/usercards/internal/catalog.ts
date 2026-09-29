@@ -113,55 +113,36 @@ export async function resolvePrintings(
 }
 
 /**
- * The finish a physical copy of `printing` carries: the requested finish when the printing offers
- * it, otherwise the printing's first offered finish. A printing the catalog does not publish as a
- * physical card, or one that offers no finish at all, carries no such finish; a source import keeps
- * such a line reviewable with the returned reason instead of failing the whole import
- * (docs/user-cards.md#source-imports).
+ * Pending input retains its requested finish without requiring physical eligibility. When no
+ * finish was supplied, suggest the first physical finish if one exists. Only an ownership action
+ * validates physical attributes (docs/user-cards.md#import-and-capture-state).
  */
-export function physicalFinishAvailability(
-  printing: PrintingRecord,
-  requested: Finish | null | undefined,
-):
-  | { readonly outcome: 'available'; readonly finish: Finish }
-  | { readonly outcome: 'unavailable'; readonly problem: string } {
-  if (!printing.physical) {
-    return {
-      outcome: 'unavailable',
-      problem: 'The printing is not available as a physical card.',
-    };
-  }
-  if (requested !== null && requested !== undefined) {
-    return printing.finishes.includes(requested)
-      ? { outcome: 'available', finish: requested }
-      : {
-          outcome: 'unavailable',
-          problem: `The printing is not available in the ${requested} finish.`,
-        };
-  }
-  const offered = printing.finishes[0];
-  return offered === undefined
-    ? {
-        outcome: 'unavailable',
-        problem: 'The printing offers no finish a physical copy could carry.',
-      }
-    : { outcome: 'available', finish: offered };
+export function pendingFinish(printing: PrintingRecord, requested: Finish | null): Finish | null {
+  return requested ?? (printing.physical ? (printing.finishes[0] ?? null) : null);
 }
 
-/**
- * The finish a stored record carries: the requested finish, or the printing's first offered finish
- * when the caller left it open. The printing must be available as a physical card and offer the
- * finish, so no record carries an attribute the catalog does not publish.
- */
-export function physicalFinish(
-  printing: PrintingRecord,
-  requested: Finish | null | undefined,
-): Finish {
-  const availability = physicalFinishAvailability(printing, requested);
-  if (availability.outcome === 'unavailable') {
-    throw new UserCardsError('invalid-request', availability.problem);
+/** The finish a physical copy carries must be offered by a physically available printing. */
+export function physicalFinish(printing: PrintingRecord, requested: Finish | null): Finish {
+  if (!printing.physical) {
+    throw new UserCardsError(
+      'invalid-request',
+      'The printing is not available as a physical card.',
+    );
   }
-  return availability.finish;
+  if (requested !== null && !printing.finishes.includes(requested)) {
+    throw new UserCardsError(
+      'invalid-request',
+      `The printing is not available in the ${requested} finish.`,
+    );
+  }
+  const finish = requested ?? printing.finishes[0];
+  if (finish === undefined) {
+    throw new UserCardsError(
+      'invalid-request',
+      'The printing offers no finish a physical copy could carry.',
+    );
+  }
+  return finish;
 }
 
 /** Resolves one printing and the finish a physical copy of it carries. */

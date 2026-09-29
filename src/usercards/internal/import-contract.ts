@@ -61,7 +61,7 @@ export interface StageImportEntryInput {
   readonly entryId: ImportEntryId;
   /** Resolved printing reference, or null while the parsed line is unresolved. */
   readonly printingId?: string | null;
-  /** Requested finish, or the printing's first offered finish when it is left open. */
+  /** Requested finish, or the first physical finish if available when it is left open. */
   readonly finish?: Finish | null;
   readonly condition?: CopyCondition | null;
   readonly quantity: number;
@@ -90,7 +90,7 @@ export interface StageCaptureInput {
   /** Stable identity of this observation; a retry returns its recorded admission decision. */
   readonly captureId: ImportEntryId;
   readonly printingId?: string | null;
-  /** Finish the pending entry starts with; the printing's first offered finish when omitted. */
+  /** Requested finish, or the first physical finish if available when omitted. */
   readonly finish?: Finish | null;
   readonly candidates?: readonly ImportCandidate[];
 }
@@ -118,7 +118,7 @@ export interface ReviewImportEntryInput {
   readonly cardId?: string | null;
   /** Reviewed printing reference, or null when the entry is reviewed at card level. */
   readonly printingId: string | null;
-  /** Reviewed finish, or null while the review carries no physical printing. */
+  /** Optional reviewed finish; physical eligibility is required only for ownership confirmation. */
   readonly finish: Finish | null;
   readonly condition: CopyCondition | null;
   readonly quantity: number;

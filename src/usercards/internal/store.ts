@@ -345,7 +345,7 @@ export interface ImportEntryCorrection {
   readonly cardId: string | null;
   /** Reviewed printing reference, or null for a card-level review. */
   readonly printingId: string | null;
-  /** Reviewed finish, or null while the review leaves the entry without a physical printing. */
+  /** Optional reviewed finish; physical eligibility is required only for ownership confirmation. */
   readonly finish: Finish | null;
   readonly condition: CopyCondition | null;
   readonly quantity: number;
