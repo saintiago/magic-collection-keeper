@@ -676,6 +676,15 @@ export type MigrationStartOutcome =
       readonly reason: 'recorded-input' | 'nonempty-account';
     };
 
+/**
+ * The progress already recorded for one source snapshot, read without writing anything, so a
+ * completed migration is recognizable before the target Catalog is consulted.
+ */
+export type MigrationRecordedOutcome =
+  | { readonly outcome: 'recorded'; readonly progress: MigrationProgress }
+  /** The account recorded another plan for this source snapshot. */
+  | { readonly outcome: 'conflict'; readonly reason: 'recorded-input' };
+
 export type MigrationBatchOutcome =
   | { readonly outcome: 'applied'; readonly publicationPosition: string | null }
   /** The identical batch was already recorded; nothing was written again. */
@@ -698,6 +707,12 @@ export type MigrationReadbackOutcome =
  * projection.
  */
 export interface MigrationStore {
+  /**
+   * Reads the progress already recorded for this source snapshot without writing anything, or null
+   * when the account records no migration for it. A recorded snapshot whose plan, source or batch
+   * count differs is conflicting input, reported as the same conflict `start` reports.
+   */
+  recorded(accountId: string, record: MigrationRecord): Promise<MigrationRecordedOutcome | null>;
   /**
    * Records the migration and its archive when the account holds no records yet, or returns the
    * progress already recorded for this snapshot. Another plan under a recorded snapshot, or any

@@ -8,10 +8,16 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createCatalog, type Catalog } from '../../../src/catalog/index.js';
+import {
+  CatalogError,
+  createCatalog,
+  type Catalog,
+  type CatalogResolver,
+} from '../../../src/catalog/index.js';
 import {
   createUserCards,
   createUserCardsPublication,
+  createSourceImports,
   type TrustedUserContext,
   type UserCards,
   type UserCardsPublication,
@@ -451,5 +457,170 @@ describe('usercards migration loading', () => {
       userCards.loadMigrationPlan(alice, { plan: later, sourceDigest: later.sourceDigest }),
     );
     expect(refused.code).toBe('conflict');
+  });
+
+  it('recognizes a migrated source line when its source is staged again', async () => {
+    const wizards = {
+      sourceId: 'wizards:mkm:deadly-disguise:regular:en',
+      reference: 'https://magic.wizards.com/en/news/announcements/deadly-disguise-decklist',
+    };
+    const raw = legacyExport();
+    const draft = raw.accounts[0]!.documents.find(
+      (document) => document.space === 'import-drafts',
+    )!;
+    draft.value = {
+      id: 'pending',
+      state: 'pending',
+      provider: 'wizards-precon',
+      source_id: wizards.sourceId,
+      url: wizards.reference,
+      rows: [
+        {
+          id: 'row-1',
+          printing_id: boltPrinting.printingId,
+          // The owner reviewed another finish than the source list declared.
+          finish: 'nonfoil',
+          condition: 'NM',
+          quantity: 1,
+          original: {
+            name: 'Lightning Bolt',
+            set: 'M11',
+            collector_number: '149',
+            language: 'en',
+            finish: 'foil',
+            quantity: 1,
+          },
+        },
+      ],
+    };
+    const plan = prepareMigration(raw);
+    expect(plan.state).toBe('prepared');
+    await userCards.loadMigrationPlan(alice, { plan, sourceDigest: plan.sourceDigest });
+    const entry = plan.accounts[0]!.pending[0]!;
+    expect(entry.finish).toBe('nonfoil');
+
+    const sourceImports = createSourceImports({ sql: database.sql, catalog });
+    const staged = await sourceImports.stageSourceImport(alice, {
+      format: 'wizards-precon',
+      sessionId: entry.sessionId,
+      sourceId: wizards.sourceId,
+      reference: wizards.reference,
+      entries: [
+        {
+          name: 'Lightning Bolt',
+          quantity: 1,
+          set: 'M11',
+          collectorNumber: '149',
+          language: 'en',
+          finish: 'foil',
+        },
+      ],
+    });
+
+    expect(staged.staged).toBe(0);
+    expect(staged.rows.map((row) => row.outcome)).toEqual(['pending']);
+    expect(staged.rows[0]!.entryId).toBe(entry.entryId);
+    const readback = await userCards.readMigrationReadback(alice);
+    expect(readback.pending).toHaveLength(1);
+    expect(readback.pending[0]!.quantity).toBe(1);
+    expect(reconcileMigration(plan, [readback])).toEqual([]);
+  });
+
+  it('reconciles the reviewed card identity of a pending entry', async () => {
+    const plan = prepareMigration(legacyExport());
+    await userCards.loadMigrationPlan(alice, { plan, sourceDigest: plan.sourceDigest });
+    const readback = await userCards.readMigrationReadback(alice);
+    expect(reconcileMigration(plan, [readback])).toEqual([]);
+    expect(readback.pending.map((entry) => entry.cardId)).toContain(lightningBolt.cardId);
+
+    const changed = {
+      ...readback,
+      pending: readback.pending.map((entry) => ({ ...entry, cardId: 'wrong-card' })),
+    };
+    expect(reconcileMigration(plan, [changed])).toEqual([`${alice.accountId}: pending mismatch`]);
+
+    const removed = {
+      ...readback,
+      pending: readback.pending.map((entry) => ({ ...entry, cardId: null })),
+    };
+    expect(reconcileMigration(plan, [removed])).toEqual([`${alice.accountId}: pending mismatch`]);
+  });
+
+  it('returns a completed migration outcome after the target catalog changed or is unavailable', async () => {
+    const plan = prepareMigration(legacyExport());
+    const first = await userCards.loadMigrationPlan(alice, {
+      plan,
+      sourceDigest: plan.sourceDigest,
+    });
+
+    // The plan's printing leaves the published revision: the recorded outcome stays recoverable.
+    await publishCatalog(database, {
+      revisionId: 'revision-2',
+      cards: [lightningBolt],
+      printings: [{ ...boltPrinting, printingId: 'printing-other' }],
+    });
+    const replayed = await userCards.loadMigrationPlan(alice, {
+      plan,
+      sourceDigest: plan.sourceDigest,
+    });
+    expect(replayed.replayed).toBe(true);
+    expect(replayed.appliedBatches).toBe(0);
+    expect(replayed.totalBatches).toBe(first.totalBatches);
+    expect(replayed.publicationPosition).toBe(first.publicationPosition);
+
+    // A Catalog outage is equally irrelevant to the recorded outcome, while an account that still
+    // has to be written validates its plan against the target first.
+    const outage: CatalogResolver = {
+      resolve: async () => {
+        throw new CatalogError('unavailable', 'simulated catalog outage');
+      },
+    };
+    const duringOutage = createUserCards({ sql: database.sql, catalog: outage });
+    expect(
+      (await duringOutage.loadMigrationPlan(alice, { plan, sourceDigest: plan.sourceDigest }))
+        .replayed,
+    ).toBe(true);
+    const bobPlan = prepareMigration(legacyExport({ accountId: bob.accountId }));
+    const refused = await captureUserCardsError(
+      duringOutage.loadMigrationPlan(bob, { plan: bobPlan, sourceDigest: bobPlan.sourceDigest }),
+    );
+    expect(refused.code).toBe('unavailable');
+  });
+
+  it('refuses pending identities the target catalog no longer publishes or agrees with', async () => {
+    const plan = prepareMigration(legacyExport());
+    const otherCard = {
+      cardId: 'oracle-other-card',
+      name: 'Other Card',
+      colors: [],
+      colorIdentity: [],
+      manaValue: 0,
+    };
+
+    // The plan's printing now carries another card while the reviewed card is still published.
+    await publishCatalog(database, {
+      revisionId: 'revision-2',
+      cards: [lightningBolt, otherCard],
+      printings: [{ ...boltPrinting, cardId: otherCard.cardId }],
+    });
+    const contradictory = await captureUserCardsError(
+      userCards.loadMigrationPlan(alice, { plan, sourceDigest: plan.sourceDigest }),
+    );
+    expect(contradictory.code).toBe('invalid-request');
+
+    // The reviewed card identity itself left the catalog.
+    await publishCatalog(database, {
+      revisionId: 'revision-3',
+      cards: [otherCard],
+      printings: [{ ...boltPrinting, cardId: otherCard.cardId }],
+    });
+    const missing = await captureUserCardsError(
+      userCards.loadMigrationPlan(alice, { plan, sourceDigest: plan.sourceDigest }),
+    );
+    expect(missing.code).toBe('not-found');
+
+    // Neither refusal wrote a migration record or any other private record.
+    const readback = await captureUserCardsError(userCards.readMigrationReadback(alice));
+    expect(readback.code).toBe('not-found');
   });
 });

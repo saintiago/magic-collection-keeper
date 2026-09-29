@@ -32,6 +32,7 @@ import {
   type Tag,
   type TagKind,
 } from './model.js';
+import { sourceLineKey } from './source-line-identity.js';
 
 export const migrationPlanFormat = 'keeper-migration-plan-v1';
 export const migrationPlanStates = ['prepared', 'blocked'] as const;
@@ -322,9 +323,22 @@ export function migrationArchiveDigest(text: string): string {
   return contentDigest(text);
 }
 
-/** Durable identity of one retained source line, derived from its content like a parsed line's. */
+/**
+ * Durable identity of one retained source line, in the form the ordinary source reconciliation
+ * derives from a parsed line (docs/user-cards.md#source-imports). It is computed from what the
+ * source published and never from the reviewed values a user later set, so a source re-staged
+ * after the migration recognizes the migrated quantity instead of staging it again. A retained
+ * source line names a card; the reviewed printing stays out of the source-content identity.
+ */
 export function migrationSourceLineKey(line: ImportSourceLine): string {
-  return contentDigest(canonicalJson(line));
+  return sourceLineKey({
+    name: line.name,
+    set: line.set,
+    collectorNumber: line.collectorNumber,
+    language: line.language,
+    finish: line.finish,
+    printingId: null,
+  });
 }
 
 /** One planned association with the kind of its tag, which the private association row stores. */

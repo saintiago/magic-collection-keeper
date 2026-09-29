@@ -49,6 +49,7 @@ import type {
   MigrationProgress,
   MigrationReadbackOutcome,
   MigrationRecord,
+  MigrationRecordedOutcome,
   MigrationStartOutcome,
   MigrationStore,
 } from './store.js';
@@ -806,6 +807,34 @@ async function pages<TRecord>(
 /** Reads and writes the private migration records of one account. */
 export function createPostgresMigrationStore(sql: UserCardsSqlTransactor): MigrationStore {
   return {
+    async recorded(accountId, record): Promise<MigrationRecordedOutcome | null> {
+      return inTransaction(
+        sql,
+        async (statements): Promise<MigrationRecordedOutcome | null> => {
+          const migration = await readRecordedMigration(statements, accountId, record.migrationId);
+          if (migration === null) {
+            return null;
+          }
+          if (
+            migration.planDigest !== record.planDigest ||
+            migration.sourceDigest !== record.sourceDigest ||
+            migration.batchCount !== record.batchCount
+          ) {
+            return { outcome: 'conflict', reason: 'recorded-input' };
+          }
+          return {
+            outcome: 'recorded',
+            progress: {
+              state: migration.state,
+              batches: await readBatchReceipts(statements, accountId, record.migrationId),
+              publicationPosition: migration.publicationPosition,
+            },
+          };
+        },
+        'The recorded migration could not be read.',
+      );
+    },
+
     async start(accountId, record, archive): Promise<MigrationStartOutcome> {
       return inTransaction(
         sql,
