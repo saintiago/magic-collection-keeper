@@ -312,6 +312,33 @@ test('a tag-read notice retires its recovery action on departure and reattaches 
   expect(errors).toEqual([]);
 });
 
+for (const result of ['present', 'absent', 'system'] as const) {
+  test(`successful tag-detail reopening clears its read failure when ${result}`, async ({
+    page,
+  }) => {
+    const errors = await openTags(page, '#/tags/tag-burn');
+    const read = await requested(page, 'readTags');
+    await control(page, 'fail', read.id, { code: 'unavailable', message: 'Tag service offline.' });
+    const notice = page.locator('[data-ui-notice="navigation:page:alice:tag:read"]');
+    await expect(notice).toContainText('Tag service offline.');
+    await page.getByRole('link', { name: 'Home', exact: true }).click();
+    await expect(notice).toBeVisible();
+    await page.goBack();
+    const reopened = await requested(page, 'readTags', 1);
+    await settle(
+      page,
+      'settleReadTags',
+      reopened.id,
+      result === 'absent' ? [] : [tag({ system: result === 'system' })],
+    );
+    if (result === 'present') {
+      await expect(page.locator('#tag-heading')).toHaveText('Burn');
+    }
+    await expect(notice).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+}
+
 test('lists the account’s tags and keeps an unsaved rename after a conflict', async ({ page }) => {
   const errors = await openTags(page, '#/tags');
   const listing = await requested<UiTagsListRequest>(page, 'listTags');

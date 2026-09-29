@@ -66,6 +66,7 @@ export type UiImportClient = Pick<
   | 'confirmImport'
   | 'retained'
   | 'resume'
+  | 'subscribe'
   | 'constraints'
 >;
 
@@ -114,6 +115,8 @@ export interface UiImportAccess {
   ): UserCardsOperation<'confirmImport', UserCardsConfirmationOutcome>;
   /** Unfinished attempts the account retains, oldest first. */
   retained(): readonly UserCardsRetainedAttempt[];
+  /** Provider changes can retire a retained source attempt, including explicit import discard. */
+  readonly subscribe: UserCardsAccountOperations['subscribe'];
   /** Reattaches to one retained attempt, or null when the account retains none with it. */
   resume(operationId: string): UserCardsRetainedAttempt | null;
 }
@@ -132,6 +135,7 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     'confirmImport',
     'retained',
     'resume',
+    'subscribe',
   ] as const) {
     if (typeof userCards?.[operation] !== 'function') {
       throw new TypeError('The Import page reads and changes pending imports through UserCards.');
@@ -153,6 +157,7 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     discardSession: (input, signal) => userCards.discardImportSession(input, signal),
     confirm: (input, signal) => userCards.confirmImport(input, signal),
     retained: () => userCards.retained(),
+    subscribe: (listener) => userCards.subscribe(listener),
     resume: (operationId) => userCards.resume(operationId),
   };
 }
@@ -249,13 +254,15 @@ export async function beginSourceImport(
   access: UiImportAccess,
   input: UserCardsSourceImportRequest,
   signal?: AbortSignal,
-): Promise<UiChangeCommit<SourceImportResult>> {
-  return commitUiOperation(
-    access.beginSource(input, signal),
+): Promise<UiChangeCommit<SourceImportResult> & { readonly operationId: string }> {
+  const operation = access.beginSource(input, signal);
+  const outcome = await commitUiOperation(
+    operation,
     async (): Promise<SourceImportResult | null> => null,
     'The source lines were not added to review.',
     { unknown: uiUnfinishedSourceMessage },
   );
+  return { ...outcome, operationId: operation.operationId };
 }
 
 /**

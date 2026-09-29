@@ -824,6 +824,9 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
     if (closed) {
       return;
     }
+    if (failure === null) {
+      options.notices?.dismiss(tagViewReadNotice);
+    }
     if (read === null || read.system) {
       const problem =
         read === null ? failure : 'System tags are managed through their own lifecycle operations.';
