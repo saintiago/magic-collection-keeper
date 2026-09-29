@@ -198,6 +198,7 @@ function pausingUserCards(
   let held = false;
   return {
     readSnapshot: (request) => userCards.readSnapshot(request),
+    readAccounts: (request) => userCards.readAccounts(request),
     async readChanges(request) {
       const page = await userCards.readChanges(request);
       if (!held && request.position === position) {
@@ -470,6 +471,9 @@ describe('search indexing over overlapping runs', () => {
     if (first === undefined || second === undefined) {
       throw new Error('The two-connection harness was not opened.');
     }
+    // The account has not published when the replacement starts, so the provider's register does
+    // not list it yet; another run adds it to the unfinished generation below.
+    alice.register([]);
     await indexerOn(first).index();
     const pause = createPause();
     const rebuildRun = indexerOn(second, {
@@ -477,6 +481,7 @@ describe('search indexing over overlapping runs', () => {
       pause,
     }).index({ rebuild: true });
     await pause.reached;
+    alice.register([accountId]);
     alice.publish(
       copyChange('5', '2', boltCopy(null)),
       accountRevisionChange('6', '2'),
@@ -506,6 +511,9 @@ describe('search indexing over overlapping runs', () => {
       if (first === undefined || second === undefined || server === undefined) {
         throw new Error('The two-connection harness was not opened.');
       }
+      // The account has published nothing when the case starts: the run that presents its private
+      // snapshot names it explicitly, and the register lists it only once it published.
+      alice.register([]);
       const retainedPrinting: CatalogPublishedRecord = {
         ...m11Printing,
         printing: { ...m11Printing.printing, printingId: 'printing-retained' },

@@ -33,6 +33,7 @@ import {
   type CardListOptions,
   type CardListRetained,
   type CardListSnapshot,
+  type CardListViewportDemand,
 } from '../../../card-list/index.js';
 
 import { observeUiInput } from '../../shared/interaction.js';
@@ -115,6 +116,8 @@ export interface UiCardList<Context = unknown> {
   readonly restoration: CardList<Context>['restoration'];
   /** Loads the next page of the active result; the window bound retires its oldest entries. */
   loadMore(): void;
+  /** Reports the visible extent and the fragment kinds the presentation needs. */
+  demand(request: CardListViewportDemand): void;
   /** Starts a new result for `context`; usable content stays until the fresh page arrives. */
   refine(context: Context): void;
   /** Reloads the active result from its first page, keeping the window until it arrives. */
@@ -294,6 +297,7 @@ export function createCardListView<Context>(
     },
     restoration,
     loadMore,
+    demand: (request) => list.demand(request),
     refine: (context) => list.refine(context),
     refresh: () => list.refresh(),
     retry: () => list.retry(),

@@ -370,6 +370,7 @@ export function createTestApplication(
     identity: options.identity ?? testIdentityVerifier(),
     resources: {
       readSql: sql.sql,
+      searchSql: sql.sql,
       writeSql: sql.sql,
       catalogSynchronization: {
         sql: sql.sql,

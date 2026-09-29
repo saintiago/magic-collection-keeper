@@ -6,9 +6,11 @@
  */
 
 import { CARD_LIST_LIMITS } from './limits.js';
+import type { PhysicalCopy } from '../../usercards/index.js';
 import {
   cardListFragmentKinds,
   type CardListEntry,
+  type CardListEntryAbsence,
   type CardListEntryImage,
   type CardListEntryOwnership,
   type CardListEntryTag,
@@ -110,7 +112,17 @@ export function readEntry(value: unknown): CardListEntry | null {
   if (entry.quantity !== null && quantity === null) {
     return null;
   }
-  return { key, target, basic, quantity };
+  const detail = readDetail(entry.detail);
+  if (entry.detail !== null && entry.detail !== undefined && detail === null) {
+    return null;
+  }
+  return {
+    key,
+    target,
+    basic,
+    quantity,
+    ...(detail === null ? {} : { detail }),
+  };
 }
 
 export function readTarget(value: unknown): CardListTarget | null {
@@ -159,6 +171,8 @@ function readBasic(value: unknown): CardListEntry['basic'] {
   const cardId = card?.cardId;
   const name = card?.name;
   const matchedName = card?.matchedName ?? null;
+  const typeLine = card?.typeLine ?? null;
+  const rulesText = card?.rulesText ?? null;
   if (
     basic === null ||
     card === null ||
@@ -166,12 +180,20 @@ function readBasic(value: unknown): CardListEntry['basic'] {
     cardId.length === 0 ||
     typeof name !== 'string' ||
     name.length === 0 ||
-    (matchedName !== null && typeof matchedName !== 'string')
+    (matchedName !== null && typeof matchedName !== 'string') ||
+    (typeLine !== null && typeof typeLine !== 'string') ||
+    (rulesText !== null && typeof rulesText !== 'string')
   ) {
     return null;
   }
   return {
-    card: { cardId, name, matchedName: matchedName === null ? null : String(matchedName) },
+    card: {
+      cardId,
+      name,
+      matchedName: matchedName === null ? null : String(matchedName),
+      ...(typeLine === null ? {} : { typeLine: String(typeLine) }),
+      ...(rulesText === null ? {} : { rulesText: String(rulesText) }),
+    },
     printing: readPrinting(basic.printing),
   };
 }
@@ -182,6 +204,7 @@ interface EntryPrintingShape {
   readonly edition: string;
   readonly collectorNumber: string;
   readonly language: string;
+  readonly finishes?: readonly string[];
 }
 
 function readPrinting(value: unknown): EntryPrintingShape | null {
@@ -206,7 +229,86 @@ function readPrinting(value: unknown): EntryPrintingShape | null {
   ) {
     return null;
   }
-  return { printingId, edition, collectorNumber, language };
+  const finishes = printing.finishes;
+  if (
+    finishes !== undefined &&
+    (!Array.isArray(finishes) || finishes.some((finish) => typeof finish !== 'string'))
+  ) {
+    return null;
+  }
+  return {
+    printingId,
+    edition,
+    collectorNumber,
+    language,
+    ...(finishes === undefined ? {} : { finishes: [...finishes] as readonly string[] }),
+  };
+}
+
+/**
+ * Detail facts of one typed detail entry (docs/ui/pages.md#page-map): the explicit absence of the
+ * level and, at the copy level, the account's private record. The record stays the shape the
+ * UserCards contract publishes; the component keeps it opaque, so a presentation that does not
+ * consume it never depends on its fields.
+ */
+function readDetail(value: unknown): CardListEntry['detail'] | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const detail = readObject(value);
+  const absent = detail?.absent;
+  const copy = readCopyRecord(detail?.copy);
+  const readableAbsence =
+    absent === null ||
+    absent === undefined ||
+    absent === 'card' ||
+    absent === 'printing' ||
+    absent === 'printing-card' ||
+    absent === 'copy';
+  if (
+    detail === null ||
+    !readableAbsence ||
+    (detail.copy !== null && detail.copy !== undefined && copy === null)
+  ) {
+    return null;
+  }
+  return { absent: (absent ?? null) as CardListEntryAbsence | null, copy };
+}
+
+/**
+ * The private copy record of one copy-level detail entry, read as the fields the editor that
+ * presents it consumes: its identity, the printing it records, its finish and condition and the
+ * revision a correction quotes. Another component owns the record's meaning; this reader only
+ * rejects a value the presentation could not use.
+ */
+function readCopyRecord(value: unknown): PhysicalCopy | null {
+  const copy = readObject(value);
+  const copyId = copy?.copyId;
+  const printingId = copy?.printingId;
+  const finish = copy?.finish;
+  const condition = copy?.condition ?? null;
+  const revision = copy?.revision;
+  if (
+    copy === null ||
+    typeof copyId !== 'string' ||
+    copyId.length === 0 ||
+    typeof printingId !== 'string' ||
+    printingId.length === 0 ||
+    typeof finish !== 'string' ||
+    finish.length === 0 ||
+    (condition !== null && typeof condition !== 'string') ||
+    typeof revision !== 'number' ||
+    !Number.isInteger(revision)
+  ) {
+    return null;
+  }
+  return {
+    copyId,
+    printingId,
+    finish: finish as PhysicalCopy['finish'],
+    condition: condition as PhysicalCopy['condition'],
+    revision,
+  };
 }
 
 function readQuantity(value: unknown): CardListEntry['quantity'] {

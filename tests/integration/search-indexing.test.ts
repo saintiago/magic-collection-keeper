@@ -107,6 +107,23 @@ describe('search indexing over real publications', () => {
     );
   }
 
+  it('keeps projection writes uncommitted across provider snapshot transactions', async () => {
+    await publishCatalog([m11Record], 'snapshot-1');
+    await database.exec('create table transaction_probe (id integer)');
+    await expect(
+      database.sql.transaction(async (statements) => {
+        await statements.query('insert into transaction_probe values (1)');
+        await database.catalogPublication.readSnapshot({ pageSize: 1 });
+        await database.userCardsPublication.readSnapshot({
+          accountId: alice.accountId,
+          pageSize: 1,
+        });
+        throw new Error('Projection interrupted');
+      }),
+    ).rejects.toThrow('Projection interrupted');
+    expect(await database.query('select * from transaction_probe')).toEqual([]);
+  });
+
   it('projects the published catalog and private records and catches up later publications', async () => {
     const revision = await publishCatalog([m11Record], 'snapshot-1');
     await database.userCards.createCopies(alice, {

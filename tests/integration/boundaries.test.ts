@@ -71,19 +71,33 @@ describe('component import boundaries', () => {
         'allowed-providers-of-ui: src/ui/index.ts -> src/recognition/internal/engine.ts',
         'allowed-providers-of-usercards: src/usercards/store.ts -> src/search/index.ts',
         'allowed-providers-of-catalog: src/catalog/index.ts -> src/recognition/index.ts',
+        // UserInterface modules follow the documented module graph: CaptureControls presents no
+        // page, and an editor reaches Navigation through its page rather than directly.
+        'allowed-ui-modules-of-capture-controls: src/ui/capture-controls/index.ts -> src/ui/pages/index.ts',
+        'allowed-ui-modules-of-editors: src/ui/editors/index.ts -> src/ui/navigation/index.ts',
         'no-circular: src/card-list/internal/window.ts -> src/ui/index.ts',
         // The Capture fixture reads its own internal module, which reaches UserInterface.
         'no-circular: src/capture/index.ts -> src/capture/internal/device.ts',
         'no-circular: src/capture/internal/device.ts -> src/ui/index.ts',
         'no-circular: src/catalog/index.ts -> src/recognition/index.ts',
         'no-backend-in-ui: src/ui/index.ts -> src/application/backend.ts',
+        'no-backend-in-ui: src/ui/index.ts -> src/application/catalog-job.ts',
         'no-backend-in-ui: src/ui/index.ts -> src/application/deployment.ts',
+        'no-backend-in-ui: src/ui/index.ts -> src/application/indexing-job.ts',
         // Application reads Search internals instead of its public entry point.
         'no-internals-of-search: src/application/index.ts -> src/search/internal/query.ts',
         // Application reads UserInterface internals instead of its public entry point.
         'no-internals-of-ui: src/application/index.ts -> src/ui/internal/page.ts',
+        // The packaged finite job entry points are not inter-component public entry points: the
+        // fixture's UserInterface import is rejected both as backend composition and as a
+        // non-public module, while the packaging command reaches them by path instead.
+        'no-internals-of-application: src/ui/index.ts -> src/application/catalog-job.ts',
+        'no-internals-of-application: src/ui/index.ts -> src/application/indexing-job.ts',
         // Application reads UserCards internals instead of its public entry point.
         'no-internals-of-usercards: src/application/index.ts -> src/usercards/internal/copies.ts',
+        // A page that names another UI module's private type depends on its internals: type-only
+        // imports are rejected like value imports (docs/tech-stack.md#component-boundaries).
+        'no-ui-internals-of-card-views: src/ui/pages/index.ts -> src/ui/card-views/internal/detail.ts',
         // UserInterface reads Application internals instead of its public entry point.
         'no-internals-of-application: src/ui/index.ts -> src/application/internal/wiring.ts',
         // Search reads Catalog internals instead of its public entry point.

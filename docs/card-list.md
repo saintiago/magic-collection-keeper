@@ -34,6 +34,12 @@ pending, ready, absent and failed fragments. Action context carries explicit ref
 when needed; visible rows are not a substitute for the selection. No mutable internal store, raw
 continuation or DOM object is exposed.
 
+A typed detail target is a description of one entry: its snapshot carries the level's basic
+presentation, the images fragment of the presented printing and, at the copy level, the account's
+private record the detail level presents. A source whose read is already authoritative for that
+record reports it as current; a target the provider does not publish is the entry's explicit
+absence, never a failed read.
+
 Snapshots also expose whether results are waiting for known committed changes to be indexed. This
 state is distinct from fetching a page, an empty result and a failed read.
 

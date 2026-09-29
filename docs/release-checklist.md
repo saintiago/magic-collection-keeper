@@ -56,12 +56,14 @@ an isolated test environment with test data. The concrete procedure is
 1. Inspect each CloudFormation change set before executing it: foundation first, then the service
    stack of the same `test` environment, importing the foundation's exports.
 2. Publish the artifacts of the release revision: the interactive package under
-   `releases/<version>/api.zip` with its object version, and both images by digest
+   `releases/<version>/api.zip` with its object version, and the recognition, catalog and indexing
+   images by digest
    ([packaging and publication](../infra/README.md#packaging-and-publication)).
 3. Build the browser bundle from the captured service-stack outputs, publish it and invalidate the
    distribution, so only public settings reach the browser.
-4. Capture the service stack's parameters into `artifacts/release.json` and start the finite catalog
-   job for the snapshot of the test data.
+4. Capture the service stack's parameters into `artifacts/release.json`, start the finite catalog
+   job for the snapshot of the test data and start indexing runs until the reported pass catches
+   up.
 5. Verify the changed live boundaries and keep the results separate from the local checks: change
    plan, deployed artifacts, identity and routing, network, IAM, data path, delivery and alarms
    ([Verification](../infra/README.md#verification)).
@@ -71,8 +73,8 @@ an isolated test environment with test data. The concrete procedure is
    isolated from the existing production application
    ([contracts and cooperation](testing.md#contracts-and-cooperation)).
 7. Rehearse rollback before calling the rehearsal complete: update the service stack to the previous
-   release's retained parameters, restore the previous browser bundle, run the catalog job again and
-   verify that the test account's identity and data are unchanged
+   release's retained parameters, restore the previous browser bundle, run both background jobs
+   again and verify that the test account's identity and data are unchanged
    ([rollback and recovery](#rollback-and-recovery)). Keep the candidate's captured
    `artifacts/release.json`: capturing the stack's parameters again while the previous release runs
    would replace the candidate's record with the previous release's.
@@ -108,12 +110,14 @@ test-environment rehearsal above are recorded:
 The artifacts of a release are immutable, so a rollback restores identities instead of rebuilding:
 
 - **Application.** Update the service stack to the previous release's `ApiCodeKey`,
-  `ApiCodeVersion`, `RecognitionImageUri` and `CatalogJobImageUri`, which the retained
-  `release.json` beside its manifest names ([Update](../infra/README.md#update)).
+  `ApiCodeVersion`, `RecognitionImageUri`, `CatalogJobImageUri` and `IndexingJobImageUri`, which the
+  retained `release.json` beside its manifest names ([Update](../infra/README.md#update)).
 - **Browser.** Re-upload the retained packaged `browser/` directory, or the bucket's previous object
   versions, and invalidate the distribution again ([Update](../infra/README.md#update)).
-- **Catalog.** The finite job takes effect on its next explicit run, because the task definition
-  pins one image digest ([catalog synchronization](../infra/README.md#catalog-synchronization)).
+- **Background jobs.** Catalog synchronization and background indexing take effect on their next
+  runs — the next explicit catalog run and the next scheduled or explicit indexing start — because
+  each task definition pins one image digest
+  ([background jobs](../infra/README.md#background-jobs)).
 - **Failed create or update.** CloudFormation rolls back automatically;
   `aws cloudformation continue-update-rollback` continues an interrupted rollback. A failed create
   removes the buckets that create made, because the three foundation buckets carry

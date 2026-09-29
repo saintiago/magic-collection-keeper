@@ -36,6 +36,18 @@ function resources(): ApplicationResources {
         });
       },
     },
+    searchSql: {
+      async query() {
+        return [];
+      },
+      async transaction(work) {
+        return work({
+          async query() {
+            return [];
+          },
+        });
+      },
+    },
     writeSql: {
       async query() {
         return [];

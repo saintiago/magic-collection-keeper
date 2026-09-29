@@ -88,8 +88,9 @@ export const SEARCH_INDEXING_LIMITS = {
 /** One indexing request as Application receives it. */
 export interface SearchIndexingRequest {
   /**
-   * Private accounts this run indexes, besides the accounts the generation already knows. An
-   * account without a checkpoint is bootstrapped from its consistent snapshot.
+   * Private accounts this run indexes besides the ones it already covers: the accounts the
+   * generation holds and the accounts the provider's register reports. An account without a
+   * checkpoint is bootstrapped from its consistent snapshot.
    */
   readonly accounts?: readonly string[];
   /** Build a replacement generation from fresh snapshots instead of catching up in place. */
@@ -309,7 +310,8 @@ export function createSearchIndexer(dependencies: SearchIndexerDependencies): Se
   if (
     userCards === undefined ||
     typeof userCards.readSnapshot !== 'function' ||
-    typeof userCards.readChanges !== 'function'
+    typeof userCards.readChanges !== 'function' ||
+    typeof userCards.readAccounts !== 'function'
   ) {
     throw new TypeError('createSearchIndexer requires the UserCards publication contract.');
   }
@@ -345,9 +347,13 @@ export function createSearchIndexer(dependencies: SearchIndexerDependencies): Se
           ? null
           : await readGenerationCheckpoints(projection, state.published),
     };
-    const accounts = target.queryable
-      ? uniqueAccounts(options.accounts)
-      : await rebuildScope(projection, generation, state.published, options.accounts);
+    const accounts = await indexingScope(
+      projection,
+      userCardsPublication,
+      target,
+      state.published,
+      options,
+    );
 
     const catalogProgress = await alignCatalog(projection, catalogPublication, target, options);
     const accountProgress: SearchAccountProgress[] = [];
@@ -428,20 +434,56 @@ function uniqueAccounts(accounts: readonly string[]): readonly string[] {
 }
 
 /**
- * The accounts a run covers while it works on a generation that is not queryable: the ones that
- * generation already knows, the ones the serving generation knows, and the ones this request
- * names. A generation is recovered in place or replaced only after being published, so this scope
- * survives both an expired position and a restart (docs/data-architecture.md#bootstrap-and-rebuild).
+ * The accounts one run covers. Every pass includes the accounts the generation already holds —
+ * their published changes are what the run exists to apply — the accounts this request names, and
+ * the accounts the provider's register reports, so a routine run without operator input catches up
+ * accounts that saved after an earlier pass and accounts that published for the first time
+ * (docs/data-architecture.md#asynchronous-synchronization). A generation that is not queryable
+ * also carries the accounts the serving generation knows, because a replaced generation is
+ * recovered in place or rebuilt only after being published: that scope survives both an expired
+ * position and a restart (docs/data-architecture.md#bootstrap-and-rebuild).
  */
-async function rebuildScope(
+async function indexingScope(
   sql: SearchSqlTransactor,
-  generation: string,
+  userCards: UserCardsPublication,
+  target: GenerationTarget,
   published: string | null,
-  requested: readonly string[],
+  options: IndexingOptions,
 ): Promise<readonly string[]> {
-  const known = await readCheckpointAccounts(sql, generation);
-  const carried = published === null ? [] : await readCheckpointAccounts(sql, published);
-  return uniqueAccounts([...carried, ...known, ...requested]);
+  const known = await readCheckpointAccounts(sql, target.generation);
+  const carried =
+    target.queryable || published === null ? [] : await readCheckpointAccounts(sql, published);
+  return uniqueAccounts([
+    ...carried,
+    ...known,
+    ...(await readPublishedAccounts(userCards, options)),
+    ...options.accounts,
+  ]);
+}
+
+/**
+ * The accounts the provider's register reports as holding published private data, read page by
+ * page until the register ends. The register is provider state: it names identities only, so the
+ * run learns which accounts to cover without reading private tables and without an operator
+ * listing them.
+ */
+async function readPublishedAccounts(
+  userCards: UserCardsPublication,
+  options: IndexingOptions,
+): Promise<readonly string[]> {
+  const accounts: string[] = [];
+  let continuation: string | null = null;
+  for (;;) {
+    const page = await userCards.readAccounts({
+      pageSize: options.pageSize,
+      ...(continuation === null ? {} : { continuation }),
+    });
+    accounts.push(...page.accounts);
+    if (page.continuation === null) {
+      return accounts;
+    }
+    continuation = page.continuation;
+  }
 }
 
 async function alignCatalog(

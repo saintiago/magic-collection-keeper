@@ -90,6 +90,7 @@ describe('application entry points', () => {
       identity: testIdentityVerifier(),
       resources: {
         readSql: database.sql,
+        searchSql: database.sql,
         writeSql: database.sql,
         catalogSynchronization: {
           sql: database.sql,

@@ -3,43 +3,35 @@
  * docs/ui/pages.md#page-map, docs/user-cards.md#records-and-associations).
  *
  * One URL names the level the page presents: the card, one printing of it or one physical copy.
- * The card level presents the published card and its published printings through the list boundary,
- * whose bounded window, continuation, failure and restoration belong to the list and travel with
- * the page's own state (docs/card-list.md,
- * docs/ui/architecture.md#state-ownership-and-restoration). The printing level presents one
- * published version of the card. The copy level reads the account's actual copy through the private
- * UserCards contract and resolves the printing it references, so a corrected copy is presented with
- * the printing it now carries. The copy level corrects printing and language (the printing the copy
- * references), finish and condition as one change quoted by the revision the page read: a conflict
- * or a failed change keeps the unsaved draft for review and retry. After a lost response the current
- * copy is read for review while the outcome stays unknown; a saved outcome requires the change's
- * confirmed commitment (docs/ui/pages.md#page-map). The draft is page state the page
- * keeps for its history entry, and a value the draft names stays presented while its catalog data is
- * still unavailable: the controls never replace the user's intended printing, language or finish
- * merely because the record that names it has not loaded. Every provider value renders as text.
+ * The page owns the route context and the lifetimes of its children; the level's content is
+ * acquired behind the supplied CardViews and CardList capabilities — the detail view the page
+ * mounts creates one list over a detail-target description, and the card level's published
+ * printings are a second list instance the page composes beside it — so no path in this page reads
+ * a card or copy itself (docs/ui/pages.md#interface, docs/ui/card-views.md#interface). The copy
+ * level presents the account's actual copy through the private UserCards contract as the supplied
+ * entry carries it, so a corrected copy is presented with the printing it now carries. The editor
+ * corrects printing and language (the printing the copy references), finish and condition as one
+ * change quoted by the revision the presented copy holds: a conflict or a failed change keeps the
+ * unsaved draft for review and retry. After a lost response the current copy is read for review
+ * while the outcome stays unknown; a saved outcome requires the change's confirmed commitment
+ * (docs/ui/pages.md#page-map). The draft is page state the page keeps for its history entry, and a
+ * value the draft names stays presented while its catalog data is still unavailable: the controls
+ * never replace the user's intended printing, language or finish merely because the record that
+ * names it has not loaded. Every provider value renders as text.
  */
 
-import type { CardRecord, Catalog, PrintingRecord } from '../../../catalog/index.js';
+import type {
+  CardListDetailTarget,
+  CardListEntry,
+  CardListEntryCard,
+} from '../../../card-list/index.js';
 
-import type { UiCardList } from '../../card-views/index.js';
-import {
-  createCopyAccess,
-  uiCopyReadNoticeId,
-  type UiCopyDraft,
-  type UiCopyEditor,
-  type UiCopyRead,
-} from '../../editors/index.js';
+import type { CardViewDetail, UiCardList } from '../../card-views/index.js';
+import { createCopyAccess, uiCopyReadNoticeId, type UiCopyEditor } from '../../editors/index.js';
 import { uiHref, type UiPageDefinition, type UiView } from '../../navigation/index.js';
 import { UI_LIMITS } from '../../shared/limits.js';
 import { reportUiFailure } from '../../shared/notices.js';
 import { cardViewOf, readListState, readPageState, restoredPresentation } from './page-support.js';
-
-/** What one level of the page presents: its content and the restoration its own list reports. */
-interface UiLevelPresentation {
-  readonly nodes: readonly Node[];
-  /** Presentation of the level's retained list, or null when the level composes none. */
-  readonly restoration: Promise<void> | null;
-}
 
 /** Notice identity of this view's own level read. */
 const cardDetailsNotice = 'card-details';
@@ -55,7 +47,7 @@ export function createCardDetailsPage(): UiPageDefinition {
       /** The card view this page presents; the level is fixed for the page's lifetime. */
       const cardView: Extract<UiView, { page: 'card' }> = view;
       const document = container.ownerDocument;
-      const restored = readPageState(context.restored?.state);
+      let retained = readPageState(context.restored?.state);
       const status = document.createElement('p');
       status.id = 'card-details-status';
       status.setAttribute('role', 'status');
@@ -72,6 +64,24 @@ export function createCardDetailsPage(): UiPageDefinition {
       let copyEditor: UiCopyEditor | null = null;
       /** The card level's printing list; the page keeps the state the list itself captured. */
       let printings: UiCardList<string> | null = null;
+      /** The mounted level: its list and the content the page composed for the published entry. */
+      let presentedLevel: CardViewDetail | null = null;
+      /**
+       * The target this route names. The page passes it to the supplied CardList binding as the
+       * description of the level; it never resolves the level's records itself
+       * (docs/ui/pages.md#interface).
+       */
+      const target: CardListDetailTarget =
+        cardView.copyId !== null
+          ? { kind: 'copy', copyId: cardView.copyId, cardId: cardView.cardId }
+          : cardView.printingId !== null
+            ? { kind: 'printing', printingId: cardView.printingId, cardId: cardView.cardId }
+            : { kind: 'card', cardId: cardView.cardId };
+      /**
+       * The card level's published printings: the page composes the list the content of the
+       * level's entry names.
+       */
+      const bindings = context.capabilities.cardList.account(context.account.accountId);
       /**
        * Newest load of the level the page presents. Each load fences its own results: a read a
        * later load superseded never reports, presents or replaces the content the user sees, and
@@ -82,20 +92,43 @@ export function createCardDetailsPage(): UiPageDefinition {
       // A page whose presentation the shell never awaits must still not surface a rejection.
       presented.promise.catch(() => {});
       let closed = false;
-      context.signal.addEventListener(
-        'abort',
-        () => {
-          closed = true;
-        },
-        { once: true },
-      );
+      context.signal.addEventListener('abort', dispose, { once: true });
 
-      void render();
+      if (context.signal.aborted) {
+        dispose();
+      } else {
+        void render();
+      }
 
       return {
         capture: captureState,
         presented: () => presented.promise,
+        dispose,
       };
+
+      function disposeChildren(): void {
+        presentedLevel?.dispose();
+        presentedLevel = null;
+        disposeContent();
+      }
+
+      function disposeContent(): void {
+        // Recomposition and retry restore the latest child state, not just the history entry.
+        retained = readPageState(captureState());
+        copyEditor?.dispose();
+        copyEditor = null;
+        printings?.dispose();
+        printings = null;
+      }
+
+      function dispose(): void {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        context.signal.removeEventListener('abort', dispose);
+        disposeChildren();
+      }
 
       /**
        * State this page retains for its history entry
@@ -107,57 +140,73 @@ export function createCardDetailsPage(): UiPageDefinition {
        */
       function captureState(): unknown | null {
         if (cardView.copyId !== null) {
-          const draft = copyEditor?.capture() ?? readCopyDraft(restored);
+          if (copyEditor === null) {
+            return retained;
+          }
+          const draft = copyEditor.capture();
           return draft === null ? null : { draft };
         }
-        return printings === null ? restored : { list: printings.capture() };
+        return printings === null ? retained : { list: printings.capture() };
       }
 
       /**
        * Loads and presents the level the view names, or a failure the user can retry. The page
-       * reports its presentation once the level's own work settled: the card level reports after
-       * the retained printing window is presented again, so the shell restores the entry's
-       * interaction over the presented printings
+       * mounts the detail view the supplied CardViews module builds over the supplied CardList
+       * capability: the view creates the level's list from the description and reports when the
+       * level presented its content or failed. The page reports its own presentation once that
+       * settled and, at the card level, once the retained printing window is presented again, so
+       * the shell restores the entry's interaction over the presented printings
        * (docs/ui/architecture.md#state-ownership-and-restoration).
        */
       async function render(): Promise<void> {
+        if (closed) {
+          return;
+        }
         const attempt = ++loadAttempt;
         status.textContent = 'Loading card details…';
         content.replaceChildren();
-        copyEditor?.dispose();
-        copyEditor = null;
-        printings?.dispose();
-        printings = null;
-        let level: UiLevelPresentation | null;
+        disposeChildren();
+        let level: CardViewDetail;
         try {
-          level =
-            cardView.copyId !== null
-              ? await copyLevel(cardView.copyId, attempt)
-              : cardView.printingId !== null
-                ? await printingLevel(cardView.printingId, attempt)
-                : await cardLevel(attempt);
-          if (!isCurrentLoad(attempt) || level === null) {
-            return;
+          level = mountLevel();
+        } catch (cause) {
+          if (isCurrentLoad(attempt)) {
+            presentFailure(attempt, cause);
           }
-          content.replaceChildren(...level.nodes);
-          status.textContent = '';
-          context.notices.dismiss(cardDetailsNotice);
+          return;
+        }
+        if (!isCurrentLoad(attempt)) {
+          level.dispose();
+          return;
+        }
+        presentedLevel = level;
+        content.replaceChildren(...level.nodes);
+        try {
+          await level.presented;
         } catch (cause) {
           if (!isCurrentLoad(attempt)) {
             return;
           }
-          const problem = readMessage(cause, 'The card details could not be loaded.');
-          content.replaceChildren(...failurePanel(problem));
-          status.textContent = '';
-          presented.reject(cause);
+          presentFailure(attempt, cause);
           return;
         }
-        if (level.restoration === null) {
+        if (!isCurrentLoad(attempt)) {
+          return;
+        }
+        status.textContent = '';
+        context.notices.dismiss(cardDetailsNotice);
+        // The copy level's editor reconciles its own read failure when the level presented the
+        // copy's recorded state or its absence (docs/ui/navigation.md#error-notices).
+        if (cardView.copyId !== null) {
+          context.notices.dismiss(uiCopyReadNoticeId(cardView.copyId));
+        }
+        const restoration = levelRestoration();
+        if (restoration === null) {
           presented.resolve();
           return;
         }
         try {
-          await level.restoration;
+          await restoration;
         } catch (cause) {
           // The retained printing window could not be presented: the page reports the interrupted
           // restoration while the list keeps the failure and its retry.
@@ -171,6 +220,169 @@ export function createCardDetailsPage(): UiPageDefinition {
         }
       }
 
+      /** The failed level with its retry and the notice the page keeps after the view is left. */
+      function presentFailure(attempt: number, cause: unknown): void {
+        const problem = readMessage(
+          cause,
+          cardView.copyId === null
+            ? 'The card details could not be loaded.'
+            : 'The copy could not be loaded.',
+        );
+        content.replaceChildren(...failurePanel(problem));
+        status.textContent = '';
+        reportUiFailure(
+          context.notices,
+          cardView.copyId === null ? cardDetailsNotice : uiCopyReadNoticeId(cardView.copyId),
+          problem,
+          {
+            label: cardView.copyId === null ? 'Load the details again' : 'Load the copy again',
+            run: () => {
+              void render();
+            },
+          },
+        );
+        if (isCurrentLoad(attempt)) {
+          presented.reject(cause);
+        }
+      }
+
+      /**
+       * Mounts the level's detail view over the supplied capabilities. The view creates the list
+       * from the description, renders the identity the list published and composes the nodes the
+       * page supplies for the entry, so the page describes the level instead of reading it.
+       */
+      function mountLevel(): CardViewDetail {
+        return context.modules.cardViews.detail({
+          document,
+          create: context.capabilities.cardList.create,
+          source: bindings.detailTarget(target),
+          context: target,
+          accountId: context.account.accountId,
+          pageSize: UI_LIMITS.printingPage,
+          identity: cardView.copyId !== null ? 'none' : printingTarget() ? 'printing' : 'card',
+          fragments: { images: bindings.printingImages() },
+          content: (entry) => levelContent(entry),
+          navigation: (entry) => levelNavigation(entry),
+          signal: context.signal,
+        });
+      }
+
+      /** Whether this route's level is one printing of a card rather than the card itself. */
+      function printingTarget(): boolean {
+        return cardView.printingId !== null && cardView.copyId === null;
+      }
+
+      /** The nodes the page composes for the published level entry. */
+      function levelContent(entry: CardListEntry): readonly Node[] {
+        disposeContent();
+        if (entry.detail?.absent != null) {
+          return [];
+        }
+        switch (entry.target.kind) {
+          case 'card':
+            return cardLevelContent(entry);
+          case 'copy':
+            return copyLevelContent(entry);
+          default:
+            return [];
+        }
+      }
+
+      /** Navigation of the presented level, as the page composes it around its children. */
+      function levelNavigation(entry: CardListEntry): readonly Node[] {
+        const card = entry.basic?.card ?? null;
+        switch (target.kind) {
+          case 'card':
+            return [collectionLinks(card)];
+          case 'printing':
+            return [
+              navigation([
+                link('printing-card-link', viewOfCard(cardView.cardId, null, null), 'Card details'),
+                collectionLink(card, 'copy'),
+              ]),
+            ];
+          case 'copy':
+            return [];
+        }
+      }
+
+      /**
+       * The restoration of the level's own child list, or null when this visit restored none: the
+       * card level reports its presentation after the retained printing window is presented again
+       * (docs/ui/architecture.md#state-ownership-and-restoration).
+       */
+      function levelRestoration(): Promise<void> | null {
+        return printings === null ? null : restoredPresentation(printings);
+      }
+
+      /**
+       * The copy level's editor and its navigation. The detail view publishes the entry the level
+       * read, so the page seeds the editor from the copy the list read and never reads it itself
+       * (docs/ui/pages.md#interface).
+       */
+      function copyLevelContent(entry: CardListEntry): readonly Node[] {
+        const copy = entry.detail?.copy ?? null;
+        if (copy === null) {
+          return [];
+        }
+        const card = entry.basic?.card ?? null;
+        const cardId = card?.cardId ?? cardView.cardId;
+        const editor = context.modules.editors.copy({
+          document,
+          access: copies,
+          catalog,
+          cardList: context.capabilities.cardList,
+          cardViews: context.modules.cardViews,
+          accountId: context.account.accountId,
+          copy,
+          card,
+          printing: entry.basic?.printing ?? null,
+          notices: context.notices,
+          restored: retained?.draft,
+          signal: context.signal,
+          printingHref: (saved) => uiHref(viewOfCard(cardId, saved.printingId, null)),
+        });
+        copyEditor = editor;
+        return [
+          editor.element,
+          navigation([
+            editor.printingLink,
+            link('copy-card-link', viewOfCard(cardId, null, null), 'Card details'),
+          ]),
+        ];
+      }
+
+      /** The card level's content: the playable printings list and the card-level navigation. */
+      function cardLevelContent(entry: CardListEntry): readonly Node[] {
+        const card = entry.basic?.card ?? null;
+        if (card === null) {
+          return [];
+        }
+        const host = document.createElement('div');
+        host.id = 'card-printings';
+        const name = card.name;
+        const list = context.modules.cardViews.list<string>({
+          container: host,
+          create: context.capabilities.cardList.create,
+          source: bindings.cardPrintings({ cardId: card.cardId, name }),
+          context: card.cardId,
+          accountId: context.account.accountId,
+          pageSize: UI_LIMITS.printingPage,
+          restored: readListState<string>(retained),
+          presentation: context.modules.cardViews.openEntries({
+            document,
+            idPrefix: 'card-printing',
+            href: (printingEntry) => {
+              const openTarget = cardViewOf(printingEntry);
+              return openTarget === null ? null : uiHref(openTarget);
+            },
+          }),
+          signal: context.signal,
+        });
+        printings = list;
+        return [line('card-printings-label', 'Published printings'), host];
+      }
+
       /**
        * Whether one load attempt is still the one the page presents
        * (docs/ui/architecture.md#asynchronous-presentation).
@@ -179,34 +391,7 @@ export function createCardDetailsPage(): UiPageDefinition {
         return !closed && attempt === loadAttempt;
       }
 
-      /**
-       * Reads the published records of the presented level. A failed read of the level is a
-       * service failure with no field to hold it: the page reports it under the identity of its
-       * own level reads, whose action loads the level again, and keeps presenting the failure
-       * beside the retry while the notice keeps it visible after the view is left
-       * (docs/ui/navigation.md#error-notices). A load a newer attempt superseded reports nothing.
-       */
-      async function readLevel<T>(attempt: number, read: () => Promise<T>): Promise<T> {
-        try {
-          return await read();
-        } catch (cause) {
-          if (isCurrentLoad(attempt)) {
-            reportUiFailure(
-              context.notices,
-              cardDetailsNotice,
-              readMessage(cause, 'The card details could not be loaded.'),
-              {
-                label: 'Load the details again',
-                run: () => {
-                  void render();
-                },
-              },
-            );
-          }
-          throw cause;
-        }
-      }
-
+      /** The card level's retryable failure of the level read. */
       function failurePanel(problem: string): readonly Node[] {
         const hint = document.createElement('p');
         hint.id = 'card-details-failure';
@@ -218,179 +403,13 @@ export function createCardDetailsPage(): UiPageDefinition {
         return [hint, retry];
       }
 
-      /** The card level: the playable identity and its published printings. */
-      async function cardLevel(attempt: number): Promise<UiLevelPresentation> {
-        const card = await readLevel(attempt, () => resolveCard(catalog, cardView.cardId));
-        return card === null
-          ? { nodes: [missingPanel('The catalog does not publish this card.')], restoration: null }
-          : cardContent(card);
-      }
-
-      /** The printing level: one published version of one card. */
-      async function printingLevel(
-        printingId: string,
-        attempt: number,
-      ): Promise<UiLevelPresentation> {
-        const resolution = await readLevel(attempt, () =>
-          catalog.resolve([{ kind: 'printing', printingId }]),
-        );
-        const printing = resolution.printings.get(printingId) ?? null;
-        if (printing === null) {
-          return {
-            nodes: [missingPanel('The catalog does not publish this printing.')],
-            restoration: null,
-          };
-        }
-        const card = await readLevel(attempt, () => resolveCard(catalog, printing.cardId));
-        return card === null
-          ? {
-              nodes: [missingPanel('The catalog does not publish the card of this printing.')],
-              restoration: null,
-            }
-          : { nodes: printingContent(card, printing), restoration: null };
-      }
-
-      /**
-       * The physical-copy level: the account's actual copy, its current attributes and the change
-       * that corrects printing and language, finish and condition.
-       */
-      async function copyLevel(
-        copyId: string,
-        attempt: number,
-      ): Promise<UiLevelPresentation | null> {
-        const readNotice = uiCopyReadNoticeId(copyId);
-        let read: UiCopyRead;
-        try {
-          read = await copies.read([copyId], context.signal);
-        } catch (cause) {
-          if (isCurrentLoad(attempt)) {
-            // Reading the copy is a service failure with no field to hold it: the notice keeps the
-            // failure visible after the view is left, with the same explicit recovery
-            // (docs/ui/navigation.md#error-notices).
-            reportUiFailure(
-              context.notices,
-              readNotice,
-              readMessage(cause, 'The copy could not be loaded.'),
-              {
-                label: 'Load the copy again',
-                run: () => {
-                  void render();
-                },
-              },
-            );
-          }
-          throw cause;
-        }
-        if (!isCurrentLoad(attempt)) {
-          // A later load of the level owns the page: this read reports nothing and presents
-          // nothing.
-          return null;
-        }
-        // The read established the copy's current state — its recorded attributes or its absence —
-        // so it reconciles the failure of an earlier read, including one an editor presented
-        // before this page replaced it (docs/ui/navigation.md#error-notices).
-        context.notices.dismiss(readNotice);
-        const copy = read.copies[0] ?? null;
-        if (copy === null) {
-          return {
-            nodes: [missingPanel('This account has no physical copy with that identity.')],
-            restoration: null,
-          };
-        }
-        const resolution = await readLevel(attempt, () =>
-          catalog.resolve([{ kind: 'printing', printingId: copy.printingId }]),
-        );
-        const printing = resolution.printings.get(copy.printingId) ?? null;
-        const cardId = printing?.cardId ?? cardView.cardId;
-        const card = await readLevel(attempt, () => resolveCard(catalog, cardId));
-        if (!isCurrentLoad(attempt)) {
-          // The read of the copy and its catalog resolution belong to a load the page replaced.
-          return null;
-        }
-        const editor = context.modules.editors.copy({
-          document,
-          access: copies,
-          catalog,
-          cardList: context.capabilities.cardList,
-          cardViews: context.modules.cardViews,
-          accountId: context.account.accountId,
-          copy,
-          card,
-          printing,
-          notices: context.notices,
-          restored: restored?.draft,
-          signal: context.signal,
-          printingHref: (saved) => uiHref(viewOfCard(cardId, saved.printingId, null)),
-        });
-        copyEditor = editor;
-        return {
-          nodes: [
-            editor.element,
-            navigation([
-              editor.printingLink,
-              link('copy-card-link', viewOfCard(cardId, null, null), 'Card details'),
-            ]),
-          ],
-          restoration: null,
-        };
-      }
-
-      /**
-       * The card level's content: the published printings are one bounded list over the Catalog
-       * contract, so its window, continuation, failure and retry stay the list's own business and
-       * the page keeps the state it captured for the history entry (docs/card-list.md).
-       */
-      function cardContent(card: CardRecord): UiLevelPresentation {
-        const host = document.createElement('div');
-        host.id = 'card-printings';
-        const bindings = context.capabilities.cardList.account(context.account.accountId);
-        const list = context.modules.cardViews.list({
-          container: host,
-          create: context.capabilities.cardList.create,
-          source: bindings.cardPrintings(card),
-          context: card.cardId,
-          accountId: context.account.accountId,
-          pageSize: UI_LIMITS.printingPage,
-          restored: readListState<string>(restored),
-          presentation: context.modules.cardViews.openEntries({
-            document,
-            idPrefix: 'card-printing',
-            href: (entry) => {
-              const target = cardViewOf(entry);
-              return target === null ? null : uiHref(target);
-            },
-          }),
-          signal: context.signal,
-        });
-        printings = list;
-        const detail = context.modules.cardViews.detail({
-          document,
-          card,
-          printing: null,
-          content: [line('card-printings-label', 'Published printings'), host],
-          navigation: [collectionLinks(card)],
-        });
-        return {
-          nodes: detail.nodes,
-          restoration: restoredPresentation(list),
-        };
-      }
-
-      function printingContent(card: CardRecord, printing: PrintingRecord): readonly Node[] {
-        return context.modules.cardViews.detail({
-          document,
-          card,
-          printing,
-          navigation: [navigation([cardLink(card), collectionLink(card, 'copy')])],
-        }).nodes;
-      }
-
-      function collectionLinks(card: CardRecord): Node {
+      /** The card level's navigation: search the collection for this card. */
+      function collectionLinks(card: CardListEntryCard | null): Node {
         return navigation([collectionLink(card, 'printing'), collectionLink(card, 'copy')]);
       }
 
       function collectionLink(
-        card: CardRecord | null,
+        card: CardListEntryCard | null,
         level: 'printing' | 'copy',
       ): HTMLAnchorElement {
         const anchor = link(
@@ -401,10 +420,6 @@ export function createCardDetailsPage(): UiPageDefinition {
             : 'Search your collection for this card’s copies',
         );
         return anchor;
-      }
-
-      function cardLink(card: CardRecord): HTMLAnchorElement {
-        return link('printing-card-link', viewOfCard(card.cardId, null, null), 'Card details');
       }
 
       function viewOfCard(
@@ -445,41 +460,8 @@ export function createCardDetailsPage(): UiPageDefinition {
         element.append(...links);
         return element;
       }
-
-      function missingPanel(message: string): HTMLParagraphElement {
-        const element = document.createElement('p');
-        element.id = 'card-details-missing';
-        element.textContent = message;
-        return element;
-      }
     },
   };
-}
-
-/** Resolves one card, or null when the published revision does not carry it. */
-async function resolveCard(catalog: Catalog, cardId: string): Promise<CardRecord | null> {
-  const resolution = await catalog.resolve([{ kind: 'card', cardId }]);
-  return resolution.cards.get(cardId) ?? null;
-}
-
-/** The copy draft a history entry kept, or null when this visit restored none. */
-function readCopyDraft(state: Readonly<Record<string, unknown>> | null): UiCopyDraft | null {
-  const draft = state?.draft;
-  if (typeof draft !== 'object' || draft === null || Array.isArray(draft)) {
-    return null;
-  }
-  const values = draft as Readonly<Record<string, unknown>>;
-  const printingId = values.printingId;
-  const finish = values.finish;
-  const condition = values.condition;
-  if (
-    typeof printingId !== 'string' ||
-    typeof finish !== 'string' ||
-    typeof condition !== 'string'
-  ) {
-    return null;
-  }
-  return { printingId, finish, condition };
 }
 
 function readMessage(cause: unknown, fallback: string): string {

@@ -12,12 +12,13 @@
 
 import type {
   CardListBrowser,
+  CardListEntryCard,
   CardListEntryPrinting,
   CardListFragmentReader,
   CardListToolSelection,
 } from '../../../card-list/index.js';
 import { resolvePrintings } from '../../../card-list/index.js';
-import type { CardRecord, Catalog, Finish, PrintingRecord } from '../../../catalog/index.js';
+import type { Catalog, Finish } from '../../../catalog/index.js';
 import type { PhysicalCopy } from '../../../usercards/index.js';
 
 import type { CardViews, UiCardList, UiListAction } from '../../card-views/index.js';
@@ -270,10 +271,10 @@ export interface UiCopyEditorOptions {
   readonly catalog: Catalog;
   /** Authoritative copy the editor presents. */
   readonly copy: PhysicalCopy;
-  /** Published card of the copy, when the catalog resolves it. */
-  readonly card: CardRecord | null;
-  /** Printing the copy records now, when the catalog resolves it. */
-  readonly printing: PrintingRecord | null;
+  /** Basic information of the copy's card, as the supplied CardList entry published it. */
+  readonly card: CardListEntryCard | null;
+  /** Basic information of the printing the copy records now, when the catalog resolves it. */
+  readonly printing: CardListEntryPrinting | null;
   /** Draft a previous visit retained, when it carried one. */
   readonly restored?: unknown;
   /** Aborted when the view closes; the editor drops late results then. */
@@ -345,7 +346,7 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
    * the finishes a chosen printing offers are read through Catalog on demand
    * (docs/ui/editors.md#interface).
    */
-  const knownPrintings = new Map<string, PrintingRecord>();
+  const knownPrintings = new Map<string, CardListEntryPrinting>();
   if (printing !== null) {
     knownPrintings.set(printing.printingId, printing);
   }
@@ -459,14 +460,17 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
     // of being replaced by one that happens to be loaded.
     printingLine.textContent = printingLineFor(wantedPrintingId);
     learnPrinting(wantedPrintingId);
-    const finishes =
-      chosenPrinting === null || chosenPrinting.finishes.length === 0
+    const publishedFinishes = chosenPrinting?.finishes ?? [];
+    const finishes: readonly Finish[] =
+      publishedFinishes.length === 0
         ? uiCatalogFinishes
-        : chosenPrinting.finishes;
+        : publishedFinishes.filter((value): value is Finish =>
+            uiCatalogFinishes.includes(value as Finish),
+          );
     finish.replaceChildren(
       ...finishes.map((value) => optionElement(document, value, uiFinishLabel(value))),
     );
-    const finishValue = finishes.includes(wanted.finish as Finish)
+    const finishValue: string = finishes.includes(wanted.finish as Finish)
       ? wanted.finish
       : (finishes[0] ?? '');
     finish.value = finishValue;
@@ -732,7 +736,7 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
 }
 
 /** One printing as the form presents it: its edition, collector number and language. */
-function printingLineOf(printing: PrintingRecord): string {
+function printingLineOf(printing: CardListEntryPrinting): string {
   return `${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
 }
 

@@ -10,6 +10,8 @@
  * presentation types.
  */
 
+import type { PhysicalCopy } from '../../usercards/index.js';
+
 /** Typed reference of one entry at the levels a list presents. */
 export type CardListTarget =
   | { readonly kind: 'card'; readonly cardId: string }
@@ -28,6 +30,13 @@ export interface CardListEntryCard {
   readonly name: string;
   /** Translated or face name that matched the source, when it differs from the canonical name. */
   readonly matchedName: string | null;
+  /**
+   * Published type line, when the source read the card's presentation with the entry. Absent
+   * means the source did not read it, not that the catalog publishes none.
+   */
+  readonly typeLine?: string | null;
+  /** Published rules text, on the same terms as {@link typeLine}. */
+  readonly rulesText?: string | null;
 }
 
 /** Basic printing information of a printing- or copy-level entry. */
@@ -36,6 +45,11 @@ export interface CardListEntryPrinting {
   readonly edition: string;
   readonly collectorNumber: string;
   readonly language: string;
+  /**
+   * Finishes the printing publishes, when the source read them with the entry: a detail or picker
+   * presentation uses them, while a row renders the printing line alone.
+   */
+  readonly finishes?: readonly string[];
 }
 
 /** Basic information of one resolved entry; null while the entry is explicitly unresolved. */
@@ -59,6 +73,29 @@ export interface CardListEntry {
   readonly basic: CardListEntryBasic | null;
   /** Quantity context the source evaluated; null when it carries none. */
   readonly quantity: CardListEntryQuantity | null;
+  /**
+   * Detail facts of a typed detail-target entry, when the source read the level a detail view
+   * presents (docs/ui/pages.md#page-map). A row source leaves it absent: rows render their basic
+   * information and fragments.
+   */
+  readonly detail?: CardListEntryDetail;
+}
+
+/** Why one typed detail target carries no content: the level that could not be resolved. */
+export type CardListEntryAbsence = 'card' | 'printing' | 'printing-card' | 'copy';
+
+/**
+ * The level facts of one typed detail target: the presentation of the card and printing the level
+ * names, the private copy record when the level presents a physical copy, and the explicit absence
+ * of a target the provider does not publish. A detail source reads them together with the entry,
+ * so the presentation composes the level from what the list published instead of reading content
+ * itself.
+ */
+export interface CardListEntryDetail {
+  /** Explicit absence of the target; null when the level resolved. */
+  readonly absent: CardListEntryAbsence | null;
+  /** The private copy record a copy-level entry presents; null at another level. */
+  readonly copy: PhysicalCopy | null;
 }
 
 /** One image of an entry's images fragment; the presentation shows visible, named images only. */
