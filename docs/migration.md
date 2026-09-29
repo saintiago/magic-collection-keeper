@@ -155,9 +155,8 @@ Before any owner-data migration:
    verified prior environment and reconcile before reopening it. Once new writes exist, reverting
    traffic alone would lose them; resolving them is part of rollback approval.
 
-The target loader, durable evidence/readback adapter, real backup rehearsal and cutover are still
-outstanding. Deployment and migration have separate evidence: a deployable build is not proof of
-a migrated collection.
+The real backup rehearsal and cutover are still outstanding. Deployment and migration have separate
+evidence: a deployable build is not proof of a migrated collection.
 
 ## Preparation verification
 
@@ -169,9 +168,9 @@ SQLite adapter with a temporary synthetic database and verify it remains unchang
 CLI's blocked outcome and refusal to overwrite files.
 
 ```sh
-npm test -- tests/component/migration/prepare.test.ts tests/integration/migration-export.test.ts
+npm test -- tests/component/migration/prepare.test.ts tests/component/usercards/migration-loading.test.ts tests/integration/migration-export.test.ts
 npm run typecheck
 ```
 
-Passing these tests verifies offline preparation behavior. The execution gates above require
-additional loader tests and actual authorized rehearsal evidence.
+Passing these tests verifies offline preparation and the loader's repeat-safe loading and readback.
+The execution gates above still require actual authorized rehearsal evidence.

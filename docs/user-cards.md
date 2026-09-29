@@ -26,6 +26,7 @@ quantity, confirmation and account-isolation rules for all changes.
 | Confirm imports                   | Trusted context, operation ID, explicit destination/change and reviewed entry revisions.      | Receipt identifying the resulting associations or copies and committed outcome. |
 | Recover an operation              | Trusted context and operation ID.                                                             | Recorded outcome or explicit absence; never another user's result.              |
 | Load a migration plan             | Trusted offline plan, exact source digest and explicit target account.                        | Durable batch progress, final publication position and repeat-safe outcome.     |
+| Read migration readback           | Trusted context and the account's recorded migration.                                         | Authoritative private records, system ownership identities and archive digest.  |
 
 Import confirmation carries an operation ID scoped to the account. Replaying identical input returns
 its recorded outcome; reuse with different input fails. Other edits use record identity and revision

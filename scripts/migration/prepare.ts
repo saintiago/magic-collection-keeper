@@ -452,11 +452,20 @@ function preparePending(
         condition: row.condition === undefined || row.condition === 'UNK' ? null : row.condition,
         quantity: row.quantity,
         revision: 1,
-        candidates: row.recognition_candidates.map((c) => ({
-          printingId: c.printing_id,
-          provider: c.provider,
-          evidence: c.evidence,
-        })),
+        // The provider reads an entry's alternatives in a stable order of their own; the plan
+        // retains them in that order so the readback compares equal to what it prepared.
+        candidates: row.recognition_candidates
+          .map((c) => ({
+            printingId: c.printing_id,
+            provider: c.provider,
+            evidence: c.evidence,
+          }))
+          .sort(
+            (left, right) =>
+              left.printingId.localeCompare(right.printingId) ||
+              left.provider.localeCompare(right.provider) ||
+              left.evidence.localeCompare(right.evidence),
+          ),
         sourceLine: {
           name: text('name'),
           section: text('section'),

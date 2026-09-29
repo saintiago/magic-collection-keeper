@@ -480,6 +480,58 @@ create table if not exists ${usercardsPrivateSchema}.copy_provenance (
 create index if not exists copy_provenance_acquisition_index
   on ${usercardsPrivateSchema}.copy_provenance (account_id, acquisition_id);
 
+-- One recorded migration per verified source snapshot (docs/migration.md#rehearsal-and-execution-gates).
+-- The migration row carries what identifies the loaded artifact; the archive rows carry the exact
+-- source evidence the plan's source digest covers, and the batch rows are the replay receipts that
+-- make a repeated or interrupted load repeat-safe. Nothing here is published: a migration's records
+-- publish through the normal publication stream.
+create table if not exists ${usercardsPrivateSchema}.migration (
+  account_id text not null check (length(account_id) between 1 and ${identifierLength}),
+  migration_id text not null check (length(migration_id) between 1 and ${identifierLength}),
+  -- Digest of the verified prepared plan and of the source archive it was converted from. A plan
+  -- presented under a recorded snapshot identity must match both.
+  plan_digest text not null check (length(plan_digest) between 1 and ${fingerprintLength}),
+  source_digest text not null check (length(source_digest) between 1 and ${fingerprintLength}),
+  batch_count integer not null check (batch_count >= 0),
+  state text not null default 'loading' check (state in ('loading', 'completed')),
+  -- Position of the last query-visible batch; null while the plan published no query-visible record.
+  publication_position bigint check (publication_position is null or publication_position > 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  completed_at timestamptz,
+  primary key (account_id, migration_id)
+);
+
+-- The durable source evidence, in bounded chunks whose concatenation is the canonical archive the
+-- plan's source digest covers. A readback reassembles and digests them, so a changed archive fails
+-- reconciliation instead of passing silently.
+create table if not exists ${usercardsPrivateSchema}.migration_archive (
+  account_id text not null,
+  migration_id text not null,
+  chunk_index integer not null check (chunk_index >= 0),
+  content text not null
+    check (length(content) between 1 and ${USERCARDS_LIMITS.maxMigrationArchiveChunkLength}),
+  primary key (account_id, migration_id, chunk_index),
+  foreign key (account_id, migration_id)
+    references ${usercardsPrivateSchema}.migration (account_id, migration_id)
+);
+
+-- One committed batch of a migration: the digest of exactly the records it wrote and the position
+-- of the publication that made them visible. It commits in the same transaction as those records,
+-- so a retry skips a completed identical batch and resumes at the first missing one.
+create table if not exists ${usercardsPrivateSchema}.migration_batch (
+  account_id text not null,
+  migration_id text not null,
+  batch_index integer not null check (batch_index >= 0),
+  kind text not null check (kind in ('tags', 'copies', 'associations', 'sessions', 'entries')),
+  fingerprint text not null check (length(fingerprint) between 1 and ${fingerprintLength}),
+  publication_position bigint check (publication_position is null or publication_position > 0),
+  created_at timestamptz not null default now(),
+  primary key (account_id, migration_id, batch_index),
+  foreign key (account_id, migration_id)
+    references ${usercardsPrivateSchema}.migration (account_id, migration_id)
+);
+
 -- The durable publication stream (docs/user-cards.md#query-surface). Every query-visible mutation
 -- writes the changes of the records it touched and the revision that completes them in its own
 -- transaction, so a consumer observes a logical mutation completely or not at all. Positions
