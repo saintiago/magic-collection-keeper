@@ -7,7 +7,8 @@
  * associations and a copy's single physical location follow the same revision-checked,
  * account-scoped rules. Pending imports, review and confirmation follow the same rules: an
  * observation or parsed line is staged once, review quotes the entry revision, and a confirmation
- * under an operation identity creates the copies with their provenance or returns the recorded
+ * under an operation identity applies its explicit destination — the reviewed associations of a
+ * tag, or the individual copies and provenance of an ownership action — or returns the recorded
  * outcome. Consumers read private copies, tags and associations through their own operations;
  * another component builds searchable data from the provider-owned publication contract
  * (createUserCardsPublication) instead of reading UserCards' relations, whose views stay internal
@@ -47,6 +48,7 @@ export {
   type CopyCondition,
   type CopyId,
   type ImportCandidate,
+  type ImportDestination,
   type ImportEntry,
   type ImportEntryId,
   type ImportEntryState,

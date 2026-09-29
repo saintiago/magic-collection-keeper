@@ -8,9 +8,22 @@ import type {
   UserCardsSqlTransactor,
   UserCardsSqlValue,
 } from '../executor.js';
-import { USERCARDS_LIMITS, type PhysicalCopy } from '../model.js';
+import {
+  USERCARDS_LIMITS,
+  associationLevelsByTagKind,
+  type Association,
+  type AssociationTargetLevel,
+  type ImportDestination,
+  type PhysicalCopy,
+} from '../model.js';
 import { publishMutation } from '../publication.js';
-import { copiesFromRows, copyFromRow } from '../rows.js';
+import {
+  associationFromRow,
+  associationPayload,
+  associationPayloadSql,
+  copiesFromRows,
+  copyFromRow,
+} from '../rows.js';
 import { batches, inTransaction, placeholdersFor, readRows } from '../sql.js';
 import type {
   ConfirmationOutcome,
@@ -56,6 +69,8 @@ function readReceiptStatement(accountId: string, operationId: string): Statement
   return {
     statement: `select receipt.session_id,
               receipt.input_fingerprint,
+              receipt.destination,
+              receipt.destination_tag_id,
               receipt.publication_position::text as publication_position,
               session.source_kind,
               session.source_id
@@ -217,15 +232,89 @@ function provenanceStatement(
 function insertReceiptStatement(accountId: string, plan: ConfirmationPlan): Statement {
   return {
     statement: `insert into usercards_private.import_receipt
-       (operation_id, account_id, session_id, input_fingerprint)
-     values (:operation_id, :account_id, :session_id, :input_fingerprint)
+       (operation_id, account_id, session_id, destination, destination_tag_id, input_fingerprint)
+     values (:operation_id, :account_id, :session_id, :destination, :destination_tag_id,
+             :input_fingerprint)
      on conflict (account_id, operation_id) do nothing
      returning operation_id`,
     parameters: {
       operation_id: plan.operationId,
       account_id: accountId,
       session_id: plan.sessionId,
+      destination: plan.destination.kind,
+      destination_tag_id: plan.destination.kind === 'tag' ? plan.destination.tagId : null,
       input_fingerprint: plan.inputFingerprint,
+    },
+  };
+}
+
+/** Binds a replayed operation to the acquisitions its identical original request recorded. */
+function bindReceiptAcquisitionsStatement(
+  accountId: string,
+  operationId: string,
+  originalOperationId: string,
+): Statement {
+  return {
+    statement: `insert into usercards_private.import_receipt_acquisition
+       (account_id, operation_id, acquisition_id)
+     select account_id, :operation_id, acquisition_id
+       from usercards_private.import_receipt_acquisition
+      where account_id = :account_id and operation_id = :original_operation_id`,
+    parameters: {
+      account_id: accountId,
+      operation_id: operationId,
+      original_operation_id: originalOperationId,
+    },
+  };
+}
+
+/**
+ * Records the associations a tag destination created or updated as the immutable outcome of one
+ * operation. A later correction or removal of an association changes the association, never what
+ * the recorded receipt reports (docs/user-cards.md#import-and-capture-state).
+ */
+function insertReceiptAssociationsStatement(
+  accountId: string,
+  operationId: string,
+  associations: readonly Association[],
+): Statement {
+  const parameters: Record<string, UserCardsSqlValue> = {
+    account_id: accountId,
+    operation_id: operationId,
+  };
+  const values = associations
+    .map((association, index) => {
+      parameters[`association_id_${index}`] = association.associationId;
+      parameters[`record_${index}`] = associationPayload(association);
+      return `(:account_id, :operation_id, :association_id_${index}, :record_${index}::jsonb)`;
+    })
+    .join(',\n       ');
+  return {
+    statement: `insert into usercards_private.import_receipt_association
+       (account_id, operation_id, association_id, record)
+     values ${values}
+     on conflict (account_id, operation_id, association_id) do nothing
+     returning association_id`,
+    parameters,
+  };
+}
+
+/** Binds a replayed operation to the association outcomes its identical original request recorded. */
+function bindReceiptAssociationsStatement(
+  accountId: string,
+  operationId: string,
+  originalOperationId: string,
+): Statement {
+  return {
+    statement: `insert into usercards_private.import_receipt_association
+       (account_id, operation_id, association_id, record)
+     select account_id, :operation_id, association_id, record
+       from usercards_private.import_receipt_association
+      where account_id = :account_id and operation_id = :original_operation_id`,
+    parameters: {
+      account_id: accountId,
+      operation_id: operationId,
+      original_operation_id: originalOperationId,
     },
   };
 }
@@ -295,7 +384,7 @@ function recordedPositionStatement(
  * among the recorded operations whose acquisitions this outcome covers, so recovery returns the
  * position the copies were published at rather than the account's current one.
  */
-function inheritedPositionStatement(accountId: string, operationId: string): Statement {
+function inheritedAcquisitionPositionStatement(accountId: string, operationId: string): Statement {
   return {
     statement: `update usercards_private.import_receipt as receipt
      set publication_position = recorded.position
@@ -316,6 +405,41 @@ function inheritedPositionStatement(accountId: string, operationId: string): Sta
     where receipt.account_id = :account_id and receipt.operation_id = :operation_id`,
     parameters: { account_id: accountId, operation_id: operationId },
   };
+}
+
+/**
+ * The position of an outcome that replayed already recorded associations: the newest position
+ * among the recorded operations whose associations this outcome covers, so recovery returns the
+ * position the associations were published at rather than the account's current one.
+ */
+function inheritedAssociationPositionStatement(accountId: string, operationId: string): Statement {
+  return {
+    statement: `update usercards_private.import_receipt as receipt
+    set publication_position = recorded.position
+    from (
+      select max(source.publication_position) as position
+        from usercards_private.import_receipt_association as binding
+        join usercards_private.import_receipt as source
+          on source.account_id = binding.account_id
+         and source.operation_id = binding.operation_id
+       where binding.account_id = :account_id
+         and binding.operation_id <> :operation_id
+         and binding.association_id in (
+           select covered.association_id
+             from usercards_private.import_receipt_association as covered
+            where covered.account_id = :account_id
+              and covered.operation_id = :operation_id)
+    ) as recorded
+    where receipt.account_id = :account_id and receipt.operation_id = :operation_id`,
+    parameters: { account_id: accountId, operation_id: operationId },
+  };
+}
+
+/** The recorded position one replayed outcome inherits from the records it replayed. */
+function inheritedPositionStatement(plan: ConfirmationPlan, accountId: string): Statement {
+  return plan.destination.kind === 'tag'
+    ? inheritedAssociationPositionStatement(accountId, plan.operationId)
+    : inheritedAcquisitionPositionStatement(accountId, plan.operationId);
 }
 
 /**
@@ -352,6 +476,42 @@ order by row_kind, row_position`,
 }
 
 /**
+ * The immutable association outcome of one recorded tag destination. Reading the recorded record
+ * instead of the current association keeps a later correction or removal from changing what the
+ * operation reported (docs/user-cards.md#import-and-capture-state).
+ */
+function receiptAssociationsStatement(accountId: string, operationId: string): Statement {
+  return {
+    statement: `select 'association' as row_kind,
+  (row_number() over (order by recorded.association_id))::int as row_position,
+  recorded.record::text as payload
+from (select association_id, record
+        from usercards_private.import_receipt_association
+       where account_id = :account_id
+         and operation_id = :operation_id
+       order by association_id) as recorded
+order by row_kind, row_position`,
+    parameters: { account_id: accountId, operation_id: operationId },
+  };
+}
+
+/** The explicit destination one recorded receipt carries, or unreadable state. */
+function recordedDestination(recorded: UserCardsSqlRow): ImportDestination {
+  const destination = recorded.destination;
+  if (destination === 'ownership') {
+    return { kind: 'ownership' };
+  }
+  const tagId = recorded.destination_tag_id;
+  if (destination === 'tag' && typeof tagId === 'string' && tagId.length > 0) {
+    return { kind: 'tag', tagId };
+  }
+  throw new UserCardsError(
+    'unavailable',
+    'UserCards did not report the recorded confirmation destination.',
+  );
+}
+
+/**
  * One recorded outcome: the operation, the session that referred to it and the copies it reported,
  * read in transport-safe pages so an outcome larger than one response stays complete. The copies
  * come from the immutable provenance of the acquisitions the operation covered, so later physical
@@ -374,6 +534,33 @@ async function readReceipt(
   if (recorded === undefined) {
     return null;
   }
+  const destination = recordedDestination(recorded);
+  const copies =
+    destination.kind === 'ownership'
+      ? await readReceiptCopies(statements, accountId, operationId)
+      : [];
+  const associations =
+    destination.kind === 'tag'
+      ? await readReceiptAssociations(statements, accountId, operationId)
+      : [];
+  return {
+    operationId,
+    sessionId: textValue(recorded.session_id),
+    sourceKind: textValue(recorded.source_kind),
+    sourceId: textValue(recorded.source_id),
+    destination,
+    publicationPosition: receiptPosition(recorded.publication_position),
+    copies,
+    associations,
+  };
+}
+
+/** One bounded page of the copies a recorded operation covered, read as its immutable provenance. */
+async function readReceiptCopies(
+  statements: UserCardsSqlExecutor,
+  accountId: string,
+  operationId: string,
+): Promise<readonly PhysicalCopy[]> {
   const pageSize = USERCARDS_LIMITS.maxReceiptCopiesPerRead;
   const copies: UserCardsSqlRow[] = [];
   for (let offset = 0; ; offset += pageSize) {
@@ -389,14 +576,25 @@ async function readReceipt(
       break;
     }
   }
-  return {
-    operationId,
-    sessionId: textValue(recorded.session_id),
-    sourceKind: textValue(recorded.source_kind),
-    sourceId: textValue(recorded.source_id),
-    publicationPosition: receiptPosition(recorded.publication_position),
-    copies: copiesFromRows(copies),
-  };
+  return copiesFromRows(copies);
+}
+
+/** The recorded associations of one tag destination, as the confirmation recorded them. */
+async function readReceiptAssociations(
+  statements: UserCardsSqlExecutor,
+  accountId: string,
+  operationId: string,
+): Promise<readonly Association[]> {
+  const request = receiptAssociationsStatement(accountId, operationId);
+  const rows = await readRows(
+    statements,
+    request.statement,
+    request.parameters,
+    'The recorded confirmation could not be read.',
+  );
+  return rows
+    .map((row) => associationFromRow(row))
+    .sort((left, right) => left.associationId.localeCompare(right.associationId));
 }
 
 /**
@@ -474,7 +672,11 @@ async function classifyConfirmation(
     ) {
       // The entry is confirmed or discarded, or changed after the caller read it.
       stale = true;
-    } else if (requested.copy.printingId === null || requested.copy.finish === null) {
+    } else if (
+      plan.destination.kind === 'ownership'
+        ? requested.reviewed.printingId === null || requested.reviewed.finish === null
+        : requested.reviewed.printingId === null && requested.reviewed.cardId === null
+    ) {
       unresolved = true;
     } else {
       pending.push(requested);
@@ -560,6 +762,168 @@ async function readRecordedAcquisitions(
   );
 }
 
+/** Locks the destination tag and reads its kind, so its association writers serialize. */
+function lockDestinationTagStatement(accountId: string, tagId: string): Statement {
+  return {
+    statement: `select tag_id, kind
+     from usercards_private.tag
+    where account_id = :account_id and tag_id = :tag_id
+    for update`,
+    parameters: { account_id: accountId, tag_id: tagId },
+  };
+}
+
+/** Whether one tag kind associates the card and printing targets a confirmation reviews. */
+function tagAcceptsReviewedTargets(kind: string): boolean {
+  const levels = associationLevelsByTagKind[kind as keyof typeof associationLevelsByTagKind];
+  return levels !== undefined && levels.includes('card') && levels.includes('printing');
+}
+
+/** The association one tag already holds for one reviewed target, or none. */
+function storedAssociationStatement(
+  accountId: string,
+  tagId: string,
+  targetLevel: AssociationTargetLevel,
+  targetId: string,
+): Statement {
+  return {
+    statement: `select association_id, tag_id, target_level, target_id, quantity, revision
+     from usercards_private.association
+    where account_id = :account_id
+      and tag_id = :tag_id
+      and target_level = :target_level
+      and target_id = :target_id`,
+    parameters: {
+      account_id: accountId,
+      tag_id: tagId,
+      target_level: targetLevel,
+      target_id: targetId,
+    },
+  };
+}
+
+/** Creates the association one confirmed entry reviews into its destination tag. */
+function insertConfirmedAssociationStatement(
+  accountId: string,
+  tagId: string,
+  tagKind: string,
+  targetLevel: AssociationTargetLevel,
+  targetId: string,
+  quantity: number,
+): Statement {
+  return {
+    statement: `insert into usercards_private.association
+       (association_id, account_id, tag_id, tag_kind, target_level, target_id, quantity, revision)
+     values (:association_id, :account_id, :tag_id, :tag_kind, :target_level, :target_id,
+             :quantity, 1)
+     returning ${associationPayloadSql} as payload`,
+    parameters: {
+      association_id: randomUUID(),
+      account_id: accountId,
+      tag_id: tagId,
+      tag_kind: tagKind,
+      target_level: targetLevel,
+      target_id: targetId,
+      quantity,
+    },
+  };
+}
+
+/** Grows the intended quantity of the association one confirmed entry reviews into its tag. */
+function updateConfirmedAssociationStatement(
+  accountId: string,
+  tagId: string,
+  targetLevel: AssociationTargetLevel,
+  targetId: string,
+  quantity: number,
+): Statement {
+  return {
+    statement: `update usercards_private.association as target
+     set quantity = :quantity,
+         revision = target.revision + 1,
+         updated_at = now()
+    where target.account_id = :account_id
+      and target.tag_id = :tag_id
+      and target.target_level = :target_level
+      and target.target_id = :target_id
+    returning ${associationPayloadSql} as payload`,
+    parameters: {
+      account_id: accountId,
+      tag_id: tagId,
+      target_level: targetLevel,
+      target_id: targetId,
+      quantity,
+    },
+  };
+}
+
+/**
+ * Applies one tag destination to the reviewed entries. Every entry creates or grows the
+ * association its reviewed target names: an entry quantity is an intended quantity, so entries
+ * that review to the same target (for example a mainboard and a sideboard line of one card) add
+ * up and a target the tag already requires grows by what this import now accepts. A tag
+ * destination never creates copies: physical ownership changes only through the explicit
+ * ownership destination (docs/user-cards.md#import-and-capture-state).
+ */
+async function applyTagDestination(
+  statements: UserCardsSqlExecutor,
+  accountId: string,
+  tagId: string,
+  tagKind: string,
+  pending: readonly ConfirmedImportEntry[],
+): Promise<readonly Association[]> {
+  const recorded: Association[] = [];
+  for (const entry of pending) {
+    const targetLevel: AssociationTargetLevel =
+      entry.reviewed.printingId === null ? 'card' : 'printing';
+    const targetId = entry.reviewed.printingId ?? entry.reviewed.cardId;
+    if (targetId === null) {
+      throw new UserCardsError(
+        'unavailable',
+        'UserCards did not report the reviewed entry target.',
+      );
+    }
+    const existingRequest = storedAssociationStatement(accountId, tagId, targetLevel, targetId);
+    const existing = (
+      await readRows(
+        statements,
+        existingRequest.statement,
+        existingRequest.parameters,
+        'The destination association could not be read.',
+      )
+    )[0];
+    const quantity =
+      (existing === undefined ? 0 : integerValue(existing.quantity)) + entry.reviewed.quantity;
+    if (quantity > USERCARDS_LIMITS.maxAssociationQuantity) {
+      throw new UserCardsError(
+        'invalid-request',
+        'The destination would require more than ' +
+          `${USERCARDS_LIMITS.maxAssociationQuantity} of one card; review the import quantity ` +
+          'before confirming it.',
+      );
+    }
+    const statement =
+      existing === undefined
+        ? insertConfirmedAssociationStatement(
+            accountId,
+            tagId,
+            tagKind,
+            targetLevel,
+            targetId,
+            quantity,
+          )
+        : updateConfirmedAssociationStatement(accountId, tagId, targetLevel, targetId, quantity);
+    const rows = await readRows(
+      statements,
+      statement.statement,
+      statement.parameters,
+      'The destination association could not be stored.',
+    );
+    recorded.push(associationFromRow(rows[0]));
+  }
+  return recorded;
+}
+
 export function createImportConfirmation(
   sql: UserCardsSqlTransactor,
 ): Pick<ImportStore, 'confirm' | 'recover'> {
@@ -622,6 +986,28 @@ export function createImportConfirmation(
           if (classification?.stale) return { outcome: 'stale-entry' as const };
           if (classification?.unresolved) return { outcome: 'unresolved-entry' as const };
 
+          // The explicit destination is validated before the operation identity is reserved, so a
+          // refused destination leaves no receipt, association or copy behind.
+          let destinationTagKind: string | null = null;
+          if (plan.destination.kind === 'tag') {
+            const tagRequest = lockDestinationTagStatement(accountId, plan.destination.tagId);
+            const tag = (
+              await readRows(
+                statements,
+                tagRequest.statement,
+                tagRequest.parameters,
+                'The destination tag could not be locked.',
+              )
+            )[0];
+            if (tag === undefined) {
+              return { outcome: 'missing-tag' as const };
+            }
+            destinationTagKind = textValue(tag.kind);
+            if (!tagAcceptsReviewedTargets(destinationTagKind)) {
+              return { outcome: 'unsupported-tag' as const };
+            }
+          }
+
           // Reserve the account-scoped operation identity before changing any record, so an
           // operation conflict commits no copy, acquisition or entry closure.
           const reservation = insertReceiptStatement(accountId, plan);
@@ -662,22 +1048,23 @@ export function createImportConfirmation(
 
           if (identical !== undefined) {
             // Bind every successful operation ID, even when its reviewed request already ran.
+            const originalOperationId = textValue(identical.operation_id);
+            const binding =
+              plan.destination.kind === 'ownership'
+                ? bindReceiptAcquisitionsStatement(accountId, plan.operationId, originalOperationId)
+                : bindReceiptAssociationsStatement(
+                    accountId,
+                    plan.operationId,
+                    originalOperationId,
+                  );
             await readRows(
               statements,
-              `insert into usercards_private.import_receipt_acquisition
-                 (account_id, operation_id, acquisition_id)
-               select account_id, :operation_id, acquisition_id
-                 from usercards_private.import_receipt_acquisition
-                where account_id = :account_id and operation_id = :original_operation_id`,
-              {
-                account_id: accountId,
-                operation_id: plan.operationId,
-                original_operation_id: textValue(identical.operation_id),
-              },
+              binding.statement,
+              binding.parameters,
               'The replay outcome could not be stored.',
             );
-            // The replayed outcome reports the position its acquisitions were published at.
-            const inherited = inheritedPositionStatement(accountId, plan.operationId);
+            // The replayed outcome reports the position its records were published at.
+            const inherited = inheritedPositionStatement(plan, accountId);
             await readRows(
               statements,
               inherited.statement,
@@ -691,172 +1078,28 @@ export function createImportConfirmation(
               receipt: await requireReceipt(statements, accountId, plan.operationId),
             };
           }
-          const keys = await readEntryKeys(
-            statements,
-            accountId,
-            plan.sessionId,
-            classification?.pending ?? [],
-          );
-          const recorded = await readRecordedAcquisitions(
-            statements,
-            accountId,
-            plan.sessionId,
-            keys,
-          );
-          const bindings = new Map<string, string>();
-          const covered = new Set<string>();
-          const created: {
-            copies: string[];
-            associations: string[];
-            tags: string[];
-          } = { copies: [], associations: [], tags: [] };
-          let ownedTag: OwnedTag | null = null;
-          let acquired = false;
-          for (const { entry, occurrence, key } of keys) {
-            const alreadyAcquired = recorded.get(key);
-            if (alreadyAcquired !== undefined) {
-              covered.add(alreadyAcquired);
-              bindings.set(entry.entryId, alreadyAcquired);
-              continue;
-            }
-            const claim = claimAcquisitionStatement(accountId, plan.sessionId, entry, occurrence);
-            const claimed = (
-              await readRows(
-                statements,
-                claim.statement,
-                claim.parameters,
-                'The acquisition could not be recorded.',
-              )
-            )[0];
-            if (claimed === undefined) {
-              // The import is locked and its recorded acquisitions were just read, so a claim that
-              // inserts nothing can only be a persistent record UserCards did not report.
-              throw new UserCardsError('unavailable', 'UserCards did not record the acquisition.');
-            }
-            acquired = true;
-            const acquisitionId = textValue(claimed.acquisition_id);
-            covered.add(acquisitionId);
-            bindings.set(entry.entryId, acquisitionId);
-            if (ownedTag === null) {
-              ownedTag = await ensureOwnedTag(statements, accountId);
-              if (ownedTag.created) {
-                created.tags.push(ownedTag.tagId);
-              }
-            }
-            const { printingId, finish } = entry.copy;
-            if (printingId === null || finish === null) {
+          if (plan.destination.kind === 'tag') {
+            if (destinationTagKind === null) {
               throw new UserCardsError(
                 'unavailable',
-                'UserCards did not report the reviewed entry content.',
+                'UserCards did not report the destination tag.',
               );
             }
-            const copies = Array.from({ length: entry.copy.quantity }, () => ({
-              copyId: randomUUID(),
-              entryId: entry.entryId,
-              printingId,
-              finish,
-              condition: entry.copy.condition,
-            }));
-            // One confirmation commits atomically, while each statement stays inside the deployed
-            // write transport's bound however many copies the reviewed entries carry.
-            for (const batch of batches(copies)) {
-              const stored = await storeCopiesWithOwnedTag(
-                statements,
-                accountId,
-                ownedTag.tagId,
-                batch,
-              );
-              created.copies.push(...stored.rows.map((row) => textValue(row.copy_id)));
-              created.associations.push(...stored.ownedMemberships);
-              const provenance = provenanceStatement(
-                accountId,
-                acquisitionId,
-                stored.rows.map((row) => ({ ...copyFromRow(row), entryId: entry.entryId })),
-              );
-              await readRows(
-                statements,
-                provenance.statement,
-                provenance.parameters,
-                'The copy provenance could not be stored.',
-              );
-            }
-          }
-
-          for (const [entryId, acquisitionId] of bindings) {
-            const binding = bindEntryStatement(accountId, entryId, acquisitionId);
-            await readRows(
+            return confirmTagDestination(
               statements,
-              binding.statement,
-              binding.parameters,
-              'The confirmed entry binding could not be stored.',
-            );
-          }
-          const entryIds = keys.map(({ entry }) => entry.entryId);
-          const confirmation = confirmEntriesStatement(accountId, plan.sessionId, entryIds);
-          const confirmed = await readRows(
-            statements,
-            confirmation.statement,
-            confirmation.parameters,
-            'The reviewed entries could not be confirmed.',
-          );
-          if (confirmed.length !== entryIds.length) {
-            throw new UserCardsError(
-              'unavailable',
-              'UserCards did not confirm the reviewed entries.',
-            );
-          }
-          const bump = bumpSessionStatement(accountId, plan.sessionId);
-          await readRows(
-            statements,
-            bump.statement,
-            bump.parameters,
-            'The import session could not be updated.',
-          );
-          for (const batch of batches([...covered])) {
-            const outcome = insertReceiptAcquisitionsStatement(accountId, plan.operationId, batch);
-            await readRows(
-              statements,
-              outcome.statement,
-              outcome.parameters,
-              'The recorded outcome could not be stored.',
-            );
-          }
-          // The copies this confirmation created and the revision that completes them commit
-          // together; a confirmation that only replayed already acquired source entries publishes
-          // no record and reports the position its acquisitions were recorded at.
-          let privateRevision: string;
-          if (acquired) {
-            const publication = await publishMutation(statements, accountId, created);
-            privateRevision = publication.revision;
-            const recorded = recordedPositionStatement(
               accountId,
-              plan.operationId,
-              publication.position,
-            );
-            await readRows(
-              statements,
-              recorded.statement,
-              recorded.parameters,
-              'The recorded publication position could not be stored.',
-            );
-          } else {
-            privateRevision = await advanceRevision(statements, accountId);
-            const inherited = inheritedPositionStatement(accountId, plan.operationId);
-            await readRows(
-              statements,
-              inherited.statement,
-              inherited.parameters,
-              'The recorded publication position could not be inherited.',
+              plan,
+              plan.destination.tagId,
+              destinationTagKind,
+              classification?.pending ?? [],
             );
           }
-          return {
-            outcome: 'confirmed' as const,
-            // A confirmation whose source entries are all already acquired returned their recorded
-            // outcome instead of committing a new acquisition.
-            replayed: !acquired,
-            privateRevision,
-            receipt: await requireReceipt(statements, accountId, plan.operationId),
-          };
+          return confirmOwnershipDestination(
+            statements,
+            accountId,
+            plan,
+            classification?.pending ?? [],
+          );
         },
         'The confirmation could not be committed.',
       );
@@ -864,5 +1107,224 @@ export function createImportConfirmation(
     async recover(accountId, operationId): Promise<ImportReceiptData | null> {
       return readReceipt(sql, accountId, operationId);
     },
+  };
+}
+
+/**
+ * Applies one tag destination inside the caller's transaction: the reviewed associations are
+ * created or grown, the entries close and the recorded outcome publishes, all atomically. No
+ * acquisition, copy or owned membership is created.
+ */
+async function confirmTagDestination(
+  statements: UserCardsSqlExecutor,
+  accountId: string,
+  plan: ConfirmationPlan,
+  tagId: string,
+  tagKind: string,
+  pending: readonly ConfirmedImportEntry[],
+): Promise<ConfirmationOutcome> {
+  const recorded = await applyTagDestination(statements, accountId, tagId, tagKind, pending);
+  await closeConfirmedEntries(
+    statements,
+    accountId,
+    plan.sessionId,
+    pending.map((entry) => entry.entryId),
+  );
+  for (const batch of batches(recorded)) {
+    const outcome = insertReceiptAssociationsStatement(accountId, plan.operationId, batch);
+    await readRows(
+      statements,
+      outcome.statement,
+      outcome.parameters,
+      'The recorded outcome could not be stored.',
+    );
+  }
+  // The associations this confirmation created or grew and the revision that completes them
+  // commit together, and the recorded outcome reports the position they were published at.
+  const publication = await publishMutation(statements, accountId, {
+    associations: recorded.map((association) => association.associationId),
+  });
+  const position = recordedPositionStatement(accountId, plan.operationId, publication.position);
+  await readRows(
+    statements,
+    position.statement,
+    position.parameters,
+    'The recorded publication position could not be stored.',
+  );
+  return {
+    outcome: 'confirmed' as const,
+    replayed: false,
+    privateRevision: publication.revision,
+    receipt: await requireReceipt(statements, accountId, plan.operationId),
+  };
+}
+
+/**
+ * Closes the reviewed entries of one confirmation and advances the session revision that its
+ * pending set carries.
+ */
+async function closeConfirmedEntries(
+  statements: UserCardsSqlExecutor,
+  accountId: string,
+  sessionId: string,
+  entryIds: readonly string[],
+): Promise<void> {
+  const confirmation = confirmEntriesStatement(accountId, sessionId, entryIds);
+  const confirmed = await readRows(
+    statements,
+    confirmation.statement,
+    confirmation.parameters,
+    'The reviewed entries could not be confirmed.',
+  );
+  if (confirmed.length !== entryIds.length) {
+    throw new UserCardsError('unavailable', 'UserCards did not confirm the reviewed entries.');
+  }
+  const bump = bumpSessionStatement(accountId, sessionId);
+  await readRows(
+    statements,
+    bump.statement,
+    bump.parameters,
+    'The import session could not be updated.',
+  );
+}
+
+/**
+ * Applies the explicit ownership destination inside the caller's transaction: individual copies,
+ * their acquisition provenance and their owned memberships. A source entry this import already
+ * acquired is bound to its recorded acquisition instead of being acquired again.
+ */
+async function confirmOwnershipDestination(
+  statements: UserCardsSqlExecutor,
+  accountId: string,
+  plan: ConfirmationPlan,
+  pending: readonly ConfirmedImportEntry[],
+): Promise<ConfirmationOutcome> {
+  const keys = await readEntryKeys(statements, accountId, plan.sessionId, pending);
+  const recorded = await readRecordedAcquisitions(statements, accountId, plan.sessionId, keys);
+  const bindings = new Map<string, string>();
+  const covered = new Set<string>();
+  const created: {
+    copies: string[];
+    associations: string[];
+    tags: string[];
+  } = { copies: [], associations: [], tags: [] };
+  let ownedTag: OwnedTag | null = null;
+  let acquired = false;
+  for (const { entry, occurrence, key } of keys) {
+    const alreadyAcquired = recorded.get(key);
+    if (alreadyAcquired !== undefined) {
+      covered.add(alreadyAcquired);
+      bindings.set(entry.entryId, alreadyAcquired);
+      continue;
+    }
+    const claim = claimAcquisitionStatement(accountId, plan.sessionId, entry, occurrence);
+    const claimed = (
+      await readRows(
+        statements,
+        claim.statement,
+        claim.parameters,
+        'The acquisition could not be recorded.',
+      )
+    )[0];
+    if (claimed === undefined) {
+      // The import is locked and its recorded acquisitions were just read, so a claim that
+      // inserts nothing can only be a persistent record UserCards did not report.
+      throw new UserCardsError('unavailable', 'UserCards did not record the acquisition.');
+    }
+    acquired = true;
+    const acquisitionId = textValue(claimed.acquisition_id);
+    covered.add(acquisitionId);
+    bindings.set(entry.entryId, acquisitionId);
+    if (ownedTag === null) {
+      ownedTag = await ensureOwnedTag(statements, accountId);
+      if (ownedTag.created) {
+        created.tags.push(ownedTag.tagId);
+      }
+    }
+    const { printingId, finish, condition, quantity } = entry.reviewed;
+    if (printingId === null || finish === null) {
+      throw new UserCardsError(
+        'unavailable',
+        'UserCards did not report the reviewed entry content.',
+      );
+    }
+    const copies = Array.from({ length: quantity }, () => ({
+      copyId: randomUUID(),
+      entryId: entry.entryId,
+      printingId,
+      finish,
+      condition,
+    }));
+    // One confirmation commits atomically, while each statement stays inside the deployed
+    // write transport's bound however many copies the reviewed entries carry.
+    for (const batch of batches(copies)) {
+      const stored = await storeCopiesWithOwnedTag(statements, accountId, ownedTag.tagId, batch);
+      created.copies.push(...stored.rows.map((row) => textValue(row.copy_id)));
+      created.associations.push(...stored.ownedMemberships);
+      const provenance = provenanceStatement(
+        accountId,
+        acquisitionId,
+        stored.rows.map((row) => ({ ...copyFromRow(row), entryId: entry.entryId })),
+      );
+      await readRows(
+        statements,
+        provenance.statement,
+        provenance.parameters,
+        'The copy provenance could not be stored.',
+      );
+    }
+  }
+
+  for (const [entryId, acquisitionId] of bindings) {
+    const binding = bindEntryStatement(accountId, entryId, acquisitionId);
+    await readRows(
+      statements,
+      binding.statement,
+      binding.parameters,
+      'The confirmed entry binding could not be stored.',
+    );
+  }
+  const entryIds = keys.map(({ entry }) => entry.entryId);
+  await closeConfirmedEntries(statements, accountId, plan.sessionId, entryIds);
+  for (const batch of batches([...covered])) {
+    const outcome = insertReceiptAcquisitionsStatement(accountId, plan.operationId, batch);
+    await readRows(
+      statements,
+      outcome.statement,
+      outcome.parameters,
+      'The recorded outcome could not be stored.',
+    );
+  }
+  // The copies this confirmation created and the revision that completes them commit
+  // together; a confirmation that only replayed already acquired source entries publishes
+  // no record and reports the position its acquisitions were recorded at.
+  let privateRevision: string;
+  if (acquired) {
+    const publication = await publishMutation(statements, accountId, created);
+    privateRevision = publication.revision;
+    const recorded = recordedPositionStatement(accountId, plan.operationId, publication.position);
+    await readRows(
+      statements,
+      recorded.statement,
+      recorded.parameters,
+      'The recorded publication position could not be stored.',
+    );
+  } else {
+    privateRevision = await advanceRevision(statements, accountId);
+    const inherited = inheritedPositionStatement(plan, accountId);
+    await readRows(
+      statements,
+      inherited.statement,
+      inherited.parameters,
+      'The recorded publication position could not be inherited.',
+    );
+  }
+  return {
+    outcome: 'confirmed' as const,
+    // A confirmation whose source entries are all already acquired returned their recorded
+    // outcome instead of committing a new acquisition.
+    replayed: !acquired,
+    privateRevision,
+    receipt: await requireReceipt(statements, accountId, plan.operationId),
   };
 }

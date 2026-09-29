@@ -6,10 +6,11 @@
  * the manual entry editor searches the catalog and stages the selected printings, the source
  * editor parses one supported source method into review and reopens the imports the account still
  * retains, and the pending review editor presents one import's entries with their corrections and
- * the explicit confirmation that creates copies. A staged line, source row or capture is a
- * candidate in review; only a confirmation creates physical copies. Each editor owns its drafts
- * and operation presentation; the page owns layout, route context and the coordination between
- * its children (docs/ui/pages.md#interface).
+ * the explicit confirmation of its destination. A staged line, source row or capture is a
+ * candidate in review: a tag destination records the reviewed associations, and only the explicit
+ * ownership destination creates physical copies. Each editor owns its drafts and operation
+ * presentation; the page owns layout, route context and the coordination between its children
+ * (docs/ui/pages.md#interface).
  */
 
 import type { CardListBrowser } from '../../../card-list/index.js';
@@ -17,10 +18,13 @@ import type { Catalog, Finish, PrintingRecord } from '../../../catalog/index.js'
 import type { CaptureReviewChange } from '../../../capture/index.js';
 import type {
   ConfirmImportEntryInput,
+  ImportDestination,
+  ImportEntryChangeResult,
   ImportReceipt,
   ImportSession,
   ImportSessionListResult,
   SourceImportResult,
+  Tag,
 } from '../../../usercards/index.js';
 import type {
   UserCardsConfirmationOutcome,
@@ -33,7 +37,12 @@ import type { UiActionIntent } from '../../shared/actions.js';
 import type { CardViews } from '../../card-views/index.js';
 import type { UiActionRequest, UiOperationAction, UiOperationOutcome } from './operations.js';
 import { applyAction, outcomeText, reportUiOperation } from './operations.js';
-import { printingChoiceGuidance, singlePrintingChoice } from './printing-choice.js';
+import {
+  cardChoiceGuidance,
+  printingChoiceGuidance,
+  singleCardChoice,
+  singlePrintingChoice,
+} from './printing-choice.js';
 import {
   button,
   controlLabel,
@@ -52,6 +61,7 @@ import type { UiDialogs } from '../../shared/dialogs.js';
 import { UI_LIMITS } from '../../shared/limits.js';
 import { reportUiFailure, type UiNotices } from '../../shared/notices.js';
 import { readRetainedList, readState } from '../../shared/state.js';
+import { createTag } from './tag-edits.js';
 import {
   cardListEntryKey,
   resolvePrintings,
@@ -87,14 +97,19 @@ import {
   conditionOptions,
   confirmationMessage,
   defaultSessionId,
+  destinationValue,
   finishOptions,
   finishSelect,
   firstFinish,
+  importDestinationLabel,
+  importDestinationTags,
   inBatches,
   knownPrinting,
   manualImport,
+  ownershipDestinationValue,
   printingLine,
   readConditionValue,
+  readDestination,
   readFinishValue,
   readManualDraft,
   readQuantity,
@@ -184,6 +199,8 @@ function dismissReviewEntryNotices(notices: UiNotices | undefined, entryId: stri
 /** One outstanding confirmation the review presents until UserCards establishes its outcome. */
 interface UiConfirmationDraft {
   readonly sessionId: string;
+  /** Explicit destination the confirmation applies. */
+  readonly destination: ImportDestination;
   readonly entries: readonly ConfirmImportEntryInput[];
   /** The provider-owned operation whose recorded outcome decides this confirmation. */
   readonly operation: UserCardsOperation<'confirmImport', UserCardsConfirmationOutcome>;
@@ -196,10 +213,12 @@ interface UiImportEntryEditor {
   readonly status: HTMLParagraphElement;
 }
 
-/** One mounted printing picker of a pending entry and the region it presents in. */
+/** One mounted card or printing picker of a pending entry and the region it presents in. */
 interface UiImportEntryPicker {
   readonly host: HTMLElement;
   readonly list: UiCardList<CardListPickerQuery>;
+  /** Reviewed level the mounted picker presents. */
+  readonly level: 'card' | 'printing';
 }
 
 /** One focused control of a row a redraw keeps in place. */
@@ -321,7 +340,7 @@ export function createManualImportEditor(
     document,
     'import-manual-quantity',
     manual.quantity,
-    constraints.quantity.copy,
+    constraints.quantity.association,
   );
   const finish = select(document, finishOptions(), manual.finish);
   finish.id = 'import-manual-finish';
@@ -486,11 +505,11 @@ export function createManualImportEditor(
         validation: true,
       };
     }
-    const wantedQuantity = readQuantity(quantity, constraints.quantity.copy);
+    const wantedQuantity = readQuantity(quantity, constraints.quantity.association);
     if (wantedQuantity === null) {
       return {
         status: 'failed',
-        message: `Choose a quantity from 1 to ${constraints.quantity.copy}.`,
+        message: `Choose a quantity from 1 to ${constraints.quantity.association}.`,
         validation: true,
       };
     }
@@ -749,6 +768,29 @@ export function createImportReviewEditor(
   const provenance = note(document, '');
   provenance.id = 'import-provenance';
   provenance.hidden = true;
+  // The destination region names what a confirmation applies: the explicit ownership action that
+  // creates physical copies, or one of the account's tags whose reviewed card/printing
+  // associations the confirmation creates or grows
+  // (docs/user-cards.md#import-and-capture-state, docs/ui/editors.md#internal-design).
+  const destinationSelect = select(
+    document,
+    [{ value: ownershipDestinationValue, label: 'Add to collection (own the cards)' }],
+    ownershipDestinationValue,
+  );
+  destinationSelect.id = 'import-destination';
+  const destinationStatus = statusLine(document, 'import-destination-status');
+  const newDeck = textInput(document, 'import-new-deck', '');
+  newDeck.maxLength = constraints.text.identifier;
+  newDeck.placeholder = 'New deck name';
+  const createDeck = button(document, 'import-create-deck', 'Create deck');
+  const destinationRegion = document.createElement('div');
+  destinationRegion.id = 'import-destination-region';
+  destinationRegion.append(
+    controlLabel(document, 'Destination', destinationSelect),
+    controlLabel(document, 'New deck', newDeck),
+    createDeck,
+    destinationStatus,
+  );
   // The region keeps the pending list beside the editor's own presentation of the confirmation
   // action the list offers (docs/ui/editors.md#interface).
   const pendingRegion = document.createElement('div');
@@ -770,6 +812,12 @@ export function createImportReviewEditor(
   let sessionsRead = 0;
   /** Session record the pending entries were read with; its revision guards a discard. */
   let session: ImportSession | null = null;
+  /** Tag destinations the account currently lists; an ownership destination needs none. */
+  let destinationTags: readonly Tag[] = [];
+  /** Read of the tag list now answering for the review; an older one never replaces it. */
+  let destinationsRead = 0;
+  /** Whether a deck creation is in flight, so one click creates one tag. */
+  let creatingDestination = false;
   /**
    * CardList binding of the presented import: it owns the pending-entry read, its translation and
    * the provider records the review's editors read under an entry's own key.
@@ -791,8 +839,8 @@ export function createImportReviewEditor(
   const printings = new Map<string, readonly PrintingRecord[]>();
   /** Printing records already read, so an unanswered identity is never asked for again. */
   const learnedPrintings = new Set<string>();
-  /** Printing pickers one row presented, keyed by the entry key they belong to. */
-  const printingPickers = new Map<string, UiImportEntryPicker>();
+  /** Card or printing pickers one row presented, keyed by the entry key they belong to. */
+  const pickers = new Map<string, UiImportEntryPicker>();
   /** Unsaved review input per entry, kept across redraws and with the history entry. */
   const drafts = readReviewDrafts(restored?.review);
   let confirmation = retainedConfirmation();
@@ -821,6 +869,14 @@ export function createImportReviewEditor(
   discard.addEventListener('click', () => {
     void discardImport();
   });
+  destinationSelect.addEventListener('change', () => {
+    // The presented physical attributes follow the destination the review now applies.
+    destinationStatus.textContent = '';
+    paintReviewEditors();
+  });
+  createDeck.addEventListener('click', () => {
+    void createDestinationDeck();
+  });
   if (retainedPending !== null) {
     composePending(retainedPending.sessionId, retainedPending.list);
   }
@@ -844,6 +900,7 @@ export function createImportReviewEditor(
       sessionsMore,
       refresh,
       recover,
+      destinationRegion,
       reviewStatus,
       pendingRegion,
       discard,
@@ -884,15 +941,15 @@ export function createImportReviewEditor(
     dispose: () => {
       disposed = true;
       pending?.dispose();
-      for (const key of [...printingPickers.keys()]) {
-        releasePrintingPicker(key);
+      for (const key of [...pickers.keys()]) {
+        releaseEntryPicker(key);
       }
     },
   };
 
   /** Reads the account's pending sessions and presents the review of the chosen one. */
   async function open(): Promise<void> {
-    await readSessions(null, false);
+    await Promise.all([readSessions(null, false), refreshDestinations()]);
     if (disposed) {
       return;
     }
@@ -1030,6 +1087,130 @@ export function createImportReviewEditor(
     provenance.replaceChildren(...parts);
   }
 
+  /** Whether the presented destination is the explicit ownership action. */
+  function ownedCopies(): boolean {
+    return destinationSelect.value === ownershipDestinationValue;
+  }
+
+  /** The destination the review currently presents, or null when it names none. */
+  function currentDestination(): ImportDestination | null {
+    return readDestination(destinationSelect.value, destinationTags);
+  }
+
+  /** Redraws every presented entry editor, e.g. after the destination changed. */
+  function paintReviewEditors(): void {
+    for (const editor of editors.values()) {
+      paintEditor(editor);
+    }
+  }
+
+  /**
+   * Reads the tags a confirmation can apply its reviewed associations to. A tag the account no
+   * longer lists ends its own option; the ownership action stays available, and a destination read
+   * that fails stays visible beside the control that repeats it
+   * (docs/ui/navigation.md#error-notices).
+   */
+  async function refreshDestinations(): Promise<void> {
+    destinationsRead += 1;
+    const read = destinationsRead;
+    const tags: Tag[] = [];
+    let continuation: string | null = null;
+    try {
+      do {
+        const page = await access.tags(
+          {
+            pageSize: constraints.pages.tags.default,
+            ...(continuation === null ? {} : { continuation }),
+          },
+          options.signal,
+        );
+        tags.push(...page.tags);
+        continuation = page.continuation;
+      } while (continuation !== null);
+    } catch (cause) {
+      if (disposed || read !== destinationsRead) {
+        return;
+      }
+      destinationStatus.textContent = `The destinations could not be read: ${readMessage(
+        cause,
+        'unknown failure',
+      )}`;
+      return;
+    }
+    if (disposed || read !== destinationsRead) {
+      return;
+    }
+    destinationTags = tags;
+    destinationStatus.textContent = '';
+    paintDestinations();
+  }
+
+  /** Draws the destination control: the explicit ownership action and the applicable tags. */
+  function paintDestinations(): void {
+    const wanted = destinationSelect.value;
+    const options = [
+      { value: ownershipDestinationValue, label: 'Add to collection (own the cards)' },
+      ...importDestinationTags(destinationTags).map((tag) => ({
+        value: destinationValue({ kind: 'tag', tagId: tag.tagId }),
+        label: importDestinationLabel(tag),
+      })),
+    ];
+    destinationSelect.replaceChildren(
+      ...options.map((option) => {
+        const element = document.createElement('option');
+        element.value = option.value;
+        element.textContent = option.label;
+        return element;
+      }),
+    );
+    destinationSelect.value = options.some((option) => option.value === wanted)
+      ? wanted
+      : ownershipDestinationValue;
+  }
+
+  /**
+   * Creates the deck tag one import is accepted into and makes it the presented destination, so
+   * an unowned deck list needs no other page. The tag is created through its own operation; the
+   * confirmation then applies the destination the review presents
+   * (docs/ui/editors.md#internal-design).
+   */
+  async function createDestinationDeck(): Promise<void> {
+    if (creatingDestination) {
+      return;
+    }
+    const label = newDeck.value.trim();
+    if (label.length === 0) {
+      destinationStatus.textContent = 'Name the deck this import is accepted into.';
+      return;
+    }
+    creatingDestination = true;
+    createDeck.disabled = true;
+    try {
+      const outcome = await createTag(access, { kind: 'deck', label }, options.signal);
+      if (disposed) {
+        return;
+      }
+      if (outcome.record === null) {
+        destinationStatus.textContent = outcome.message ?? 'The deck was not created.';
+        return;
+      }
+      newDeck.value = '';
+      await refreshDestinations();
+      if (disposed) {
+        return;
+      }
+      destinationSelect.value = destinationValue({
+        kind: 'tag',
+        tagId: outcome.record.tagId,
+      });
+      destinationStatus.textContent = `Deck “${outcome.record.label}” is the destination.`;
+      paintReviewEditors();
+    } finally {
+      creatingDestination = false;
+      createDeck.disabled = false;
+    }
+  }
+
   /**
    * Presents one session's pending entries. The list is composed again for another session, so a
    * chosen session keeps its own review and no row carries another import's record.
@@ -1040,8 +1221,8 @@ export function createImportReviewEditor(
       return;
     }
     sessionId = next;
-    for (const key of [...printingPickers.keys()]) {
-      releasePrintingPicker(key);
+    for (const key of [...pickers.keys()]) {
+      releaseEntryPicker(key);
     }
     selectedRevisions.clear();
     messages.clear();
@@ -1108,7 +1289,7 @@ export function createImportReviewEditor(
       for (const key of editors.keys()) {
         if (!presentedKeys.has(key)) {
           editors.delete(key);
-          releasePrintingPicker(key);
+          releaseEntryPicker(key);
         }
       }
       const readSession = binding.session();
@@ -1214,6 +1395,28 @@ export function createImportReviewEditor(
         : chosenPrinting === null
           ? `Printing ${chosenPrintingId}`
           : printingLine(chosenPrinting);
+    const cardQuery = textInput(
+      document,
+      `import-card-query-${encodeURIComponent(entry.entryId)}`,
+      draft?.cardQuery ?? '',
+    );
+    cardQuery.type = 'search';
+    cardQuery.maxLength = UI_LIMITS.catalogQuery;
+    const findCard = button(
+      document,
+      `import-card-find-${encodeURIComponent(entry.entryId)}`,
+      'Find cards',
+    );
+    const chosenCardId = chosenPrinting?.cardId ?? draft?.cardId ?? entry.cardId ?? '';
+    const chosenCard = document.createElement('span');
+    chosenCard.id = `import-review-card-${encodeURIComponent(entry.entryId)}`;
+    chosenCard.dataset.uiImportChosenCard = '';
+    chosenCard.textContent =
+      chosenCardId.length === 0
+        ? 'No card chosen'
+        : record.card !== null && record.card.cardId === chosenCardId
+          ? `${record.card.name} (${chosenCardId})`
+          : `Card ${chosenCardId}`;
     const wantedFinish = finishSelect(
       document,
       chosenPrinting,
@@ -1230,7 +1433,7 @@ export function createImportReviewEditor(
       document,
       `import-review-quantity-${encodeURIComponent(entry.entryId)}`,
       draft?.quantity ?? String(entry.quantity),
-      constraints.quantity.copy,
+      constraints.quantity.association,
     );
     const save = button(
       document,
@@ -1247,7 +1450,14 @@ export function createImportReviewEditor(
       draftFor(record).query = query.value;
     });
     find.addEventListener('click', () => {
-      openPrintingSearch(editor, query.value);
+      openEntrySearch(editor, 'printing', query.value);
+    });
+    cardQuery.addEventListener('input', () => {
+      clearMessage(editor);
+      draftFor(record).cardQuery = cardQuery.value;
+    });
+    findCard.addEventListener('click', () => {
+      openEntrySearch(editor, 'card', cardQuery.value);
     });
     wantedFinish.addEventListener('change', () => {
       clearMessage(editor);
@@ -1264,6 +1474,8 @@ export function createImportReviewEditor(
     save.addEventListener('click', () => {
       void saveReview(editor, {
         query: query.value,
+        cardQuery: cardQuery.value,
+        cardId: chosenCardId,
         printingId: chosenPrintingId,
         finish: wantedFinish.value,
         condition: wantedCondition.value,
@@ -1273,14 +1485,23 @@ export function createImportReviewEditor(
     remove.addEventListener('click', () => {
       void removeEntry(editor);
     });
-    const picker = printingPickers.get(editor.entry.key) ?? null;
+    const picker = pickers.get(editor.entry.key) ?? null;
     content.push(
+      controlLabel(document, 'Card search', cardQuery),
+      findCard,
+      controlLabel(document, 'Card', chosenCard),
       controlLabel(document, 'Printing search', query),
       find,
       controlLabel(document, 'Printing', chosen),
       ...(picker === null ? [] : [picker.host]),
-      controlLabel(document, 'Finish', wantedFinish),
-      controlLabel(document, 'Condition', wantedCondition),
+      // Physical attributes only matter when the presented destination creates owned copies
+      // (docs/ui/editors.md#internal-design).
+      ...(ownedCopies()
+        ? [
+            controlLabel(document, 'Finish', wantedFinish),
+            controlLabel(document, 'Condition', wantedCondition),
+          ]
+        : []),
       controlLabel(document, 'Quantity', wantedQuantity),
       save,
       remove,
@@ -1294,6 +1515,9 @@ export function createImportReviewEditor(
     const entry = record.entry;
     const values = document.createElement('span');
     values.dataset.uiImportReview = entry.entryId;
+    const card = document.createElement('span');
+    card.dataset.uiImportCard = '';
+    card.textContent = `Card: ${entry.cardId ?? 'unresolved'}`;
     const printing = document.createElement('span');
     printing.dataset.uiImportPrinting = '';
     printing.textContent = `Printing: ${
@@ -1308,7 +1532,12 @@ export function createImportReviewEditor(
     const quantityLine = document.createElement('span');
     quantityLine.dataset.uiImportQuantity = '';
     quantityLine.textContent = ` Quantity: ${entry.quantity}`;
-    values.append(printing, finishLine, conditionLine, quantityLine);
+    values.append(card, printing);
+    // Physical attributes are presented when the chosen destination creates owned copies.
+    if (ownedCopies()) {
+      values.append(finishLine, conditionLine);
+    }
+    values.append(quantityLine);
     const source = entry.sourceLine;
     if (source !== null) {
       const line = document.createElement('span');
@@ -1331,27 +1560,42 @@ export function createImportReviewEditor(
   }
 
   /**
-   * Presents the printings one entry's review may choose through the supplied picker: the row's
-   * search describes the list once, and a further search refines the window it holds. The list
-   * owns matching, ordering, continuation and the recovery of a failed page, so an exact printing
-   * beyond the first page stays reachable (docs/search.md#freshness, docs/ui/editors.md#interface).
+   * Presents the card identities or printings one entry's review may choose through the supplied
+   * picker: the row's search describes the list once, and a further search refines the window it
+   * holds. The list owns matching, ordering, continuation and the recovery of a failed page, so an
+   * exact card or printing beyond the first page stays reachable
+   * (docs/search.md#freshness, docs/ui/editors.md#interface).
    */
-  function openPrintingSearch(editor: UiImportEntryEditor, text: string): void {
+  function openEntrySearch(
+    editor: UiImportEntryEditor,
+    level: 'card' | 'printing',
+    text: string,
+  ): void {
     const record = pendingRecord(editor.entry.key);
     if (record === null) {
       return;
     }
     const wanted = text.trim();
     if (wanted.length === 0) {
-      report(editor, 'Enter a card name to find its printings.');
+      report(
+        editor,
+        level === 'card'
+          ? 'Enter a card name to find its playable identity.'
+          : 'Enter a card name to find its printings.',
+      );
       return;
     }
     clearMessage(editor);
-    draftFor(record).query = text;
-    const context: CardListPickerQuery = { text: wanted, level: 'printing' };
-    const existing = printingPickers.get(editor.entry.key);
-    if (existing === undefined) {
-      composePrintingPicker(editor, context);
+    const draft = draftFor(record);
+    if (level === 'card') {
+      draft.cardQuery = text;
+    } else {
+      draft.query = text;
+    }
+    const context: CardListPickerQuery = { text: wanted, level };
+    const existing = pickers.get(editor.entry.key);
+    if (existing === undefined || existing.level !== level) {
+      composeEntryPicker(editor, context, level);
       return;
     }
     existing.host.hidden = false;
@@ -1359,11 +1603,16 @@ export function createImportReviewEditor(
     paintEditor(editor);
   }
 
-  /** Mounts the picker of one entry's printing search. */
-  function composePrintingPicker(editor: UiImportEntryEditor, context: CardListPickerQuery): void {
+  /** Mounts the picker of one entry's card or printing search. */
+  function composeEntryPicker(
+    editor: UiImportEntryEditor,
+    context: CardListPickerQuery,
+    level: 'card' | 'printing',
+  ): void {
     const entryKey = editor.entry.key;
+    releaseEntryPicker(entryKey);
     const host = document.createElement('div');
-    host.dataset.uiImportPrintingPicker = editor.entry.key;
+    host.dataset.uiImportPicker = entryKey;
     const list = options.cardViews.picker<CardListPickerQuery>({
       container: host,
       create: options.cardList.create,
@@ -1371,26 +1620,31 @@ export function createImportReviewEditor(
       context,
       accountId: options.accountId,
       pageSize: UI_LIMITS.importPrintings,
-      fragments: { tools: printingChoicesReader() },
-      choice: { id: 'choose-printing', label: 'Use this printing' },
+      fragments: { tools: entryChoicesReader(level) },
+      choice: {
+        id: 'choose-entry',
+        label: level === 'card' ? 'Use this card' : 'Use this printing',
+      },
       onChoose: (selection) => {
-        void choosePrinting(entryKey, selection);
+        void chooseEntryTarget(entryKey, selection);
       },
       signal: options.signal,
     });
-    printingPickers.set(editor.entry.key, { host, list });
+    pickers.set(entryKey, { host, list, level });
     paintEditor(editor);
   }
 
-  /** Availability of the picker's choice for the printings one entry's search presents. */
-  function printingChoicesReader(): CardListFragmentReader<readonly string[]> {
+  /** Availability of the picker's choice for the entries one search presents. */
+  function entryChoicesReader(
+    level: 'card' | 'printing',
+  ): CardListFragmentReader<readonly string[]> {
     return {
       read(request) {
         return Promise.resolve(
           request.keys.map((key) => ({
             key,
             status: 'ready' as const,
-            values: key.startsWith('printing:') ? ['choose-printing'] : [],
+            values: key.startsWith(`${level}:`) ? ['choose-entry'] : [],
           })),
         );
       },
@@ -1398,28 +1652,48 @@ export function createImportReviewEditor(
   }
 
   /**
-   * Takes the printing the picker's explicit selection names into the entry's review draft and
-   * reads its record, so the finish control follows the finishes that printing offers.
+   * Takes the card identity or printing the picker's explicit selection names into the entry's
+   * review draft. A printing choice also reads its record, so the finish control follows the
+   * finishes that printing offers.
    */
-  async function choosePrinting(entryKey: string, selection: CardListToolSelection): Promise<void> {
+  async function chooseEntryTarget(
+    entryKey: string,
+    selection: CardListToolSelection,
+  ): Promise<void> {
     const editor = editors.get(entryKey);
     const record = pendingRecord(entryKey);
     if (disposed || record === null || editor === undefined) {
       return;
     }
-    const target = singlePrintingChoice(selection);
-    if (target === null) {
-      report(editor, printingChoiceGuidance);
+    const card = singleCardChoice(selection);
+    const printing = card === null ? singlePrintingChoice(selection) : null;
+    if (card === null && printing === null) {
+      report(
+        editor,
+        selection.targets[0]?.kind === 'card' ? cardChoiceGuidance : printingChoiceGuidance,
+      );
+      return;
+    }
+    const picker = pickers.get(entryKey);
+    if (picker !== undefined) {
+      picker.host.hidden = true;
+    }
+    if (card !== null) {
+      clearMessage(editor);
+      const draft = draftFor(record);
+      draft.cardId = card.cardId;
+      // A card-level review names the playable identity without a physical printing.
+      draft.printingId = '';
+      paintEditor(editor);
+      return;
+    }
+    if (printing === null) {
       return;
     }
     clearMessage(editor);
     const draft = draftFor(record);
-    draft.printingId = target.printingId;
-    const picker = printingPickers.get(entryKey);
-    if (picker !== undefined) {
-      picker.host.hidden = true;
-    }
-    const learning = learnPrinting(record.entry.entryId, target.printingId);
+    draft.printingId = printing.printingId;
+    const learning = learnPrinting(record.entry.entryId, printing.printingId);
     // The chosen target must reach the visible form and its Save handler before a catalog
     // read yields. The lookup enriches that choice; it does not decide which printing to save.
     paintEditor(editor);
@@ -1428,16 +1702,16 @@ export function createImportReviewEditor(
     if (
       disposed ||
       currentEditor === undefined ||
-      printingPickers.get(entryKey) !== picker ||
+      pickers.get(entryKey) !== picker ||
       drafts.get(record.entry.entryId) !== draft ||
-      draft.printingId !== target.printingId
+      draft.printingId !== printing.printingId
     ) {
       return;
     }
     const known = knownPrinting(
       record,
       printings.get(record.entry.entryId) ?? [],
-      target.printingId,
+      printing.printingId,
     );
     if (known !== null && !known.finishes.includes(draft.finish as Finish)) {
       draft.finish = '';
@@ -1489,20 +1763,20 @@ export function createImportReviewEditor(
   }
 
   /** Releases the printing picker of one entry, if it is mounted. */
-  function releasePrintingPicker(entryKey: string): void {
-    const picker = printingPickers.get(entryKey);
+  function releaseEntryPicker(entryKey: string): void {
+    const picker = pickers.get(entryKey);
     if (picker === undefined) {
       return;
     }
-    printingPickers.delete(entryKey);
+    pickers.delete(entryKey);
     picker.list.dispose();
     picker.host.remove();
   }
 
   /**
-   * Saves one entry's reviewed printing, finish, condition and quantity under the revision the
-   * review read. A conflict keeps the draft for review; a lost response keeps it too and reloads
-   * the stored values instead of presenting the review as saved.
+   * Saves one entry's reviewed card identity, optional printing, physical attributes and quantity
+   * under the revision the review read. A conflict keeps the draft for review; a lost response
+   * keeps it too and reloads the stored values instead of presenting the review as saved.
    */
   async function saveReview(
     editor: UiImportEntryEditor,
@@ -1513,8 +1787,9 @@ export function createImportReviewEditor(
       return;
     }
     const printingId = submitted.printingId.length > 0 ? submitted.printingId : null;
-    if (printingId === null) {
-      report(editor, 'Choose the printing this entry describes.');
+    const cardId = submitted.cardId.length > 0 ? submitted.cardId : null;
+    if (printingId === null && cardId === null) {
+      report(editor, 'Choose the card or the printing this entry describes.');
       return;
     }
     const wantedFinish = readFinishValue(submitted.finish);
@@ -1522,9 +1797,31 @@ export function createImportReviewEditor(
       report(editor, 'Choose the finish of the printing.');
       return;
     }
-    const wantedQuantity = readQuantityValue(submitted.quantity, constraints.quantity.copy);
+    const wantedQuantity = readQuantityValue(submitted.quantity, constraints.quantity.association);
     if (wantedQuantity === null) {
-      report(editor, `Choose a quantity from 1 to ${constraints.quantity.copy}.`);
+      report(editor, `Choose a quantity from 1 to ${constraints.quantity.association}.`);
+      return;
+    }
+    if (printingId === null) {
+      // A card-level review names the playable identity an association destination can require
+      // without a physical printing (docs/user-cards.md#import-and-capture-state).
+      const outcome = await reviewImportEntry(
+        access,
+        {
+          entryId: record.entry.entryId,
+          expectedRevision: record.entry.revision,
+          cardId,
+          printingId: null,
+          finish: null,
+          condition: readConditionValue(submitted.condition),
+          quantity: wantedQuantity,
+        },
+        options.signal,
+      );
+      if (disposed) {
+        return;
+      }
+      await finishReview(editor, submitted, outcome);
       return;
     }
     let chosenPrinting = knownPrinting(
@@ -1577,6 +1874,7 @@ export function createImportReviewEditor(
       {
         entryId: record.entry.entryId,
         expectedRevision: record.entry.revision,
+        cardId,
         printingId,
         finish: resolvedFinish,
         condition: readConditionValue(submitted.condition),
@@ -1585,6 +1883,19 @@ export function createImportReviewEditor(
       options.signal,
     );
     if (disposed) {
+      return;
+    }
+    await finishReview(editor, submitted, outcome);
+  }
+
+  /** Presents one committed review and clears the draft that exactly produced it. */
+  async function finishReview(
+    editor: UiImportEntryEditor,
+    submitted: Readonly<UiReviewDraft>,
+    outcome: UiChangeCommit<ImportEntryChangeResult>,
+  ): Promise<void> {
+    const record = pendingRecord(editor.entry.key);
+    if (record === null) {
       return;
     }
     // The row keeps its unsaved review input and its own message; the notice keeps a review that
@@ -1640,7 +1951,7 @@ export function createImportReviewEditor(
     if (outcome.status === 'committed') {
       drafts.delete(record.entry.entryId);
       printings.delete(record.entry.entryId);
-      releasePrintingPicker(editor.entry.key);
+      releaseEntryPicker(editor.entry.key);
       messages.delete(editor.entry.key);
       dismissReviewEntryNotices(options.notices, record.entry.entryId);
     } else {
@@ -1707,7 +2018,7 @@ export function createImportReviewEditor(
       }
       drafts.delete(record.entry.entryId);
       printings.delete(record.entry.entryId);
-      releasePrintingPicker(key);
+      releaseEntryPicker(key);
       messages.delete(key);
       // The entry left the review: the notices of its own review — including the reading of the
       // printing it named — describe a pending entry that no longer exists
@@ -1734,6 +2045,14 @@ export function createImportReviewEditor(
         validation: true,
       };
     }
+    const destination = currentDestination();
+    if (destination === null) {
+      return {
+        status: 'failed',
+        message: 'Choose the destination this confirmation applies.',
+        validation: true,
+      };
+    }
     const chosen: ConfirmImportEntryInput[] = [];
     for (const target of request.selection.targets) {
       if (target.kind !== 'pending') {
@@ -1750,6 +2069,14 @@ export function createImportReviewEditor(
           validation: true,
         };
       }
+      const record = pendingRecord(key);
+      if (record !== null && !reviewedFor(destination, record)) {
+        return {
+          status: 'failed',
+          message: destinationGuidance(destination),
+          validation: true,
+        };
+      }
       chosen.push({ entryId: target.entryId, expectedRevision: revision });
     }
     if (chosen.length === 0) {
@@ -1761,6 +2088,7 @@ export function createImportReviewEditor(
     confirming = true;
     paintConfirmation();
     let copies = 0;
+    let associations = 0;
     let note: string | null = null;
     let reported: UiOperationOutcome | null = null;
     try {
@@ -1769,8 +2097,12 @@ export function createImportReviewEditor(
         // outcome is not established, so a lost response is recovered through its receipt.
         const operation: UiConfirmationDraft = {
           sessionId: presentedSession,
+          destination,
           entries,
-          operation: access.confirm({ sessionId: presentedSession, entries }, request.signal),
+          operation: access.confirm(
+            { sessionId: presentedSession, destination, entries },
+            request.signal,
+          ),
         };
         confirmation = operation;
         paintConfirmation();
@@ -1786,14 +2118,15 @@ export function createImportReviewEditor(
           reported = {
             status: outcome.status,
             message:
-              copies === 0
+              copies === 0 && associations === 0
                 ? outcome.message
-                : `${confirmationMessage(copies, note)} ${
+                : `${confirmationMessage(associations, copies, note)} ${
                     outcome.message ?? 'The remaining entries were not confirmed.'
                   }`,
           };
           break;
         }
+        associations += outcome.record.associations.length;
         copies += outcome.record.copies.length;
         note ??= outcome.message;
         forgetConfirmed(operation);
@@ -1808,7 +2141,7 @@ export function createImportReviewEditor(
       void reconcile();
       return reported;
     }
-    const message = confirmationMessage(copies, note);
+    const message = confirmationMessage(associations, copies, note);
     reviewStatus.textContent = message;
     void reconcile(false);
     return { status: 'committed', message };
@@ -1824,7 +2157,7 @@ export function createImportReviewEditor(
       }
       drafts.delete(entry.entryId);
       printings.delete(entry.entryId);
-      releasePrintingPicker(key);
+      releaseEntryPicker(key);
       // The confirmed entry no longer awaits review, so the notices of its own review end with it
       // (docs/ui/navigation.md#error-notices).
       dismissReviewEntryNotices(options.notices, entry.entryId);
@@ -1863,6 +2196,24 @@ export function createImportReviewEditor(
     }
     const kept = selectedRevisions.get(key);
     return kept !== undefined && kept.entryId === entryId ? kept.revision : null;
+  }
+
+  /**
+   * Whether one reviewed entry carries what the presented destination needs: an ownership action
+   * needs a printing and its finish, while a tag destination is satisfied by a reviewed card or
+   * printing identity.
+   */
+  function reviewedFor(destination: ImportDestination, record: CardListPendingRecord): boolean {
+    return destination.kind === 'ownership'
+      ? record.entry.printingId !== null && record.entry.finish !== null
+      : record.entry.cardId !== null || record.entry.printingId !== null;
+  }
+
+  /** What one reviewed entry is missing for the presented destination. */
+  function destinationGuidance(destination: ImportDestination): string {
+    return destination.kind === 'ownership'
+      ? 'Every confirmed entry needs a reviewed printing and finish before it can add owned copies.'
+      : 'Every confirmed entry needs a reviewed card or printing before it can be added to a tag.';
   }
 
   /**
@@ -1925,7 +2276,11 @@ export function createImportReviewEditor(
     if (outcome.status === 'committed' && outcome.record !== null) {
       options.notices?.dismiss(reviewConfirmNotice);
       forgetConfirmed(outstanding);
-      const message = confirmationMessage(outcome.record.copies.length, outcome.message);
+      const message = confirmationMessage(
+        outcome.record.associations.length,
+        outcome.record.copies.length,
+        outcome.message,
+      );
       reviewStatus.textContent = message;
       void reconcile(false);
       return;
@@ -1981,6 +2336,8 @@ export function createImportReviewEditor(
     }
     const created: UiReviewDraft = {
       query: '',
+      cardQuery: '',
+      cardId: entry.cardId ?? '',
       printingId: entry.printingId ?? '',
       finish: entry.finish ?? '',
       condition: entry.condition ?? '',
@@ -2108,6 +2465,7 @@ export function createImportReviewEditor(
       if (attempt.kind === 'confirmImport') {
         return {
           sessionId: attempt.request.sessionId,
+          destination: attempt.request.destination,
           entries: attempt.request.entries,
           operation: attempt,
         };

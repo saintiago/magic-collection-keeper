@@ -77,8 +77,8 @@ function entryDataStatement(accountId: string, entryId: string): Statement {
     statement: `${revisionBranchSql()}
 union all
 select 'entry' as row_kind, 0 as row_position, ${importEntryPayloadSql} as payload
-from (select entry_id, session_id, position, state, printing_id, finish, condition, quantity,
-             source_line, revision
+from (select entry_id, session_id, position, state, card_id, printing_id, finish, condition,
+             quantity, source_line, revision
         from usercards_private.import_entry
        where account_id = :account_id and entry_id = :entry_id) as entry
 union all
@@ -228,8 +228,8 @@ function entriesDataStatement(accountId: string, entryIds: readonly string[]): S
     statement: `select 'entry' as row_kind,
   (row_number() over (order by entry.position))::int as row_position,
   ${importEntryPayloadSql} as payload
-from (select entry_id, session_id, position, state, printing_id, finish, condition, quantity,
-             source_line, revision
+from (select entry_id, session_id, position, state, card_id, printing_id, finish, condition,
+             quantity, source_line, revision
         from usercards_private.import_entry
        where account_id = :account_id and entry_id in (${references.list})) as entry
 union all

@@ -76,6 +76,7 @@ describe('usercards browser entry point', () => {
           sessionId: 'import-1',
           sourceKind: 'manual',
           sourceId: 'manual',
+          destination: { kind: 'ownership' },
           publicationPosition: '4',
           copies: [
             {
@@ -86,6 +87,7 @@ describe('usercards browser entry point', () => {
               revision: 1,
             },
           ],
+          associations: [],
         },
       }),
     };
@@ -94,6 +96,7 @@ describe('usercards browser entry point', () => {
 
     const confirmation = account.confirmImport({
       sessionId: 'import-1',
+      destination: { kind: 'ownership' },
       entries: [{ entryId: 'entry-1', expectedRevision: 1 }],
     });
 

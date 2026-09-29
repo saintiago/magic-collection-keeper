@@ -149,7 +149,7 @@ export function pendingListEntry(record: CardListPendingRecord): CardListEntry {
     // quantity context; the review presents its own value (docs/user-cards.md#import-state).
     quantity: null,
     basic:
-      printing === null || record.card === null
+      record.card === null
         ? null
         : {
             card: {
@@ -157,12 +157,15 @@ export function pendingListEntry(record: CardListPendingRecord): CardListEntry {
               name: record.card.name,
               matchedName: null,
             },
-            printing: {
-              printingId: printing.printingId,
-              edition: printing.edition,
-              collectorNumber: printing.collectorNumber,
-              language: printing.language,
-            },
+            printing:
+              printing === null
+                ? null
+                : {
+                    printingId: printing.printingId,
+                    edition: printing.edition,
+                    collectorNumber: printing.collectorNumber,
+                    language: printing.language,
+                  },
           },
   };
 }
@@ -183,11 +186,21 @@ async function resolvePendingRecords(
   );
   const printings = await resolvePrintings(catalog, printingIds);
   signal.throwIfAborted();
-  const cardIds = [...new Set([...printings.values()].map((printing) => printing.cardId))];
+  const cardIds = [
+    ...new Set([
+      ...[...printings.values()].map((printing) => printing.cardId),
+      // A card-level review names its playable identity without a printing; a printing entry
+      // reads its card through the printing it resolved.
+      ...entries.flatMap((entry) =>
+        entry.printingId === null && entry.cardId !== null ? [entry.cardId] : [],
+      ),
+    ]),
+  ];
   const cards = await resolveCards(catalog, cardIds);
   return entries.map((entry) => {
     const printing = entry.printingId === null ? null : (printings.get(entry.printingId) ?? null);
-    const card = printing === null ? null : (cards.get(printing.cardId) ?? null);
+    const cardId = printing?.cardId ?? (entry.printingId === null ? entry.cardId : null);
+    const card = cardId === null ? null : (cards.get(cardId) ?? null);
     return { entry, printing, card };
   });
 }

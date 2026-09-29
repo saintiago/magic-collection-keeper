@@ -25,8 +25,9 @@ export function candidateTuples(
     .sort((left, right) => left.join('\u0000').localeCompare(right.join('\u0000')));
 }
 
-/** Reviewed copy data and alternatives of one staged source line. */
+/** Reviewed target data and alternatives of one staged source line. */
 export interface StagedLineContent {
+  readonly cardId: string | null;
   readonly printingId: string | null;
   readonly finish: Finish | null;
   readonly condition: CopyCondition | null;
@@ -37,6 +38,7 @@ export interface StagedLineContent {
 /** Digest of one staged source line: restaging identical content returns its recorded state. */
 export function stagedLineFingerprint(line: StagedLineContent): string {
   return fingerprint({
+    cardId: line.cardId,
     printingId: line.printingId,
     finish: line.finish,
     condition: line.condition,

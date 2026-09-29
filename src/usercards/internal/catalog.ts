@@ -4,6 +4,7 @@ import {
   type CatalogResolver,
   type CatalogReference,
   type CatalogResolution,
+  type CardRecord,
   type Finish,
   type PrintingRecord,
 } from '../../catalog/index.js';
@@ -58,6 +59,38 @@ export async function resolveAvailablePrintings(
     }
   }
   return printings;
+}
+
+/**
+ * Resolves the distinct cards of one request; a reference the published revision does not contain
+ * is a missing reference, because a reviewed card identity is always a published one
+ * (docs/user-cards.md#records-and-associations).
+ */
+export async function resolveCards(
+  catalog: CatalogResolver,
+  cardIds: readonly string[],
+): Promise<ReadonlyMap<string, CardRecord>> {
+  const distinct = [...new Set(cardIds)];
+  const cards = new Map<string, CardRecord>();
+  for (let start = 0; start < distinct.length; start += CATALOG_LIMITS.maxResolutionReferences) {
+    const batch = distinct.slice(start, start + CATALOG_LIMITS.maxResolutionReferences);
+    const resolution = await resolveCatalog(
+      catalog,
+      batch.map((cardId) => ({ kind: 'card', cardId }) as const),
+    );
+    for (const cardId of batch) {
+      const card = resolution.cards.get(cardId);
+      if (card !== undefined) {
+        cards.set(cardId, card);
+      }
+    }
+  }
+  for (const cardId of distinct) {
+    if (!cards.has(cardId)) {
+      throw new UserCardsError('not-found', 'The card is not available in the catalog.');
+    }
+  }
+  return cards;
 }
 
 /**

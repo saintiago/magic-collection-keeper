@@ -110,6 +110,7 @@ export function createImportStaging(
         if (printingId === null) {
           return {
             entryId: entry.entryId,
+            cardId: null,
             printingId: null,
             finish: null,
             condition: entry.condition ?? null,
@@ -118,6 +119,7 @@ export function createImportStaging(
             sourceLine: null,
             sourceLineKey: null,
             fingerprint: stagedLineFingerprint({
+              cardId: null,
               printingId: null,
               finish: null,
               condition: entry.condition ?? null,
@@ -133,6 +135,7 @@ export function createImportStaging(
         const finish = physicalFinish(printing, entry.finish ?? null);
         return {
           entryId: entry.entryId,
+          cardId: printing.cardId,
           printingId,
           finish,
           condition: entry.condition ?? null,
@@ -141,6 +144,7 @@ export function createImportStaging(
           sourceLine: null,
           sourceLineKey: null,
           fingerprint: stagedLineFingerprint({
+            cardId: printing.cardId,
             printingId,
             finish,
             condition: entry.condition ?? null,
@@ -225,6 +229,7 @@ export function createImportStaging(
             ? null
             : {
                 entryId: captureId,
+                cardId: identity,
                 printingId,
                 finish,
                 condition: null,

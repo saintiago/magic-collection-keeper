@@ -173,6 +173,7 @@ function captureEntry(overrides: Partial<ImportEntry> = {}): ImportEntry {
     sessionId: 'ui-capture-1',
     position: 1,
     state: 'pending',
+    cardId: 'card-bolt',
     printingId: 'printing-bolt',
     finish: 'nonfoil',
     condition: null,

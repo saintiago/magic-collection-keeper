@@ -8,7 +8,12 @@ export const referenceSchema = z.string().min(1).max(identifierLength);
 
 export const revisionSchema = z.number().int().min(1);
 
-export const quantitySchema = z.number().int().min(1).max(USERCARDS_LIMITS.maxCreateQuantity);
+/**
+ * One pending or reviewed quantity. Its meaning follows the destination its confirmation applies,
+ * so it is an intended quantity bounded by the association product bound rather than by the
+ * request batch size the writes are carried in (docs/user-cards.md#records-and-associations).
+ */
+export const quantitySchema = z.number().int().min(1).max(USERCARDS_LIMITS.maxAssociationQuantity);
 
 export const conditionSchema = z.enum(copyConditions).nullable();
 

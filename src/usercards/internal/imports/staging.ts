@@ -150,16 +150,17 @@ function insertEntryStatement(
 ): Statement {
   return {
     statement: `insert into usercards_private.import_entry
-       (entry_id, account_id, session_id, state, position, printing_id, finish, condition,
-        quantity, revision)
-     values (:entry_id, :account_id, :session_id, 'pending', :position, :printing_id, :finish,
-             :condition, :quantity, 1)
+       (entry_id, account_id, session_id, state, position, card_id, printing_id, finish,
+        condition, quantity, revision)
+     values (:entry_id, :account_id, :session_id, 'pending', :position, :card_id, :printing_id,
+             :finish, :condition, :quantity, 1)
      returning entry_id`,
     parameters: {
       entry_id: entry.entryId,
       account_id: accountId,
       session_id: sessionId,
       position,
+      card_id: entry.cardId,
       printing_id: entry.printingId,
       finish: entry.finish,
       condition: entry.condition,
@@ -182,6 +183,7 @@ function insertEntriesStatement(
     .map((entry, index) => {
       parameters[`entry_id_${index}`] = entry.entryId;
       parameters[`position_${index}`] = basePosition + index;
+      parameters[`card_id_${index}`] = entry.cardId;
       parameters[`printing_id_${index}`] = entry.printingId;
       parameters[`finish_${index}`] = entry.finish;
       parameters[`condition_${index}`] = entry.condition;
@@ -191,14 +193,14 @@ function insertEntriesStatement(
       parameters[`source_line_key_${index}`] = entry.sourceLineKey;
       return (
         `(:entry_id_${index}, :account_id, :session_id, 'pending', :position_${index}, ` +
-        `:printing_id_${index}, :finish_${index}, :condition_${index}, :quantity_${index}, ` +
-        `:source_line_${index}::jsonb, :source_line_key_${index}, 1)`
+        `:card_id_${index}, :printing_id_${index}, :finish_${index}, :condition_${index}, ` +
+        `:quantity_${index}, :source_line_${index}::jsonb, :source_line_key_${index}, 1)`
       );
     })
     .join(',\n       ');
   return {
     statement: `insert into usercards_private.import_entry
-       (entry_id, account_id, session_id, state, position, printing_id, finish, condition,
+       (entry_id, account_id, session_id, state, position, card_id, printing_id, finish, condition,
         quantity, source_line, source_line_key, revision)
      values ${values}
      returning entry_id`,
@@ -537,6 +539,7 @@ async function reconcileSourceLines(
       attempts += 1;
       const entry: NewStagedImportEntry = {
         entryId: sourceEntryId(plan.sessionId, sourceLineKey, attempts),
+        cardId: null,
         printingId: line.printingId,
         finish: line.finish,
         condition: line.condition,
@@ -545,6 +548,7 @@ async function reconcileSourceLines(
         sourceLine: line.sourceLine,
         sourceLineKey,
         fingerprint: stagedLineFingerprint({
+          cardId: null,
           printingId: line.printingId,
           finish: line.finish,
           condition: line.condition,

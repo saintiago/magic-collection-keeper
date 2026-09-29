@@ -4,15 +4,16 @@
  * docs/user-cards.md#browser-operation-lifecycle).
  *
  * The page stages manual lines and parsed sources as pending entries, reviews a pending entry's
- * printing, finish, condition and quantity under the revision it read, discards entries and
- * confirms the reviewed entries; Capture stages the camera observations and their later
- * alternatives through its own binding (docs/capture.md#interface). Every change is a UserCards
+ * card identity, optional printing, quantity and physical attributes under the revision it read,
+ * discards entries and confirms the reviewed entries under the explicit destination the review
+ * presents; Capture stages the camera observations and their later alternatives through its own
+ * binding (docs/capture.md#interface). Every change is a UserCards
  * operation: the provider-owned handle reports whether it committed, was rejected or stays unknown,
  * retains the identity an unfinished attempt needs, and recovers a recorded outcome under that
  * identity. The page presents those outcomes; it never classifies a failure, invents an operation
- * identity or infers that a lost response committed. Nothing here reports ownership: a staged
- * line, source row or capture is a candidate in review, and only a confirmation creates the
- * physical copies.
+ * identity or infers that a lost response committed. Nothing here reports ownership implicitly: a
+ * staged line, source row or capture is a candidate in review, and only the explicit ownership
+ * destination creates the physical copies.
  */
 
 import type { Finish } from '../../../catalog/index.js';
@@ -28,6 +29,7 @@ import type {
 } from '../../../usercards/browser.js';
 import type {
   CopyCondition,
+  CreateTagInput,
   DiscardImportEntryInput,
   DiscardImportSessionInput,
   ImportCandidate,
@@ -44,6 +46,9 @@ import type {
   ReviewImportEntryInput,
   SourceImportResult,
   StageImportEntriesInput,
+  TagChangeResult,
+  TagListOptions,
+  TagListResult,
 } from '../../../usercards/index.js';
 
 import { commitUiOperation, type UiChangeCommit } from './failure.js';
@@ -57,6 +62,8 @@ export type UiImportClient = Pick<
   UserCardsAccountOperations,
   | 'listImportSessions'
   | 'listImportEntries'
+  | 'listTags'
+  | 'createTag'
   | 'stageImportEntries'
   | 'beginSourceImport'
   | 'reopenSourceImport'
@@ -81,6 +88,13 @@ export interface UiImportAccess {
   ): Promise<ImportSessionListResult>;
   /** One bounded page of one session's pending entries, in capture order. */
   entries(input: ListImportEntriesOptions, signal?: AbortSignal): Promise<ImportEntryListResult>;
+  /** One bounded page of the account's tags, so the review names its confirmation destination. */
+  tags(options?: TagListOptions, signal?: AbortSignal): Promise<TagListResult>;
+  /** Creates the destination tag of one confirmation, e.g. the deck a list is accepted into. */
+  createTag(
+    input: CreateTagInput,
+    signal?: AbortSignal,
+  ): UserCardsOperation<'createTag', TagChangeResult>;
   stage(
     input: StageImportEntriesInput,
     signal?: AbortSignal,
@@ -126,6 +140,8 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
   for (const operation of [
     'listImportSessions',
     'listImportEntries',
+    'listTags',
+    'createTag',
     'stageImportEntries',
     'beginSourceImport',
     'reopenSourceImport',
@@ -148,6 +164,8 @@ export function createImportAccess(userCards: UiImportClient): UiImportAccess {
     constraints: userCards.constraints,
     sessions: (options, signal) => userCards.listImportSessions(options, signal),
     entries: (input, signal) => userCards.listImportEntries(input, signal),
+    tags: (options, signal) => userCards.listTags(options, signal),
+    createTag: (input, signal) => userCards.createTag(input, signal),
     stage: (input, signal) => userCards.stageImportEntries(input, signal),
     beginSource: (input, signal) => userCards.beginSourceImport(input, signal),
     reopenSource: (operationId, input, signal) =>
@@ -351,9 +369,9 @@ export async function discardImportSession(
   );
 }
 
-/** Note the page presents beside the copies of a confirmation that had already been recorded. */
+/** Note the page presents beside the records of a confirmation that had already been recorded. */
 const recordedConfirmationNote =
-  'This confirmation had already been recorded; the copies it created are listed.';
+  'This confirmation had already been recorded; the records it reported are listed.';
 
 /** What one confirmation's outcome reports to the page. */
 function confirmationCommit(
@@ -372,7 +390,7 @@ function confirmationCommit(
       return {
         status: 'failed',
         message:
-          'This confirmation is not recorded, so no copies were created. Review the entries and ' +
+          'This confirmation is not recorded, so nothing was created. Review the entries and ' +
           'confirm them again.',
         record: null,
       };

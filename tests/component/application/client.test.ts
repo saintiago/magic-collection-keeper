@@ -686,6 +686,7 @@ describe('user cards client', () => {
       sessionId: 'manual',
       position: 1,
       state: 'pending',
+      cardId: null,
       printingId: 'printing-1',
       finish: 'nonfoil',
       condition: null,
@@ -766,6 +767,7 @@ describe('user cards client', () => {
     const reviewed = await reviewClient.reviewImportEntry({
       entryId: 'entry/1',
       expectedRevision: 3,
+      cardId: null,
       printingId: 'printing-1',
       finish: 'foil',
       condition: null,
@@ -776,7 +778,8 @@ describe('user cards client', () => {
       'https://api.test.keeper.example/api/collection/imports/entries/entry%2F1/review',
     );
     expect(review.calls[0]?.init.body).toBe(
-      '{"expectedRevision":3,"printingId":"printing-1","finish":"foil","condition":null,"quantity":2}',
+      '{"expectedRevision":3,"cardId":null,"printingId":"printing-1","finish":"foil",' +
+        '"condition":null,"quantity":2}',
     );
     expect(reviewed.entry.revision).toBe(4);
 
@@ -785,6 +788,7 @@ describe('user cards client', () => {
       sessionId: 'manual',
       sourceKind: 'manual',
       sourceId: 'manual',
+      destination: { kind: 'ownership' },
       copies: [
         {
           copyId: 'copy-1',
@@ -794,6 +798,7 @@ describe('user cards client', () => {
           revision: 1,
         },
       ],
+      associations: [],
       replayed: true,
       privateRevision: 'private-4',
       publicationPosition: '4',
@@ -809,6 +814,7 @@ describe('user cards client', () => {
     const confirmed = await confirmationClient.confirmImport({
       operationId: 'operation-1',
       sessionId: 'manual',
+      destination: { kind: 'ownership' },
       entries: [{ entryId: 'entry-1', expectedRevision: 4 }],
     });
 
@@ -816,7 +822,8 @@ describe('user cards client', () => {
       'https://api.test.keeper.example/api/collection/imports/manual/confirmation',
     );
     expect(confirmation.calls[0]?.init.body).toBe(
-      '{"operationId":"operation-1","entries":[{"entryId":"entry-1","expectedRevision":4}]}',
+      '{"operationId":"operation-1","destination":{"kind":"ownership"},' +
+        '"entries":[{"entryId":"entry-1","expectedRevision":4}]}',
     );
     expect(confirmed.replayed).toBe(true);
     expect(confirmed.copies.map((copy) => copy.copyId)).toEqual(['copy-1']);

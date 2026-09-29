@@ -354,6 +354,7 @@ describe('usercards source imports', () => {
   async function confirmSession(sessionId: string, operationId: string): Promise<ImportReceipt> {
     const pending = await userCards.listImportEntries(alice, { sessionId });
     return userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId,
       sessionId,
       entries: pending.entries.map((entry) => ({
@@ -422,6 +423,50 @@ describe('usercards source imports', () => {
     ]);
     expect(pending.entries.map((entry) => entry.quantity)).toEqual([4, 2]);
     expect(pending.entries.every((entry) => entry.printingId === null)).toBe(true);
+  });
+
+  it('preserves a deck requirement larger than one write batch as one intended quantity', async () => {
+    const result = await sourceImports.stageSourceImport(alice, {
+      format: 'pasted-list',
+      sessionId: 'bulk-paste',
+      text: '250 Lightning Bolt',
+    });
+    expect(result.staged).toBe(1);
+    const pending = await userCards.listImportEntries(alice, {
+      sessionId: result.session.sessionId,
+    });
+    const line = pending.entries[0];
+    expect(line?.quantity).toBe(250);
+    expect(line?.sourceLine?.declaredQuantity).toBe(250);
+
+    // Accepting the list as a deck keeps the complete requirement in one association; no
+    // transport or storage batch size caps it.
+    const reviewed = await userCards.reviewImportEntry(alice, {
+      entryId: line?.entryId as string,
+      expectedRevision: line?.revision as number,
+      cardId: lightningBolt.cardId,
+      printingId: null,
+      finish: null,
+      condition: null,
+      quantity: 250,
+    });
+    const deck = (await userCards.createTag(alice, { kind: 'deck', label: 'Bulk' })).tag;
+    const accepted = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'bulk-deck',
+      sessionId: result.session.sessionId,
+      entries: [{ entryId: reviewed.entry.entryId, expectedRevision: reviewed.entry.revision }],
+    });
+    expect(accepted.associations).toMatchObject([
+      {
+        tagId: deck.tagId,
+        targetLevel: 'card',
+        targetId: lightningBolt.cardId,
+        quantity: 250,
+      },
+    ]);
+    expect(accepted.copies).toEqual([]);
+    expect(await countCopies(database, alice.accountId)).toBe(0);
   });
 
   it('keeps each identified import as its own list and replays only that import', async () => {

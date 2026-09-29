@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { physicalFinish, resolvePrintings } from './catalog.js';
+import type { PrintingRecord } from '../../catalog/index.js';
+import { physicalFinish, resolveCards, resolvePrintings } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';
 import { fingerprint } from './fingerprint.js';
@@ -11,17 +12,52 @@ import type {
   ImportServiceDependencies,
 } from './import-contract.js';
 import { referenceSchema, revisionSchema } from './import-validation.js';
-import { USERCARDS_LIMITS, type ImportOperationId, type TrustedUserContext } from './model.js';
+import {
+  USERCARDS_LIMITS,
+  type ImportEntry,
+  type ImportOperationId,
+  type TrustedUserContext,
+} from './model.js';
 import type { ConfirmedImportEntry } from './store.js';
 
 const confirmImportRequestSchema = z.object({
   operationId: referenceSchema,
   sessionId: referenceSchema,
+  destination: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('ownership') }),
+    z.object({ kind: z.literal('tag'), tagId: referenceSchema }),
+  ]),
   entries: z
     .array(z.object({ entryId: referenceSchema, expectedRevision: revisionSchema }))
     .min(1)
     .max(USERCARDS_LIMITS.maxConfirmEntries),
 });
+
+/**
+ * Resolves the reviewed targets of the pending entries one confirmation covers, so it never stores
+ * an association or copy for a reference the published catalog does not contain
+ * (docs/user-cards.md#import-and-capture-state).
+ */
+async function resolveReviewedTargets(
+  catalog: ImportServiceDependencies['catalog'],
+  verified: readonly { readonly entry: ImportEntry }[],
+): Promise<ReadonlyMap<string, PrintingRecord>> {
+  const printings = await resolvePrintings(
+    catalog,
+    verified.flatMap(({ entry }) =>
+      entry.state === 'pending' && entry.printingId !== null ? [entry.printingId] : [],
+    ),
+  );
+  await resolveCards(
+    catalog,
+    verified.flatMap(({ entry }) =>
+      entry.state === 'pending' && entry.printingId === null && entry.cardId !== null
+        ? [entry.cardId]
+        : [],
+    ),
+  );
+  return printings;
+}
 
 export function createImportConfirmation(
   dependencies: ImportServiceDependencies,
@@ -37,11 +73,12 @@ export function createImportConfirmation(
       if (!request.success) {
         throw new UserCardsError(
           'invalid-request',
-          `A confirmation needs an operation identity, an import identity and 1 to ` +
-            `${USERCARDS_LIMITS.maxConfirmEntries} reviewed entries with their revisions.`,
+          `A confirmation needs an operation identity, an import identity, an explicit ` +
+            `destination and 1 to ${USERCARDS_LIMITS.maxConfirmEntries} reviewed entries with ` +
+            'their revisions.',
         );
       }
-      const { operationId, sessionId, entries } = request.data;
+      const { operationId, sessionId, destination, entries } = request.data;
       if (new Set(entries.map((entry) => entry.entryId)).size !== entries.length) {
         throw new UserCardsError('invalid-request', 'Each confirmed entry needs its own identity.');
       }
@@ -62,12 +99,7 @@ export function createImportConfirmation(
         return { requested, entry };
       });
 
-      const printings = await resolvePrintings(
-        catalog,
-        verified.flatMap(({ entry }) =>
-          entry.state === 'pending' && entry.printingId !== null ? [entry.printingId] : [],
-        ),
-      );
+      const printings = await resolveReviewedTargets(catalog, verified);
       const reviewed: ConfirmedImportEntry[] = verified.map(({ requested, entry }) => {
         let finish = entry.finish;
         if (entry.state === 'pending' && entry.printingId !== null && entry.finish !== null) {
@@ -77,7 +109,8 @@ export function createImportConfirmation(
           }
           finish = physicalFinish(printing, entry.finish);
         }
-        const copy = {
+        const target = {
+          cardId: entry.cardId,
           printingId: entry.printingId,
           finish,
           condition: entry.condition,
@@ -90,20 +123,23 @@ export function createImportConfirmation(
           // The reviewed content of this entry is the durable key its acquisition is recorded
           // under, so replay protection does not depend on how a caller partitions confirmations.
           entryFingerprint: fingerprint([
-            copy.printingId,
-            copy.finish,
-            copy.condition,
-            copy.quantity,
+            target.cardId,
+            target.printingId,
+            target.finish,
+            target.condition,
+            target.quantity,
           ]),
-          copy,
+          reviewed: target,
         };
       });
 
       const outcome = await store.confirm(accountId, {
         operationId,
         sessionId,
+        destination,
         inputFingerprint: fingerprint({
           sessionId,
+          destination,
           entries: entries
             .map((entry) => [entry.entryId, entry.expectedRevision] as const)
             .sort((left, right) => left[0].localeCompare(right[0])),
@@ -122,7 +158,18 @@ export function createImportConfirmation(
         case 'unresolved-entry':
           throw new UserCardsError(
             'invalid-request',
-            'Every confirmed entry needs a reviewed printing and finish first.',
+            destination.kind === 'ownership'
+              ? 'Every confirmed entry needs a reviewed printing and finish before it can add ' +
+                  'owned copies.'
+              : 'Every confirmed entry needs a reviewed card or printing before it can be added ' +
+                  'to a tag.',
+          );
+        case 'missing-tag':
+          throw new UserCardsError('not-found', 'This account has no tag with that identity.');
+        case 'unsupported-tag':
+          throw new UserCardsError(
+            'invalid-request',
+            'A location or system tag is not a destination a reviewed import can be applied to.',
           );
         case 'operation-conflict':
           throw new UserCardsError(
