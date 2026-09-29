@@ -21,7 +21,12 @@ export {
   type UiPageRegistry,
 } from './internal/shell.js';
 export type { UiPageContext, UiPageDefinition, UiPageHandle } from './internal/pages.js';
-export { createViewStateStore, type UiViewSnapshot } from './internal/restoration.js';
+export {
+  createViewStateStore,
+  type UiRetainedRelease,
+  type UiViewSnapshot,
+  type UiViewStateStore,
+} from './internal/restoration.js';
 export type { UiAccount, UiIdentity } from './internal/identity.js';
 export type { UiDialogOptions, UiDialogs } from './internal/dialogs.js';
 export type { UiNotice, UiNoticeAction, UiNotices, UiNoticeSeverity } from './internal/notices.js';

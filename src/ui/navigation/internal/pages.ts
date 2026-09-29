@@ -94,6 +94,14 @@ export interface UiPageDefinition {
   readonly page: UiPageName;
   mount(container: HTMLElement, context: UiPageContext): UiPageHandle | void;
   /**
+   * Releases one retained handle of this factory without remounting its page. Navigation calls it
+   * when the history entry that kept the handle is replaced, evicted, or discarded with the
+   * account or the shell (docs/ui/navigation.md#interface). The handle is the page's own
+   * representation: the factory interprets it here exactly as its `capture` produced it, while
+   * Navigation never reads it.
+   */
+  release?(retained: unknown): void;
+  /**
    * The shell leaves one presented account: it presents another account, the visitor signs out or
    * the shell is disposed. A page that keeps private presentation state outside the state of a
    * history entry releases that account's state here; the state of a closed view is released the

@@ -759,6 +759,44 @@ test('a lost staging response is recovered by an identical replay before late al
   expect(errors).toEqual([]);
 });
 
+test('a lost staging outcome stays visible as a shell notice with its recovery action', async ({
+  page,
+}) => {
+  const errors = await openCapture(page);
+  await settleSessions(page, 0, []);
+  await control(page, 'scriptReading', {
+    candidates: [hostName('bolt')],
+    printingId: 'printing-bolt',
+  });
+
+  await page.click('#import-camera-start');
+  const capture = await requested<Record<string, unknown>>(page, 'captures', 0);
+  await control(page, 'fail', capture.id, {
+    code: 'unavailable',
+    message: 'The service is unavailable.',
+  });
+
+  // The status line keeps the staging outcome beside the controls; the floating notice keeps the
+  // unknown capture visible after the view is left, with the recovery that replays it
+  // (docs/ui/navigation.md#error-notices, docs/ui/capture-controls.md#presentation-and-lifetime).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:import-capture"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice.locator('.ui-notice-mark')).toHaveText('Error:');
+  await expect(notice.locator('.ui-notice-spinner')).toBeHidden();
+  await expect(notice).toContainText('The staging outcome is unknown.');
+  await expect(notice.getByRole('button', { name: 'Recover the capture' })).toBeVisible();
+
+  // The notice's recovery action recovers the attempt the session already submitted: it replays
+  // that observation under its own identity instead of starting another one.
+  await notice.getByRole('button', { name: 'Recover the capture' }).click();
+  const replay = await requested<Record<string, unknown>>(page, 'captures', 1);
+  expect(replay.arguments).toEqual(capture.arguments);
+  const camera = await control<{ opened: number }>(page, 'camera');
+  expect(camera.opened).toBe(1);
+  expect(errors).toEqual([]);
+});
+
 test('geometry decides admission independently of the identity the engine reported', async ({
   page,
 }) => {

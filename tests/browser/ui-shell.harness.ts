@@ -44,6 +44,10 @@ export interface UiShellControl {
   completeSignOut(): void;
   /** Rejects the sign-out the shell awaits, as an authentication outage would. */
   failSignOut(message: string): void;
+  /** Completes the sign-in the shell awaits, reporting the verified account as the deployment would. */
+  completeSignIn(): void;
+  /** Rejects the sign-in the shell awaits, as an authentication outage would. */
+  failSignIn(message: string): void;
   /** Settles the controlled device release, rejecting when a message is supplied. */
   completeDeviceRelease(message?: string): void;
   /** Answers the asynchronous page's held result requests, as the source's response arriving would. */
@@ -70,6 +74,11 @@ export interface UiShellControl {
   rejectDeferredPage(): void;
   /** Notes the harness recorded, oldest first. */
   log(): string[];
+  /**
+   * Resources the retention fixture's factory still owns through the retained handles of the
+   * history entries Navigation keeps.
+   */
+  retainedResources(): number;
   /** Releases the shell and its listeners. */
   dispose(): void;
 }
@@ -79,6 +88,10 @@ export interface UiShellStart {
   readonly signedOut?: boolean;
   /** Holds each sign-out until the journey completes or rejects it through the control. */
   readonly deferredSignOut?: boolean;
+  /** Holds each sign-in until the journey completes or rejects it through the control. */
+  readonly deferredSignIn?: boolean;
+  /** Presents the resource-owning retention fixture as the Tags page. */
+  readonly retainedResources?: boolean;
   readonly deviceRelease?: 'deferred' | 'throw';
   /** Presents the asynchronous Home page instead of the immediate one. */
   readonly asyncResults?: boolean;
@@ -107,6 +120,12 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     start.signedOut === true ? null : { accountId: 'alice', displayName: 'Alice' };
   const listeners = new Set<(account: UiAccount | null) => void>();
   let pendingSignOut: { resolve(): void; reject(cause: Error): void } | null = null;
+  let pendingSignIn: { resolve(): void; reject(cause: Error): void } | null = null;
+  /**
+   * Resources the retention fixture's factory owns through the handles its page retained: the
+   * fixture acquires one per retained handle and releases it through the page contract.
+   */
+  const resources = new Set<string>();
 
   let pendingDeviceRelease: { resolve(): void; reject(cause: Error): void } | null = null;
   const asyncResults = createAsyncResults();
@@ -114,6 +133,11 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
   const identity: UiIdentity = {
     current: () => account,
     signIn: () => {
+      if (start.deferredSignIn === true) {
+        return new Promise<void>((resolve, reject) => {
+          pendingSignIn = { resolve, reject };
+        });
+      }
       report({ accountId: 'bob', displayName: 'Bob' });
     },
     signOut: () => {
@@ -164,6 +188,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     start.rejectRedirect === true,
     start.listResults,
     start.pageNotices === true,
+    start.retainedResources === true ? resources : null,
   );
   const capabilities: UserInterfaceCapabilities = {
     settings: {
@@ -242,6 +267,17 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       pendingSignOut = null;
       pending?.reject(new Error(message));
     },
+    completeSignIn: () => {
+      const pending = pendingSignIn;
+      pendingSignIn = null;
+      report({ accountId: 'bob', displayName: 'Bob' });
+      pending?.resolve();
+    },
+    failSignIn: (message) => {
+      const pending = pendingSignIn;
+      pendingSignIn = null;
+      pending?.reject(new Error(message));
+    },
     completeDeviceRelease: (message) => {
       const pending = pendingDeviceRelease;
       pendingDeviceRelease = null;
@@ -266,6 +302,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     resolveDeferredPage: () => deferred?.resolve(),
     rejectDeferredPage: () => deferred?.reject(),
     log: () => [...log],
+    retainedResources: () => resources.size,
     dispose: () => {
       shell.dispose();
     },
@@ -281,6 +318,7 @@ function fixturePages(
   rejectRedirect: boolean,
   listResults: UiShellStart['listResults'],
   pageNotices: boolean,
+  retainedResources: Set<string> | null,
 ): readonly UiPageDefinition[] {
   return [
     listResults !== undefined
@@ -291,7 +329,9 @@ function fixturePages(
     catalogPage(document),
     cardPage(document, log),
     pageNotices ? noticesPage(document, log) : collectionPage(document),
-    statePage(document),
+    retainedResources === null
+      ? statePage(document)
+      : resourcePage(document, log, retainedResources),
     redirectPage(document, log),
     devicePage(document, log),
   ];
@@ -615,6 +655,70 @@ function statePage(document: Document): UiPageDefinition {
       function render(): void {
         count.textContent = `${selection.size} selected`;
       }
+    },
+  };
+}
+
+/**
+ * Resource-owning retention fixture: every history entry retains an opaque handle that its factory
+ * vouches for by acquiring a resource beside it, and the page contract's release frees exactly
+ * that resource. Navigation keeps the handle's meaning to itself, so a journey observes the
+ * resources the owning factory holds and whether it reclaimed them
+ * (docs/ui/navigation.md#interface, docs/ui/navigation.md#replacement-evidence).
+ */
+function resourcePage(document: Document, log: string[], resources: Set<string>): UiPageDefinition {
+  let serial = 0;
+
+  /** Reclaims one resource the factory owns through an opaque handle. */
+  function releaseHandle(handle: string): void {
+    resources.delete(handle);
+    log.push(`released:${handle}`);
+  }
+
+  return {
+    page: 'tags',
+    mount(container, context) {
+      const restored = context.restored?.state;
+      // Leaving and returning to an entry retains the handle that entry already owns; a new visit
+      // acquires one of its own, so the bound and the account decide when a resource is reclaimed.
+      const kept = typeof restored === 'string' ? restored : null;
+      const handle = kept ?? `resource-${++serial}`;
+      let handedOver = false;
+      resources.add(handle);
+      log.push(`retained:${handle}`);
+      const status = document.createElement('p');
+      status.id = 'resource-status';
+      status.textContent = `Holding ${resources.size} retained resources`;
+      const open = document.createElement('a');
+      open.id = 'resource-open';
+      open.href = uiHref({ page: 'collection', query: '', level: 'card' });
+      open.textContent = 'Open collection';
+      const replace = document.createElement('a');
+      replace.id = 'resource-replace';
+      replace.href = uiHref({ page: 'collection', query: '', level: 'card' });
+      replace.textContent = 'Replace with collection';
+      replace.addEventListener('click', (event) => {
+        event.preventDefault();
+        context.replace({ page: 'collection', query: '', level: 'card' });
+      });
+      container.append(status, open, replace);
+      return {
+        capture: () => {
+          handedOver = true;
+          return handle;
+        },
+        // A visit that ends before Navigation kept its handle releases the resource it still owns
+        // itself; a handle the entry already owns is released through the page contract instead.
+        dispose: () => {
+          if (kept === null && !handedOver) {
+            releaseHandle(handle);
+          }
+        },
+      };
+    },
+    release(retained) {
+      // The factory owns the handle's meaning: it frees the resource the handle was acquired for.
+      releaseHandle(String(retained));
     },
   };
 }

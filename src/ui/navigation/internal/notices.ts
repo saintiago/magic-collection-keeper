@@ -15,44 +15,19 @@
  * spinner.
  */
 
-/**
- * How one notice presents: `progress` shows a spinner while the reported work is ongoing, `status`
- * reports a settled state a retry can check without a spinner, and `error` reports a failure with
- * red styling and a textual indicator.
- */
-export type UiNoticeSeverity = 'progress' | 'status' | 'error';
+import type { UiNotice, UiNotices } from '../../shared/notices.js';
 
-/** One action one notice offers; the reporter owns what the action does. */
-export interface UiNoticeAction {
-  readonly label: string;
-  run(): void;
-}
-
-/** One notice the shell presents, identified by the operation it reports. */
-export interface UiNotice {
-  /** Identity of the reported operation; updating it replaces the presented notice. */
-  readonly id: string;
-  readonly severity: UiNoticeSeverity;
-  /** User-facing text of the notice; only this text is rendered, so external values stay safe. */
-  readonly message: string;
-  /** Relevant recovery action the reporter supplied, or absent when none applies. */
-  readonly action?: UiNoticeAction | null;
-}
-
-/**
- * Notice capability the shell supplies to the pages it presents. A page reports the operation and
- * service failures it presents and updates the notice of an operation it reports again; Navigation
- * owns the presentation.
- */
-export interface UiNotices {
-  /** Presents the notice of this identity, or updates the presented notice of the same identity. */
-  show(notice: UiNotice): void;
-  /** Removes the notice of one identity; an identity that is not presented is ignored. */
-  dismiss(id: string): void;
-}
+export type {
+  UiNotice,
+  UiNoticeAction,
+  UiNotices,
+  UiNoticeSeverity,
+} from '../../shared/notices.js';
 
 /** The notice presentation of one shell. */
 export interface UiNoticeHost extends UiNotices {
+  /** Keeps notice text but drops recovery callbacks belonging to a departed page. */
+  retireActions(ids: Iterable<string>): void;
   /** Removes every presented notice; the account the shell presented ended. */
   clear(): void;
   /** Releases the presentation region; the shell is closing. */
@@ -150,7 +125,17 @@ export function createNoticeHost(parent: Element): UiNoticeHost {
   parent.append(region);
   const presented = new Map<string, PresentedNotice>();
 
-  return { show, dismiss, clear, dispose };
+  return { show, dismiss, retireActions, clear, dispose };
+
+  function retireActions(ids: Iterable<string>): void {
+    for (const id of ids) {
+      const current = presented.get(id);
+      if (current !== undefined) {
+        current.notice = { ...current.notice, action: null };
+        paint(current);
+      }
+    }
+  }
 
   function show(notice: UiNotice): void {
     const current = presented.get(notice.id);

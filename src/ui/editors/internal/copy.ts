@@ -41,7 +41,12 @@ import {
   type UiCopyChange,
   type UiCopyCorrection,
 } from './copy-edits.js';
-import { applyAction, outcomeText, type UiOperationOutcome } from './operations.js';
+import {
+  applyAction,
+  outcomeText,
+  reportUiOperation,
+  type UiOperationOutcome,
+} from './operations.js';
 import { printingChoiceGuidance, singlePrintingChoice } from './printing-choice.js';
 
 /** Draft of the collection's bulk change controls. */
@@ -56,9 +61,17 @@ export interface UiCopyBulkEditorOptions {
   readonly access: UiCopyAccess;
   /** Aborted when the view closes; a dispatched change stops then. */
   readonly signal: AbortSignal;
+  /**
+   * Floating notices of the shell: the editor reports the failures of the changes it dispatches,
+   * so they stay visible after the view is left (docs/ui/navigation.md#error-notices).
+   */
+  readonly notices?: UiNotices;
   /** Draft a previous visit retained, when it carried one. */
   readonly restored?: unknown;
 }
+
+/** Notice identity of the bulk copy changes of one view. */
+const bulkNotice = 'copy-bulk';
 
 /**
  * The bulk copy change editor: the values its controls apply beside the actions the list presents
@@ -153,6 +166,7 @@ export function createCopyBulkEditor(options: UiCopyBulkEditorOptions): UiCopyBu
         (outcome) => {
           applying = false;
           paintOutcome(outcome);
+          reportUiOperation(options.notices, bulkNotice, outcome);
         },
       );
     },

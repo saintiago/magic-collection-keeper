@@ -35,7 +35,11 @@ import { createDialogs, type UiDialogs } from './dialogs.js';
 import { readAccount, type UiAccount, type UiIdentity } from './identity.js';
 import { createNoticeHost, type UiNotice } from './notices.js';
 import type { UiPageContext, UiPageDefinition, UiPageHandle } from './pages.js';
-import { createViewStateStore, type UiViewSnapshot } from './restoration.js';
+import {
+  createViewStateStore,
+  type UiRetainedRelease,
+  type UiViewSnapshot,
+} from './restoration.js';
 import {
   readUiView,
   uiHref,
@@ -160,10 +164,19 @@ export function createNavigation(options: NavigationOptions): Navigation {
   let view: UiView | null = null;
   let pageController: AbortController | null = null;
   let pageHandle: UiPageHandle | null = null;
+  /** Factory that owns the mounted page's retained handles; the shell delegates release to it. */
+  let pageDefinition: UiPageDefinition | null = null;
   let generation = 0;
   let teardownGeneration: number | null = null;
   let disposed = false;
   let signOutPending = false;
+  /**
+   * Lifetime of the identity operation the shell presents. A change of the presented account and
+   * the disposal of the shell end it, so a completion of an operation the departed account started
+   * changes neither the notices nor the controls of the account that replaced it
+   * (docs/ui/architecture.md#asynchronous-presentation).
+   */
+  let identityOperation = 0;
   let lastHref = '';
   let lastToken: string | null = null;
   /** Account-scoped indexing progress Application supplied for the presented account. */
@@ -219,9 +232,15 @@ export function createNavigation(options: NavigationOptions): Navigation {
     if (disposed) {
       return;
     }
-    rememberCurrent();
+    // The entry the presented view occupies cannot be returned to: the page's own state is not
+    // retained for it, and the store discards what it kept once that view is disposed below, so
+    // the factory that owns the handle reclaims it (docs/ui/navigation.md#interface).
+    const superseded = lastToken;
     history.replaceState({ ...readState(history), uiView: store.open() }, '', uiHref(target));
     render();
+    if (superseded !== null) {
+      store.discard(superseded);
+    }
   }
 
   function back(): void {
@@ -237,6 +256,7 @@ export function createNavigation(options: NavigationOptions): Navigation {
       return;
     }
     disposed = true;
+    identityOperation += 1;
     closePage();
     browser.removeEventListener('popstate', onBrowserNavigation);
     browser.removeEventListener('hashchange', onBrowserNavigation);
@@ -272,6 +292,12 @@ export function createNavigation(options: NavigationOptions): Navigation {
       renderAccountLabel();
       return;
     }
+    // The account that replaced the previous one owns fresh controls: the operation the departed
+    // account started no longer presents its pending state here, and its later completion is
+    // fenced out of the notices and controls of this account.
+    identityOperation += 1;
+    signOutPending = false;
+    signOutButton.disabled = false;
     closePage();
     store.clear();
     // The notices of the presented view end with the account that presented them, and the progress
@@ -308,21 +334,24 @@ export function createNavigation(options: NavigationOptions): Navigation {
     if (disposed || signOutPending) {
       return;
     }
+    const operation = identityOperation;
     signOutPending = true;
     signOutButton.disabled = true;
     main.hidden = true;
     notices.show({ id: signOutNotice, severity: 'progress', message: 'Signing out…' });
-    void finishSignOut();
+    void finishSignOut(operation);
   }
 
-  async function finishSignOut(): Promise<void> {
+  async function finishSignOut(operation: number): Promise<void> {
     let message: string | null = null;
     try {
       await identity.signOut();
     } catch (cause) {
       message = readMessage(cause, 'Sign-out failed. Please retry.');
     }
-    if (disposed) {
+    if (disposed || operation !== identityOperation) {
+      // The account this sign-out belonged to left meanwhile: its failure belongs to a session that
+      // no longer exists and never reaches the replacement account's notices or controls.
       return;
     }
     signOutPending = false;
@@ -339,9 +368,14 @@ export function createNavigation(options: NavigationOptions): Navigation {
       return;
     }
     // Signing out is a service failure with no field to hold it: the floating error notice reports
-    // it, the live page keeps its work, and the enabled control offers the retry
+    // it, the live page keeps its work, and the notice and the enabled control offer the retry
     // (docs/ui/navigation.md#error-notices).
-    notices.show({ id: signOutNotice, severity: 'error', message });
+    notices.show({
+      id: signOutNotice,
+      severity: 'error',
+      message,
+      action: { label: 'Retry sign-out', run: requestSignOut },
+    });
   }
 
   function requestSignIn(): void {
@@ -352,10 +386,16 @@ export function createNavigation(options: NavigationOptions): Navigation {
   }
 
   async function runIdentity(start: () => void | Promise<void>, fallback: string): Promise<void> {
+    const operation = identityOperation;
     notices.dismiss(signInNotice);
     try {
       await start();
     } catch (cause) {
+      if (disposed || operation !== identityOperation) {
+        // The attempt belongs to a session the shell already left; its failure is not presented to
+        // the account that replaced it (docs/ui/architecture.md#asynchronous-presentation).
+        return;
+      }
       notices.show({
         id: signInNotice,
         severity: 'error',
@@ -364,7 +404,7 @@ export function createNavigation(options: NavigationOptions): Navigation {
       });
       return;
     }
-    if (!disposed) {
+    if (!disposed && operation === identityOperation) {
       applyAccount(readAccount(identity.current()));
     }
   }
@@ -534,6 +574,7 @@ export function createNavigation(options: NavigationOptions): Navigation {
       return;
     }
     pageHandle = handle;
+    pageDefinition = definition;
     restoreInteraction(heading, restored);
     restorePresentedInteraction(handle, heading, restored, currentGeneration, controller.signal);
   }
@@ -949,24 +990,47 @@ export function createNavigation(options: NavigationOptions): Navigation {
     if (current === null || view === null || lastToken === null) {
       return;
     }
+    const release = releaseRetained(pageDefinition);
     const keeping = restoringEntry ? restoringSnapshot : null;
     if (keeping !== null) {
-      store.save(current.accountId, lastToken, {
-        state: capturePageState(keeping.state),
-        scrollY: keeping.scrollY,
-        ...(keeping.anchorId == null
-          ? {}
-          : { anchorId: keeping.anchorId, anchorTop: keeping.anchorTop }),
-        focusId: keeping.focusId,
-      });
+      store.save(
+        current.accountId,
+        lastToken,
+        {
+          state: capturePageState(keeping.state),
+          scrollY: keeping.scrollY,
+          ...(keeping.anchorId == null
+            ? {}
+            : { anchorId: keeping.anchorId, anchorTop: keeping.anchorTop }),
+          focusId: keeping.focusId,
+        },
+        release,
+      );
       return;
     }
-    store.save(current.accountId, lastToken, {
-      state: capturePageState(null),
-      scrollY: browser.scrollY,
-      ...captureAnchor(),
-      focusId: document.activeElement?.id ?? null,
-    });
+    store.save(
+      current.accountId,
+      lastToken,
+      {
+        state: capturePageState(null),
+        scrollY: browser.scrollY,
+        ...captureAnchor(),
+        focusId: document.activeElement?.id ?? null,
+      },
+      release,
+    );
+  }
+
+  /**
+   * Release callback of the factory that owns the retained handles of the page presented now. The
+   * store invokes it when an entry is replaced, evicted or discarded, so the factory reclaims what
+   * it retained for a history entry whose page instance is gone
+   * (docs/ui/navigation.md#interface, docs/ui/architecture.md#state-ownership-and-restoration).
+   */
+  function releaseRetained(definition: UiPageDefinition | null): UiRetainedRelease {
+    return (retained) => {
+      definition?.release?.(retained);
+    };
   }
 
   /**
@@ -1013,6 +1077,8 @@ export function createNavigation(options: NavigationOptions): Navigation {
     const handle = pageHandle;
     pageController = null;
     pageHandle = null;
+    // The saved release callbacks keep their owning factory; only the mounted lifetime ends here.
+    pageDefinition = null;
     try {
       // Navigation and dialogs are already invalidated, but device cleanup is still permitted.
       // A nested transition advances generation again, ending this page's device ownership too.

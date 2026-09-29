@@ -44,6 +44,8 @@ function shellBundle(): Promise<string> {
           '  listResults: globalThis.keeperUiListResults,',
           '  pageNotices: globalThis.keeperUiPageNotices === true,',
           '  deferredPages: globalThis.keeperUiDeferredPages === true,',
+          '  deferredSignIn: globalThis.keeperUiDeferredSignIn === true,',
+          '  retainedResources: globalThis.keeperUiRetainedResources === true,',
           '});',
         ].join('\n'),
         resolveDir: repoRoot,
@@ -85,6 +87,8 @@ async function openShell(page: Page, hash: string, start: UiShellStart = {}): Pr
     globals.keeperUiListResults = flags.listResults;
     globals.keeperUiPageNotices = flags.pageNotices === true;
     globals.keeperUiDeferredPages = flags.deferredPages === true;
+    globals.keeperUiDeferredSignIn = flags.deferredSignIn === true;
+    globals.keeperUiRetainedResources = flags.retainedResources === true;
   }, start);
   await loadShell(page);
   return errors;
@@ -98,6 +102,13 @@ async function loadShell(page: Page): Promise<void> {
 async function notes(page: Page): Promise<string[]> {
   return page.evaluate(() =>
     (globalThis as unknown as { keeperUiControl: { log(): string[] } }).keeperUiControl.log(),
+  );
+}
+
+/** Handles the retention fixture named under one prefix, without reading their contents. */
+function handlesNamed(notes: readonly string[], prefix: 'retained:' | 'released:'): Set<string> {
+  return new Set(
+    notes.filter((note) => note.startsWith(prefix)).map((note) => note.slice(prefix.length)),
   );
 }
 
@@ -177,6 +188,31 @@ async function disposeShell(page: Page): Promise<void> {
     const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
     control.dispose();
   });
+}
+
+/** Completes the sign-in the shell awaits, as the deployment's authentication would. */
+async function completeSignIn(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.completeSignIn();
+  });
+}
+
+/** Rejects the sign-in the shell awaits, as an authentication outage would. */
+async function failSignIn(page: Page, message: string): Promise<void> {
+  await page.evaluate((text) => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.failSignIn(text);
+  }, message);
+}
+
+/** Resources the retention fixture's factory still owns through retained handles. */
+async function retainedResources(page: Page): Promise<number> {
+  return page.evaluate(() =>
+    (
+      globalThis as unknown as { keeperUiControl: UiShellControl }
+    ).keeperUiControl.retainedResources(),
+  );
 }
 
 /** Publishes one indexing status of an account, as Search's progress tracker would. */
@@ -391,6 +427,61 @@ test('history eviction releases the state of the oldest entries', async ({ page 
   await expect(page.locator('#collection-marker')).toBeVisible();
   await page.goBack();
   await expect(page.getByLabel('State draft')).toHaveValue('fresh');
+});
+
+test('retained handles are released through their owning factory on eviction and account change', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/tags', { retainedResources: true });
+
+  // The entry the user returns to hands its handle back, and replacing that entry discards the
+  // state it kept: the factory that owns the handle reclaims its resource at once.
+  await page.locator('#resource-open').click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+  await page.goBack();
+  await expect(page.locator('#resource-status')).toBeVisible();
+  await page.locator('#resource-replace').click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+  expect((await notes(page)).filter((note) => note.startsWith('released:'))).toEqual([
+    'released:resource-1',
+  ]);
+
+  const visits = UI_LIMITS.viewStates + 3;
+  await page.getByRole('link', { name: 'Tags', exact: true }).click();
+  for (let index = 1; index <= visits; index += 1) {
+    await page.locator('#resource-open').click();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+    await page.getByRole('link', { name: 'Tags', exact: true }).click();
+    await expect(page.locator('#resource-status')).toBeVisible();
+  }
+
+  // The history bound dropped the oldest entries and their owner reclaimed each handle's
+  // resource; every retained resource the fixture's factory still holds belongs to a kept entry.
+  const before = await notes(page);
+  const acquired = handlesNamed(before, 'retained:');
+  const retained = await retainedResources(page);
+  const released = handlesNamed(before, 'released:');
+  // The mounted visit holds one resource of its own; the rest belong to the entries history keeps.
+  expect(retained).toBeGreaterThan(1);
+  expect(retained).toBeLessThan(acquired.size);
+  expect(released.size).toBe(acquired.size - retained);
+
+  // Leaving the account releases the handles its entries still retained, and the replacement
+  // account retains resources of its own instead of a departed entry's.
+  await signInAs(page, 'bob');
+  await expect(page.locator('#resource-status')).toBeVisible();
+  const after = await notes(page);
+  const nowReleased = handlesNamed(after, 'released:');
+  for (const handle of acquired) {
+    expect(nowReleased).toContain(handle);
+  }
+  const own = handlesNamed(after, 'retained:');
+  for (const handle of acquired) {
+    own.delete(handle);
+  }
+  expect([...own]).toHaveLength(1);
+  expect(await retainedResources(page)).toBe(1);
+  expect(errors).toEqual([]);
 });
 
 test('sign-out removes private presentation state and ends the session', async ({ page }) => {
@@ -730,6 +821,63 @@ test('a rejected sign-out returns a live page with working controls', async ({ p
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeEnabled();
   await page.getByRole('button', { name: 'Go to collection' }).click();
   await expect(page.locator('#collection-marker')).toBeVisible();
+});
+
+test('an account change fences a departed account’s sign-out failure', async ({ page }) => {
+  const errors = await openShell(page, '#/', { deferredSignOut: true });
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('#ui-root main')).toBeHidden();
+
+  // Identity reports another account while the departed account's sign-out is outstanding: the
+  // replacement session presents its own controls, not the pending state of the old one.
+  await signInAs(page, 'bob');
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+  const signOut = page.getByRole('button', { name: 'Sign out' });
+  await expect(signOut).toBeEnabled();
+
+  // The departed account's rejection arrives after its session ended: it reaches neither the
+  // notices nor the controls of the account that replaced it.
+  await failSignOut(page, 'Alice identity operation failed');
+  await expect(page.locator('[data-ui-notice]')).toHaveCount(0);
+  await expect(signOut).toBeEnabled();
+
+  // The control belongs to the presented account: signing out again starts its own operation.
+  await signOut.click();
+  await expect(page.locator('#ui-root main')).toBeHidden();
+  await completeSignOut(page);
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('a departed account’s failed sign-in never reaches the replacement account', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/', { signedOut: true, deferredSignIn: true });
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  // Authentication reports a verified account while the abandoned attempt is still outstanding.
+  await signInAs(page, 'bob');
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+
+  await failSignIn(page, 'Sign-in failed. Please retry.');
+  await expect(page.locator('[data-ui-notice]')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+  expect(errors).toEqual([]);
+
+  // A sign-in attempt the presented session starts is presented again when it fails, with the
+  // retry that starts a fresh attempt.
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await failSignIn(page, 'Sign-in failed. Please retry.');
+  const notice = page.locator('[data-ui-notice="navigation:sign-in"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice).toContainText('Sign-in failed. Please retry.');
+  await notice.getByRole('button', { name: 'Sign in again' }).click();
+  await completeSignIn(page);
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+  expect(errors).toEqual([]);
 });
 
 test('a page without a state handle keeps focus and scroll for the way back', async ({ page }) => {

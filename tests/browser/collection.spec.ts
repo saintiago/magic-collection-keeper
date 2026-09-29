@@ -706,10 +706,19 @@ test('a detail read that fails is reported with a retry', async ({ page }) => {
     ).keeperCollectionControl.failCatalog(id, 'The catalog is unavailable.');
   }, request[0]!.id);
   await expect(page.locator('#card-details-failure')).toHaveText('The catalog is unavailable.');
+  // The page keeps the retry beside the failed level; the floating notice keeps the service
+  // failure visible after the view is left (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:card-details"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice).toContainText('The catalog is unavailable.');
+  await expect(notice.locator('.ui-notice-mark')).toHaveText('Error:');
+  await expect(notice.locator('.ui-notice-spinner')).toBeHidden();
 
   await page.getByRole('button', { name: 'Retry' }).click();
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
   await expect(page.locator('#card-name')).toHaveText('Lightning Bolt');
+  await expect(notice).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -803,6 +812,13 @@ test('a lost response stays unknown while current attributes and a guarded retry
   await expect(page.locator('#copy-status')).toHaveText(
     'The outcome is unknown. Reload the copy before retrying.',
   );
+  // The form keeps the draft and the message; the floating notice keeps the uncertain correction
+  // visible with the recovery read the form offers (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice).toContainText('The outcome is unknown. Reload the copy before retrying.');
+  await expect(notice.getByRole('button', { name: 'Reload the copy' })).toBeVisible();
   await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · foil · near mint');
   await expect(page.locator('#copy-finish-choice')).toHaveValue('foil');
   await expect(page.getByRole('button', { name: 'Save changes' })).toBeEnabled();
@@ -817,6 +833,7 @@ test('a lost response stays unknown while current attributes and a guarded retry
   expect(retry.input.finish).toBe('foil');
   await settleCorrection(page, retry.id, [storedCopy({ finish: 'foil', revision: 7 })]);
   await expect(page.locator('#copy-status')).toHaveText('Saved.');
+  await expect(notice).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -924,6 +941,13 @@ for (const failure of ['conflict', 'unavailable'] as const) {
         '1 of 2 copies changed since they were read. Reload and review the change.',
       );
     }
+    // A bulk change that did not commit stays visible as the floating error notice, with the
+    // selection the list still holds for the retry (docs/ui/navigation.md#error-notices).
+    const outcomeText = (await outcome.textContent()) ?? '';
+    const notice = page.locator('[data-ui-notice="navigation:page:alice:copy-bulk"]');
+    await expect(notice).toBeVisible();
+    await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+    await expect(notice).toContainText(outcomeText);
     await expect(page.locator('[data-ui-group-select]')).toBeChecked();
     expect(errors).toEqual([]);
   });

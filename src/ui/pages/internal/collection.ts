@@ -52,6 +52,7 @@ function collectionPage(): UiPageDefinition {
       const changes = context.modules.editors.copyBulk({
         document,
         access: copies,
+        notices: context.notices,
         signal: context.signal,
         restored,
       });

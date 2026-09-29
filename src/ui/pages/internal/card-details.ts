@@ -41,6 +41,9 @@ interface UiLevelPresentation {
   readonly restoration: Promise<void> | null;
 }
 
+/** Notice identity of this view's own level read. */
+const cardDetailsNotice = 'card-details';
+
 export function createCardDetailsPage(): UiPageDefinition {
   return {
     page: 'card',
@@ -131,18 +134,20 @@ export function createCardDetailsPage(): UiPageDefinition {
             cardView.copyId !== null
               ? await copyLevel(cardView.copyId, attempt)
               : cardView.printingId !== null
-                ? await printingLevel(cardView.printingId)
-                : await cardLevel();
+                ? await printingLevel(cardView.printingId, attempt)
+                : await cardLevel(attempt);
           if (!isCurrentLoad(attempt) || level === null) {
             return;
           }
           content.replaceChildren(...level.nodes);
           status.textContent = '';
+          context.notices.dismiss(cardDetailsNotice);
         } catch (cause) {
           if (!isCurrentLoad(attempt)) {
             return;
           }
-          content.replaceChildren(...failurePanel(cause));
+          const problem = readMessage(cause, 'The card details could not be loaded.');
+          content.replaceChildren(...failurePanel(problem));
           status.textContent = '';
           presented.reject(cause);
           return;
@@ -174,10 +179,38 @@ export function createCardDetailsPage(): UiPageDefinition {
         return !closed && attempt === loadAttempt;
       }
 
-      function failurePanel(cause: unknown): readonly Node[] {
+      /**
+       * Reads the published records of the presented level. A failed read of the level is a
+       * service failure with no field to hold it: the page reports it under the identity of its
+       * own level reads, whose action loads the level again, and keeps presenting the failure
+       * beside the retry while the notice keeps it visible after the view is left
+       * (docs/ui/navigation.md#error-notices). A load a newer attempt superseded reports nothing.
+       */
+      async function readLevel<T>(attempt: number, read: () => Promise<T>): Promise<T> {
+        try {
+          return await read();
+        } catch (cause) {
+          if (isCurrentLoad(attempt)) {
+            reportUiFailure(
+              context.notices,
+              cardDetailsNotice,
+              readMessage(cause, 'The card details could not be loaded.'),
+              {
+                label: 'Load the details again',
+                run: () => {
+                  void render();
+                },
+              },
+            );
+          }
+          throw cause;
+        }
+      }
+
+      function failurePanel(problem: string): readonly Node[] {
         const hint = document.createElement('p');
         hint.id = 'card-details-failure';
-        hint.textContent = readMessage(cause, 'The card details could not be loaded.');
+        hint.textContent = problem;
         const retry = button('card-details-retry', 'Retry');
         retry.addEventListener('click', () => {
           void render();
@@ -186,16 +219,21 @@ export function createCardDetailsPage(): UiPageDefinition {
       }
 
       /** The card level: the playable identity and its published printings. */
-      async function cardLevel(): Promise<UiLevelPresentation> {
-        const card = await resolveCard(catalog, cardView.cardId);
+      async function cardLevel(attempt: number): Promise<UiLevelPresentation> {
+        const card = await readLevel(attempt, () => resolveCard(catalog, cardView.cardId));
         return card === null
           ? { nodes: [missingPanel('The catalog does not publish this card.')], restoration: null }
           : cardContent(card);
       }
 
       /** The printing level: one published version of one card. */
-      async function printingLevel(printingId: string): Promise<UiLevelPresentation> {
-        const resolution = await catalog.resolve([{ kind: 'printing', printingId }]);
+      async function printingLevel(
+        printingId: string,
+        attempt: number,
+      ): Promise<UiLevelPresentation> {
+        const resolution = await readLevel(attempt, () =>
+          catalog.resolve([{ kind: 'printing', printingId }]),
+        );
         const printing = resolution.printings.get(printingId) ?? null;
         if (printing === null) {
           return {
@@ -203,7 +241,7 @@ export function createCardDetailsPage(): UiPageDefinition {
             restoration: null,
           };
         }
-        const card = await resolveCard(catalog, printing.cardId);
+        const card = await readLevel(attempt, () => resolveCard(catalog, printing.cardId));
         return card === null
           ? {
               nodes: [missingPanel('The catalog does not publish the card of this printing.')],
@@ -259,12 +297,12 @@ export function createCardDetailsPage(): UiPageDefinition {
             restoration: null,
           };
         }
-        const resolution = await catalog.resolve([
-          { kind: 'printing', printingId: copy.printingId },
-        ]);
+        const resolution = await readLevel(attempt, () =>
+          catalog.resolve([{ kind: 'printing', printingId: copy.printingId }]),
+        );
         const printing = resolution.printings.get(copy.printingId) ?? null;
         const cardId = printing?.cardId ?? cardView.cardId;
-        const card = await resolveCard(catalog, cardId);
+        const card = await readLevel(attempt, () => resolveCard(catalog, cardId));
         if (!isCurrentLoad(attempt)) {
           // The read of the copy and its catalog resolution belong to a load the page replaced.
           return null;

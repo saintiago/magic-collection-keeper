@@ -398,6 +398,7 @@ async function addSelection(
       message: 'The tag is not available.',
       committed: 0,
       unknown: 0,
+      validation: true,
     };
   }
   if (request.selection.targets.length === 0) {
@@ -406,11 +407,15 @@ async function addSelection(
       message: 'Select the entries to add.',
       committed: 0,
       unknown: 0,
+      validation: true,
     };
   }
   const quantity = options.quantity();
   const counts = { committed: 0, conflict: 0, failed: 0, unknown: 0 };
   const failures: string[] = [];
+  // Selected targets the editor decides before dispatching anything are presentation validation:
+  // their message stays with the control and no provider operation exists to report.
+  const undecided = request.selection.targets.filter((target) => !dispatches(target, quantity));
   for (const target of request.selection.targets) {
     const outcome = await addTarget(options.access, tag, target, quantity, request.signal);
     counts[outcome.status] += 1;
@@ -418,7 +423,19 @@ async function addSelection(
       failures.push(outcome.message);
     }
   }
-  return addOutcome(counts, failures, request.selection.targets.length, options.guidance);
+  const outcome = addOutcome(counts, failures, request.selection.targets.length, options.guidance);
+  return undecided.length === request.selection.targets.length
+    ? { ...outcome, validation: true }
+    : outcome;
+}
+
+/** Whether one selected target reaches a provider operation instead of local validation. */
+function dispatches(target: CardListTarget, quantity: number | null): boolean {
+  if (target.kind === 'copy') {
+    return true;
+  }
+  // A pending entry is no catalog record, and a card or printing needs its intended quantity.
+  return target.kind !== 'pending' && quantity !== null;
 }
 
 /** Adds one selected target to the tag; a location holds copies through their location move. */

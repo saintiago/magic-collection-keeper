@@ -24,11 +24,16 @@ import type {
   CaptureStatusKind,
 } from '../../../capture/index.js';
 
+import { reportUiFailure, type UiNotices } from '../../shared/notices.js';
+
 /** Longest candidate name the capture status presents, so one engine reading stays bounded. */
 const uiCaptureNameLength = 120;
 
 /** Longest candidate names the capture status lists as alternatives. */
 const uiCaptureNameCount = 3;
+
+/** Notice identity of this mounted capture view's failures. */
+const captureNotice = 'import-capture';
 
 export interface UiCaptureOptions {
   readonly document: Document;
@@ -42,6 +47,12 @@ export interface UiCaptureOptions {
   readonly device: CaptureBrowserDevice;
   /** Aborted when the view closes; its work must not change a replacement view. */
   readonly signal: AbortSignal;
+  /**
+   * Floating notices of the shell: the view reports the camera, preparation, recognition and
+   * staging failures its status line presents, so a failure stays visible after the view is left
+   * (docs/ui/navigation.md#error-notices).
+   */
+  readonly notices?: UiNotices;
   /** Reports that the pending review changed, so the page presents what the provider now holds. */
   readonly reviewChanged: (change: CaptureReviewChange) => void;
 }
@@ -218,12 +229,16 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
         say('Camera capture is unavailable in this deployment.', null);
         return;
       case 'starting':
+        // The camera is being acquired again: the failure the user retried is no longer presented.
+        options.notices?.dismiss(captureNotice);
         say('Waiting for camera permission…', null);
         return;
       case 'preparing':
+        options.notices?.dismiss(captureNotice);
         say('Preparing recognition…', null);
         return;
       case 'running':
+        options.notices?.dismiss(captureNotice);
         say('Scanner ready. Hold one card inside the frame until it is accepted.', null);
         return;
       case 'stopped':
@@ -235,6 +250,15 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
         return;
       case 'failed':
         say(`Camera unavailable: ${failure ?? 'the camera could not be started.'}`, 'error');
+        // A camera that could not start is a service failure with no field to hold it: the notice
+        // keeps it visible with the control's own retry
+        // (docs/ui/navigation.md#error-notices, docs/ui/capture-controls.md#presentation-and-lifetime).
+        reportUiFailure(
+          options.notices,
+          captureNotice,
+          `Camera unavailable: ${failure ?? 'the camera could not be started.'}`,
+          { label: 'Start the camera again', run: () => void session.start() },
+        );
         return;
     }
   }
@@ -244,6 +268,9 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
     switch (event.kind) {
       case 'accepted':
         presentCue(event.cue);
+        // A later accepted capture establishes that the camera and recognition work again: the
+        // failure notice of an earlier attempt ends with it.
+        options.notices?.dismiss(captureNotice);
         say(
           event.reading === null
             ? 'The earlier capture was already accepted into review.'
@@ -281,9 +308,31 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
       case 'unavailable':
         presentCue(event.cue);
         say(unavailableMessage(event.reason, event.failure, event.recoverable), null);
+        // A frame that delivered nothing is guidance for the next attempt; preparation,
+        // recognition and staging failures stay visible as the shell's notice
+        // (docs/ui/navigation.md#error-notices).
+        if (event.reason !== 'frame') {
+          reportUiFailure(
+            options.notices,
+            captureNotice,
+            unavailableMessage(event.reason, event.failure, event.recoverable),
+            event.recoverable
+              ? { label: 'Recover the capture', run: () => void session.retry() }
+              : { label: 'Start the camera again', run: () => void session.start() },
+          );
+        }
         return;
       case 'comparison':
         say(comparisonMessage(event), null);
+        if (event.outcome === 'rejected' || event.outcome === 'unverified') {
+          // Later alternatives that could not be stored leave the accepted capture in review: the
+          // notice keeps the failure visible with the recovery the view offers
+          // (docs/ui/navigation.md#error-notices).
+          reportUiFailure(options.notices, captureNotice, comparisonMessage(event), {
+            label: 'Recover the capture',
+            run: () => void session.retry(),
+          });
+        }
         return;
     }
   }

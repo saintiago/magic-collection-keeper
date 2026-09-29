@@ -361,9 +361,26 @@ test('creates a tag and keeps the unsaved label when the create fails', async ({
   await expect(page.locator('#tag-create-status')).toHaveText(
     'The outcome is unknown. Check whether the tag appears in the list before retrying.',
   );
+  // The field keeps the unsaved label; the shell's floating error notice keeps the unresolved
+  // operation visible with the recovery read that checks what the account holds
+  // (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:tags:create"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice.locator('.ui-notice-mark')).toHaveText('Error:');
+  await expect(notice.locator('.ui-notice-spinner')).toBeHidden();
+  await expect(notice).toContainText(
+    'The outcome is unknown. Check whether the tag appears in the list before retrying.',
+  );
   // The lost response is recovered by reading the list again, not by guessing the outcome.
   const recovery = await requested<UiTagsListRequest>(page, 'listTags', 1);
   await settle(page, 'settleListTags', recovery.id, { tags: [], continuation: null });
+
+  // The notice's own recovery action repeats that read without repeating the write.
+  await notice.getByRole('button', { name: 'Check the tags' }).click();
+  const check = await requested<UiTagsListRequest>(page, 'listTags', 2);
+  await settle(page, 'settleListTags', check.id, { tags: [], continuation: null });
+  expect(await control<readonly unknown[]>(page, 'createTag')).toHaveLength(1);
 
   await page.click('#tag-create-submit');
   const retry = await requested<{ readonly label: string }>(page, 'createTag', 1);
@@ -376,6 +393,8 @@ test('creates a tag and keeps the unsaved label when the create fails', async ({
   await expect(page.locator('#tag-create-status')).toHaveText('Created “To buy”.');
   await expect(page.locator('#tag-create-label')).toHaveValue('');
   await expect(page.locator('#tags-list [data-ui-tag="tag-wish"] a')).toHaveText('To buy');
+  // A committed create clears the failure notice of its operation.
+  await expect(notice).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -463,6 +482,12 @@ test('keeps the unsaved rename label when a lost response stays unknown', async 
   await expect(page.locator('#tag-row-status-tag-burn')).toHaveText(
     'The outcome is unknown. Review the record before retrying.',
   );
+  // The row keeps the unsaved label; the floating notice keeps the row's unresolved operation
+  // visible after the view is left (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:tags:rename:tag-burn"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice).toContainText('The outcome is unknown. Review the record before retrying.');
 
   await page.click('#tag-rename-tag-burn');
   const retry = await requested<{ readonly expectedRevision: number; readonly label: string }>(
@@ -475,6 +500,9 @@ test('keeps the unsaved rename label when a lost response stays unknown', async 
     expectedRevision: 2,
     label: 'My draft',
   });
+  await settle(page, 'settleRenameTag', retry.id, tag({ label: 'My draft', revision: 3 }));
+  await expect(page.locator('#tag-row-status-tag-burn')).toHaveText('Renamed the tag.');
+  await expect(notice).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
