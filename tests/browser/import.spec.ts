@@ -1923,6 +1923,46 @@ test('a failed printing read clears when reopening the review presents the print
   expect(errors).toEqual([]);
 });
 
+test('reopening reconciles a failed printing read supplied by CardList enrichment', async ({
+  page,
+}) => {
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, {});
+  await settle(page, 'settleSessions', (await requested(page, 'sessions')).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries')).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText(
+    `Printing ${m11.printingId}`,
+  );
+  // Neither the list enrichment nor the editor's fallback resolved the unchanged printing.
+  await expect.poll(async () => (await control<unknown[]>(page, 'catalogRequests')).length).toBe(2);
+  await control(page, 'scriptCatalog', null);
+  await page.click('#import-review-save-entry-1');
+  await control(page, 'fail', (await requested(page, 'catalogRequests', 2)).id, {
+    code: 'unavailable',
+    message: 'Offline',
+  });
+  const notice = page.locator(
+    '[data-ui-notice="navigation:page:alice:import-entry:entry-1:printing"]',
+  );
+  await expect(notice).toContainText('The selected printing could not be read');
+  await control(page, 'navigate', { page: 'home' });
+  await expect(notice).toBeVisible();
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  await control(page, 'back');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M11 149 · en');
+  await expect(notice).toHaveCount(0);
+  expect(await control<unknown[]>(page, 'review')).toHaveLength(0);
+  expect(errors).toEqual([]);
+});
+
 test('keeps an unestablished review outcome when a later printing read fails', async ({ page }) => {
   const errors = await openPendingReview(page, [entry()]);
   // The entry names a printing the review already read, so the save is attempted without a lookup

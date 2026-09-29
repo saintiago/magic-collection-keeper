@@ -252,6 +252,7 @@ async function applyCopyChange(
     return {
       status: 'failed',
       message: `The selected copies could not be read: ${readUiFailureMessage(cause, 'unknown failure')}`,
+      prerequisiteFailure: true,
     };
   }
   const byId = new Map(copies.map((copy) => [copy.copyId, copy] as const));
@@ -260,6 +261,7 @@ async function applyCopyChange(
     return {
       status: 'failed',
       message: 'Some selected copies are no longer in the collection. Reload and select again.',
+      prerequisiteFailure: true,
     };
   }
   const counts = { committed: 0, conflict: 0, failed: 0, unknown: 0 };

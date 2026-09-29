@@ -36,6 +36,11 @@ export interface UiOperationOutcome {
    * floating error notice (docs/ui/navigation.md#error-notices).
    */
   readonly validation?: true;
+  /**
+   * A required read failed or found missing state before any write was dispatched. Its feedback
+   * cannot replace an earlier unresolved write (docs/ui/navigation.md#error-notices).
+   */
+  readonly prerequisiteFailure?: true;
 }
 
 /** One editor-owned action a presented list names. */
@@ -81,8 +86,9 @@ export async function applyAction<Outcome extends UiOperationOutcome>(
  * (docs/ui/navigation.md#error-notices). The editor keeps presenting the same outcome beside its
  * own controls, where the returned message and the affected field or row stay together; the notice
  * is what keeps a failed, conflicted or unresolved operation visible after the view is left. A
- * committed operation clears the notice of an earlier failure of the same operation, and
- * validation the editor established itself never reaches the shell.
+ * committed operation clears the notice of an earlier failure of the same operation. A failure
+ * before dispatch has its own read notice, reconciled when a later attempt reaches the write;
+ * it never replaces an unresolved write. Validation stays local.
  */
 export function reportUiOperation(
   notices: UiNotices | undefined,
@@ -93,6 +99,18 @@ export function reportUiOperation(
   if (notices === undefined || outcome.validation === true) {
     return;
   }
+  const readId = `${id}:read`;
+  if (outcome.prerequisiteFailure === true) {
+    notices.show({
+      id: readId,
+      severity: 'error',
+      message: outcome.message ?? outcomeText(outcome.status),
+      action: action ?? null,
+    });
+    return;
+  }
+  // Reaching the write establishes its prerequisites, even if that write remains unknown.
+  notices.dismiss(readId);
   if (outcome.status === 'committed') {
     notices.dismiss(id);
     return;

@@ -1270,6 +1270,122 @@ test('moves a copy out of a location and shows the remaining associations', asyn
   expect(errors).toEqual([]);
 });
 
+for (const method of ['move', 'add'] as const) {
+  test(`location ${method} prerequisite reads preserve an unknown write`, async ({ page }) => {
+    const errors = await openTags(page, '#/tags/tag-binder');
+    await scriptCounts(page, [['copy:copy-1', { owned: 1, locations: 1, intended: null }]]);
+    await resolveLocationVisit(page, 0);
+    await settle(page, 'settleListTags', (await requested(page, 'listTags')).id, {
+      tags: [tag({ tagId: 'tag-binder', kind: 'location', label: 'Binder' })],
+      continuation: null,
+    });
+    const stored: PhysicalCopy = {
+      copyId: 'copy-1',
+      printingId: 'printing-1',
+      finish: 'nonfoil',
+      condition: 'NM',
+      revision: 5,
+    };
+    if (method === 'add') {
+      await page.fill('#tag-add-query', 'bolt');
+      await page.selectOption('#tag-add-level', 'copy');
+      await page.click('#tag-add-submit');
+      await settle(page, 'settleSearch', (await requested(page, 'searches')).id, {
+        entries: [
+          {
+            entryKey: 'copy:copy-1',
+            target: { kind: 'copy', copyId: 'copy-1' },
+            card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
+            printing: {
+              printingId: 'printing-1',
+              edition: 'M11',
+              collectorNumber: '149',
+              language: 'en',
+              finishes: ['nonfoil'],
+            },
+            quantity: null,
+          },
+        ],
+        status: 'ready',
+        totalCount: 1,
+        continuation: null,
+        revisions: {
+          generation: 'tags-generation',
+          catalogRevision: 'tags-revision',
+          catalogPosition: '1',
+          privateRevision: 'private-1',
+        },
+      });
+      await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', 1)).id, [stored]);
+      await page.locator('#tag-add-results [data-ui-select]').check();
+    } else {
+      await page.selectOption('#tag-move-association-1', '');
+    }
+    const apply = page.locator(
+      method === 'move'
+        ? '#tag-move-save-association-1'
+        : '#tag-add-results [data-ui-tool="add-to-tag"]',
+    );
+    let index = (await control<unknown[]>(page, 'readCopies')).length;
+    await apply.click();
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index++)).id, [
+      stored,
+    ]);
+    await settle(page, 'fail', (await requested(page, 'setCopyLocation')).id, {
+      code: 'unavailable',
+      message: 'Lost response',
+    });
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index++)).id, [
+      stored,
+    ]);
+    const identity = method === 'move' ? 'tag:association:association-1' : 'tag:add';
+    const write = page.locator(`[data-ui-notice="navigation:page:alice:${identity}"]`);
+    const read = page.locator(`[data-ui-notice="navigation:page:alice:${identity}:read"]`);
+    await expect(write).toContainText('unknown');
+    // The unknown write refreshes the association list; current state is not proof of commitment.
+    await settle(
+      page,
+      'settleListAssociations',
+      (await requested(page, 'listAssociations', 1)).id,
+      {
+        associations: [association({ targetLevel: 'copy', targetId: 'copy-1', quantity: null })],
+      },
+    );
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index++)).id, [
+      stored,
+    ]);
+    await settleCatalog(page, 2, { printings: [boltPrinting] });
+    await settleCatalog(page, 3, { cards: [boltCard] });
+    await apply.click();
+    await settle(page, 'fail', (await requested(page, 'readCopies', index++)).id, {
+      code: 'unavailable',
+      message: 'Offline',
+    });
+    await expect(write).toContainText('unknown');
+    await expect(read).toContainText('could not be read');
+    expect(await control<unknown[]>(page, 'setCopyLocation')).toHaveLength(1);
+    await apply.click();
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index++)).id, []);
+    await expect(read).toContainText('no longer in the collection');
+    await expect(write).toContainText('unknown');
+    expect(await control<unknown[]>(page, 'setCopyLocation')).toHaveLength(1);
+    await apply.click();
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index++)).id, [
+      stored,
+    ]);
+    await settle(page, 'fail', (await requested(page, 'setCopyLocation', 1)).id, {
+      code: 'unavailable',
+      message: 'Lost again',
+    });
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index)).id, [
+      stored,
+    ]);
+    await expect(read).toHaveCount(0);
+    await expect(write).toContainText('unknown');
+    expect(errors).toEqual([]);
+  });
+}
+
 test('searches the catalog and adds a card to the wishlist with its intended quantity', async ({
   page,
 }) => {

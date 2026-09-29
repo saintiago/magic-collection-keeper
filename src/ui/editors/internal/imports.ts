@@ -1183,7 +1183,11 @@ export function createImportReviewEditor(
     const found = printings.get(entry.entryId) ?? [];
     const chosenPrintingId = draft?.printingId ?? entry.printingId ?? '';
     const chosenPrinting = knownPrinting(record, found, chosenPrintingId);
-    if (chosenPrinting === null && chosenPrintingId.length > 0) {
+    if (chosenPrinting !== null) {
+      // CardList enrichment can establish the printing without the editor's fallback lookup.
+      // Reconcile only its read notice; current data cannot establish an earlier write outcome.
+      options.notices?.dismiss(reviewEntryPrintingNotice(entry.entryId));
+    } else if (chosenPrintingId.length > 0) {
       // The draft names a printing the row has not read: its record is read again, so the
       // reviewed values and the finish control keep following the choice
       // (docs/ui/editors.md#drafts-and-asynchronous-outcomes).

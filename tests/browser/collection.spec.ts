@@ -995,6 +995,64 @@ for (const failure of ['conflict', 'unavailable'] as const) {
   });
 }
 
+for (const attribute of ['finish', 'condition'] as const) {
+  test(`bulk ${attribute} prerequisite reads preserve unknown corrections and reconcile independently`, async ({
+    page,
+  }) => {
+    const errors = await openCollection(page, '#/collection?level=copy');
+    await settleSearch(
+      page,
+      (await searchRequest(page)).id,
+      searchPage([copyEntry('copy-1', 'printing-1')]),
+    );
+    await page.locator('[data-ui-select]').check();
+    await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+    await page
+      .locator(`#collection-${attribute}`)
+      .selectOption(attribute === 'finish' ? 'foil' : 'DMG');
+    const apply = page.getByRole('button', { name: `Apply ${attribute}` });
+    await apply.click();
+    await settleCopyRead(page, (await copyRead(page, 1)).id, [storedCopy()]);
+    await failCorrection(page, (await correction(page)).id, {
+      code: 'unavailable',
+      message: 'Lost response',
+    });
+    await settleCopyRead(page, (await copyRead(page, 2)).id, [storedCopy()]);
+    const write = page.locator('[data-ui-notice="navigation:page:alice:copy-bulk"]');
+    const read = page.locator('[data-ui-notice="navigation:page:alice:copy-bulk:read"]');
+    await expect(write).toContainText('unknown outcome');
+
+    await apply.click();
+    await failCopyRead(page, (await copyRead(page, 3)).id, {
+      code: 'unavailable',
+      message: 'Offline',
+    });
+    await expect(page.locator('#collection-changes-status')).toContainText('could not be read');
+    await expect(write).toContainText('unknown outcome');
+    await expect(read).toContainText('could not be read');
+    expect(await corrections(page)).toHaveLength(1);
+
+    // An answering read with a missing copy also dispatches no correction.
+    await apply.click();
+    await settleCopyRead(page, (await copyRead(page, 4)).id, []);
+    await expect(read).toContainText('no longer in the collection');
+    await expect(write).toContainText('unknown outcome');
+    expect(await corrections(page)).toHaveLength(1);
+
+    // A later attempt reads the selection successfully, but still cannot confirm its write.
+    await apply.click();
+    await settleCopyRead(page, (await copyRead(page, 5)).id, [storedCopy()]);
+    await failCorrection(page, (await correction(page, 1)).id, {
+      code: 'unavailable',
+      message: 'Lost again',
+    });
+    await settleCopyRead(page, (await copyRead(page, 6)).id, [storedCopy()]);
+    await expect(read).toHaveCount(0);
+    await expect(write).toContainText('unknown outcome');
+    expect(errors).toEqual([]);
+  });
+}
+
 test('leaving and returning keeps the collection selection and the unsaved copy draft', async ({
   page,
 }) => {

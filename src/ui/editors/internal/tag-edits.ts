@@ -225,7 +225,7 @@ export function createTagAccess(userCards: UiTagClient): UiTagAccess {
 }
 
 /** Outcome of one private change as an organization view presents it. */
-export type UiChangeOutcome<Record> = UiChangeCommit<Record>;
+export type UiChangeOutcome<Record> = UiChangeCommit<Record> & UiOperationOutcome;
 
 /** Creates one tag through the private contract. */
 export async function createTag(
@@ -416,14 +416,25 @@ async function addSelection(
   // Selected targets the editor decides before dispatching anything are presentation validation:
   // their message stays with the control and no provider operation exists to report.
   const undecided = request.selection.targets.filter((target) => !dispatches(target, quantity));
+  let prerequisiteFailures = 0;
   for (const target of request.selection.targets) {
     const outcome = await addTarget(options.access, tag, target, quantity, request.signal);
+    if (outcome.prerequisiteFailure === true) {
+      prerequisiteFailures += 1;
+    }
     counts[outcome.status] += 1;
     if (outcome.status !== 'committed' && outcome.message !== null) {
       failures.push(outcome.message);
     }
   }
   const outcome = addOutcome(counts, failures, request.selection.targets.length, options.guidance);
+  if (
+    prerequisiteFailures > 0 &&
+    prerequisiteFailures + undecided.length === request.selection.targets.length
+  ) {
+    // No selected target reached a write. Keep an earlier uncertain addition's notice intact.
+    return { ...outcome, prerequisiteFailure: true };
+  }
   return undecided.length === request.selection.targets.length
     ? { ...outcome, validation: true }
     : outcome;
@@ -491,10 +502,16 @@ export async function moveCopyById(
       status: 'failed',
       message: `The copy could not be read: ${readUiFailureMessage(cause, 'unknown failure')}`,
       record: null,
+      prerequisiteFailure: true,
     };
   }
   if (copy === null) {
-    return { status: 'failed', message: 'The copy is no longer in the collection.', record: null };
+    return {
+      status: 'failed',
+      message: 'The copy is no longer in the collection.',
+      record: null,
+      prerequisiteFailure: true,
+    };
   }
   return moveCopyLocation(
     access,
