@@ -298,6 +298,7 @@ describe('application transport', () => {
         requestId: 'request-1',
         body: JSON.stringify({
           operationId: 'operation-1',
+          destination: { kind: 'ownership' },
           entries: [{ entryId: 'entry-1', expectedRevision: 1 }],
         }),
       }),

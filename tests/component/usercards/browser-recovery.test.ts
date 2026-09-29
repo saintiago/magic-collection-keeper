@@ -10,14 +10,20 @@ import type {
 } from '../../../src/usercards/index.js';
 import { unusedUserCardsClient, memoryAttemptStorage } from '../../support/usercards-browser.js';
 
-const input = { sessionId: 'import-1', entries: [{ entryId: 'entry-1', expectedRevision: 1 }] };
+const input = {
+  sessionId: 'import-1',
+  destination: { kind: 'ownership' } as const,
+  entries: [{ entryId: 'entry-1', expectedRevision: 1 }],
+};
 const receipt: ImportReceipt = {
   operationId: 'op-1',
   sessionId: 'import-1',
   sourceKind: 'pasted-list',
   sourceId: 'import-1',
+  destination: { kind: 'ownership' },
   publicationPosition: '7',
   copies: [],
+  associations: [],
 };
 const failure = (code: string) => Object.assign(new Error(code), { code });
 

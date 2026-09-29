@@ -318,11 +318,12 @@ create table if not exists ${usercardsPrivateSchema}.import_entry (
   session_id text not null check (length(session_id) between 1 and ${identifierLength}),
   state text not null default 'pending' check (state in (${importEntryStateValues})),
   position integer not null check (position >= 1),
+  card_id text check (card_id is null or length(card_id) between 1 and ${identifierLength}),
   printing_id text check (printing_id is null or length(printing_id) between 1 and ${identifierLength}),
   finish text check (finish is null or finish in (${finishValues})),
   condition text check (condition in (${conditionValues})),
   quantity integer not null default 1
-    check (quantity between 1 and ${USERCARDS_LIMITS.maxCreateQuantity}),
+    check (quantity between 1 and ${USERCARDS_LIMITS.maxAssociationQuantity}),
   -- The parsed source line and its durable identity inside the import that staged it. Every field
   -- of the line is separately bounded, so this bound only has to cover the same text after
   -- escaping; the reviewed values stay in the columns above.
@@ -413,6 +414,12 @@ create table if not exists ${usercardsPrivateSchema}.import_receipt (
   operation_id text not null check (length(operation_id) between 1 and ${identifierLength}),
   account_id text not null check (length(account_id) between 1 and ${identifierLength}),
   session_id text not null check (length(session_id) between 1 and ${identifierLength}),
+  -- Explicit destination the recorded confirmation applied: an ownership action creates copies,
+  -- a tag destination creates or updates the reviewed associations
+  -- (docs/user-cards.md#import-and-capture-state).
+  destination text not null check (destination in ('ownership', 'tag')),
+  destination_tag_id text check (destination_tag_id is null
+    or length(destination_tag_id) between 1 and ${identifierLength}),
   input_fingerprint text not null check (length(input_fingerprint) between 1 and ${fingerprintLength}),
   -- Position of the publication that made this outcome's copies visible. A recovered outcome
   -- reports it long after the account published later revisions, so the recorded value stays
@@ -420,6 +427,7 @@ create table if not exists ${usercardsPrivateSchema}.import_receipt (
   publication_position bigint check (publication_position is null or publication_position > 0),
   created_at timestamptz not null default now(),
   primary key (account_id, operation_id),
+  check ((destination = 'tag') = (destination_tag_id is not null)),
   foreign key (account_id, session_id)
     references ${usercardsPrivateSchema}.import_session (account_id, session_id)
 );
@@ -436,6 +444,20 @@ create table if not exists ${usercardsPrivateSchema}.import_receipt_acquisition 
     references ${usercardsPrivateSchema}.import_receipt (account_id, operation_id),
   foreign key (acquisition_id)
     references ${usercardsPrivateSchema}.import_acquisition (acquisition_id)
+);
+
+-- The association outcome of one tag-destination confirmation, recorded as the association was
+-- when the confirmation committed. A later correction or removal of the association changes the
+-- association, never what the recorded receipt reports
+-- (docs/user-cards.md#import-and-capture-state).
+create table if not exists ${usercardsPrivateSchema}.import_receipt_association (
+  account_id text not null check (length(account_id) between 1 and ${identifierLength}),
+  operation_id text not null check (length(operation_id) between 1 and ${identifierLength}),
+  association_id text not null check (length(association_id) between 1 and ${identifierLength}),
+  record jsonb not null,
+  primary key (account_id, operation_id, association_id),
+  foreign key (account_id, operation_id)
+    references ${usercardsPrivateSchema}.import_receipt (account_id, operation_id)
 );
 
 create table if not exists ${usercardsPrivateSchema}.copy_provenance (

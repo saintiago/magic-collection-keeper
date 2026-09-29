@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { resolvePhysicalPrinting, resolvePrintings } from './catalog.js';
+import { resolveCards, resolvePrintings } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';
 import type {
@@ -26,8 +26,9 @@ import { USERCARDS_LIMITS, type TrustedUserContext } from './model.js';
 const reviewEntryRequestSchema = z.object({
   entryId: referenceSchema,
   expectedRevision: revisionSchema,
-  printingId: referenceSchema,
-  finish: finishSchema,
+  cardId: referenceSchema.nullable().optional(),
+  printingId: referenceSchema.nullable(),
+  finish: finishSchema.nullable(),
   condition: conditionSchema,
   quantity: quantitySchema,
 });
@@ -64,16 +65,47 @@ export function createImportReview(
       if (!request.success) {
         throw new UserCardsError(
           'invalid-request',
-          'A review needs an entry identity, the revision it started from, a resolved printing ' +
-            'and finish, a condition or an explicit unknown condition, and a quantity from 1 to ' +
-            `${USERCARDS_LIMITS.maxCreateQuantity}.`,
+          'A review needs an entry identity, the revision it started from, a reviewed card ' +
+            'identity or printing, a condition or an explicit unknown condition, and a quantity ' +
+            `from 1 to ${USERCARDS_LIMITS.maxAssociationQuantity}.`,
         );
       }
-      const { entryId, expectedRevision, printingId, finish, condition, quantity } = request.data;
-      await resolvePhysicalPrinting(catalog, printingId, finish);
+      const { entryId, expectedRevision, printingId, condition, quantity } = request.data;
+      let cardId = request.data.cardId ?? null;
+      const finish = request.data.finish;
+      if (printingId !== null) {
+        // Review records a catalog target independently of ownership. Physical eligibility and
+        // finish availability are validated by the explicit ownership confirmation.
+        const printing = (await resolvePrintings(catalog, [printingId])).get(printingId);
+        if (printing === undefined) {
+          throw new UserCardsError('not-found', 'The printing is not available in the catalog.');
+        }
+        if (cardId !== null && cardId !== printing.cardId) {
+          throw new UserCardsError(
+            'invalid-request',
+            'The reviewed card identity and printing do not agree.',
+          );
+        }
+        cardId = printing.cardId;
+      } else {
+        if (cardId === null) {
+          throw new UserCardsError(
+            'invalid-request',
+            'A review needs a card identity, a printing, or both.',
+          );
+        }
+        if (finish !== null) {
+          throw new UserCardsError(
+            'invalid-request',
+            'A card-level review carries no finish; choose a printing to review the finish.',
+          );
+        }
+        await resolveCards(catalog, [cardId]);
+      }
       const outcome = await store.correctEntry(accountId, {
         entryId,
         expectedRevision,
+        cardId,
         printingId,
         finish,
         condition,

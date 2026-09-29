@@ -46,7 +46,8 @@ function lockEntrySessionStatement(accountId: string, entryId: string): Statemen
 function correctEntryStatement(accountId: string, correction: ImportEntryCorrection): Statement {
   return {
     statement: `update usercards_private.import_entry as target
-     set printing_id = :printing_id,
+     set card_id = :card_id,
+         printing_id = :printing_id,
          finish = :finish,
          condition = :condition,
          quantity = :quantity,
@@ -61,6 +62,7 @@ function correctEntryStatement(accountId: string, correction: ImportEntryCorrect
       account_id: accountId,
       entry_id: correction.entryId,
       expected_revision: correction.expectedRevision,
+      card_id: correction.cardId,
       printing_id: correction.printingId,
       finish: correction.finish,
       condition: correction.condition,

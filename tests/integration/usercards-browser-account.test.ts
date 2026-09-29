@@ -24,6 +24,7 @@ it('does not send an ended confirmation recovery or retry with the replacement c
   const facade = createUserCardsOperations({ client: createUserCardsClient(request) });
   const operation = facade.account('alice').confirmImport({
     sessionId: 'import-1',
+    destination: { kind: 'ownership' },
     entries: [{ entryId: 'entry-1', expectedRevision: 1 }],
   });
   const rejected = await operation.observe();

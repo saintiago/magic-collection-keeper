@@ -35,6 +35,7 @@ import type { SearchPage, SearchRequestInput } from '../../src/search/index.js';
 import { createCardListBrowser } from '../../src/card-list/index.js';
 import type {
   ConfirmImportInput,
+  CreateTagInput,
   DiscardImportEntryInput,
   DiscardImportSessionInput,
   ImportConfirmationResult,
@@ -50,6 +51,9 @@ import type {
   SourceImportResult,
   StageImportEntriesInput,
   StageSourceImportInput,
+  Tag,
+  TagChangeResult,
+  TagListResult,
 } from '../../src/usercards/index.js';
 import {
   createImportPages,
@@ -93,6 +97,12 @@ export interface UiImportCatalogRequest {
   readonly references: readonly CatalogReference[];
 }
 
+/** One page request of the account's tags, read as confirmation destinations. */
+export interface UiImportTagsRequest {
+  readonly pageSize: number | null;
+  readonly continuation: string | null;
+}
+
 export interface UiImportControl {
   log(): string[];
   readonly accountId: string | null;
@@ -105,6 +115,10 @@ export interface UiImportControl {
   discardSession(): readonly UiImportRequest<DiscardImportSessionInput>[];
   confirm(): readonly UiImportRequest<ConfirmImportInput>[];
   recover(): readonly UiImportRequest<string>[];
+  /** Pages of the account's tags the review read as confirmation destinations. */
+  tags(): readonly UiImportRequest<UiImportTagsRequest>[];
+  /** Deck creations the review issued for a new confirmation destination. */
+  createdTags(): readonly UiImportRequest<CreateTagInput>[];
   searches(): readonly UiImportRequest<SearchRequestInput>[];
   catalogRequests(): readonly UiImportRequest<UiImportCatalogRequest>[];
   settleSessions(
@@ -133,6 +147,13 @@ export interface UiImportControl {
   settleDiscardSession(id: number, session: ImportSession): void;
   settleConfirm(id: number, result: Omit<ImportConfirmationResult, 'privateRevision'>): void;
   settleRecover(id: number, result: ImportOperationRecoveryResult): void;
+  settleCreateTag(id: number, tag: Tag): void;
+  /** Answers every following tag page from this list, like the account's current tags. */
+  scriptDestinationTags(tags: readonly Tag[]): void;
+  /** Fails every following destination read while a failure is set, like an unavailable provider. */
+  scriptDestinationFailure(
+    failure: { readonly code: ApplicationFailureCode; readonly message: string } | null,
+  ): void;
   settleSearch(id: number, page: SearchPage): void;
   /** Answers every following catalog resolve from this table, like the provider the page reads. */
   scriptCatalog(
@@ -174,6 +195,11 @@ const harnessRevision = {
 export interface UiImportHarnessOptions {
   /** Whether the deployment parses source imports; a journey may present one that refuses them. */
   readonly sourceImports?: boolean;
+  /** A destination read that fails from the start, so a journey can retry it explicitly. */
+  readonly failDestinationReads?: {
+    readonly code: ApplicationFailureCode;
+    readonly message: string;
+  } | null;
 }
 
 /** Installs the Import page into `root`; identity starts signed in as one account. */
@@ -198,6 +224,8 @@ export function installImportHarness(
   const discardSessionRequests: UiImportRequest<DiscardImportSessionInput>[] = [];
   const confirmRequests: UiImportRequest<ConfirmImportInput>[] = [];
   const recoverRequests: UiImportRequest<string>[] = [];
+  const tagRequests: UiImportRequest<UiImportTagsRequest>[] = [];
+  const createTagRequests: UiImportRequest<CreateTagInput>[] = [];
   const searchRequests: UiImportRequest<SearchRequestInput>[] = [];
   const catalogRequests: UiImportRequest<UiImportCatalogRequest>[] = [];
   /** Catalog records every following resolve answers from, or null while each one is settled. */
@@ -205,6 +233,13 @@ export function installImportHarness(
     readonly cards: readonly CardRecord[];
     readonly printings: readonly PrintingRecord[];
   } | null = null;
+  /** Tags every following destination page answers with, like the account's current tags. */
+  let scriptedDestinationTags: readonly Tag[] = [];
+  /** Failure every following destination read rejects with, or null while they answer. */
+  let scriptedDestinationFailure: {
+    readonly code: ApplicationFailureCode;
+    readonly message: string;
+  } | null = options.failDestinationReads ?? null;
 
   /** Records one request and returns the promise the journey settles by its identity. */
   function begin<Arguments>(
@@ -233,6 +268,31 @@ export function installImportHarness(
     }
     pending.delete(id);
     waiting.resolve(wrap(value));
+  }
+
+  /** Records one request that a journey answers from a script instead of a settlement. */
+  function record<Arguments>(
+    requests: UiImportRequest<Arguments>[],
+    arguments_: Arguments,
+    signal?: AbortSignal,
+  ): void {
+    sequence += 1;
+    requests.push({
+      id: sequence,
+      arguments: arguments_,
+      get aborted() {
+        return signal?.aborted === true;
+      },
+    });
+  }
+
+  /**
+   * Completes one recorded confirmation with the destination shape a journey leaves implicit: the
+   * ownership destination the review presents by default. A journey that accepts a deck supplies
+   * its own tag destination and recorded associations instead.
+   */
+  function confirmedReceipt(value: object): object {
+    return { destination: { kind: 'ownership' }, associations: [], ...value };
   }
 
   const identity: UiIdentity = {
@@ -333,6 +393,28 @@ export function installImportHarness(
     },
     recoverImportOperation(operationId, signal) {
       return begin(recoverRequests, operationId, signal) as Promise<ImportOperationRecoveryResult>;
+    },
+    listTags(options, signal) {
+      // The account's tags are the destination control's own read: a journey scripts them like
+      // the catalog it presents, instead of settling each page by hand.
+      record(
+        tagRequests,
+        { pageSize: options?.pageSize ?? null, continuation: options?.continuation ?? null },
+        signal,
+      );
+      if (scriptedDestinationFailure !== null) {
+        return Promise.reject(
+          new ApplicationError(scriptedDestinationFailure.code, scriptedDestinationFailure.message),
+        );
+      }
+      return Promise.resolve({
+        privateRevision: 'private-1',
+        tags: scriptedDestinationTags,
+        continuation: null,
+      } as TagListResult);
+    },
+    createTag(input, signal) {
+      return begin(createTagRequests, input, signal) as Promise<TagChangeResult>;
     },
   };
   // Source imports are the deployment's capability: Application enables the operations this
@@ -454,6 +536,8 @@ export function installImportHarness(
     discardSession: () => discardSessionRequests.map((entry) => ({ ...entry })),
     confirm: () => confirmRequests.map((entry) => ({ ...entry })),
     recover: () => recoverRequests.map((entry) => ({ ...entry })),
+    tags: () => tagRequests.map((entry) => ({ ...entry })),
+    createdTags: () => createTagRequests.map((entry) => ({ ...entry })),
     searches: () => searchRequests.map((entry) => ({ ...entry })),
     catalogRequests: () => catalogRequests.map((entry) => ({ ...entry })),
     settleSessions: (id, sessions, continuation = null) =>
@@ -480,8 +564,34 @@ export function installImportHarness(
     settleDiscardSession: (id, session) =>
       settle(id, session, (value) => ({ privateRevision: 'private-1', session: value })),
     settleConfirm: (id, result) =>
-      settle(id, result, (value) => ({ privateRevision: 'private-1', ...value })),
-    settleRecover: (id, result) => settle(id, result, (value) => value),
+      // The ownership destination is the review's presented default; a journey that accepts a
+      // deck supplies its own tag destination and recorded associations.
+      settle(id, result as object, (value) => ({
+        privateRevision: 'private-1',
+        ...confirmedReceipt(value),
+      })),
+    settleRecover: (id, result) =>
+      // A recorded recovery carries the same destination shape the original confirmation reported.
+      settle(id, result, (value) =>
+        value.outcome === 'recorded'
+          ? {
+              ...value,
+              receipt: confirmedReceipt(value.receipt),
+            }
+          : value,
+      ),
+    settleCreateTag: (id, tag) =>
+      settle(id, tag, (value) => ({
+        privateRevision: 'private-1',
+        publicationPosition: '1',
+        tag: value,
+      })),
+    scriptDestinationTags: (tags) => {
+      scriptedDestinationTags = [...tags];
+    },
+    scriptDestinationFailure: (failure) => {
+      scriptedDestinationFailure = failure;
+    },
     settleSearch: (id, page) => settle(id, page, (value) => value),
     scriptCatalog: (records) => {
       scriptedCatalog =

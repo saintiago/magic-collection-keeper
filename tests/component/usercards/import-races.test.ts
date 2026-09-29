@@ -204,6 +204,7 @@ describe('usercards confirmation races', () => {
 
     const held = heldWriter(holder);
     const first = held.cards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-1',
       sessionId: 'session-1',
       entries: [{ entryId: 'line-1', expectedRevision: 1 }],
@@ -216,6 +217,7 @@ describe('usercards confirmation races', () => {
       catalog,
     });
     const second = contenderCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-2',
       sessionId: 'session-1',
       entries: [{ entryId: 'line-1', expectedRevision: 1 }],
@@ -266,6 +268,7 @@ describe('usercards confirmation races', () => {
 
     const held = heldWriter(holder);
     const first = held.cards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-3',
       sessionId: 'session-2',
       entries: [
@@ -281,6 +284,7 @@ describe('usercards confirmation races', () => {
       catalog,
     });
     const second = contenderCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-4',
       sessionId: 'session-2',
       entries: [{ entryId: 'line-2a', expectedRevision: 1 }],
@@ -325,6 +329,7 @@ describe('usercards confirmation races', () => {
 
     const held = heldWriter(holder);
     const request = {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-5',
       sessionId: 'session-3',
       entries: [{ entryId: 'line-3', expectedRevision: 1 }],
@@ -376,6 +381,7 @@ describe('usercards confirmation races', () => {
 
     const held = heldWriter(holder);
     const winner = held.cards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-shared',
       sessionId: 'session-4',
       entries: [{ entryId: 'line-4', expectedRevision: 1 }],
@@ -396,6 +402,7 @@ describe('usercards confirmation races', () => {
       catalog,
     });
     const loser = contenderCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-shared',
       sessionId: 'session-5',
       entries: [{ entryId: 'line-5', expectedRevision: 1 }],
@@ -439,12 +446,14 @@ describe('usercards confirmation races', () => {
       });
     }
     const original = await cards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'alias-original',
       sessionId: 'alias-original',
       entries: [{ entryId: 'alias-original', expectedRevision: 1 }],
     });
     const held = heldWriter(holder);
     const winner = held.cards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'alias-shared',
       sessionId: 'alias-winner',
       entries: [{ entryId: 'alias-winner', expectedRevision: 1 }],
@@ -462,6 +471,7 @@ describe('usercards confirmation races', () => {
     });
     const replay = racing
       .confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
         operationId: 'alias-shared',
         sessionId: 'alias-original',
         entries: [{ entryId: 'alias-original', expectedRevision: 1 }],
@@ -514,6 +524,7 @@ describe('usercards confirmation races', () => {
 
     const held = heldWriter(holder);
     const first = held.cards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-6',
       sessionId: 'session-6',
       entries: [{ entryId: 'line-6', expectedRevision: 1 }],
@@ -524,6 +535,7 @@ describe('usercards confirmation races', () => {
     // blocked by the held import and creates its own copy
     // (docs/user-cards.md#import-state-and-identity).
     const second = cards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-7',
       sessionId: 'session-7',
       entries: [{ entryId: 'line-7', expectedRevision: 1 }],

@@ -227,9 +227,12 @@ export function createTagAccess(userCards: UiTagClient): UiTagAccess {
 /** Outcome of one private change as an organization view presents it. */
 export type UiChangeOutcome<Record> = UiChangeCommit<Record> & UiOperationOutcome;
 
+/** The narrow capability that creates one tag, so an editor that only creates a tag presents it. */
+export type UiTagCreateAccess = Pick<UiTagAccess, 'createTag'>;
+
 /** Creates one tag through the private contract. */
 export async function createTag(
-  access: UiTagAccess,
+  access: UiTagCreateAccess,
   input: CreateTagInput,
   signal?: AbortSignal,
 ): Promise<UiChangeOutcome<Tag>> {

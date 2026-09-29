@@ -4,6 +4,7 @@ import type {
   AssociationTargetLevel,
   CopyCondition,
   ImportCandidate,
+  ImportDestination,
   ImportEntry,
   ImportSession,
   ImportSourceLine,
@@ -243,6 +244,8 @@ export interface OrganizationStore {
 /** One pending entry about to be staged; its stable capture or source-line identity is assigned. */
 export interface NewImportEntry {
   readonly entryId: string;
+  /** Reviewed card identity when the observation resolved one; null while unresolved. */
+  readonly cardId: string | null;
   readonly printingId: string | null;
   readonly finish: Finish | null;
   readonly condition: CopyCondition | null;
@@ -338,8 +341,12 @@ export type CaptureStageOutcome = CaptureStageData | { readonly outcome: 'confli
 export interface ImportEntryCorrection {
   readonly entryId: string;
   readonly expectedRevision: number;
-  readonly printingId: string;
-  readonly finish: Finish;
+  /** Reviewed card identity, or null while the entry stays unresolved. */
+  readonly cardId: string | null;
+  /** Reviewed printing reference, or null for a card-level review. */
+  readonly printingId: string | null;
+  /** Optional reviewed finish; physical eligibility is required only for ownership confirmation. */
+  readonly finish: Finish | null;
   readonly condition: CopyCondition | null;
   readonly quantity: number;
 }
@@ -388,8 +395,9 @@ export type ImportSessionDiscardOutcome =
   | { readonly outcome: 'missing' }
   | { readonly outcome: 'conflict' };
 
-/** The reviewed copy data one pending entry carried when the caller read it. */
-export interface ReviewedEntryCopy {
+/** The reviewed target one pending entry carried when the caller read it. */
+export interface ReviewedEntryTarget {
+  readonly cardId: string | null;
   readonly printingId: string | null;
   readonly finish: Finish | null;
   readonly condition: CopyCondition | null;
@@ -408,13 +416,19 @@ export interface ConfirmedImportEntry {
   readonly state: ImportEntry['state'];
   /** Digest of the reviewed copy attributes and quantity of this entry. */
   readonly entryFingerprint: string;
-  readonly copy: ReviewedEntryCopy;
+  readonly reviewed: ReviewedEntryTarget;
 }
 
 export interface ConfirmationPlan {
   /** Operation identity scoped to the account, so a retry refers to the same action. */
   readonly operationId: string;
   readonly sessionId: string;
+  /**
+   * Explicit destination of this confirmation: the tag whose reviewed associations it creates or
+   * updates, or the ownership action that creates individual copies
+   * (docs/user-cards.md#import-and-capture-state).
+   */
+  readonly destination: ImportDestination;
   /**
    * Digest of the confirmation request. Reuse with a different request is refused, while the same
    * request under another operation identity returns the recorded outcome.
@@ -428,13 +442,20 @@ export interface ImportReceiptData {
   readonly sessionId: string;
   readonly sourceKind: string;
   readonly sourceId: string;
+  /** Destination the recorded confirmation applied. */
+  readonly destination: ImportDestination;
   /**
-   * Position of the publication that made the recorded copies visible, or of the recorded
+   * Position of the publication that made the recorded outcome visible, or of the recorded
    * operations whose acquisitions this outcome replayed (docs/user-cards.md#query-surface).
    */
   readonly publicationPosition: string;
-  /** Copies the acquisition created, ordered by copy identity. */
+  /** Copies an ownership action created, ordered by copy identity; empty for a tag destination. */
   readonly copies: readonly PhysicalCopy[];
+  /**
+   * Associations a tag destination created or updated, ordered by association identity; empty for
+   * an ownership action.
+   */
+  readonly associations: readonly Association[];
 }
 
 export type ConfirmationOutcome =
@@ -450,6 +471,10 @@ export type ConfirmationOutcome =
   | { readonly outcome: 'stale-entry' }
   /** A reviewed entry has no resolved printing and finish, so it cannot become copies. */
   | { readonly outcome: 'unresolved-entry' }
+  /** The destination tag is not this account's. */
+  | { readonly outcome: 'missing-tag' }
+  /** The destination tag is system-managed or does not associate cards or printings. */
+  | { readonly outcome: 'unsupported-tag' }
   /** The operation identity was already used for a different request. */
   | { readonly outcome: 'operation-conflict' };
 
@@ -594,10 +619,13 @@ export interface ImportStore {
     expectedRevision: number,
   ): Promise<ImportSessionDiscardOutcome>;
   /**
-   * Confirms reviewed entries, creating individual copies with their provenance for every source
-   * entry the import has not acquired yet. Entries whose own import already holds that source entry
-   * are confirmed under the recorded outcome instead of creating copies again, so a repeated import
-   * of one list adds nothing however the caller partitions its confirmations.
+   * Confirms reviewed entries under their explicit destination: a tag destination creates or
+   * updates the reviewed card/printing associations with their intended quantities and never
+   * establishes ownership, while the ownership destination creates individual copies with their
+   * provenance for every source entry the import has not acquired yet. Entries whose own import
+   * already holds that source entry are confirmed under the recorded outcome instead of creating
+   * copies again, so a repeated import of one list adds nothing however the caller partitions its
+   * confirmations (docs/user-cards.md#import-and-capture-state).
    */
   confirm(accountId: string, plan: ConfirmationPlan): Promise<ConfirmationOutcome>;
   /** Reads the recorded outcome of one operation, or `null` when the account has none. */

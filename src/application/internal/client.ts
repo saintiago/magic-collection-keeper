@@ -79,6 +79,7 @@ import type {
   DiscardImportSessionInput,
   ImportCandidate,
   ImportConfirmationResult,
+  ImportDestination,
   ImportEntry,
   ImportEntryChangeResult,
   ImportEntryListResult,
@@ -621,6 +622,7 @@ export function createUserCardsClient(request: RequestTransport): UserCardsBrows
           method: 'POST',
           body: JSON.stringify({
             expectedRevision: input.expectedRevision,
+            cardId: input.cardId ?? null,
             printingId: input.printingId,
             finish: input.finish,
             condition: input.condition,
@@ -685,7 +687,11 @@ export function createUserCardsClient(request: RequestTransport): UserCardsBrows
         applicationPath(applicationRoutes.importConfirmation, { sessionId: input.sessionId }),
         {
           method: 'POST',
-          body: JSON.stringify({ operationId: input.operationId, entries: input.entries }),
+          body: JSON.stringify({
+            operationId: input.operationId,
+            destination: input.destination,
+            entries: input.entries,
+          }),
           ...(signal === undefined ? {} : { signal }),
         },
       );
@@ -1795,6 +1801,7 @@ function readImportEntry(value: unknown): ImportEntry | null {
   const sessionId = entry?.sessionId;
   const position = entry?.position;
   const state = entry?.state;
+  const cardId = entry?.cardId ?? null;
   const printingId = entry?.printingId ?? null;
   const finish = entry?.finish ?? null;
   const condition = entry?.condition ?? null;
@@ -1808,6 +1815,7 @@ function readImportEntry(value: unknown): ImportEntry | null {
     !isIdentifier(sessionId) ||
     !isSearchCount(position) ||
     !isImportState(state) ||
+    (cardId !== null && !isIdentifier(cardId)) ||
     (printingId !== null && !isIdentifier(printingId)) ||
     (finish !== null && !isIdentifier(finish)) ||
     (condition !== null && !isIdentifier(condition)) ||
@@ -1823,6 +1831,7 @@ function readImportEntry(value: unknown): ImportEntry | null {
     sessionId,
     position,
     state,
+    cardId,
     printingId,
     finish: finish as ImportEntry['finish'],
     condition: condition as ImportEntry['condition'],
@@ -2047,8 +2056,8 @@ function readImportSessionChange(payload: unknown): ImportSessionChange {
 }
 
 /**
- * One recorded confirmation: the operation, its acquisition source, the position its copies were
- * published at and the copies it created.
+ * One recorded confirmation: the operation, its acquisition source, the explicit destination it
+ * applied, the position its records were published at and the associations or copies it produced.
  */
 function readImportReceipt(value: unknown): ImportReceipt | null {
   const receipt = readObject(value);
@@ -2056,20 +2065,44 @@ function readImportReceipt(value: unknown): ImportReceipt | null {
   const sessionId = receipt?.sessionId;
   const sourceKind = receipt?.sourceKind;
   const sourceId = receipt?.sourceId;
+  const destination = readImportDestination(receipt?.destination);
   const publicationPosition = readPublicationPosition(receipt);
   const copies = readCopyRecords(receipt?.copies);
+  const associations = readAssociationRecords(receipt?.associations);
   if (
     receipt === null ||
     !isIdentifier(operationId) ||
     !isIdentifier(sessionId) ||
     !isIdentifier(sourceKind) ||
     !isIdentifier(sourceId) ||
+    destination === null ||
     publicationPosition === null ||
-    copies === null
+    copies === null ||
+    associations === null
   ) {
     return null;
   }
-  return { operationId, sessionId, sourceKind, sourceId, publicationPosition, copies };
+  return {
+    operationId,
+    sessionId,
+    sourceKind,
+    sourceId,
+    destination,
+    publicationPosition,
+    copies,
+    associations,
+  };
+}
+
+/** One explicit confirmation destination in a payload, or null when the value is not one. */
+function readImportDestination(value: unknown): ImportDestination | null {
+  const destination = readObject(value);
+  if (destination?.kind === 'ownership') {
+    return { kind: 'ownership' };
+  }
+  return destination?.kind === 'tag' && isIdentifier(destination.tagId)
+    ? { kind: 'tag', tagId: destination.tagId }
+    : null;
 }
 
 /** Reads one confirmation: its receipt, whether it replayed a recorded outcome and its revision. */

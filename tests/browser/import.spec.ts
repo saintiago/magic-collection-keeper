@@ -19,11 +19,13 @@ import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 
+import type { ApplicationFailureCode } from '../../src/application/index.js';
 import type { CardRecord, PrintingRecord } from '../../src/catalog/index.js';
 import type {
   ImportEntry,
   ImportSession,
   StageSourceImportInput,
+  Tag,
 } from '../../src/usercards/index.js';
 import type {
   UiImportControl,
@@ -75,7 +77,13 @@ function importBundle(): Promise<string> {
 async function openImport(
   page: Page,
   hash: string,
-  options: { readonly sourceImports?: boolean } = {},
+  options: {
+    readonly sourceImports?: boolean;
+    readonly failDestinationReads?: {
+      readonly code: ApplicationFailureCode;
+      readonly message: string;
+    } | null;
+  } = {},
 ): Promise<string[]> {
   const errors: string[] = [];
   page.on('pageerror', (error) => {
@@ -92,7 +100,13 @@ async function openImport(
 /** Loads a fresh UserInterface into the current document, as a reload of the app does. */
 async function loadImport(
   page: Page,
-  options: { readonly sourceImports?: boolean } = {},
+  options: {
+    readonly sourceImports?: boolean;
+    readonly failDestinationReads?: {
+      readonly code: ApplicationFailureCode;
+      readonly message: string;
+    } | null;
+  } = {},
 ): Promise<void> {
   await page.evaluate((capabilities) => {
     (globalThis as unknown as { keeperImportOptions: unknown }).keeperImportOptions = capabilities;
@@ -217,12 +231,15 @@ function session(overrides: Partial<ImportSession> = {}): ImportSession {
 }
 
 function entry(overrides: Partial<ImportEntry> = {}): ImportEntry {
+  const printingId = overrides.printingId === undefined ? m11.printingId : overrides.printingId;
   return {
     entryId: 'entry-1',
     sessionId: 'manual',
     position: 1,
     state: 'pending',
-    printingId: m11.printingId,
+    // A reviewed printing carries its card identity; an entry without one stays unresolved.
+    cardId: printingId === null ? null : m11.cardId,
+    printingId,
     finish: 'nonfoil',
     condition: null,
     quantity: 1,
@@ -316,9 +333,9 @@ async function chooseImportPrinting(
   entryId: string,
   printingId: string,
 ): Promise<void> {
-  const picker = page.locator(`[data-ui-import-printing-picker="pending:${entryId}"]`);
+  const picker = page.locator(`[data-ui-import-picker="pending:${entryId}"]`);
   await picker.locator(`[data-ui-select="printing:${printingId}"]`).check();
-  await picker.locator('[data-ui-tool="choose-printing"]').click();
+  await picker.locator('[data-ui-tool="choose-entry"]').click();
 }
 
 async function openPendingReview(
@@ -404,7 +421,7 @@ test('stages a manual printing into review and only its confirmation creates cop
   await expect(row.locator('[data-ui-import-condition]')).toHaveText(' Condition: NM');
   await expect(row.locator('[data-ui-import-quantity]')).toHaveText(' Quantity: 2');
 
-  await row.locator('[data-ui-select]').check();
+  await row.locator('[data-ui-select="pending:entry-1"]').check();
   await page.click('#import-pending [data-ui-tool="confirm-import"]');
   const confirmation = await requested<Record<string, unknown>>(page, 'confirm');
   expect(confirmation.arguments).toMatchObject({ sessionId: 'manual' });
@@ -446,6 +463,359 @@ test('stages a manual printing into review and only its confirmation creates cop
     entries: [],
   });
   await expect(page.locator('#import-pending-list')).toHaveText('No pending entries to review.');
+  expect(errors).toEqual([]);
+});
+
+/** One card-level search page of the review's card picker. */
+function cardSearchPage(cards: readonly CardRecord[]) {
+  return {
+    status: 'ready',
+    entries: cards.map((card) => ({
+      key: `card:${card.cardId}`,
+      target: { kind: 'card' as const, cardId: card.cardId },
+      card: { cardId: card.cardId, name: card.name, matchedName: null },
+      printing: null,
+      quantity: null,
+      tools: [],
+    })),
+    totalCount: cards.length,
+    continuation: null,
+    revisions: {
+      generation: 'imports-generation',
+      catalogRevision: 'imports-revision',
+      catalogPosition: '1',
+      privateRevision: 'private-1',
+    },
+  };
+}
+
+test('accepts an unowned deck from card names and quantities without creating copies', async ({
+  page,
+}) => {
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  await control(page, 'scriptDestinationTags', []);
+  await settle(page, 'settleSessions', (await requested(page, 'sessions')).id, []);
+
+  // A pasted list of names stages one unresolved line: no printing is required to accept the deck.
+  await page.fill('#import-source-text', '4 Lightning Bolt');
+  await page.click('#import-source-submit');
+  const source = await requested<Record<string, unknown>>(page, 'source');
+  const sessionId = source.arguments.sessionId as string;
+  const deck = session({ sessionId, sourceKind: 'pasted-list', sourceId: sessionId });
+  await settle(page, 'settleSource', source.id, {
+    session: deck,
+    rows: [
+      {
+        position: 1,
+        line: {
+          name: 'Lightning Bolt',
+          section: null,
+          set: null,
+          collectorNumber: null,
+          language: null,
+          finish: null,
+          declaredQuantity: 4,
+          problem: 'The source named no printing; choose one during review.',
+        },
+        outcome: 'staged',
+        problem: 'The source named no printing; choose one during review.',
+        entryId: 'entry-1',
+        sessionId,
+      },
+    ],
+    staged: 1,
+  });
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [deck]);
+
+  const unresolved = entry({
+    sessionId,
+    printingId: null,
+    finish: null,
+    cardId: null,
+    quantity: 4,
+  });
+  await settle(page, 'settleEntries', (await requested(page, 'entries')).id, {
+    session: deck,
+    entries: [unresolved],
+  });
+  const row = page.locator('#import-pending [data-ui-entry="pending:entry-1"]');
+  await expect(row.locator('[data-ui-import-card]')).toHaveText('Card: unresolved');
+  // The ownership destination presents physical attributes; the deck destination does not.
+  await expect(row.locator('[data-ui-import-finish]')).toHaveCount(1);
+
+  // Reviewing the card identity needs no printing: the card picker resolves the playable identity.
+  await page.fill('#import-card-query-entry-1', 'Lightning Bolt');
+  await page.click('#import-card-find-entry-1');
+  const search = await requested<Record<string, unknown>>(page, 'searches');
+  expect(search.arguments).toMatchObject({ resultLevel: 'card', query: 'Lightning Bolt' });
+  await settle(page, 'settleSearch', search.id, cardSearchPage([boltCard]));
+  const picker = page.locator('[data-ui-import-picker="pending:entry-1"]');
+  await picker.locator(`[data-ui-select="card:${boltCard.cardId}"]`).check();
+  await picker.locator('[data-ui-tool="choose-entry"]').click();
+  // The choice reaches the form with its identity; the card's name follows the next read.
+  await expect(page.locator('#import-review-card-entry-1')).toHaveText('Card card-bolt');
+
+  await page.click('#import-review-save-entry-1');
+  const review = await requested<Record<string, unknown>>(page, 'review');
+  expect(review.arguments).toMatchObject({
+    entryId: 'entry-1',
+    cardId: boltCard.cardId,
+    printingId: null,
+    finish: null,
+    quantity: 4,
+  });
+  const reviewed = entry({
+    sessionId,
+    cardId: boltCard.cardId,
+    printingId: null,
+    finish: null,
+    quantity: 4,
+    revision: 4,
+  });
+  await settle(page, 'settleReview', review.id, { entry: reviewed, session: deck });
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: deck,
+    entries: [reviewed],
+  });
+  await expect(page.locator('#import-review-card-entry-1')).toHaveText(
+    'Lightning Bolt (card-bolt)',
+  );
+
+  // The owner names the deck the list is accepted into without leaving the review.
+  await page.fill('#import-new-deck', 'Burn');
+  await page.click('#import-create-deck');
+  const creation = await requested<Record<string, unknown>>(page, 'createdTags');
+  expect(creation.arguments).toEqual({ kind: 'deck', label: 'Burn' });
+  const burn: Tag = {
+    tagId: 'tag-burn',
+    kind: 'deck',
+    label: 'Burn',
+    system: false,
+    revision: 1,
+  };
+  await control(page, 'scriptDestinationTags', [burn]);
+  await settle(page, 'settleCreateTag', creation.id, burn);
+  await expect(page.locator('#import-destination')).toHaveValue(`tag:${burn.tagId}`);
+  await expect(page.locator('#import-destination-region')).toContainText(
+    'Deck “Burn” is the destination.',
+  );
+  // Physical attributes are not presented while a deck destination is chosen.
+  await expect(row.locator('[data-ui-import-finish]')).toHaveCount(0);
+  await expect(row.locator('[data-ui-import-condition]')).toHaveCount(0);
+
+  await row.locator('[data-ui-select="pending:entry-1"]').check();
+  await page.click('#import-pending [data-ui-tool="confirm-import"]');
+  const confirmation = await requested<Record<string, unknown>>(page, 'confirm');
+  expect(confirmation.arguments).toMatchObject({
+    sessionId,
+    destination: { kind: 'tag', tagId: burn.tagId },
+    entries: [{ entryId: 'entry-1', expectedRevision: 4 }],
+  });
+  await settle(page, 'settleConfirm', confirmation.id, {
+    operationId: confirmation.arguments.operationId as string,
+    sessionId,
+    sourceKind: 'pasted-list',
+    sourceId: sessionId,
+    destination: { kind: 'tag', tagId: burn.tagId },
+    associations: [
+      {
+        associationId: 'association-1',
+        tagId: burn.tagId,
+        targetLevel: 'card',
+        targetId: boltCard.cardId,
+        quantity: 4,
+        revision: 1,
+      },
+    ],
+    copies: [],
+  });
+  await expect(page.locator('#import-review-status')).toHaveText(
+    'Confirmed: 1 association recorded in the destination tag.',
+  );
+
+  // The accepted import leaves the review without reporting a copy or an owned change.
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 2)).id, []);
+  const finished = await requested<UiImportEntriesRequest>(page, 'entries', 2);
+  await settle(page, 'settleEntries', finished.id, {
+    session: session({
+      sessionId,
+      sourceKind: 'pasted-list',
+      sourceId: sessionId,
+      state: 'confirmed',
+      pendingEntries: 0,
+      confirmedEntries: 1,
+      revision: 5,
+    }),
+    entries: [],
+  });
+  await expect(page.locator('#import-pending-list')).toHaveText('No pending entries to review.');
+  expect(errors).toEqual([]);
+});
+
+for (const physical of [false, true]) {
+  test(`saves a printing-specific deck review without a physical finish (physical=${physical})`, async ({
+    page,
+  }) => {
+    const errors = await openImport(page, '#/import');
+    const printing: PrintingRecord = {
+      ...m11,
+      physical,
+      finishes: physical ? ['nonfoil'] : ['etched'],
+    };
+    await scriptCatalog(page, { cards: [boltCard], printings: [printing] });
+    await settle(page, 'settleSessions', (await requested(page, 'sessions')).id, [session()]);
+    await settle(page, 'settleEntries', (await requested(page, 'entries')).id, {
+      session: session(),
+      entries: [entry({ finish: null })],
+    });
+    await page.fill('#import-new-deck', 'Burn');
+    await page.click('#import-create-deck');
+    const creation = await requested(page, 'createdTags');
+    const burn: Tag = { tagId: 'burn', kind: 'deck', label: 'Burn', system: false, revision: 1 };
+    await control(page, 'scriptDestinationTags', [burn]);
+    await settle(page, 'settleCreateTag', creation.id, burn);
+    await expect(page.locator('#import-destination')).toHaveValue('tag:burn');
+    await expect(page.locator('#import-review-finish-entry-1')).toHaveCount(0);
+    await page.fill('#import-review-quantity-entry-1', '3');
+    await page.click('#import-review-save-entry-1');
+    const review = await requested(page, 'review');
+    expect(review.arguments).toMatchObject({
+      cardId: boltCard.cardId,
+      printingId: m11.printingId,
+      finish: null,
+      quantity: 3,
+    });
+    const reviewed = entry({ finish: null, quantity: 3, revision: 4 });
+    await settle(page, 'settleReview', review.id, {
+      entry: reviewed,
+      session: session({ revision: 5 }),
+    });
+    await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+      session: session({ revision: 5 }),
+      entries: [reviewed],
+    });
+    await selectAllRendered(page, '#import-pending');
+    await page.click('#import-pending [data-ui-tool="confirm-import"]');
+    expect((await requested(page, 'confirm')).arguments).toMatchObject({
+      destination: { kind: 'tag', tagId: 'burn' },
+      entries: [{ entryId: 'entry-1', expectedRevision: 4 }],
+    });
+    expect(errors).toEqual([]);
+  });
+}
+
+test('restores the deck destination the review chose on the way back', async ({ page }) => {
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  await control(page, 'scriptDestinationTags', []);
+  await settle(page, 'settleSessions', (await requested(page, 'sessions')).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries')).id, {
+    session: session(),
+    entries: [entry()],
+  });
+
+  // The owner names the deck the list is accepted into without leaving the review.
+  await page.fill('#import-new-deck', 'Burn');
+  await page.click('#import-create-deck');
+  const creation = await requested<Record<string, unknown>>(page, 'createdTags');
+  const burn: Tag = {
+    tagId: 'tag-burn',
+    kind: 'deck',
+    label: 'Burn',
+    system: false,
+    revision: 1,
+  };
+  await control(page, 'scriptDestinationTags', [burn]);
+  await settle(page, 'settleCreateTag', creation.id, burn);
+  await expect(page.locator('#import-destination')).toHaveValue(`tag:${burn.tagId}`);
+
+  // Leaving the review and returning applies the destination the owner chose; the selected deck is
+  // never silently replaced by the ownership action.
+  await control(page, 'navigate', { page: 'home' });
+  await control(page, 'back');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-destination')).toHaveValue(`tag:${burn.tagId}`);
+  await expect(page.locator('#import-destination option:checked')).toHaveText('Deck: Burn');
+  expect(errors).toEqual([]);
+});
+
+test('repeats a failed destination read through refresh and keeps the chosen deck', async ({
+  page,
+}) => {
+  const errors = await openImport(page, '#/import', {
+    failDestinationReads: { code: 'unavailable', message: 'Offline' },
+  });
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  await settle(page, 'settleSessions', (await requested(page, 'sessions')).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries')).id, {
+    session: session(),
+    entries: [entry()],
+  });
+
+  // A destination read that failed stays visible beside the control that repeats it, and as the
+  // shell's notice with the same refresh.
+  await expect(page.locator('#import-destination-status')).toContainText(
+    'The destinations could not be read: Offline',
+  );
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:import-destinations"]');
+  await expect(notice).toContainText('The destinations could not be read');
+
+  const burn: Tag = {
+    tagId: 'tag-burn',
+    kind: 'deck',
+    label: 'Burn',
+    system: false,
+    revision: 1,
+  };
+  await control(page, 'scriptDestinationFailure', null);
+  await control(page, 'scriptDestinationTags', [burn]);
+  await page.click('#import-refresh');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-destination option[value="tag:tag-burn"]')).toHaveCount(1);
+  await expect(page.locator('#import-destination-status')).toHaveText('');
+  await expect(notice).toHaveCount(0);
+
+  // The deck the owner selected stays selected while the read it needs fails again.
+  await page.selectOption('#import-destination', `tag:${burn.tagId}`);
+  await control(page, 'scriptDestinationFailure', { code: 'unavailable', message: 'Offline' });
+  await page.click('#import-refresh');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 2)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 2)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-destination')).toHaveValue(`tag:${burn.tagId}`);
+  await expect(page.locator('#import-destination-status')).toContainText(
+    'The destinations could not be read',
+  );
+
+  // The next successful read presents a destination added since and keeps the chosen one.
+  const swamp: Tag = {
+    tagId: 'tag-swamp',
+    kind: 'deck',
+    label: 'Swamp',
+    system: false,
+    revision: 1,
+  };
+  await control(page, 'scriptDestinationFailure', null);
+  await control(page, 'scriptDestinationTags', [burn, swamp]);
+  await page.click('#import-refresh');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 3)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 3)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-destination option[value="tag:tag-swamp"]')).toHaveCount(1);
+  await expect(page.locator('#import-destination')).toHaveValue(`tag:${burn.tagId}`);
   expect(errors).toEqual([]);
 });
 
@@ -554,7 +924,7 @@ test('reads further printing pages of a review search and saves an exact printin
   await page.click('#import-printing-find-entry-1');
   const search = await requested<Record<string, unknown>>(page, 'searches');
   await settle(page, 'settleSearch', search.id, searchSlice([m11], 'printing-page-2'));
-  const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
+  const picker = page.locator('[data-ui-import-picker="pending:entry-1"]');
   await expect(picker.locator('[data-ui-entry]')).toHaveCount(1);
 
   // The exact printing is beyond the first page: the picker offers the continuation of the rest,
@@ -609,7 +979,7 @@ test('reports an indexing printing search instead of offering no printing', asyn
     revisions: null,
   });
 
-  const picker = page.locator('[data-ui-import-printing-picker="pending:entry-capture"]');
+  const picker = page.locator('[data-ui-import-picker="pending:entry-capture"]');
   await expect(picker.locator('[data-ui-status]')).toHaveText(
     'The search results are still being indexed.',
   );
@@ -652,7 +1022,7 @@ test('recovers a lost confirmation through its recorded operation outcome', asyn
 
   await expect(page.locator('#import-review-status')).toHaveText(
     'Confirmed: 1 physical copy created. This confirmation had already been recorded; the ' +
-      'copies it created are listed.',
+      'records it reported are listed.',
   );
   const afterRecovery = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
   await settle(page, 'settleSessions', afterRecovery.id, []);
@@ -1278,8 +1648,8 @@ test('recovers a lost confirmation whose pending entries are gone', async ({ pag
     },
   });
   await expect(page.locator('#import-review-status')).toHaveText(
-    'Confirmed: 1 physical copy created. This confirmation had already been recorded; the copies ' +
-      'it created are listed.',
+    'Confirmed: 1 physical copy created. This confirmation had already been recorded; the records ' +
+      'it reported are listed.',
   );
   // The established outcome ends the notice of the confirmation it resolved.
   await expect(notice).toHaveCount(0);
@@ -1318,8 +1688,8 @@ test('recovers the confirmation a restored page kept', async ({ page }) => {
     },
   });
   await expect(page.locator('#import-review-status')).toHaveText(
-    'Confirmed: 1 physical copy created. This confirmation had already been recorded; the copies ' +
-      'it created are listed.',
+    'Confirmed: 1 physical copy created. This confirmation had already been recorded; the records ' +
+      'it reported are listed.',
   );
   const listing = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
   await settle(page, 'settleSessions', listing.id, []);
@@ -1443,7 +1813,7 @@ for (const obsolete of ['success', 'failure', 'edited query', 'changed session']
     await page.fill('#import-printing-query-entry-1', 'older');
     await page.click('#import-printing-find-entry-1');
     const older = await requested(page, 'searches');
-    const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
+    const picker = page.locator('[data-ui-import-picker="pending:entry-1"]');
     await page.fill('#import-printing-query-entry-1', 'newer');
 
     if (obsolete === 'changed session') {
@@ -1456,9 +1826,7 @@ for (const obsolete of ['success', 'failure', 'edited query', 'changed session']
         entries: [entry({ entryId: 'other', sessionId: 'capture' })],
       });
       await settle(page, 'settleSearch', older.id, searchPage([m10]));
-      await expect(page.locator('[data-ui-import-printing-picker="pending:entry-1"]')).toHaveCount(
-        0,
-      );
+      await expect(page.locator('[data-ui-import-picker="pending:entry-1"]')).toHaveCount(0);
       await page.selectOption('#import-session', 'manual');
       const back = await requested(page, 'entries', 2);
       await settle(page, 'settleEntries', back.id, { session: session(), entries: [entry()] });
@@ -3302,9 +3670,9 @@ test('releases replaced import editor controls while preserving drafts and selec
       (await requested(page, 'searches', index - 1)).id,
       searchSlice([m10], null),
     );
-    await expect(page.locator('[data-ui-import-printing-picker] [data-ui-entry]')).toHaveCount(1);
+    await expect(page.locator('[data-ui-import-picker] [data-ui-entry]')).toHaveCount(1);
     expect(await observers()).toBe(baseline + 1);
-    await page.locator('[data-ui-import-printing-picker]').evaluate((picker) => {
+    await page.locator('[data-ui-import-picker]').evaluate((picker) => {
       (globalThis as unknown as TrackedEditors).retiredEditors.push(new WeakRef(picker));
     });
     await page.locator('[data-ui-import-editor]').evaluate((editor) => {
@@ -3389,7 +3757,7 @@ test('keeps pending selection and paging independent of its nested printing pick
     (await requested(page, 'searches')).id,
     searchSlice([m11], 'printing-next'),
   );
-  const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
+  const picker = page.locator('[data-ui-import-picker="pending:entry-1"]');
   await picker.locator('[data-ui-select]').check();
   await picker.getByRole('button', { name: 'Clear selection' }).click();
   await expect(parentSelection).toBeChecked();
@@ -3418,7 +3786,7 @@ test('rejects ambiguous review choices and applies cached choices to the refresh
     (await requested(page, 'searches')).id,
     searchSlice([m10, m11], null),
   );
-  const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
+  const picker = page.locator('[data-ui-import-picker="pending:entry-1"]');
   await chooseImportPrinting(page, 'entry-1', m10.printingId);
   await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
   await page.click('#import-refresh');
@@ -3442,7 +3810,7 @@ test('rejects ambiguous review choices and applies cached choices to the refresh
   await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
   expect(await control<unknown[]>(page, 'review')).toHaveLength(0);
   await picker.locator(`[data-ui-select="printing:${m10.printingId}"]`).uncheck();
-  await picker.locator('[data-ui-tool="choose-printing"]').click();
+  await picker.locator('[data-ui-tool="choose-entry"]').click();
   await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M11 149 · en');
   await page.click('#import-printing-find-entry-1');
   await settle(
@@ -3502,6 +3870,110 @@ test('saves the chosen printing while its catalog lookup is pending', async ({ p
   expect(errors).toEqual([]);
 });
 
+test('saves the chosen printing with the identity of its own card', async ({ page }) => {
+  // The entry names another card than the printing the owner now chooses: the review must quote
+  // the printing's own card, however long its lookup takes.
+  const errors = await openPendingReview(page, [
+    entry({ cardId: 'card-other', printingId: m11.printingId, finish: 'nonfoil' }),
+  ]);
+  await page.fill('#import-printing-query-entry-1', 'Bolt');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchSlice([m10], null),
+  );
+  const reads = (await control<unknown[]>(page, 'catalogRequests')).length;
+  await control(page, 'scriptCatalog', null);
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  const lookup = await requested(page, 'catalogRequests', reads);
+  // Save resolves the printing it must quote while the earlier enrichment read stays unanswered.
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11, m10] });
+  await page.click('#import-review-save-entry-1');
+  const review = await requested<Record<string, unknown>>(page, 'review');
+  expect(review.arguments).toMatchObject({
+    cardId: boltCard.cardId,
+    printingId: m10.printingId,
+    finish: 'nonfoil',
+  });
+  // The stored review comes back authoritative, carrying the quantity this confirmation read.
+  await settle(page, 'settleReview', review.id, {
+    entry: entry({
+      cardId: boltCard.cardId,
+      printingId: m10.printingId,
+      finish: 'nonfoil',
+      quantity: 7,
+      revision: 4,
+    }),
+    session: session({ revision: 5 }),
+  });
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session({ revision: 5 }),
+    entries: [
+      entry({
+        cardId: boltCard.cardId,
+        printingId: m10.printingId,
+        finish: 'nonfoil',
+        quantity: 7,
+        revision: 4,
+      }),
+    ],
+  });
+  await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('7');
+  await settle(page, 'settleCatalog', lookup.id, {});
+  expect(errors).toEqual([]);
+});
+
+test('clears a saved review draft the resolved printing identity belongs to', async ({ page }) => {
+  // An entry that names no identity resolves through a printing choice: the saved draft leaves
+  // with its own submission instead of hiding the review the provider now holds.
+  const errors = await openPendingReview(page, [
+    entry({ cardId: null, printingId: null, finish: null, quantity: 1 }),
+  ]);
+  await page.fill('#import-printing-query-entry-1', 'Bolt');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchSlice([m10], null),
+  );
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await page.click('#import-review-save-entry-1');
+  const review = await requested<Record<string, unknown>>(page, 'review');
+  expect(review.arguments).toMatchObject({
+    cardId: boltCard.cardId,
+    printingId: m10.printingId,
+    finish: 'nonfoil',
+  });
+  await settle(page, 'settleReview', review.id, {
+    entry: entry({
+      cardId: boltCard.cardId,
+      printingId: m10.printingId,
+      finish: 'nonfoil',
+      quantity: 7,
+      revision: 4,
+    }),
+    session: session({ revision: 5 }),
+  });
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session({ revision: 5 }),
+    entries: [
+      entry({
+        cardId: boltCard.cardId,
+        printingId: m10.printingId,
+        finish: 'nonfoil',
+        quantity: 7,
+        revision: 4,
+      }),
+    ],
+  });
+  await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('7');
+  expect(errors).toEqual([]);
+});
+
 test('keeps nested printing picker focus when a review save refreshes its parent', async ({
   page,
 }) => {
@@ -3549,7 +4021,7 @@ for (const superseded of [false, true]) {
       (await requested(page, 'searches')).id,
       searchSlice([m10, m11], null),
     );
-    const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
+    const picker = page.locator('[data-ui-import-picker="pending:entry-1"]');
     await expect(picker.locator('[data-ui-entry]')).toHaveCount(2);
     const reads = (await control<unknown[]>(page, 'catalogRequests')).length;
     await control(page, 'scriptCatalog', null);

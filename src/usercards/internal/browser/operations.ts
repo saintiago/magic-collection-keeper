@@ -33,7 +33,7 @@
  * account.
  */
 
-import type { CopyId, ImportSessionId, TagId } from '../model.js';
+import type { CopyId, ImportDestination, ImportSessionId, TagId } from '../model.js';
 import type {
   AttachImportCandidatesInput,
   CaptureStageResult,
@@ -179,7 +179,7 @@ export interface UserCardsBrowserClient {
     input: DiscardImportSessionInput,
     signal?: AbortSignal,
   ): Promise<ImportSessionChange>;
-  /** Confirms reviewed entries under one operation identity, creating their copies. */
+  /** Confirms reviewed entries under one operation identity and explicit destination. */
   confirmImport(input: ConfirmImportInput, signal?: AbortSignal): Promise<ImportConfirmationResult>;
   /** The recorded outcome of one operation identity, or its explicit absence. */
   recoverImportOperation(
@@ -206,6 +206,12 @@ export type UserCardsSourceImportRequest =
 /** One confirmation a browser submits, under the operation identity the facade owns. */
 export interface UserCardsConfirmationRequest {
   readonly sessionId: ImportSessionId;
+  /**
+   * Explicit destination the confirmation applies: the tag whose reviewed associations it creates
+   * or updates, or the ownership action that creates physical copies
+   * (docs/user-cards.md#import-and-capture-state).
+   */
+  readonly destination: ImportDestination;
   readonly entries: readonly ConfirmImportInput['entries'][number][];
 }
 
@@ -252,8 +258,9 @@ export type UserCardsOperationOutcome<Record> =
   | { readonly state: 'unknown'; readonly failure: UserCardsOperationFailure | null };
 
 /**
- * One confirmation's committed outcome: the receipt that names its copies and whether the
- * provider returned the recorded outcome instead of committing the request again.
+ * One confirmation's committed outcome: the receipt that names the associations or copies its
+ * destination produced and whether the provider returned the recorded outcome instead of
+ * committing the request again.
  */
 export interface UserCardsConfirmationOutcome extends ImportReceipt {
   readonly replayed: boolean;
@@ -1501,14 +1508,29 @@ function associationChange(result: AssociationChangeResult): UserCardsChange {
   };
 }
 
-/** One committed confirmation: the created copies and the import they leave. */
+/**
+ * One committed confirmation: the records its destination created or updated and the import they
+ * leave. A tag destination reports the associations it recorded under the association scope, so
+ * consumers reload the membership and quantities the confirmation changed rather than a copy
+ * scope that never changed (docs/user-cards.md#browser-operation-lifecycle).
+ */
 function confirmedChange(receipt: ImportReceipt): UserCardsChange {
-  return {
-    scope: 'copies',
-    records: receipt.copies.map((copy) => ({ kind: 'copy', copyId: copy.copyId })),
-    imports: [receipt.sessionId],
-    position: receipt.publicationPosition,
-  };
+  return receipt.destination.kind === 'tag'
+    ? {
+        scope: 'associations',
+        records: receipt.associations.map((association) => ({
+          kind: 'association',
+          associationId: association.associationId,
+        })),
+        imports: [receipt.sessionId],
+        position: receipt.publicationPosition,
+      }
+    : {
+        scope: 'copies',
+        records: receipt.copies.map((copy) => ({ kind: 'copy', copyId: copy.copyId })),
+        imports: [receipt.sessionId],
+        position: receipt.publicationPosition,
+      };
 }
 
 /** One committed pending-import change: the import whose entries may have changed. */
@@ -1519,7 +1541,7 @@ function importChange(sessionId: ImportSessionId): UserCardsChange {
 /** The failure one confirmation reports when the provider records no outcome for it. */
 const confirmationAbsent: UserCardsOperationFailure = {
   code: 'not-found',
-  message: 'This confirmation is not recorded; no copies were created.',
+  message: 'This confirmation is not recorded; nothing was created.',
 };
 
 /**
@@ -1647,9 +1669,14 @@ function captureIdentity(input: StageCaptureInput): string {
   return `capture ${input.sessionId} ${input.captureId}`;
 }
 
-/** The identity of one confirmation: the import session and the entries it covers. */
+/** The identity of one confirmation: the import session, the destination and the entries. */
 function confirmationIdentity(input: UserCardsConfirmationRequest): string {
-  return `confirmation ${input.sessionId} ${input.entries.map((entry) => entry.entryId).join(' ')}`;
+  const destination =
+    input.destination.kind === 'tag' ? `tag ${input.destination.tagId}` : 'ownership';
+  return (
+    `confirmation ${input.sessionId} ${destination} ` +
+    input.entries.map((entry) => entry.entryId).join(' ')
+  );
 }
 
 /** One stored attempt as it is kept for a reload. */
@@ -1809,8 +1836,27 @@ function readCapture(value: unknown): StageCaptureInput | null {
 /** One confirmation input, or null when the stored value is not one. */
 function readConfirmation(value: unknown): UserCardsConfirmationRequest | null {
   const record = readObject(value);
-  return record !== null && isText(record.sessionId) && Array.isArray(record.entries)
-    ? (value as UserCardsConfirmationRequest)
+  const destination = readDestination(record?.destination);
+  return record !== null &&
+    isText(record.sessionId) &&
+    destination !== null &&
+    Array.isArray(record.entries)
+    ? {
+        sessionId: record.sessionId,
+        destination,
+        entries: record.entries as UserCardsConfirmationRequest['entries'],
+      }
+    : null;
+}
+
+/** One explicit confirmation destination, or null when the value is not one. */
+function readDestination(value: unknown): ImportDestination | null {
+  const record = readObject(value);
+  if (record?.kind === 'ownership') {
+    return { kind: 'ownership' };
+  }
+  return record?.kind === 'tag' && isText(record.tagId)
+    ? { kind: 'tag', tagId: record.tagId }
     : null;
 }
 

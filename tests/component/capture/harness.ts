@@ -187,6 +187,7 @@ export function entry(overrides: Partial<ImportEntry> = {}): ImportEntry {
     sessionId: 'import-1',
     position: 1,
     state: 'pending',
+    cardId: 'card-bolt',
     printingId: 'printing-bolt',
     finish: 'nonfoil',
     condition: null,

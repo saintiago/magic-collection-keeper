@@ -47,6 +47,7 @@ function entry(overrides: Partial<ImportEntry> = {}): ImportEntry {
     sessionId: 'import-1',
     position: 1,
     state: 'pending',
+    cardId: 'card-1',
     printingId: 'printing-1',
     finish: 'nonfoil',
     condition: null,
@@ -259,6 +260,7 @@ describe('UserCards browser operations', () => {
             sessionId: 'import-1',
             sourceKind: 'pasted-list',
             sourceId: 'import-1',
+            destination: { kind: 'ownership' },
             publicationPosition: '7',
             copies: [
               {
@@ -269,6 +271,7 @@ describe('UserCards browser operations', () => {
                 revision: 1,
               },
             ],
+            associations: [],
           },
         };
       },
@@ -281,6 +284,7 @@ describe('UserCards browser operations', () => {
     account.subscribe((change) => changes.push(change));
 
     const confirmation = account.confirmImport({
+      destination: { kind: 'ownership' } as const,
       sessionId: 'import-1',
       entries: [{ entryId: 'entry-1', expectedRevision: 1 }],
     });
@@ -305,6 +309,57 @@ describe('UserCards browser operations', () => {
     expect(account.retained()).toEqual([]);
   });
 
+  it('publishes the recorded associations of a tag confirmation as an association invalidation', async () => {
+    const changes: UserCardsChange[] = [];
+    const client = scriptedClient({
+      confirmImport: async (input) => ({
+        privateRevision: 'revision-2',
+        replayed: false,
+        operationId: input.operationId,
+        sessionId: input.sessionId,
+        sourceKind: 'moxfield',
+        sourceId: 'deck-1',
+        destination: input.destination,
+        publicationPosition: '9',
+        copies: [],
+        associations: [
+          {
+            associationId: 'association-1',
+            tagId: 'tag-burn',
+            targetLevel: 'card' as const,
+            targetId: 'card-bolt',
+            quantity: 4,
+            revision: 1,
+          },
+        ],
+      }),
+    });
+    const account = createUserCardsOperations({
+      client,
+      storage: null,
+      identity: identities(),
+    }).account('alice');
+    account.subscribe((change) => changes.push(change));
+
+    const confirmation = account.confirmImport({
+      sessionId: 'import-1',
+      destination: { kind: 'tag', tagId: 'tag-burn' },
+      entries: [{ entryId: 'entry-1', expectedRevision: 1 }],
+    });
+    expect((await confirmation.observe()).state).toBe('committed');
+
+    // A tag destination reports the associations it recorded under the association scope; a copy
+    // scope would report a change this confirmation never made.
+    expect(changes).toEqual([
+      {
+        scope: 'associations',
+        records: [{ kind: 'association', associationId: 'association-1' }],
+        imports: ['import-1'],
+        position: '9',
+      },
+    ]);
+  });
+
   it('leaves a confirmation unknown, without a speculative invalidation, when the receipt cannot be read', async () => {
     const changes: UserCardsChange[] = [];
     const client = scriptedClient({
@@ -319,6 +374,7 @@ describe('UserCards browser operations', () => {
     account.subscribe((change) => changes.push(change));
 
     const confirmation = account.confirmImport({
+      destination: { kind: 'ownership' } as const,
       sessionId: 'import-1',
       entries: [{ entryId: 'entry-1', expectedRevision: 1 }],
     });
@@ -403,7 +459,7 @@ describe('UserCards browser operations', () => {
     expect(account.constraints.batch.stageEntries).toBe(50);
     expect(account.constraints.batch.confirmEntries).toBe(50);
     expect(account.constraints.quantity.copy).toBe(100);
-    expect(account.constraints.quantity.association).toBe(1000);
+    expect(account.constraints.quantity.association).toBe(1_000_000);
     expect(account.constraints.text.sourceText).toBe(128 * 1024);
     expect(account.constraints.pages.imports).toEqual({ default: 50, min: 1, max: 100 });
 
@@ -804,6 +860,7 @@ describe('UserCards browser operations', () => {
       identity: identities(),
     }).account('alice');
     const confirmation = (expectedRevision: number) => ({
+      destination: { kind: 'ownership' } as const,
       sessionId: 'import-1',
       entries: [{ entryId: 'entry-1', expectedRevision }],
     });
@@ -863,6 +920,7 @@ describe('UserCards browser operations', () => {
     }).account('alice');
 
     const confirmation = account.confirmImport({
+      destination: { kind: 'ownership' } as const,
       sessionId: 'import-1',
       entries: [{ entryId: 'entry-1', expectedRevision: 1 }],
     });
@@ -876,6 +934,7 @@ describe('UserCards browser operations', () => {
       sessionId: 'import-1',
       sourceKind: 'pasted-list',
       sourceId: 'import-1',
+      destination: { kind: 'ownership' },
       publicationPosition: '5',
       copies: [
         {
@@ -886,6 +945,7 @@ describe('UserCards browser operations', () => {
           revision: 1,
         },
       ],
+      associations: [],
     });
 
     const observed = await confirmation.observe();

@@ -12,6 +12,7 @@ import type { Finish, PrintingRecord } from '../../../catalog/index.js';
 import type { CardListPendingRecord, CardListTarget } from '../../../card-list/index.js';
 import type {
   CopyCondition,
+  ImportDestination,
   ImportSourceLine,
   ImportStageResult,
   ImportSession,
@@ -19,6 +20,7 @@ import type {
   SourceImportOutcome,
   SourceImportResult,
   SourceImportRow,
+  Tag,
 } from '../../../usercards/index.js';
 import type {
   UserCardsRetainedAttempt,
@@ -32,6 +34,7 @@ import { readState } from '../../shared/state.js';
 import { uiImportSourceLabel, type UiImportLine } from './import-edits.js';
 import { uiCatalogFinishes, uiFinishLabel } from '../../shared/vocabulary.js';
 import { uiCopyConditions } from './copy-edits.js';
+import { uiAssociationLevelsByTagKind, uiTagKindLabel, type UiTagKind } from './tag-edits.js';
 import type { UiChangeCommit } from './failure.js';
 import type { UiOperationOutcome } from './operations.js';
 
@@ -50,6 +53,10 @@ export type UiSourceFormat = UserCardsSourceImportRequest['format'];
 /** Unsaved review input of one entry, kept outside the rendered controls. */
 export interface UiReviewDraft {
   query: string;
+  /** Card-name search the review used to find the entry's playable identity. */
+  cardQuery: string;
+  /** Reviewed card identity: the entry's playable identity, or empty while unresolved. */
+  cardId: string;
   printingId: string;
   finish: string;
   condition: string;
@@ -274,6 +281,8 @@ export function readReviewDrafts(value: unknown): Map<string, UiReviewDraft> {
     }
     drafts.set(entryId, {
       query: readDraftValue(draft.query, UI_LIMITS.catalogQuery) ?? '',
+      cardQuery: readDraftValue(draft.cardQuery, UI_LIMITS.catalogQuery) ?? '',
+      cardId: readDraftValue(draft.cardId, UI_LIMITS.entryKey) ?? '',
       printingId: readDraftValue(draft.printingId, UI_LIMITS.entryKey) ?? '',
       finish: readDraftValue(draft.finish, 16) ?? '',
       condition: readDraftValue(draft.condition, 8) ?? '',
@@ -417,9 +426,69 @@ export function sourceLineText(line: ImportSourceLine): string {
   return parts.length === 0 ? 'the parsed source line' : parts.join(' · ');
 }
 
-/** One confirmation's receipt as the review presents it; a recovered outcome stays explicit. */
-export function confirmationMessage(copies: number, recovered: string | null): string {
-  const line = `Confirmed: ${copies} ${copies === 1 ? 'physical copy' : 'physical copies'} created.`;
+/** Destination value the review presents for the explicit ownership action. */
+export const ownershipDestinationValue = 'ownership';
+
+/**
+ * The destination control value one history entry kept, or the explicit ownership action when it
+ * kept none. A retained deck destination stays the value it named, so returning to the review
+ * restores the owner's intention instead of presenting ownership for it; the control shows it as
+ * unavailable until the account lists that tag again (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
+ */
+export function readDestinationChoice(value: unknown): string {
+  return typeof value === 'string' && value.length > 0 && value.length <= UI_LIMITS.entryKey
+    ? value
+    : ownershipDestinationValue;
+}
+
+/** Control value one confirmation destination is presented under. */
+export function destinationValue(destination: ImportDestination): string {
+  return destination.kind === 'ownership' ? ownershipDestinationValue : `tag:${destination.tagId}`;
+}
+
+/**
+ * The destination one control value names, or null when it names none the review presents. A tag
+ * destination is only readable while the account still lists that tag.
+ */
+export function readDestination(value: string, tags: readonly Tag[]): ImportDestination | null {
+  if (value === ownershipDestinationValue) {
+    return { kind: 'ownership' };
+  }
+  const tagId = value.startsWith('tag:') ? value.slice('tag:'.length) : '';
+  return tagId.length > 0 && tags.some((tag) => tag.tagId === tagId)
+    ? { kind: 'tag', tagId }
+    : null;
+}
+
+/** Tags one confirmation can apply reviewed card or printing associations to. */
+export function importDestinationTags(tags: readonly Tag[]): readonly Tag[] {
+  return tags.filter((tag) => {
+    const levels = uiAssociationLevelsByTagKind[tag.kind as UiTagKind];
+    return levels !== undefined && levels.includes('card');
+  });
+}
+
+/** One destination tag as the review presents it. */
+export function importDestinationLabel(tag: Tag): string {
+  return `${uiTagKindLabel(tag.kind as UiTagKind)}: ${tag.label}`;
+}
+
+/**
+ * One confirmation's recorded outcome as the review presents it: a tag destination reports the
+ * associations it created or grew, an ownership action the copies it created. A recovered outcome
+ * stays explicit.
+ */
+export function confirmationMessage(
+  associations: number,
+  copies: number,
+  recovered: string | null,
+): string {
+  const line =
+    associations > 0
+      ? `Confirmed: ${associations} ${
+          associations === 1 ? 'association' : 'associations'
+        } recorded in the destination tag.`
+      : `Confirmed: ${copies} ${copies === 1 ? 'physical copy' : 'physical copies'} created.`;
   return recovered === null ? line : `${line} ${recovered}`;
 }
 
@@ -457,10 +526,16 @@ export function inBatches<Value>(
   return batches;
 }
 
-/** Whether one draft still holds exactly the reviewed input a save submitted. */
+/**
+ * Whether one draft still holds exactly the reviewed input a save submitted. A printing review
+ * derives its card identity from the printing it names, so the draft's own card identity always
+ * follows the printing a save established instead of the value the snapshot was taken with.
+ */
 export function sameReviewDraft(draft: UiReviewDraft, submitted: Readonly<UiReviewDraft>): boolean {
   return (
     draft.query === submitted.query &&
+    draft.cardQuery === submitted.cardQuery &&
+    (submitted.printingId.length > 0 || draft.cardId === submitted.cardId) &&
     draft.printingId === submitted.printingId &&
     draft.finish === submitted.finish &&
     draft.condition === submitted.condition &&

@@ -547,6 +547,50 @@ describe('usercards query surface', () => {
     ).toEqual([{ revision: '6' }]);
   });
 
+  it('publishes a deck acceptance as associations without publishing copies', async () => {
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-deck',
+      source: { kind: 'text', id: 'deck-1' },
+      entries: [{ entryId: 'line-1', quantity: 3 }],
+    });
+    const reviewed = await userCards.reviewImportEntry(alice, {
+      entryId: 'line-1',
+      expectedRevision: 1,
+      cardId: lightningBolt.cardId,
+      printingId: null,
+      finish: null,
+      condition: null,
+      quantity: 3,
+    });
+    const deck = (await userCards.createTag(alice, { kind: 'deck', label: 'Burn' })).tag;
+    const accepted = await userCards.confirmImport(alice, {
+      operationId: 'operation-deck',
+      sessionId: 'session-deck',
+      destination: { kind: 'tag', tagId: deck.tagId },
+      entries: [{ entryId: 'line-1', expectedRevision: reviewed.entry.revision }],
+    });
+    expect(accepted.copies).toEqual([]);
+
+    // The intended requirement is the published association; ownership stays untouched.
+    expect(
+      await readScoped(
+        database,
+        alice.accountId,
+        'select tag_id, target_level, target_id, quantity from usercards.associations',
+      ),
+    ).toEqual([
+      {
+        tag_id: deck.tagId,
+        target_level: 'card',
+        target_id: lightningBolt.cardId,
+        quantity: 3,
+      },
+    ]);
+    expect(await readScoped(database, alice.accountId, 'select * from usercards.copies')).toEqual(
+      [],
+    );
+  });
+
   it('keeps pending imports outside the published ownership relations', async () => {
     await userCards.stageImportEntries(alice, {
       sessionId: 'session-1',
@@ -573,6 +617,7 @@ describe('usercards query surface', () => {
     await userCards.confirmImport(alice, {
       operationId: 'operation-1',
       sessionId: 'session-1',
+      destination: { kind: 'ownership' },
       entries: [{ entryId: 'line-1', expectedRevision: 1 }],
     });
     expect(

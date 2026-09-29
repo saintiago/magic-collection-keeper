@@ -444,6 +444,9 @@ function preparePending(
         sessionId,
         position: ++session.pendingEntries,
         state: 'pending',
+        // The reviewed card identity follows the printing the target catalog publishes; an
+        // unresolved legacy printing keeps its entry unresolved.
+        cardId: row.printing_id === null ? null : (catalog.get(row.printing_id)?.cardId ?? null),
         printingId: row.printing_id,
         finish: row.finish,
         condition: row.condition === undefined || row.condition === 'UNK' ? null : row.condition,

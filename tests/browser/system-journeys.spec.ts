@@ -141,7 +141,7 @@ test('a confirmation whose response is lost recovers its recorded copies', async
     // collection holds exactly the copies that outcome names.
     await expect(page.locator('#import-review-status')).toHaveText(
       'Confirmed: 2 physical copies created. This confirmation had already been recorded; the ' +
-        'copies it created are listed.',
+        'records it reported are listed.',
     );
     expect(
       journey.calls.filter((call) => call.path.startsWith('/api/collection/imports/operations/')),

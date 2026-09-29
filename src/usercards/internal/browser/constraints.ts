@@ -77,9 +77,15 @@ export interface UserCardsConstraints {
    * rather than a request batch size.
    */
   readonly quantity: {
-    /** Physical copies one confirmed or corrected record declares. */
+    /**
+     * Physical copies one direct copy request declares. A confirmed entry carries its reviewed
+     * intended quantity instead, which the association bound below publishes.
+     */
     readonly copy: number;
-    /** Intended copies one card- or printing-level association requires. */
+    /**
+     * Intended copies one card- or printing-level association requires, and the largest reviewed
+     * quantity one pending entry carries.
+     */
     readonly association: number;
   };
   /** Text bounds one operation accepts. */

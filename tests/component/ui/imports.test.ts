@@ -44,6 +44,7 @@ function entry(overrides: Partial<ImportEntry> = {}): ImportEntry {
     sessionId: 'manual',
     position: 1,
     state: 'pending',
+    cardId: 'card-m11-149',
     printingId: 'printing-m11-149-en',
     finish: 'nonfoil',
     condition: null,
@@ -367,6 +368,7 @@ describe('import confirmation', () => {
       sessionId: 'manual',
       sourceKind: 'manual',
       sourceId: 'manual',
+      destination: { kind: 'ownership' } as const,
       copies: [
         {
           copyId: 'copy-1',
@@ -376,11 +378,13 @@ describe('import confirmation', () => {
           revision: 1,
         },
       ],
+      associations: [],
       replayed: false,
       privateRevision: 'r5',
       publicationPosition: '5',
     };
     const operation = access({ confirmImport: async () => receipt }).confirm({
+      destination: { kind: 'ownership' } as const,
       sessionId: 'manual',
       entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
     });
@@ -400,6 +404,7 @@ describe('import confirmation', () => {
           sessionId: 'manual',
           sourceKind: 'manual',
           sourceId: 'manual',
+          destination: { kind: 'ownership' } as const,
           publicationPosition: '5',
           copies: [
             {
@@ -410,9 +415,11 @@ describe('import confirmation', () => {
               revision: 1,
             },
           ],
+          associations: [],
         },
       }),
     }).confirm({
+      destination: { kind: 'ownership' } as const,
       sessionId: 'manual',
       entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
     });
@@ -428,6 +435,7 @@ describe('import confirmation', () => {
       confirmImport: () => Promise.reject(new ApplicationError('unavailable', 'Lost.')),
       recoverImportOperation: async () => ({ outcome: 'absent' }),
     }).confirm({
+      destination: { kind: 'ownership' } as const,
       sessionId: 'manual',
       entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
     });
@@ -443,6 +451,7 @@ describe('import confirmation', () => {
       confirmImport: () => Promise.reject(new ApplicationError('busy', 'Lost.')),
       recoverImportOperation: () => Promise.reject(new ApplicationError('unavailable', 'Offline.')),
     }).confirm({
+      destination: { kind: 'ownership' } as const,
       sessionId: 'manual',
       entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
     });
@@ -458,6 +467,7 @@ describe('import confirmation', () => {
       confirmImport: () => Promise.reject(new ApplicationError('invalid-request', 'Bad input.')),
       recoverImportOperation: recover,
     }).confirm({
+      destination: { kind: 'ownership' } as const,
       sessionId: 'manual',
       entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
     });
@@ -473,6 +483,7 @@ describe('import confirmation', () => {
       sessionId: 'manual',
       sourceKind: 'manual',
       sourceId: 'manual',
+      destination: { kind: 'ownership' } as const,
       publicationPosition: '5',
       copies: [
         {
@@ -483,6 +494,7 @@ describe('import confirmation', () => {
           revision: 1,
         },
       ],
+      associations: [],
     };
     const recorded = await recoverConfirmation(
       retainedConfirmation(
@@ -514,6 +526,7 @@ describe('import confirmation', () => {
     access: UiImportAccess,
   ): UserCardsOperation<'confirmImport', UserCardsConfirmationOutcome> {
     const operation = access.confirm({
+      destination: { kind: 'ownership' } as const,
       sessionId: 'manual',
       entries: [{ entryId: 'entry-1', expectedRevision: 3 }],
     });

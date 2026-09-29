@@ -91,6 +91,7 @@ function entry(): ImportEntry {
     sessionId: 'import-1',
     position: 1,
     state: 'pending',
+    cardId: 'card-1',
     printingId: 'printing-1',
     finish: 'nonfoil',
     condition: null,

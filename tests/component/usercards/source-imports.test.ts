@@ -96,7 +96,7 @@ const m10Printing = {
   physical: true,
 };
 
-/** Digital-only printing: it can never carry a physical copy or a pending entry. */
+/** Digital-only printing: it can be a pending target but never a physical copy. */
 const staPrinting = {
   printingId: 'printing-sta-109-en',
   cardId: lightningBolt.cardId,
@@ -354,6 +354,7 @@ describe('usercards source imports', () => {
   async function confirmSession(sessionId: string, operationId: string): Promise<ImportReceipt> {
     const pending = await userCards.listImportEntries(alice, { sessionId });
     return userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId,
       sessionId,
       entries: pending.entries.map((entry) => ({
@@ -422,6 +423,80 @@ describe('usercards source imports', () => {
     ]);
     expect(pending.entries.map((entry) => entry.quantity)).toEqual([4, 2]);
     expect(pending.entries.every((entry) => entry.printingId === null)).toBe(true);
+  });
+
+  it('preserves a deck requirement larger than one write batch as one intended quantity', async () => {
+    const result = await sourceImports.stageSourceImport(alice, {
+      format: 'pasted-list',
+      sessionId: 'bulk-paste',
+      text: '250 Lightning Bolt',
+    });
+    expect(result.staged).toBe(1);
+    const pending = await userCards.listImportEntries(alice, {
+      sessionId: result.session.sessionId,
+    });
+    const line = pending.entries[0];
+    expect(line?.quantity).toBe(250);
+    expect(line?.sourceLine?.declaredQuantity).toBe(250);
+
+    // Accepting the list as a deck keeps the complete requirement in one association; no
+    // transport or storage batch size caps it.
+    const reviewed = await userCards.reviewImportEntry(alice, {
+      entryId: line?.entryId as string,
+      expectedRevision: line?.revision as number,
+      cardId: lightningBolt.cardId,
+      printingId: null,
+      finish: null,
+      condition: null,
+      quantity: 250,
+    });
+    const deck = (await userCards.createTag(alice, { kind: 'deck', label: 'Bulk' })).tag;
+    const accepted = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'bulk-deck',
+      sessionId: result.session.sessionId,
+      entries: [{ entryId: reviewed.entry.entryId, expectedRevision: reviewed.entry.revision }],
+    });
+    expect(accepted.associations).toMatchObject([
+      {
+        tagId: deck.tagId,
+        targetLevel: 'card',
+        targetId: lightningBolt.cardId,
+        quantity: 250,
+      },
+    ]);
+    expect(accepted.copies).toEqual([]);
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+  });
+
+  it('keeps a source line above 1000 as its complete intended quantity', async () => {
+    // The documented acceptance scenario: a deck requirement above 1000 is a product quantity,
+    // never a request batch bound, so every supported source keeps it whole.
+    const pasted = await sourceImports.stageSourceImport(alice, {
+      format: 'pasted-list',
+      sessionId: 'past-1000-paste',
+      text: '1200 Lightning Bolt',
+    });
+    expect(pasted.staged).toBe(1);
+    const pastedLine = (
+      await userCards.listImportEntries(alice, { sessionId: pasted.session.sessionId })
+    ).entries[0];
+    expect(pastedLine?.quantity).toBe(1200);
+    expect(pastedLine?.sourceLine?.declaredQuantity).toBe(1200);
+
+    const wizards = await sourceImports.stageSourceImport(alice, {
+      format: 'wizards-precon',
+      sessionId: 'past-1000-wizards',
+      sourceId: 'wizards:mkm:deadly-disguise:regular:en',
+      reference: 'https://magic.wizards.com/en/news/feature/deadly-disguise-decklist',
+      entries: [{ name: 'Lightning Bolt', quantity: 1200 }],
+    });
+    expect(wizards.staged).toBe(1);
+    const wizardsLine = (
+      await userCards.listImportEntries(alice, { sessionId: wizards.session.sessionId })
+    ).entries[0];
+    expect(wizardsLine?.quantity).toBe(1200);
+    expect(wizardsLine?.sourceLine?.declaredQuantity).toBe(1200);
   });
 
   it('keeps each identified import as its own list and replays only that import', async () => {
@@ -504,10 +579,10 @@ describe('usercards source imports', () => {
       line: { problem: 'The catalog does not publish this printing; choose one during review.' },
     });
     expect(result.rows[2]).toMatchObject({
-      line: { problem: 'The printing is not available in the etched finish.' },
+      line: { problem: null },
     });
     expect(result.rows[3]).toMatchObject({
-      line: { problem: 'The printing is not available as a physical card.' },
+      line: { problem: null },
     });
     expect(result.rows[5]).toMatchObject({ line: { section: 'commanders', finish: 'foil' } });
     expect(result.rows[6]).toMatchObject({
@@ -520,12 +595,19 @@ describe('usercards source imports', () => {
     expect(pending.entries.map((entry) => entry.printingId)).toEqual([
       m11Printing.printingId,
       null,
-      null,
-      null,
+      m11Printing.printingId,
+      staPrinting.printingId,
       counterspellPrinting.printingId,
       m10Printing.printingId,
     ]);
-    expect(pending.entries[0]?.finish).toBe('nonfoil');
+    expect(pending.entries.map((entry) => entry.finish)).toEqual([
+      'nonfoil',
+      null,
+      'etched',
+      'nonfoil',
+      'foil',
+      'nonfoil',
+    ]);
     // Every board the deck publishes stays reviewable; only a confirmation changes ownership, so
     // the sideboard is not withheld from review.
     expect(pending.entries.map((entry) => entry.sourceLine?.section)).toEqual([

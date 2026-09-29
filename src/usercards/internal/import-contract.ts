@@ -1,7 +1,9 @@
 import { type CatalogResolver, type Finish } from '../../catalog/index.js';
 import {
+  type Association,
   type CopyCondition,
   type ImportCandidate,
+  type ImportDestination,
   type ImportEntry,
   type ImportEntryId,
   type ImportOperationId,
@@ -59,7 +61,7 @@ export interface StageImportEntryInput {
   readonly entryId: ImportEntryId;
   /** Resolved printing reference, or null while the parsed line is unresolved. */
   readonly printingId?: string | null;
-  /** Requested finish, or the printing's first offered finish when it is left open. */
+  /** Requested finish, or the first physical finish if available when it is left open. */
   readonly finish?: Finish | null;
   readonly condition?: CopyCondition | null;
   readonly quantity: number;
@@ -88,7 +90,7 @@ export interface StageCaptureInput {
   /** Stable identity of this observation; a retry returns its recorded admission decision. */
   readonly captureId: ImportEntryId;
   readonly printingId?: string | null;
-  /** Finish the pending entry starts with; the printing's first offered finish when omitted. */
+  /** Requested finish, or the first physical finish if available when omitted. */
   readonly finish?: Finish | null;
   readonly candidates?: readonly ImportCandidate[];
 }
@@ -107,8 +109,17 @@ export interface CaptureStageResult {
 export interface ReviewImportEntryInput {
   readonly entryId: ImportEntryId;
   readonly expectedRevision: number;
-  readonly printingId: string;
-  readonly finish: Finish;
+  /**
+   * Reviewed playable card identity, or null when the review names none and the entry stays
+   * unresolved. A printing review carries the printing's card identity; a card-level review is
+   * sufficient for an association destination
+   * (docs/user-cards.md#import-and-capture-state).
+   */
+  readonly cardId?: string | null;
+  /** Reviewed printing reference, or null when the entry is reviewed at card level. */
+  readonly printingId: string | null;
+  /** Optional reviewed finish; physical eligibility is required only for ownership confirmation. */
+  readonly finish: Finish | null;
   readonly condition: CopyCondition | null;
   readonly quantity: number;
 }
@@ -134,19 +145,27 @@ export interface DiscardImportSessionInput {
   readonly expectedRevision: number;
 }
 
-/** One recorded confirmation: the operation, its acquisition source and the copies it created. */
+/** One recorded confirmation: the operation, its destination and the records it created or updated. */
 export interface ImportReceipt {
   readonly operationId: ImportOperationId;
   readonly sessionId: ImportSessionId;
   readonly sourceKind: string;
   readonly sourceId: string;
+  /** Explicit destination the recorded confirmation applied. */
+  readonly destination: ImportDestination;
   /**
-   * Durable publication position that made the recorded copies visible. A recovered or replayed
-   * outcome reports the position its acquisition was published at, not the account's current one
+   * Durable publication position that made the recorded outcome visible. A recovered or replayed
+   * outcome reports the position its records were published at, not the account's current one
    * (docs/user-cards.md#query-surface).
    */
   readonly publicationPosition: string;
+  /** Copies an ownership destination created, ordered by copy identity; empty for a tag. */
   readonly copies: readonly PhysicalCopy[];
+  /**
+   * Associations a tag destination created or updated, ordered by association identity; empty for
+   * an ownership destination.
+   */
+  readonly associations: readonly Association[];
 }
 
 export interface ConfirmImportEntryInput {
@@ -158,6 +177,13 @@ export interface ConfirmImportInput {
   /** Operation identity scoped to the account, so a retry refers to the same action. */
   readonly operationId: ImportOperationId;
   readonly sessionId: ImportSessionId;
+  /**
+   * Explicit destination of this confirmation: the tag whose reviewed card/printing associations
+   * it creates or updates, or the ownership action that creates individual copies. It is part of
+   * the replay input, so a retry cannot change it under the same operation identity
+   * (docs/user-cards.md#import-and-capture-state).
+   */
+  readonly destination: ImportDestination;
   readonly entries: readonly ConfirmImportEntryInput[];
 }
 

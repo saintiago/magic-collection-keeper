@@ -150,6 +150,18 @@ export function associationsFromRows(rows: readonly UserCardsSqlRow[]): Associat
     .sort((left, right) => left.associationId.localeCompare(right.associationId));
 }
 
+/** Stored JSON form of one association, matching `associationJsonSchema`. */
+export function associationPayload(association: Association): string {
+  return JSON.stringify({
+    association_id: association.associationId,
+    tag_id: association.tagId,
+    target_level: association.targetLevel,
+    target_id: association.targetId,
+    quantity: association.quantity,
+    revision: association.revision,
+  });
+}
+
 export const importSessionJsonSchema = z.object({
   session_id: z.string().min(1).max(identifierLength),
   source_kind: z.string().min(1).max(identifierLength),
@@ -196,7 +208,7 @@ export const importSourceLineJsonSchema = z.object({
   collector_number: z.string().min(1).max(identifierLength).nullable(),
   language: z.string().min(1).max(identifierLength).nullable(),
   finish: z.enum(finishes).nullable(),
-  declared_quantity: z.number().int().min(1).max(USERCARDS_LIMITS.maxCreateQuantity),
+  declared_quantity: z.number().int().min(1).max(USERCARDS_LIMITS.maxAssociationQuantity),
   problem: z.string().min(1).max(USERCARDS_LIMITS.maxSourceProblemLength).nullable(),
 });
 
@@ -234,10 +246,11 @@ export const importEntryJsonSchema = z.object({
   session_id: z.string().min(1).max(identifierLength),
   position: z.number().int().min(1),
   state: z.enum(importEntryStates),
+  card_id: z.string().min(1).max(identifierLength).nullable(),
   printing_id: z.string().min(1).max(identifierLength).nullable(),
   finish: z.enum(finishes).nullable(),
   condition: z.enum(copyConditions).nullable(),
-  quantity: z.number().int().min(1).max(USERCARDS_LIMITS.maxCreateQuantity),
+  quantity: z.number().int().min(1).max(USERCARDS_LIMITS.maxAssociationQuantity),
   source_line: importSourceLineJsonSchema.nullable(),
   revision: z.number().int().min(1),
 });
@@ -247,6 +260,7 @@ export const importEntryPayloadSql = `json_build_object(
     'session_id', session_id,
     'position', position,
     'state', state,
+    'card_id', card_id,
     'printing_id', printing_id,
     'finish', finish,
     'condition', condition,
@@ -300,6 +314,7 @@ export function importEntriesFromRows(
         sessionId: json.session_id,
         position: json.position,
         state: json.state,
+        cardId: json.card_id,
         printingId: json.printing_id,
         finish: json.finish,
         condition: json.condition,

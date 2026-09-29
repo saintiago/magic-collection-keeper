@@ -291,6 +291,7 @@ describe('usercards publication', () => {
 
     // Confirming publishes the copies the import created, and nothing about the pending session.
     const confirmed = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-1',
       sessionId: 'session-1',
       entries: [{ entryId: 'line-1', expectedRevision: reviewed.entry.revision }],
@@ -324,6 +325,7 @@ describe('usercards publication', () => {
       receipt: { publicationPosition: confirmed.publicationPosition },
     });
     const replay = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-2',
       sessionId: 'session-1',
       entries: [{ entryId: 'line-1', expectedRevision: reviewed.entry.revision }],

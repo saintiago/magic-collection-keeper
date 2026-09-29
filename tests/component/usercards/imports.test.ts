@@ -63,7 +63,7 @@ const m10Printing = {
   physical: true,
 };
 
-/** Digital-only printing: it cannot carry a physical copy or a pending entry. */
+/** Digital-only printing: it cannot carry a physical copy, but can be a reviewed target. */
 const staPrinting = {
   printingId: 'printing-sta-109-en',
   cardId: lightningBolt.cardId,
@@ -344,6 +344,38 @@ describe('usercards pending imports', () => {
     );
   });
 
+  it.each([
+    { printing: staPrinting, finish: null },
+    { printing: m10Printing, finish: 'foil' as const },
+  ])(
+    'preserves $printing.printingId during manual and capture staging regardless of physical attributes',
+    async ({ printing, finish }) => {
+      const manual = await userCards.stageImportEntries(alice, {
+        sessionId: 'manual',
+        source: { kind: 'manual', id: 'manual' },
+        entries: [
+          { entryId: 'manual-entry', printingId: printing.printingId, finish, quantity: 1 },
+        ],
+      });
+      const captured = stagedEntry(
+        await userCards.stageCaptureObservation(alice, {
+          sessionId: 'capture',
+          captureId: 'capture-entry',
+          printingId: printing.printingId,
+          finish,
+        }),
+      );
+      for (const entry of [manual.entries[0], captured]) {
+        expect(entry).toMatchObject({
+          cardId: printing.cardId,
+          printingId: printing.printingId,
+          finish,
+        });
+      }
+      expect(await countCopies(database, alice.accountId)).toBe(0);
+    },
+  );
+
   it('keeps review corrections against late recognition alternatives', async () => {
     const entry = stagedEntry(await stageCapture('session-1', 'capture-1', m11Printing.printingId));
     const reviewed = await userCards.reviewImportEntry(alice, {
@@ -406,6 +438,82 @@ describe('usercards pending imports', () => {
       condition: 'LP',
       quantity: 3,
     });
+  });
+
+  it('reviews an entry at card level and carries an intended quantity above one write batch', async () => {
+    const staged = await userCards.stageImportEntries(alice, {
+      sessionId: 'session-card-level',
+      source: { kind: 'text', id: 'card-level' },
+      entries: [{ entryId: 'named-line', quantity: 1 }],
+    });
+    const entry = staged.entries[0];
+    if (entry === undefined) {
+      throw new Error('Expected a staged pending entry.');
+    }
+    expect(entry).toMatchObject({ cardId: null, printingId: null, finish: null });
+
+    // A card-level review names the playable identity an association destination needs; the
+    // intended quantity is bounded by the product bound, not by one write batch.
+    const reviewed = await userCards.reviewImportEntry(alice, {
+      entryId: entry.entryId,
+      expectedRevision: entry.revision,
+      cardId: lightningBolt.cardId,
+      printingId: null,
+      finish: null,
+      condition: null,
+      quantity: 150,
+    });
+    expect(reviewed.entry).toMatchObject({
+      cardId: lightningBolt.cardId,
+      printingId: null,
+      finish: null,
+      quantity: 150,
+      revision: 2,
+    });
+
+    // A card identity the published catalog does not contain stays a missing reference.
+    const missing = await captureUserCardsError(
+      userCards.reviewImportEntry(alice, {
+        entryId: entry.entryId,
+        expectedRevision: reviewed.entry.revision,
+        cardId: 'oracle-not-published',
+        printingId: null,
+        finish: null,
+        condition: null,
+        quantity: 1,
+      }),
+    );
+    expect(missing.code).toBe('not-found');
+
+    // A printing review that disagrees with the named card is refused, and a card-level review
+    // carries no finish.
+    const disagreement = await captureUserCardsError(
+      userCards.reviewImportEntry(alice, {
+        entryId: entry.entryId,
+        expectedRevision: reviewed.entry.revision,
+        cardId: counterspell.cardId,
+        printingId: m11Printing.printingId,
+        finish: 'nonfoil',
+        condition: null,
+        quantity: 1,
+      }),
+    );
+    expect(disagreement.code).toBe('invalid-request');
+    const cardWithFinish = await captureUserCardsError(
+      userCards.reviewImportEntry(alice, {
+        entryId: entry.entryId,
+        expectedRevision: reviewed.entry.revision,
+        cardId: lightningBolt.cardId,
+        printingId: null,
+        finish: 'nonfoil',
+        condition: null,
+        quantity: 1,
+      }),
+    );
+    expect(cardWithFinish.code).toBe('invalid-request');
+    expect(
+      (await userCards.listImportEntries(alice, { sessionId: 'session-card-level' })).entries[0],
+    ).toMatchObject({ cardId: lightningBolt.cardId, quantity: 150, revision: 2 });
   });
 
   it('lists pending imports and entries with bounded continuations', async () => {
@@ -622,6 +730,7 @@ describe('usercards pending imports', () => {
       from (select entry_id, printing_id, provider, evidence from usercards_private.import_candidate) as candidate`);
       expect(dataApiResponseBytes(unbounded)).toBeGreaterThan(1024 * 1024);
       const confirmed = await bounded.confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
         operationId: 'large-candidates',
         sessionId,
         entries: entries
@@ -886,21 +995,6 @@ describe('usercards pending imports', () => {
       await invalid(userCards.listImportSessions(callerInput(undefined) as TrustedUserContext)),
     ).toBe('invalid-request');
 
-    // A digital-only printing cannot be staged as a physical pending entry.
-    const digital = await captureUserCardsError(
-      stageCapture('session-1', 'capture-1', staPrinting.printingId),
-    );
-    expect(digital.code).toBe('invalid-request');
-    // A finish the printing does not offer is refused.
-    const wrongFinish = await captureUserCardsError(
-      userCards.stageCaptureObservation(alice, {
-        sessionId: 'session-1',
-        captureId: 'capture-1',
-        printingId: m10Printing.printingId,
-        finish: 'foil',
-      }),
-    );
-    expect(wrongFinish.code).toBe('invalid-request');
     // Alternatives must resolve in the published catalog.
     const unknownCandidate = await captureUserCardsError(
       userCards.attachImportCandidates(alice, {

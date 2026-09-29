@@ -34,7 +34,7 @@ import {
   type Finish,
   type PrintingRecord,
 } from '../../catalog/index.js';
-import { physicalFinishAvailability, resolveAvailablePrintings } from './catalog.js';
+import { pendingFinish, resolveAvailablePrintings } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';
 import type { UserCardsSqlTransactor } from './executor.js';
@@ -310,7 +310,7 @@ function parsePastedList(text: string): readonly ParsedSourceRow[] {
       match === null ||
       !Number.isInteger(quantity) ||
       quantity < 1 ||
-      quantity > USERCARDS_LIMITS.maxCreateQuantity
+      quantity > USERCARDS_LIMITS.maxAssociationQuantity
     ) {
       rows.push({ kind: 'unreadable', position, problem: pastedLineProblem });
       continue;
@@ -367,7 +367,7 @@ const moxfieldCardSchema = z.object({
 });
 
 const moxfieldLineSchema = z.object({
-  quantity: z.number().int().min(1).max(USERCARDS_LIMITS.maxCreateQuantity),
+  quantity: z.number().int().min(1).max(USERCARDS_LIMITS.maxAssociationQuantity),
   finish: z.string().max(identifierLength).optional(),
   isFoil: z.boolean().optional(),
   card: moxfieldCardSchema,
@@ -544,7 +544,7 @@ function parseMoxfieldDeck(document: unknown): readonly ParsedSourceRow[] {
 
 const wizardsLineSchema = z.object({
   name: z.string().min(1).max(identifierLength),
-  quantity: z.number().int().min(1).max(USERCARDS_LIMITS.maxCreateQuantity),
+  quantity: z.number().int().min(1).max(USERCARDS_LIMITS.maxAssociationQuantity),
   section: z.string().min(1).max(identifierLength).nullable().optional(),
   set: z.string().min(1).max(identifierLength).nullable().optional(),
   collectorNumber: z.string().min(1).max(identifierLength).nullable().optional(),
@@ -563,7 +563,7 @@ function parseReviewedWizardsLines(entries: readonly unknown[]): readonly Parsed
         position,
         problem:
           'A reviewed list line needs a card name, a quantity from 1 to ' +
-          `${USERCARDS_LIMITS.maxCreateQuantity} and readable attributes.`,
+          `${USERCARDS_LIMITS.maxAssociationQuantity} and readable attributes.`,
       };
     }
     const { name, quantity } = parsed.data;
@@ -904,8 +904,5 @@ function resolveLine(
       problem: 'The catalog does not publish this printing; choose one during review.',
     };
   }
-  const availability = physicalFinishAvailability(printing, row.finish);
-  return availability.outcome === 'unavailable'
-    ? { printingId: null, finish: null, problem: availability.problem }
-    : { printingId: row.printingId, finish: availability.finish, problem: null };
+  return { printingId: row.printingId, finish: pendingFinish(printing, row.finish), problem: null };
 }

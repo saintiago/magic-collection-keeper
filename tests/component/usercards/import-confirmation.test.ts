@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createCatalog, type Catalog } from '../../../src/catalog/index.js';
 import {
   createUserCards,
+  USERCARDS_LIMITS,
   type ImportEntry,
   type TrustedUserContext,
   type UserCards,
@@ -135,6 +136,7 @@ describe('usercards import confirmation', () => {
     await stageDeck();
     const reviewed = await reviewUnresolvedLine();
     const confirmed = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-1',
       sessionId: 'session-deck',
       entries: [
@@ -206,10 +208,755 @@ describe('usercards import confirmation', () => {
     expect(receipts).toEqual([{ operation_id: 'operation-1', session_id: 'session-deck' }]);
   });
 
+  /** Creates the deck tag one confirmation accepts a reviewed list into. */
+  async function createDeck(context: TrustedUserContext = alice, label = 'Burn') {
+    return (await userCards.createTag(context, { kind: 'deck', label })).tag;
+  }
+
+  /** The association rows of one account, in stable identity order. */
+  async function storedAssociations(accountId: string) {
+    return database.query(
+      `select association_id, tag_id, target_level, target_id, quantity
+         from usercards_private.association
+        where account_id = $1
+        order by association_id`,
+      [accountId],
+    );
+  }
+
+  it('accepts a deck from names and quantities without creating owned copies', async () => {
+    await stageDeck();
+    const deck = await createDeck();
+    const reviewed = await userCards.reviewImportEntry(alice, {
+      entryId: 'line-2',
+      expectedRevision: 1,
+      cardId: counterspell.cardId,
+      printingId: null,
+      finish: null,
+      condition: null,
+      quantity: 4,
+    });
+    const confirmed = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'operation-deck',
+      sessionId: 'session-deck',
+      entries: [
+        { entryId: 'line-1', expectedRevision: 1 },
+        { entryId: 'line-2', expectedRevision: reviewed.entry.revision },
+      ],
+    });
+
+    expect(confirmed).toMatchObject({
+      operationId: 'operation-deck',
+      sessionId: 'session-deck',
+      destination: { kind: 'tag', tagId: deck.tagId },
+      replayed: false,
+    });
+    // A card-level review needs no printing; an explicit printing choice keeps its specificity.
+    expect(
+      confirmed.associations
+        .map((association) => [association.targetLevel, association.targetId, association.quantity])
+        .sort(),
+    ).toEqual([
+      ['card', counterspell.cardId, 4],
+      ['printing', m11Printing.printingId, 2],
+    ]);
+    expect(confirmed.copies).toEqual([]);
+
+    // Importing or accepting a deck never establishes ownership.
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+    const acquisitions = await database.query(
+      `select count(*)::int as count
+         from usercards_private.import_acquisition
+        where account_id = $1`,
+      [alice.accountId],
+    );
+    expect(Number(acquisitions[0]?.count)).toBe(0);
+    const owned = await database.query(
+      `select count(*)::int as count
+         from usercards_private.association
+        where account_id = $1 and tag_kind = 'owned'`,
+      [alice.accountId],
+    );
+    expect(Number(owned[0]?.count)).toBe(0);
+
+    // The intended quantities are readable through the association read, and the tag stays a tag.
+    const read = await userCards.readAssociations(
+      alice,
+      confirmed.associations.map((association) => association.associationId),
+    );
+    expect(read.missing).toEqual([]);
+    expect(
+      [...read.associations.values()].map((association) => association.quantity).sort(),
+    ).toEqual([2, 4]);
+    expect(await storedAssociations(alice.accountId)).toHaveLength(2);
+
+    // Only the associations are published for this outcome; no copy record is.
+    const published = await database.query(
+      `select kind, count(*)::int as count
+         from usercards_private.publication
+        where account_id = $1 and kind <> 'revision'
+        group by kind
+        order by kind`,
+      [alice.accountId],
+    );
+    expect(published).toEqual([
+      { kind: 'association', count: 2 },
+      { kind: 'tag', count: 1 },
+    ]);
+
+    // The recorded outcome identifies the associations the destination created.
+    const recovered = await userCards.recoverImportOperation(alice, 'operation-deck');
+    expect(recovered).toEqual({
+      outcome: 'recorded',
+      receipt: {
+        operationId: 'operation-deck',
+        sessionId: 'session-deck',
+        sourceKind: 'moxfield',
+        sourceId: 'deck-1',
+        destination: { kind: 'tag', tagId: deck.tagId },
+        publicationPosition: confirmed.publicationPosition,
+        copies: [],
+        associations: confirmed.associations,
+      },
+    });
+    // The entries are decided and the import is no longer pending.
+    expect((await userCards.listImportSessions(alice)).sessions).toEqual([]);
+
+    // A later correction of an association changes the association, never the recorded outcome.
+    const cardAssociation = confirmed.associations.find(
+      (association) => association.targetLevel === 'card',
+    );
+    if (cardAssociation === undefined) {
+      throw new Error('Expected the card-level association.');
+    }
+    await userCards.changeAssociation(alice, {
+      associationId: cardAssociation.associationId,
+      expectedRevision: cardAssociation.revision,
+      targetLevel: 'card',
+      targetId: cardAssociation.targetId,
+      quantity: 9,
+    });
+    expect(await userCards.recoverImportOperation(alice, 'operation-deck')).toMatchObject({
+      outcome: 'recorded',
+      receipt: { associations: confirmed.associations },
+    });
+  });
+
+  it.each([
+    { label: 'digital printing', physical: false, finishes: ['nonfoil'], finish: null },
+    {
+      label: 'digital printing with a finish',
+      physical: false,
+      finishes: ['nonfoil'],
+      finish: 'nonfoil' as const,
+    },
+    { label: 'unavailable finish', physical: true, finishes: ['nonfoil'], finish: 'foil' as const },
+    { label: 'unspecified finish', physical: true, finishes: ['nonfoil'], finish: null },
+  ])(
+    'accepts a reviewed $label into a deck but refuses ownership',
+    async ({ physical, finishes, finish }) => {
+      await publishCatalog(database, {
+        revisionId: 'revision-2',
+        cards: [lightningBolt],
+        printings: [{ ...m11Printing, physical, finishes }],
+      });
+      const deck = await createDeck();
+      await userCards.stageImportEntries(alice, {
+        sessionId: 'review-target',
+        source: { kind: 'manual', id: 'review-target' },
+        entries: [{ entryId: 'target', quantity: 2 }],
+      });
+      const reviewed = await userCards.reviewImportEntry(alice, {
+        entryId: 'target',
+        expectedRevision: 1,
+        printingId: m11Printing.printingId,
+        finish,
+        condition: null,
+        quantity: 2,
+      });
+      expect(reviewed.entry).toMatchObject({
+        cardId: lightningBolt.cardId,
+        printingId: m11Printing.printingId,
+        finish,
+      });
+      const request = {
+        sessionId: 'review-target',
+        entries: [{ entryId: 'target', expectedRevision: reviewed.entry.revision }],
+      };
+      expect(
+        (
+          await captureUserCardsError(
+            userCards.confirmImport(alice, {
+              ...request,
+              operationId: 'ownership',
+              destination: { kind: 'ownership' },
+            }),
+          )
+        ).code,
+      ).toBe('invalid-request');
+      expect(await userCards.recoverImportOperation(alice, 'ownership')).toEqual({
+        outcome: 'absent',
+      });
+      expect(
+        (await userCards.listImportEntries(alice, { sessionId: request.sessionId })).entries[0]
+          ?.state,
+      ).toBe('pending');
+      const confirmed = await userCards.confirmImport(alice, {
+        ...request,
+        operationId: 'deck',
+        destination: { kind: 'tag', tagId: deck.tagId },
+      });
+      expect(confirmed.associations).toHaveLength(1);
+      expect(confirmed.associations[0]).toMatchObject({
+        targetLevel: 'printing',
+        targetId: m11Printing.printingId,
+        quantity: 2,
+      });
+      expect(confirmed.copies).toEqual([]);
+      expect(await countCopies(database, alice.accountId)).toBe(0);
+    },
+  );
+
+  it('accepts a printing into a deck after its reviewed finish becomes unavailable', async () => {
+    const deck = await createDeck();
+    await stageDeck();
+    await publishCatalog(database, {
+      revisionId: 'revision-2',
+      cards: [lightningBolt],
+      printings: [{ ...m11Printing, finishes: ['nonfoil'] }],
+    });
+    const request = {
+      sessionId: 'session-deck',
+      entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+    };
+    expect(
+      (
+        await captureUserCardsError(
+          userCards.confirmImport(alice, {
+            ...request,
+            operationId: 'ownership',
+            destination: { kind: 'ownership' },
+          }),
+        )
+      ).message,
+    ).toContain('not available in the foil finish');
+    const confirmed = await userCards.confirmImport(alice, {
+      ...request,
+      operationId: 'deck',
+      destination: { kind: 'tag', tagId: deck.tagId },
+    });
+    expect(confirmed.associations[0]).toMatchObject({
+      targetLevel: 'printing',
+      targetId: m11Printing.printingId,
+      quantity: 2,
+    });
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+  });
+
+  it('grows an existing deck requirement and reports a repeated acceptance once', async () => {
+    const deck = await createDeck();
+    await stageDeck();
+    const first = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'deck-first',
+      sessionId: 'session-deck',
+      entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+    });
+    expect(first.associations).toHaveLength(1);
+    expect(first.associations[0]).toMatchObject({
+      targetLevel: 'printing',
+      targetId: m11Printing.printingId,
+      quantity: 2,
+    });
+
+    // Another import of the same card grows the same requirement instead of adding a second
+    // association for one target.
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-second',
+      source: { kind: 'moxfield', id: 'deck-2' },
+      entries: [
+        {
+          entryId: 'second-line',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 3,
+        },
+      ],
+    });
+    const second = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'deck-second',
+      sessionId: 'session-second',
+      entries: [{ entryId: 'second-line', expectedRevision: 1 }],
+    });
+    expect(second.associations).toHaveLength(1);
+    expect(second.associations[0]).toMatchObject({
+      associationId: first.associations[0]?.associationId,
+      quantity: 5,
+    });
+    expect(await storedAssociations(alice.accountId)).toHaveLength(1);
+
+    // An identical request under another operation identity returns the recorded outcome instead
+    // of growing the requirement again.
+    const replay = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'deck-second-replay',
+      sessionId: 'session-second',
+      entries: [{ entryId: 'second-line', expectedRevision: 1 }],
+    });
+    expect(replay.replayed).toBe(true);
+    expect(replay.associations).toEqual(second.associations);
+    const stored = await storedAssociations(alice.accountId);
+    expect(stored).toHaveLength(1);
+    expect(Number(stored[0]?.quantity)).toBe(5);
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+  });
+
+  it('refuses a requirement above the product bound without partial changes', async () => {
+    const deck = await createDeck();
+    // Two duplicate lines whose final requirement exceeds the product bound: the confirmation is
+    // refused as one change, so no intermediate association, receipt or entry closure remains.
+    const half = Math.ceil(USERCARDS_LIMITS.maxAssociationQuantity / 2) + 1;
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-over-bound',
+      source: { kind: 'moxfield', id: 'deck-over-bound' },
+      entries: ['over-main', 'over-side'].map((entryId) => ({
+        entryId,
+        printingId: m11Printing.printingId,
+        finish: 'foil' as const,
+        condition: 'LP' as const,
+        quantity: half,
+      })),
+    });
+    const refused = await captureUserCardsError(
+      userCards.confirmImport(alice, {
+        destination: { kind: 'tag', tagId: deck.tagId },
+        operationId: 'deck-over-bound',
+        sessionId: 'session-over-bound',
+        entries: [
+          { entryId: 'over-main', expectedRevision: 1 },
+          { entryId: 'over-side', expectedRevision: 1 },
+        ],
+      }),
+    );
+    expect(refused.code).toBe('invalid-request');
+    expect(await storedAssociations(alice.accountId)).toEqual([]);
+    expect(await userCards.recoverImportOperation(alice, 'deck-over-bound')).toEqual({
+      outcome: 'absent',
+    });
+    const pending = await userCards.listImportEntries(alice, {
+      sessionId: 'session-over-bound',
+    });
+    expect(pending.entries).toHaveLength(2);
+  });
+
+  it('records duplicate lines of one target as one final association outcome', async () => {
+    const deck = await createDeck();
+    // A deck list names the same printing in two sections and the same playable card in two
+    // card-level lines: each target is one intended quantity, however many lines carry it.
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-duplicates',
+      source: { kind: 'moxfield', id: 'deck-duplicates' },
+      entries: [
+        {
+          entryId: 'main-line',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 2,
+        },
+        {
+          entryId: 'side-line',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 3,
+        },
+        { entryId: 'card-main', quantity: 1 },
+        { entryId: 'card-side', quantity: 4 },
+      ],
+    });
+    for (const [entryId, quantity] of [
+      ['card-main', 1],
+      ['card-side', 4],
+    ] as const) {
+      await userCards.reviewImportEntry(alice, {
+        entryId,
+        expectedRevision: 1,
+        cardId: counterspell.cardId,
+        printingId: null,
+        finish: null,
+        condition: null,
+        quantity,
+      });
+    }
+
+    const confirmed = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'deck-duplicates',
+      sessionId: 'session-duplicates',
+      entries: [
+        { entryId: 'main-line', expectedRevision: 1 },
+        { entryId: 'side-line', expectedRevision: 1 },
+        { entryId: 'card-main', expectedRevision: 2 },
+        { entryId: 'card-side', expectedRevision: 2 },
+      ],
+    });
+
+    // One final outcome per target: the lines of one printing or card add up to one quantity.
+    expect(
+      confirmed.associations
+        .map((association) => [association.targetLevel, association.targetId, association.quantity])
+        .sort(),
+    ).toEqual([
+      ['card', counterspell.cardId, 5],
+      ['printing', m11Printing.printingId, 5],
+    ]);
+    expect(new Set(confirmed.associations.map((one) => one.associationId)).size).toBe(2);
+    // The immutable outcome and the stored association carry the final quantity, and the
+    // publication of the mutated records names each of them exactly once.
+    const stored = await storedAssociations(alice.accountId);
+    expect(
+      stored.map((row) => [row.target_level, row.target_id, Number(row.quantity)]).sort(),
+    ).toEqual([
+      ['card', counterspell.cardId, 5],
+      ['printing', m11Printing.printingId, 5],
+    ]);
+    expect(await userCards.recoverImportOperation(alice, 'deck-duplicates')).toEqual({
+      outcome: 'recorded',
+      receipt: {
+        operationId: 'deck-duplicates',
+        sessionId: 'session-duplicates',
+        sourceKind: 'moxfield',
+        sourceId: 'deck-duplicates',
+        destination: { kind: 'tag', tagId: deck.tagId },
+        publicationPosition: confirmed.publicationPosition,
+        copies: [],
+        associations: confirmed.associations,
+      },
+    });
+    const published = await database.query(
+      `select kind, count(*)::int as count
+         from usercards_private.publication
+        where account_id = $1 and kind <> 'revision'
+        group by kind
+        order by kind`,
+      [alice.accountId],
+    );
+    expect(published).toEqual([
+      { kind: 'association', count: 2 },
+      { kind: 'tag', count: 1 },
+    ]);
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+  });
+
+  it('keeps duplicate lines growing one existing requirement to their final quantity', async () => {
+    const deck = await createDeck();
+    await stageDeck();
+    const first = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'existing-first',
+      sessionId: 'session-deck',
+      entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+    });
+    expect(first.associations[0]).toMatchObject({ quantity: 2 });
+
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-existing-duplicates',
+      source: { kind: 'moxfield', id: 'deck-existing-duplicates' },
+      entries: [
+        {
+          entryId: 'grow-main',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 3,
+        },
+        {
+          entryId: 'grow-side',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 1,
+        },
+      ],
+    });
+    const confirmed = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'existing-duplicates',
+      sessionId: 'session-existing-duplicates',
+      entries: [
+        { entryId: 'grow-main', expectedRevision: 1 },
+        { entryId: 'grow-side', expectedRevision: 1 },
+      ],
+    });
+
+    // The recorded outcome reports the requirement after every line was applied, once.
+    expect(confirmed.associations).toEqual([
+      expect.objectContaining({
+        associationId: first.associations[0]?.associationId,
+        targetLevel: 'printing',
+        targetId: m11Printing.printingId,
+        quantity: 6,
+      }),
+    ]);
+    const stored = await storedAssociations(alice.accountId);
+    expect(stored).toHaveLength(1);
+    expect(Number(stored[0]?.quantity)).toBe(6);
+  });
+
+  it('accepts a deck requirement above 1000 and keeps accumulating it', async () => {
+    const deck = await createDeck();
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-large',
+      source: { kind: 'text', id: 'large-list' },
+      entries: [
+        {
+          entryId: 'large-line',
+          printingId: m11Printing.printingId,
+          finish: 'nonfoil',
+          condition: null,
+          quantity: 1200,
+        },
+      ],
+    });
+    const first = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'deck-large',
+      sessionId: 'session-large',
+      entries: [{ entryId: 'large-line', expectedRevision: 1 }],
+    });
+    expect(first.associations).toEqual([
+      expect.objectContaining({
+        targetLevel: 'printing',
+        targetId: m11Printing.printingId,
+        quantity: 1200,
+      }),
+    ]);
+
+    // A further accepted requirement grows the same association; the product bound is not the
+    // request batch size.
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-large-second',
+      source: { kind: 'text', id: 'large-list-second' },
+      entries: [
+        {
+          entryId: 'second-large',
+          printingId: m11Printing.printingId,
+          finish: 'nonfoil',
+          condition: null,
+          quantity: 600,
+        },
+      ],
+    });
+    const second = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'deck-large-second',
+      sessionId: 'session-large-second',
+      entries: [{ entryId: 'second-large', expectedRevision: 1 }],
+    });
+    expect(second.associations).toEqual([
+      expect.objectContaining({
+        associationId: first.associations[0]?.associationId,
+        quantity: 1800,
+      }),
+    ]);
+    expect(await storedAssociations(alice.accountId)).toHaveLength(1);
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+
+    // The recorded outcomes stay readable with their complete intended quantities.
+    expect(await userCards.recoverImportOperation(alice, 'deck-large')).toMatchObject({
+      outcome: 'recorded',
+      receipt: { associations: first.associations },
+    });
+    expect(await userCards.recoverImportOperation(alice, 'deck-large-second')).toMatchObject({
+      outcome: 'recorded',
+      receipt: { associations: second.associations },
+    });
+  });
+
+  it('returns the publication position of the request an identical replay repeats', async () => {
+    const deck = await createDeck();
+    await stageDeck();
+    const firstRequest = {
+      destination: { kind: 'tag', tagId: deck.tagId } as const,
+      operationId: 'deck-position-first',
+      sessionId: 'session-deck',
+      entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+    };
+    const first = await userCards.confirmImport(alice, firstRequest);
+
+    // A later import grows the association this outcome recorded, at a later position.
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-position-second',
+      source: { kind: 'moxfield', id: 'deck-position-second' },
+      entries: [
+        {
+          entryId: 'grow-line',
+          printingId: m11Printing.printingId,
+          finish: 'foil',
+          condition: 'LP',
+          quantity: 3,
+        },
+      ],
+    });
+    const grown = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'deck-position-second',
+      sessionId: 'session-position-second',
+      entries: [{ entryId: 'grow-line', expectedRevision: 1 }],
+    });
+    expect(Number(grown.publicationPosition)).toBeGreaterThan(Number(first.publicationPosition));
+
+    // The replay repeats the earlier request, so it returns that recorded outcome, including the
+    // position it was published at, instead of a later operation's position.
+    const replay = await userCards.confirmImport(alice, {
+      ...firstRequest,
+      operationId: 'deck-position-replay',
+    });
+    expect(replay.replayed).toBe(true);
+    expect(replay.associations).toEqual(first.associations);
+    expect(replay.publicationPosition).toBe(first.publicationPosition);
+    expect(await userCards.recoverImportOperation(alice, 'deck-position-replay')).toMatchObject({
+      outcome: 'recorded',
+      receipt: {
+        publicationPosition: first.publicationPosition,
+        associations: first.associations,
+      },
+    });
+  });
+
+  it('refuses a changed destination under a reused operation identity', async () => {
+    await stageDeck();
+    const deck = await createDeck();
+    const confirmed = await userCards.confirmImport(alice, {
+      destination: { kind: 'tag', tagId: deck.tagId },
+      operationId: 'deck-fixed',
+      sessionId: 'session-deck',
+      entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+    });
+    expect(confirmed.copies).toEqual([]);
+
+    // A retry cannot turn an accepted deck into an ownership action.
+    const changed = await captureUserCardsError(
+      userCards.confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
+        operationId: 'deck-fixed',
+        sessionId: 'session-deck',
+        entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+      }),
+    );
+    expect(changed.code).toBe('conflict');
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+  });
+
+  it('refuses destinations this account does not hold or that cannot associate cards', async () => {
+    await stageDeck();
+    const location = (await userCards.createTag(alice, { kind: 'location', label: 'Binder' })).tag;
+    const bobDeck = await createDeck(bob);
+
+    const unsupported = await captureUserCardsError(
+      userCards.confirmImport(alice, {
+        destination: { kind: 'tag', tagId: location.tagId },
+        operationId: 'deck-location',
+        sessionId: 'session-deck',
+        entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+      }),
+    );
+    expect(unsupported.code).toBe('invalid-request');
+
+    const foreign = await captureUserCardsError(
+      userCards.confirmImport(alice, {
+        destination: { kind: 'tag', tagId: bobDeck.tagId },
+        operationId: 'deck-foreign',
+        sessionId: 'session-deck',
+        entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+      }),
+    );
+    expect(foreign.code).toBe('not-found');
+
+    // Neither refusal changed a record or left a receipt.
+    expect(await storedAssociations(alice.accountId)).toEqual([]);
+    expect(await userCards.recoverImportOperation(alice, 'deck-location')).toEqual({
+      outcome: 'absent',
+    });
+    expect(await userCards.recoverImportOperation(alice, 'deck-foreign')).toEqual({
+      outcome: 'absent',
+    });
+  });
+
+  it('rolls back a tag destination that cannot be committed', async () => {
+    await stageDeck();
+    const deck = await createDeck();
+    const failing = createUserCards({ sql: failRevisionStatements(database.sql), catalog });
+
+    const failed = await captureUserCardsError(
+      failing.confirmImport(alice, {
+        destination: { kind: 'tag', tagId: deck.tagId },
+        operationId: 'deck-rollback',
+        sessionId: 'session-deck',
+        entries: [{ entryId: 'line-1', expectedRevision: 1 }],
+      }),
+    );
+    expect(failed.code).toBe('unavailable');
+
+    expect(await storedAssociations(alice.accountId)).toEqual([]);
+    expect(await userCards.recoverImportOperation(alice, 'deck-rollback')).toEqual({
+      outcome: 'absent',
+    });
+    const entries = await userCards.listImportEntries(alice, { sessionId: 'session-deck' });
+    expect(entries.session.pendingEntries).toBe(2);
+    expect(entries.entries.map((entry) => entry.state)).toEqual(['pending', 'pending']);
+  });
+
+  it('needs a reviewed card or printing for a tag destination and a printing for ownership', async () => {
+    await userCards.stageImportEntries(alice, {
+      sessionId: 'session-unresolved',
+      source: { kind: 'text', id: 'unresolved' },
+      entries: [{ entryId: 'named-line', quantity: 1 }],
+    });
+    const deck = await createDeck();
+
+    const unresolvedTag = await captureUserCardsError(
+      userCards.confirmImport(alice, {
+        destination: { kind: 'tag', tagId: deck.tagId },
+        operationId: 'unresolved-tag',
+        sessionId: 'session-unresolved',
+        entries: [{ entryId: 'named-line', expectedRevision: 1 }],
+      }),
+    );
+    expect(unresolvedTag.code).toBe('invalid-request');
+
+    // A card-level review still needs a printing before the entry can become owned copies.
+    const reviewed = await userCards.reviewImportEntry(alice, {
+      entryId: 'named-line',
+      expectedRevision: 1,
+      cardId: counterspell.cardId,
+      printingId: null,
+      finish: null,
+      condition: null,
+      quantity: 1,
+    });
+    const unresolvedOwnership = await captureUserCardsError(
+      userCards.confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
+        operationId: 'unresolved-ownership',
+        sessionId: 'session-unresolved',
+        entries: [{ entryId: 'named-line', expectedRevision: reviewed.entry.revision }],
+      }),
+    );
+    expect(unresolvedOwnership.code).toBe('invalid-request');
+    expect(await storedAssociations(alice.accountId)).toEqual([]);
+    expect(await countCopies(database, alice.accountId)).toBe(0);
+  });
+
   it('returns the recorded outcome for an identical retry and refuses a changed request', async () => {
     await stageDeck();
     const reviewed = await reviewUnresolvedLine();
     const request = {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-1',
       sessionId: 'session-deck',
       entries: [
@@ -233,6 +980,7 @@ describe('usercards import confirmation', () => {
     // Reusing the operation identity for different reviewed content is refused.
     const changed = await captureUserCardsError(
       userCards.confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
         operationId: 'operation-1',
         sessionId: 'session-deck',
         entries: [{ entryId: 'line-1', expectedRevision: 1 }],
@@ -245,6 +993,7 @@ describe('usercards import confirmation', () => {
   it('records every successful operation identity, including alternate-operation retries', async () => {
     await stageDeck();
     const request = {
+      destination: { kind: 'ownership' } as const,
       operationId: 'original',
       sessionId: 'session-deck',
       entries: [{ entryId: 'line-1', expectedRevision: 1 }],
@@ -263,8 +1012,10 @@ describe('usercards import confirmation', () => {
         sessionId: replay.sessionId,
         sourceId: replay.sourceId,
         sourceKind: replay.sourceKind,
+        destination: { kind: 'ownership' } as const,
         publicationPosition: original.publicationPosition,
         copies: original.copies,
+        associations: [],
       },
     });
     expect(await userCards.recoverImportOperation(bob, 'replay')).toEqual({ outcome: 'absent' });
@@ -319,6 +1070,7 @@ describe('usercards import confirmation', () => {
         }
       }
       const later = await userCards.confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
         operationId: 'later',
         sessionId,
         entries: [{ entryId: 'later', expectedRevision: 1 }],
@@ -332,6 +1084,7 @@ describe('usercards import confirmation', () => {
         quantity: 1,
       });
       const earlier = await userCards.confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
         operationId: 'earlier',
         sessionId,
         entries: [{ entryId: 'earlier', expectedRevision: 2 }],
@@ -354,6 +1107,7 @@ describe('usercards import confirmation', () => {
         const repeatedByEntry = new Map<string, readonly { readonly copyId: string }[]>();
         for (const entryId of ['repeat-2', 'repeat-1']) {
           const repeated = await userCards.confirmImport(alice, {
+            destination: { kind: 'ownership' } as const,
             operationId: entryId,
             sessionId: 'repeat',
             entries: [{ entryId, expectedRevision: 1 }],
@@ -373,6 +1127,7 @@ describe('usercards import confirmation', () => {
 
         // Retrying one of that import's own confirmations returns its recorded outcome.
         const retried = await userCards.confirmImport(alice, {
+          destination: { kind: 'ownership' } as const,
           operationId: 'repeat-1-retry',
           sessionId: 'repeat',
           entries: [{ entryId: 'repeat-1', expectedRevision: 1 }],
@@ -396,6 +1151,7 @@ describe('usercards import confirmation', () => {
       })),
     });
     const second = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'second',
       sessionId: 'original',
       entries: [{ entryId: 'second', expectedRevision: 1 }],
@@ -409,6 +1165,7 @@ describe('usercards import confirmation', () => {
       quantity: 1,
     });
     const first = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'first',
       sessionId: 'original',
       entries: [{ entryId: 'first', expectedRevision: 2 }],
@@ -428,6 +1185,7 @@ describe('usercards import confirmation', () => {
       ],
     });
     const repeated = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'repeat',
       sessionId: 'repeat',
       entries: ['repeat-first', 'repeat-second'].map((entryId) => ({
@@ -448,6 +1206,7 @@ describe('usercards import confirmation', () => {
 
     const stale = await captureUserCardsError(
       userCards.confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
         operationId: 'operation-2',
         sessionId: 'session-deck',
         entries: [{ entryId: 'line-1', expectedRevision: 2 }],
@@ -457,6 +1216,7 @@ describe('usercards import confirmation', () => {
 
     const unresolved = await captureUserCardsError(
       userCards.confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
         operationId: 'operation-3',
         sessionId: 'session-deck',
         entries: [
@@ -474,6 +1234,7 @@ describe('usercards import confirmation', () => {
     expect(discarded.entry.state).toBe('discarded');
     const afterDiscard = await captureUserCardsError(
       userCards.confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
         operationId: 'operation-4',
         sessionId: 'session-deck',
         entries: [
@@ -487,6 +1248,7 @@ describe('usercards import confirmation', () => {
     // A foreign or unknown import is reported as missing, never confirmed.
     const foreignSession = await captureUserCardsError(
       userCards.confirmImport(bob, {
+        destination: { kind: 'ownership' } as const,
         operationId: 'operation-5',
         sessionId: 'session-deck',
         entries: [{ entryId: 'line-1', expectedRevision: 1 }],
@@ -495,6 +1257,7 @@ describe('usercards import confirmation', () => {
     expect(foreignSession.code).toBe('not-found');
     const unknownEntry = await captureUserCardsError(
       userCards.confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
         operationId: 'operation-6',
         sessionId: 'session-deck',
         entries: [{ entryId: 'line-unknown', expectedRevision: 1 }],
@@ -521,6 +1284,7 @@ describe('usercards import confirmation', () => {
       entries: [{ entryId: 'line-1', ...content }],
     });
     const first = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-1',
       sessionId: 'session-1',
       entries: [{ entryId: 'line-1', expectedRevision: 1 }],
@@ -537,6 +1301,7 @@ describe('usercards import confirmation', () => {
       entries: [{ entryId: 'line-2', ...content }],
     });
     const repeated = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-2',
       sessionId: 'session-2',
       entries: [{ entryId: 'line-2', expectedRevision: 1 }],
@@ -558,6 +1323,7 @@ describe('usercards import confirmation', () => {
     // Retrying that import's own confirmation returns its recorded outcome instead of adding its
     // copies twice.
     const retried = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-2-retry',
       sessionId: 'session-2',
       entries: [{ entryId: 'line-2', expectedRevision: 1 }],
@@ -574,6 +1340,7 @@ describe('usercards import confirmation', () => {
       entries: [{ entryId: 'line-3', ...content, quantity: 3 }],
     });
     const changed = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-3',
       sessionId: 'session-3',
       entries: [{ entryId: 'line-3', expectedRevision: 1 }],
@@ -609,6 +1376,7 @@ describe('usercards import confirmation', () => {
     for (const [captureId] of admissions) {
       confirmed.push(
         await userCards.confirmImport(alice, {
+          destination: { kind: 'ownership' } as const,
           operationId: `operation-${captureId}`,
           sessionId: 'capture-session',
           entries: [{ entryId: captureId, expectedRevision: 1 }],
@@ -653,6 +1421,7 @@ describe('usercards import confirmation', () => {
       ],
     });
     const together = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-together',
       sessionId: 'session-1',
       entries: [
@@ -677,6 +1446,7 @@ describe('usercards import confirmation', () => {
     }
     for (const [sessionId, entryId] of reimported) {
       const repeated = await userCards.confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
         operationId: `operation-${entryId}`,
         sessionId,
         entries: [{ entryId, expectedRevision: 1 }],
@@ -708,6 +1478,7 @@ describe('usercards import confirmation', () => {
       ],
     });
     const firstOfTwo = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-line-5',
       sessionId: 'session-4',
       entries: [{ entryId: 'line-5', expectedRevision: 1 }],
@@ -715,6 +1486,7 @@ describe('usercards import confirmation', () => {
     expect(firstOfTwo.replayed).toBe(false);
     expect(firstOfTwo.copies).toHaveLength(1);
     const secondOfTwo = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-line-6',
       sessionId: 'session-4',
       entries: [{ entryId: 'line-6', expectedRevision: 1 }],
@@ -736,6 +1508,7 @@ describe('usercards import confirmation', () => {
       })),
     });
     const repeated = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-deck-2-repeat',
       sessionId: 'session-5',
       entries: [
@@ -766,6 +1539,7 @@ describe('usercards import confirmation', () => {
       ],
     });
     const request = {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-review',
       sessionId: 'session-review',
       entries: [{ entryId: 'line-1', expectedRevision: 1 }],
@@ -810,8 +1584,10 @@ describe('usercards import confirmation', () => {
         sessionId: confirmed.sessionId,
         sourceKind: confirmed.sourceKind,
         sourceId: confirmed.sourceId,
+        destination: { kind: 'ownership' } as const,
         publicationPosition: confirmed.publicationPosition,
         copies: confirmed.copies,
+        associations: [],
       },
     });
   });
@@ -819,6 +1595,7 @@ describe('usercards import confirmation', () => {
   it('recovers a recorded outcome and reports its absence without revealing another account', async () => {
     await stageDeck();
     const confirmed = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-1',
       sessionId: 'session-deck',
       entries: [{ entryId: 'line-1', expectedRevision: 1 }],
@@ -851,6 +1628,7 @@ describe('usercards import confirmation', () => {
   it('removes only the confirmed entries and keeps the rest reviewable', async () => {
     await stageDeck();
     const first = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-1',
       sessionId: 'session-deck',
       entries: [{ entryId: 'line-1', expectedRevision: 1 }],
@@ -870,6 +1648,7 @@ describe('usercards import confirmation', () => {
 
     const reviewed = await reviewUnresolvedLine();
     const second = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-2',
       sessionId: 'session-deck',
       entries: [{ entryId: 'line-2', expectedRevision: reviewed.revision }],
@@ -915,6 +1694,7 @@ describe('usercards import confirmation', () => {
     });
 
     const confirmed = await userCards.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-bulk',
       sessionId: 'session-bulk',
       entries: [
@@ -944,6 +1724,7 @@ describe('usercards import confirmation', () => {
 
     const failed = await captureUserCardsError(
       failing.confirmImport(alice, {
+        destination: { kind: 'ownership' } as const,
         operationId: 'operation-1',
         sessionId: 'session-deck',
         entries: [{ entryId: 'line-1', expectedRevision: 1 }],
@@ -981,6 +1762,7 @@ describe('usercards import confirmation', () => {
       entries,
     });
     const confirmed = await bounded.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-maximum',
       sessionId: 'session-maximum',
       entries: entries.map((entry) => ({ entryId: entry.entryId, expectedRevision: 1 })),
@@ -1021,6 +1803,7 @@ describe('usercards import confirmation', () => {
 
     // An identical retry returns the same complete outcome.
     const retry = await bounded.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-maximum',
       sessionId: 'session-maximum',
       entries: entries.map((entry) => ({ entryId: entry.entryId, expectedRevision: 1 })),
@@ -1036,6 +1819,7 @@ describe('usercards import confirmation', () => {
       entries: [{ ...(entries[0] as (typeof entries)[number]), entryId: 'repeat-0' }],
     });
     const repeated = await bounded.confirmImport(alice, {
+      destination: { kind: 'ownership' } as const,
       operationId: 'operation-maximum-repeat',
       sessionId: 'session-maximum-repeat',
       entries: [{ entryId: 'repeat-0', expectedRevision: 1 }],

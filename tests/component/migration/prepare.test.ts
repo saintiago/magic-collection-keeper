@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { USERCARDS_LIMITS } from '../../../src/usercards/index.js';
 import {
   bundle,
   canonical,
@@ -345,6 +346,10 @@ describe('offline migration preparation', () => {
 
   it('preserves an aggregated deck quantity the current target cannot yet accept', () => {
     const raw = fixture();
+    // The legacy aggregate stays above the target's product bound, whatever that bound is: it is
+    // reported as a blocker instead of being truncated or split.
+    const perAssignment = Math.ceil((USERCARDS_LIMITS.maxAssociationQuantity + 1) / 2);
+    const aggregate = perAssignment * 2;
     raw.catalog[0]!.finishes.push('foil');
     raw.accounts[0]!.inventory.push({
       id: 'foil',
@@ -359,7 +364,7 @@ describe('offline migration preparation', () => {
       ...['native', 'foil'].map((id) =>
         doc('assignments', id, {
           locations_override: true,
-          locations: [{ tag_id: 'deck', quantity: 600 }],
+          locations: [{ tag_id: 'deck', quantity: perAssignment }],
         }),
       ),
     );
@@ -368,7 +373,7 @@ describe('offline migration preparation', () => {
     expect(plan.issues.map((i) => i.code)).toEqual(['deck-quantity-compatibility']);
     expect(plan.accounts[0]!.associations[0]).toMatchObject({
       targetLevel: 'printing',
-      quantity: 1200,
+      quantity: aggregate,
     });
     expect(plan.accounts[0]!.copies).toHaveLength(4);
     expect(plan.archive).toEqual(raw);

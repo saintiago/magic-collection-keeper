@@ -76,6 +76,15 @@ export type ImportSessionId = string;
 export type ImportEntryId = string;
 export type ImportOperationId = string;
 
+/**
+ * Explicit destination one confirmation applies to its reviewed entries
+ * (docs/user-cards.md#import-and-capture-state). A tag destination creates or updates the reviewed
+ * card/printing associations with their intended quantities; only the explicit ownership
+ * destination creates individual physical copies, acquisition provenance and owned memberships.
+ */
+export type ImportDestination =
+  { readonly kind: 'tag'; readonly tagId: TagId } | { readonly kind: 'ownership' };
+
 export const importEntryStates = ['pending', 'confirmed', 'discarded'] as const;
 export type ImportEntryState = (typeof importEntryStates)[number];
 
@@ -133,13 +142,22 @@ export interface ImportEntry {
   /** Position in the session's capture order, oldest first; edits never reorder it. */
   readonly position: number;
   readonly state: ImportEntryState;
-  /** Reviewed printing reference; `null` while the entry is unresolved. */
+  /**
+   * Reviewed playable card identity; `null` while the entry is unresolved. A card-level review is
+   * sufficient for an association destination, so an entry can name a card without a printing.
+   */
+  readonly cardId: string | null;
+  /** Reviewed printing reference; `null` for a card-level review or an unresolved entry. */
   readonly printingId: PrintingId | null;
-  /** Reviewed finish; `null` while the entry is unresolved. */
+  /** Optional reviewed finish; physical eligibility is required only for ownership confirmation. */
   readonly finish: Finish | null;
   /** Reviewed physical condition; `null` while the condition is unknown. */
   readonly condition: CopyCondition | null;
-  /** Explicit pending quantity; confirmation creates this many individual copies. */
+  /**
+   * Explicit pending quantity; its meaning follows the destination the confirmation applies: an
+   * intended quantity for a tag destination, or the number of individual copies an explicit
+   * ownership action creates (docs/user-cards.md#import-and-capture-state).
+   */
   readonly quantity: number;
   readonly candidates: readonly ImportCandidate[];
   /**
@@ -207,8 +225,15 @@ export const USERCARDS_LIMITS = {
    * result.
    */
   maxReceiptCopiesPerRead: 100,
-  /** Largest intended quantity a card- or printing-level association may carry. */
-  maxAssociationQuantity: 1000,
+  /**
+   * Largest intended quantity a card- or printing-level association may carry, and the largest
+   * reviewed quantity one pending entry may carry: the meaning of a pending quantity follows the
+   * destination its confirmation applies. It is a product bound independent of the request batch
+   * size, so a deck requirement is never capped by an incidental storage or transport batch and
+   * accumulates across confirmations up to this bound
+   * (docs/user-cards.md#records-and-associations, docs/testing.md#usercards).
+   */
+  maxAssociationQuantity: 1_000_000,
   defaultTagPageSize: 50,
   minTagPageSize: 1,
   maxTagPageSize: 100,
