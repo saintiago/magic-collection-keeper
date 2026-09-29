@@ -343,13 +343,20 @@ passwords stored in the seven database secrets, applies `catalogSchemaSql`, `use
 and `searchSchemaSql`, applies `catalogReaderGrants` and `usercardsReaderGrants` to the reader
 role, `searchReaderGrants` to Search's query role, `searchIndexingGrants` to the indexing role and
 `catalogPublicationGrants`/`usercardsPublicationGrants` to the respective provider's publication
-reader. Each writer role receives the private privileges of its own component only - the
-interactive API's role reaches `usercards_private` and the finite catalog job's role reaches
+reader. Apply `catalogReaderGrants` to the Catalog writer and `usercardsReaderGrants` to the
+UserCards writer as well: synchronization reads its published revision, and mutations read their
+account-scoped published records when constructing durable changes. Each writer role receives the
+private privileges of its own component only - the interactive API's role reaches `usercards_private` and the finite catalog job's role reaches
 `catalog_private` - while the indexing role maintains `search_private` alone: it reaches no
 provider relation, because the background job reads each provider's publication with that
 provider's own publication credential. No runtime component uses the master credential, and no
 role can mutate or read another component's private schema
 (docs/data-architecture.md#access-and-deployment).
+
+For each writer, grant `USAGE` on its private schema, `SELECT, INSERT, UPDATE, DELETE` on all
+its private tables, and `USAGE, SELECT` on its private sequences. Apply these grants after the
+schema definitions, alongside the published-view grants above; substitute the configured role
+names. Schema creation and later schema changes remain bootstrap operations.
 
 The service stack's outputs carry the public settings the browser bundle is built with
 (`ApiBaseUrl`, `RecognitionBaseUrl`, `UserPoolClientId`, and the environment's region for the

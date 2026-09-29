@@ -97,20 +97,41 @@ export function createCardDetailsPage(): UiPageDefinition {
       // A page whose presentation the shell never awaits must still not surface a rejection.
       presented.promise.catch(() => {});
       let closed = false;
-      context.signal.addEventListener(
-        'abort',
-        () => {
-          closed = true;
-        },
-        { once: true },
-      );
+      context.signal.addEventListener('abort', dispose, { once: true });
 
-      void render();
+      if (context.signal.aborted) {
+        dispose();
+      } else {
+        void render();
+      }
 
       return {
         capture: captureState,
         presented: () => presented.promise,
+        dispose,
       };
+
+      function disposeChildren(): void {
+        presentedLevel?.dispose();
+        presentedLevel = null;
+        disposeContent();
+      }
+
+      function disposeContent(): void {
+        copyEditor?.dispose();
+        copyEditor = null;
+        printings?.dispose();
+        printings = null;
+      }
+
+      function dispose(): void {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        context.signal.removeEventListener('abort', dispose);
+        disposeChildren();
+      }
 
       /**
        * State this page retains for its history entry
@@ -138,15 +159,13 @@ export function createCardDetailsPage(): UiPageDefinition {
        * (docs/ui/architecture.md#state-ownership-and-restoration).
        */
       async function render(): Promise<void> {
+        if (closed) {
+          return;
+        }
         const attempt = ++loadAttempt;
         status.textContent = 'Loading card details…';
         content.replaceChildren();
-        copyEditor?.dispose();
-        copyEditor = null;
-        printings?.dispose();
-        printings = null;
-        presentedLevel?.dispose();
-        presentedLevel = null;
+        disposeChildren();
         let level: CardViewDetail;
         try {
           level = mountLevel();
@@ -255,6 +274,7 @@ export function createCardDetailsPage(): UiPageDefinition {
 
       /** The nodes the page composes for the published level entry. */
       function levelContent(entry: CardListEntry): readonly Node[] {
+        disposeContent();
         if (entry.detail?.absent != null) {
           return [];
         }

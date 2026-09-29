@@ -1,6 +1,6 @@
 /**
- * Search contract fixtures over the shared in-process PostgreSQL harness
- * (tests/support/postgres-database.ts): the real Catalog, UserCards and Search schemas, the
+ * Search contract fixtures over a local PostgreSQL server with separate projection and publication
+ * sessions (tests/support/postgres-server.ts): the real Catalog, UserCards and Search schemas, the
  * binder Application supplies for Search's account-scoped projection views, and a Search instance
  * that evaluates against its own projection. Catalog and private rows are written through the
  * providers' own contracts and become query-visible only through a Search indexing pass, so the
@@ -30,7 +30,8 @@ import {
   type UserCardsPublication,
   type UserCardsSqlTransactor,
 } from '../../src/usercards/index.js';
-import { createTestDatabase, type TestDatabase } from './postgres-database.js';
+import type { TestDatabase } from './postgres-database.js';
+import { startPostgresServer } from './postgres-server.js';
 
 export interface SearchTestDatabase extends TestDatabase {
   /** Executor in the shape Application supplies to the provider components. */
@@ -50,9 +51,29 @@ export interface SearchTestDatabase extends TestDatabase {
 }
 
 export async function createSearchTestDatabase(): Promise<SearchTestDatabase> {
-  const database = await createTestDatabase(
+  const server = await startPostgresServer(
     `${catalogSchemaSql}\n\n${usercardsSchemaSql}\n\n${searchSchemaSql}`,
   );
+  const connection = await server.connect();
+  const catalogConnection = await server.connect();
+  const userCardsConnection = await server.connect();
+  // Provider snapshots open their own transactions while a projection write is in progress.
+  // Sharing one connection would let a provider commit the projection before its checkpoint.
+  const database: TestDatabase = {
+    sql: connection.transactor(),
+    query: (statement, values) => connection.query(statement, values),
+    async exec(statement) {
+      await connection.query(statement);
+    },
+    async close() {
+      await Promise.all([
+        connection.close(),
+        catalogConnection.close(),
+        userCardsConnection.close(),
+      ]);
+      await server.close();
+    },
+  };
   const search = createSearch({
     sql: database.sql,
     withAccountScope: (accountId, work) =>
@@ -65,8 +86,10 @@ export async function createSearchTestDatabase(): Promise<SearchTestDatabase> {
     sql: database.sql,
     catalog: createCatalog({ sql: database.sql }),
   });
-  const catalogPublication = createCatalogPublication({ sql: database.sql });
-  const userCardsPublication = createUserCardsPublication({ sql: database.sql });
+  const catalogPublication = createCatalogPublication({ sql: catalogConnection.transactor() });
+  const userCardsPublication = createUserCardsPublication({
+    sql: userCardsConnection.transactor(),
+  });
   const indexer = createSearchIndexer({
     sql: database.sql,
     catalog: catalogPublication,

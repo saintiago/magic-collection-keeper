@@ -36,7 +36,11 @@ import {
   usercardsSchemaSql,
 } from '../../src/usercards/index.js';
 import { createDataApiTestClient, type DataApiTestClient } from '../support/data-api.js';
-import { createTestDatabase, type TestDatabase } from '../support/postgres-database.js';
+import {
+  startPostgresServer,
+  type PostgresServer,
+  type PostgresConnection,
+} from '../support/postgres-server.js';
 import { createSnapshotObjects, type SnapshotObjectFixture } from '../support/snapshot-objects.js';
 
 const issuer = 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_keeper001';
@@ -164,20 +168,25 @@ function invocation(request: {
 }
 
 describe('packaged runtimes', () => {
-  let database: TestDatabase;
+  let server: PostgresServer;
+  let database: PostgresConnection;
   let dataApi: DataApiTestClient;
   let records: Record<string, unknown>[];
 
   beforeEach(async () => {
-    database = await createTestDatabase(
+    server = await startPostgresServer(
       `${catalogSchemaSql}\n\n${usercardsSchemaSql}\n\n${searchSchemaSql}`,
     );
-    dataApi = createDataApiTestClient(database);
+    database = await server.connect();
+    // General runtime cases use bootstrap privileges; the exact-grants case maps every secret.
+    dataApi = createDataApiTestClient(server);
     records = [];
   });
 
   afterEach(async () => {
+    await dataApi.close();
     await database.close();
+    await server.close();
   });
 
   /** Runs the finite job against one snapshot object, as the deployed task runs it. */
@@ -222,7 +231,7 @@ describe('packaged runtimes', () => {
       text: `${JSON.stringify(bolt)}\n`,
     });
 
-    expect(outcome.ok).toBe(true);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
     expect(outcome.revision?.sourceVersion).toBe(sourceVersion);
     const jobRecord = records.at(-1);
     expect(jobRecord).toMatchObject({
@@ -366,7 +375,7 @@ describe('packaged runtimes', () => {
       KEEPER_INDEXING_ACCOUNTS: 'cognito-alice',
     });
 
-    expect(outcome.ok).toBe(true);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
     expect(outcome.result).toMatchObject({
       rebuilt: true,
       published: true,
@@ -521,20 +530,31 @@ describe('packaged runtimes', () => {
       'keeper_catalog_publication',
       'keeper_usercards_publication',
     ]) {
-      await database.exec(`create role ${role}`);
+      await database.query(`create role ${role}`);
     }
-    await database.exec(catalogReaderGrants('keeper_reader'));
-    await database.exec(usercardsReaderGrants('keeper_reader'));
-    await database.exec(searchReaderGrants('keeper_search_query'));
-    await database.exec(searchIndexingGrants('keeper_search_indexing'));
-    await database.exec(catalogPublicationGrants('keeper_catalog_publication'));
-    await database.exec(usercardsPublicationGrants('keeper_usercards_publication'));
+    for (const component of ['catalog', 'usercards']) {
+      await database.query(`
+        grant usage on schema ${component}_private to keeper_${component}_writer;
+        grant select, insert, update, delete on all tables in schema ${component}_private to keeper_${component}_writer;
+        grant usage, select on all sequences in schema ${component}_private to keeper_${component}_writer;
+      `);
+    }
+    await database.query(catalogReaderGrants('keeper_catalog_writer'));
+    await database.query(usercardsReaderGrants('keeper_usercards_writer'));
+    await database.query(catalogReaderGrants('keeper_reader'));
+    await database.query(usercardsReaderGrants('keeper_reader'));
+    await database.query(searchReaderGrants('keeper_search_query'));
+    await database.query(searchIndexingGrants('keeper_search_indexing'));
+    await database.query(catalogPublicationGrants('keeper_catalog_publication'));
+    await database.query(usercardsPublicationGrants('keeper_usercards_publication'));
 
     // Each secret executes as the role it names, so the packaged runtimes run under exactly the
     // deployment's grants rather than the bootstrap connection's own privileges.
-    dataApi = createDataApiTestClient(database, {
+    dataApi = createDataApiTestClient(server, {
       roles: {
         [readerSecret]: 'keeper_reader',
+        [catalogWriterSecret]: 'keeper_catalog_writer',
+        [userCardsWriterSecret]: 'keeper_usercards_writer',
         [searchQuerySecret]: 'keeper_search_query',
         [searchIndexingSecret]: 'keeper_search_indexing',
         [catalogPublicationSecret]: 'keeper_catalog_publication',
@@ -542,14 +562,15 @@ describe('packaged runtimes', () => {
       },
     });
 
-    await runJob({
+    const catalogOutcome = await runJob({
       metadata: { 'source-version': sourceVersion },
       version: 'snapshot-version-1',
       text: `${JSON.stringify(bolt)}\n`,
     });
+    expect(catalogOutcome.ok, JSON.stringify(catalogOutcome)).toBe(true);
     const deployment = interactive();
     const handler = createApiGatewayHandler(deployment.application);
-    await handler(
+    const saved = await handler(
       invocation({
         method: 'POST',
         path: '/api/collection/copies',
@@ -562,6 +583,8 @@ describe('packaged runtimes', () => {
         },
       }),
     );
+
+    expect(saved.statusCode, saved.body).toBe(200);
 
     // A Search query answers as Search's query role: its projection is reachable and no provider
     // relation is, even though the interactive runtime also holds the reader credential.
@@ -579,64 +602,87 @@ describe('packaged runtimes', () => {
       ...indexingJobEnvironment,
       KEEPER_INDEXING_ACCOUNTS: 'cognito-alice',
     });
-    expect(outcome.ok).toBe(true);
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
     expect(outcome.result).toMatchObject({ published: true, caughtUp: true });
 
-    /** One statement executed as a role, to prove what that credential can and cannot reach. */
-    async function asRole(
-      role: string,
-      statement: string,
-    ): Promise<readonly Record<string, unknown>[]> {
-      await database.exec(`set role ${role}`);
-      try {
-        return await database.query(statement);
-      } finally {
-        await database.exec('reset role');
-      }
+    for (const [accountId, copies] of [
+      ['cognito-alice', 1],
+      ['cognito-bob', 0],
+    ] as const) {
+      const response = await handler(
+        invocation({
+          method: 'POST',
+          path: '/api/search',
+          claims: claimsFor(accountId),
+          body: { resultLevel: 'copy', criteria: [{ kind: 'owned' }] },
+        }),
+      );
+      expect(response.statusCode, response.body).toBe(200);
+      expect((JSON.parse(response.body) as { entries: readonly unknown[] }).entries).toHaveLength(
+        copies,
+      );
+    }
+
+    /** Exercise denied and permitted reads through the same adapter as the runtime. */
+    async function asSecret(secretArn: string, sql: string): Promise<unknown> {
+      const result = await dataApi.send({ name: 'ExecuteStatement', input: { secretArn, sql } });
+      return JSON.parse(String(result['formattedRecords'])) as unknown;
     }
 
     // Each credential reaches what its own role owns and no other component's storage.
     await expect(
-      asRole('keeper_search_indexing', 'select card_id from catalog_private.card'),
+      asSecret(catalogWriterSecret, 'select copy_id from usercards_private.copy'),
     ).rejects.toThrow(/permission denied/);
     await expect(
-      asRole('keeper_search_indexing', 'select copy_id from usercards_private.copy'),
+      asSecret(userCardsWriterSecret, 'select card_id from catalog_private.card'),
     ).rejects.toThrow(/permission denied/);
     await expect(
-      asRole('keeper_search_indexing', 'select card_id from catalog.cards'),
+      asSecret(readerSecret, 'select card_id from catalog_private.card'),
     ).rejects.toThrow(/permission denied/);
     await expect(
-      asRole('keeper_search_indexing', 'select copy_id from usercards.copies'),
+      asSecret(readerSecret, 'select copy_id from usercards_private.copy'),
     ).rejects.toThrow(/permission denied/);
     await expect(
-      asRole('keeper_search_indexing', 'select position from catalog_private.publication'),
+      asSecret(searchIndexingSecret, 'select card_id from catalog_private.card'),
     ).rejects.toThrow(/permission denied/);
     await expect(
-      asRole('keeper_search_query', 'select card_id from catalog.cards'),
+      asSecret(searchIndexingSecret, 'select copy_id from usercards_private.copy'),
     ).rejects.toThrow(/permission denied/);
     await expect(
-      asRole('keeper_search_query', 'select copy_id from usercards.copies'),
+      asSecret(searchIndexingSecret, 'select card_id from catalog.cards'),
     ).rejects.toThrow(/permission denied/);
     await expect(
-      asRole('keeper_search_query', 'select card_id from search_private.card'),
+      asSecret(searchIndexingSecret, 'select copy_id from usercards.copies'),
     ).rejects.toThrow(/permission denied/);
     await expect(
-      asRole('keeper_catalog_publication', 'select card_id from catalog_private.card'),
+      asSecret(searchIndexingSecret, 'select position from catalog_private.publication'),
+    ).rejects.toThrow(/permission denied/);
+    await expect(asSecret(searchQuerySecret, 'select card_id from catalog.cards')).rejects.toThrow(
+      /permission denied/,
+    );
+    await expect(
+      asSecret(searchQuerySecret, 'select copy_id from usercards.copies'),
     ).rejects.toThrow(/permission denied/);
     await expect(
-      asRole('keeper_catalog_publication', 'select copy_id from usercards_private.copy'),
+      asSecret(searchQuerySecret, 'select card_id from search_private.card'),
     ).rejects.toThrow(/permission denied/);
     await expect(
-      asRole(
-        'keeper_usercards_publication',
+      asSecret(catalogPublicationSecret, 'select card_id from catalog_private.card'),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      asSecret(catalogPublicationSecret, 'select copy_id from usercards_private.copy'),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      asSecret(
+        userCardsPublicationSecret,
         'select account_id from usercards_private.account_state',
       ),
     ).resolves.not.toThrow();
     await expect(
-      asRole('keeper_usercards_publication', 'select card_id from catalog_private.card'),
+      asSecret(userCardsPublicationSecret, 'select card_id from catalog_private.card'),
     ).rejects.toThrow(/permission denied/);
     expect(
-      await asRole('keeper_search_query', 'select count(*)::int as cards from search.cards'),
+      await asSecret(searchQuerySecret, 'select count(*)::int as cards from search.cards'),
     ).toEqual([{ cards: 1 }]);
 
     const indexed = await database.query(`select count(*)::int as copies from search_private.copy`);

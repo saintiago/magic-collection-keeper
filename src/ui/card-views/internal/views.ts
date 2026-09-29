@@ -102,7 +102,8 @@ export interface CardViewDetailOptions<Context = unknown> {
   readonly fragments?: CardListFragmentReaders;
   /**
    * Nodes the page composes for the published entry, after the identity information: the level's
-   * related list or the editor it presents. The page keeps the children it creates here.
+   * related list or the editor it presents. Called for explicit absence too, so the page can
+   * release previously composed children. The page keeps the children it creates here.
    */
   readonly content?: (entry: CardListEntry) => readonly Node[];
   /** Navigation the page presents after the composed content, from the entry it published. */
@@ -167,10 +168,6 @@ export function createCardViews(): CardViews {
     },
     detail<Context>(options: CardViewDetailOptions<Context>): CardViewDetail {
       const document = readDocument(options?.document);
-      const identity: Node[] = [];
-      const image: Node[] = [];
-      const content: Node[] = [];
-      const navigation: Node[] = [];
       // The level is one typed target: the view presents the identity and the content the page
       // composes, so it uses the headless list the supplied factory constructs instead of the
       // rendered list presentation of a page.
@@ -187,7 +184,7 @@ export function createCardViews(): CardViews {
       presented.promise.catch(() => {});
       let settled = false;
       let composedKey: string | null = null;
-      let composed: readonly Node[] = [];
+      let disposed = false;
       let composedGeneration = -1;
       /**
        * Renders the identity and the composition of the published entry. The entry of one level is
@@ -196,7 +193,13 @@ export function createCardViews(): CardViews {
        */
       const identityHost = document.createElement('div');
       identityHost.id = 'card-details-identity';
+      const imageHost = document.createElement('div');
+      const contentHost = document.createElement('div');
+      contentHost.id = 'card-details-level';
       const paint = (snapshot: CardListSnapshot<Context>): void => {
+        if (disposed) {
+          return;
+        }
         const entry = snapshot.entries[0]?.entry ?? null;
         if (entry === null) {
           if (snapshot.error !== null) {
@@ -213,24 +216,27 @@ export function createCardViews(): CardViews {
         if (entry.key !== composedKey || generation !== composedGeneration) {
           composedKey = entry.key;
           composedGeneration = generation;
-          identity.splice(0, identity.length, ...identityNodes(document, options.identity, entry));
-          image.splice(0, image.length, ...imageNodes(document, options.identity, snapshot));
-          composed = entry.detail?.absent == null ? (options.content?.(entry) ?? []) : [];
-          content.splice(0, content.length, ...composed);
+          identityHost.replaceChildren(...identityNodes(document, options.identity, entry));
+          const composed = options.content?.(entry) ?? [];
           const links = entry.detail?.absent == null ? (options.navigation?.(entry) ?? []) : [];
-          navigation.splice(0, navigation.length, ...links);
+          contentHost.replaceChildren(...composed, ...links);
         }
-        if (options.identity === 'printing') {
-          // The identity presents the printing's image: demand that fragment for the one entry.
-          list.demand({ entries: 1, information: ['images'] });
-        }
+        // Enrichment can change without changing the entry or generation. Reconcile only its
+        // region, preserving the mounted children and their focus while fragments arrive.
+        imageHost.replaceChildren(...imageNodes(document, options.identity, snapshot));
         settle();
       };
-      list.subscribe((snapshot) => {
-        paint(snapshot);
-        render();
-      });
+      const unsubscribe = list.subscribe(paint);
+      if (options.identity === 'printing') {
+        // Demand belongs to mounting this one-entry viewport, never to snapshot rendering.
+        list.demand({ entries: 1, information: ['images'] });
+      }
       paint(list.snapshot());
+      if (options.signal?.aborted) {
+        dispose();
+      } else {
+        options.signal?.addEventListener('abort', dispose, { once: true });
+      }
 
       function report(problem: string): void {
         if (settled) {
@@ -248,20 +254,20 @@ export function createCardViews(): CardViews {
         presented.resolve();
       }
 
-      const contentHost = document.createElement('div');
-      contentHost.id = 'card-details-level';
-      const render = (): void => {
-        identityHost.replaceChildren(...identity, ...image);
-        contentHost.replaceChildren(...content, ...navigation);
-      };
-      render();
-      const nodes: Node[] = [identityHost, contentHost];
+      function dispose(): void {
+        if (disposed) {
+          return;
+        }
+        disposed = true;
+        options.signal?.removeEventListener('abort', dispose);
+        unsubscribe();
+        list.dispose();
+      }
+
       return {
-        nodes,
+        nodes: [identityHost, imageHost, contentHost],
         presented: presented.promise,
-        dispose: () => {
-          list.dispose();
-        },
+        dispose,
       };
     },
     picker(options) {
@@ -355,6 +361,12 @@ function imageNodes(
     return [];
   }
   const state = snapshot.entries[0]?.fragments.get('images');
+  if (state?.status === 'failed') {
+    return [line(document, 'printing-image-status', state.message)];
+  }
+  if (state?.status === 'loading') {
+    return [line(document, 'printing-image-status', 'Loading printing image…')];
+  }
   if (state?.status !== 'ready') {
     return [];
   }
