@@ -1867,6 +1867,110 @@ for (const context of ['Back', 'another search', 'missing lookup', 'failed looku
   });
 }
 
+test('a failed printing read clears when reopening the review presents the printing', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry()]);
+  const foil: PrintingRecord = { ...m10, finishes: ['nonfoil', 'foil'] };
+  // The search offers a printing the catalog does not publish: choosing it keeps the choice's
+  // identity while the lookup that would resolve its record stays unanswered.
+  await page.fill('#import-printing-query-entry-1', 'set:m10');
+  await page.click('#import-printing-find-entry-1');
+  await settle(page, 'settleSearch', (await requested(page, 'searches')).id, searchPage([foil]));
+  const reads = (await control<unknown[]>(page, 'catalogRequests')).length;
+  await control(page, 'scriptCatalog', null);
+  await chooseImportPrinting(page, 'entry-1', foil.printingId);
+  await settle(page, 'settleCatalog', (await requested(page, 'catalogRequests', reads)).id, {});
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText(
+    `Printing ${foil.printingId}`,
+  );
+
+  // Saving re-reads the printing it must quote; the lookup fails, so the row keeps the failure
+  // beside the printing it names and the shell keeps it visible under the identity of this
+  // entry's catalog read (docs/ui/navigation.md#error-notices).
+  await page.click('#import-review-save-entry-1');
+  await control(page, 'fail', (await requested(page, 'catalogRequests', reads + 1)).id, {
+    code: 'unavailable',
+    message: 'Offline',
+  });
+  await expect(page.locator('#import-entry-status-entry-1')).toContainText('could not be read');
+  const notice = page.locator(
+    '[data-ui-notice="navigation:page:alice:import-entry:entry-1:printing"]',
+  );
+  await expect(notice).toContainText('The selected printing could not be read');
+  expect(await control<unknown[]>(page, 'review')).toHaveLength(0);
+
+  // Leaving the review keeps the service failure visible.
+  await control(page, 'navigate', { page: 'home' });
+  await expect(notice).toContainText('The selected printing could not be read');
+
+  // Returning reads the entries again — the stored printing stays unanswered for this fixture —
+  // and the review reads the printing its draft names once more. That lookup answers, so it
+  // reconciles the failure the replaced editor presented
+  // (docs/ui/navigation.md#error-notices).
+  await control(page, 'back');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await settle(page, 'settleCatalog', (await requested(page, 'catalogRequests', reads + 2)).id, {});
+  await settle(page, 'settleCatalog', (await requested(page, 'catalogRequests', reads + 3)).id, {
+    printings: [foil],
+  });
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await expect(notice).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('keeps an unestablished review outcome when a later printing read fails', async ({ page }) => {
+  const errors = await openPendingReview(page, [entry()]);
+  // The entry names a printing the review already read, so the save is attempted without a lookup
+  // and its lost response stays unestablished.
+  await page.click('#import-review-save-entry-1');
+  const review = await requested<Record<string, unknown>>(page, 'review');
+  await control(page, 'fail', review.id, { code: 'unavailable', message: 'Lost response' });
+  const write = page.locator('[data-ui-notice="navigation:page:alice:import-entry:entry-1"]');
+  await expect(write).toContainText('The review outcome is unknown');
+  await expect(page.locator('#import-entry-status-entry-1')).toHaveText(
+    'The review outcome is unknown. Reload the pending import before retrying.',
+  );
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+
+  // A later review of another printing fails its lookup before any write: the read reports its own
+  // failure without displacing the warning for the write that stays unresolved
+  // (docs/ui/navigation.md#error-notices).
+  await page.fill('#import-printing-query-entry-1', 'set:m10');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchPage([{ ...m10, finishes: ['nonfoil', 'foil'] }]),
+  );
+  const reads = (await control<unknown[]>(page, 'catalogRequests')).length;
+  await control(page, 'scriptCatalog', null);
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  await settle(page, 'settleCatalog', (await requested(page, 'catalogRequests', reads)).id, {});
+  await page.click('#import-review-save-entry-1');
+  await control(page, 'fail', (await requested(page, 'catalogRequests', reads + 1)).id, {
+    code: 'unavailable',
+    message: 'Offline',
+  });
+  await expect(page.locator('#import-entry-status-entry-1')).toContainText('could not be read');
+  const read = page.locator(
+    '[data-ui-notice="navigation:page:alice:import-entry:entry-1:printing"]',
+  );
+  await expect(read).toContainText('The selected printing could not be read');
+  await expect(write).toContainText('The review outcome is unknown');
+  expect(await control<unknown[]>(page, 'review')).toHaveLength(1);
+  expect(errors).toEqual([]);
+});
+
 test('serializes confirmation across sessions and releases it after explicit absence', async ({
   page,
 }) => {

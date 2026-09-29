@@ -155,9 +155,30 @@ const reviewReadNotice = 'import-review';
 const reviewConfirmNotice = 'import-confirm';
 const reviewDiscardNotice = 'import-discard';
 
-/** Notice identity of one pending entry's own review. */
+/**
+ * Notice identity of one pending entry's own state changes: the review and the discard of the
+ * entry. Reporting it again updates the feedback of that write, and a catalog read never resolves
+ * it (docs/ui/navigation.md#error-notices).
+ */
 function reviewEntryNotice(entryId: string): string {
   return `import-entry:${entryId}`;
+}
+
+/**
+ * Notice identity of one pending entry's catalog read: the lookup that resolves the printing the
+ * review names. The read has a lifecycle of its own, so a lookup that establishes the printing —
+ * including one a reopened review issues — reconciles the failure of an earlier lookup, and it
+ * never replaces the feedback of a write whose outcome the provider has not established
+ * (docs/ui/navigation.md#error-notices, docs/ui/architecture.md#state-ownership-and-restoration).
+ */
+function reviewEntryPrintingNotice(entryId: string): string {
+  return `import-entry:${entryId}:printing`;
+}
+
+/** Ends every notice of one pending entry whose review no longer exists. */
+function dismissReviewEntryNotices(notices: UiNotices | undefined, entryId: string): void {
+  notices?.dismiss(reviewEntryNotice(entryId));
+  notices?.dismiss(reviewEntryPrintingNotice(entryId));
 }
 
 /** One outstanding confirmation the review presents until UserCards establishes its outcome. */
@@ -1438,7 +1459,14 @@ export function createImportReviewEditor(
     try {
       const resolved = await resolvePrintings(options.catalog, [printingId]);
       const record = resolved.get(printingId) ?? null;
-      if (disposed || pendingEntries !== binding || record === null) {
+      if (disposed || pendingEntries !== binding) {
+        return;
+      }
+      // The lookup answered — with the printing or with the catalog's silence — so the read it
+      // repeats is established and the failure of an earlier lookup of this entry no longer
+      // describes the service (docs/ui/navigation.md#error-notices).
+      options.notices?.dismiss(reviewEntryPrintingNotice(entryId));
+      if (record === null) {
         return;
       }
       const current = printings.get(entryId) ?? [];
@@ -1501,9 +1529,9 @@ export function createImportReviewEditor(
       printingId,
     );
     if (chosenPrinting === null) {
+      let resolution: ReadonlyMap<string, PrintingRecord>;
       try {
-        chosenPrinting =
-          (await resolvePrintings(options.catalog, [printingId])).get(printingId) ?? null;
+        resolution = await resolvePrintings(options.catalog, [printingId]);
       } catch (cause) {
         if (!disposed && sessionId === record.entry.sessionId) {
           const problem = `The selected printing could not be read: ${readMessage(
@@ -1512,11 +1540,25 @@ export function createImportReviewEditor(
           )}`;
           report(editor, problem);
           // The row keeps the message beside the printing it names; the notice keeps the service
-          // failure visible after the view is left (docs/ui/navigation.md#error-notices).
-          reportUiFailure(options.notices, reviewEntryNotice(record.entry.entryId), problem);
+          // failure visible after the view is left, under the identity of this entry's catalog
+          // read, so it never displaces the feedback of a write that stays unestablished
+          // (docs/ui/navigation.md#error-notices).
+          reportUiFailure(
+            options.notices,
+            reviewEntryPrintingNotice(record.entry.entryId),
+            problem,
+          );
         }
         return;
       }
+      if (disposed) {
+        return;
+      }
+      chosenPrinting = resolution.get(printingId) ?? null;
+      // The lookup answered — with the printing or with the catalog's silence — so the failure of
+      // an earlier lookup of this entry is reconciled
+      // (docs/ui/navigation.md#error-notices).
+      options.notices?.dismiss(reviewEntryPrintingNotice(record.entry.entryId));
     }
     if (disposed) {
       return;
@@ -1596,7 +1638,7 @@ export function createImportReviewEditor(
       printings.delete(record.entry.entryId);
       releasePrintingPicker(editor.entry.key);
       messages.delete(editor.entry.key);
-      options.notices?.dismiss(reviewEntryNotice(record.entry.entryId));
+      dismissReviewEntryNotices(options.notices, record.entry.entryId);
     } else {
       const problem = outcome.message ?? 'The entry was not discarded.';
       report(editor, problem);
@@ -1663,6 +1705,10 @@ export function createImportReviewEditor(
       printings.delete(record.entry.entryId);
       releasePrintingPicker(key);
       messages.delete(key);
+      // The entry left the review: the notices of its own review — including the reading of the
+      // printing it named — describe a pending entry that no longer exists
+      // (docs/ui/navigation.md#error-notices).
+      dismissReviewEntryNotices(options.notices, record.entry.entryId);
     }
     selectedRevisions.clear();
   }
@@ -1775,6 +1821,9 @@ export function createImportReviewEditor(
       drafts.delete(entry.entryId);
       printings.delete(entry.entryId);
       releasePrintingPicker(key);
+      // The confirmed entry no longer awaits review, so the notices of its own review end with it
+      // (docs/ui/navigation.md#error-notices).
+      dismissReviewEntryNotices(options.notices, entry.entryId);
     }
   }
 
