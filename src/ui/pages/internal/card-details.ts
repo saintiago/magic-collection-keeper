@@ -24,6 +24,7 @@ import type { CardRecord, Catalog, PrintingRecord } from '../../../catalog/index
 import type { UiCardList } from '../../card-views/index.js';
 import { createCopyAccess, type UiCopyDraft, type UiCopyEditor } from '../../editors/index.js';
 import { UI_LIMITS } from '../../shared/limits.js';
+import { reportUiFailure } from '../../shared/notices.js';
 import { uiHref, type UiPageDefinition, type UiView } from '../../navigation/index.js';
 import { cardViewOf, readListState, readPageState, restoredPresentation } from './page-support.js';
 
@@ -33,6 +34,9 @@ interface UiLevelPresentation {
   /** Presentation of the level's retained list, or null when the level composes none. */
   readonly restoration: Promise<void> | null;
 }
+
+/** Notice identity of this view's own level read. */
+const cardDetailsNotice = 'card-details';
 
 export function createCardDetailsPage(): UiPageDefinition {
   return {
@@ -124,12 +128,23 @@ export function createCardDetailsPage(): UiPageDefinition {
           }
           content.replaceChildren(...level.nodes);
           status.textContent = '';
+          context.notices.dismiss(cardDetailsNotice);
         } catch (cause) {
           if (closed) {
             return;
           }
-          content.replaceChildren(...failurePanel(cause));
+          const problem = readMessage(cause, 'The card details could not be loaded.');
+          content.replaceChildren(...failurePanel(problem));
           status.textContent = '';
+          // Reading the level is a service failure with no field to hold it: the notice keeps it
+          // visible after the view is left, with the same explicit retry
+          // (docs/ui/navigation.md#error-notices).
+          reportUiFailure(context.notices, cardDetailsNotice, problem, {
+            label: 'Load the details again',
+            run: () => {
+              void render();
+            },
+          });
           presented.reject(cause);
           return;
         }
@@ -152,10 +167,10 @@ export function createCardDetailsPage(): UiPageDefinition {
         }
       }
 
-      function failurePanel(cause: unknown): readonly Node[] {
+      function failurePanel(problem: string): readonly Node[] {
         const hint = document.createElement('p');
         hint.id = 'card-details-failure';
-        hint.textContent = readMessage(cause, 'The card details could not be loaded.');
+        hint.textContent = problem;
         const retry = button('card-details-retry', 'Retry');
         retry.addEventListener('click', () => {
           void render();
@@ -219,6 +234,7 @@ export function createCardDetailsPage(): UiPageDefinition {
           copy,
           card,
           printing,
+          notices: context.notices,
           restored: restored?.draft,
           signal: context.signal,
           printingHref: (saved) => uiHref(viewOfCard(cardId, saved.printingId, null)),

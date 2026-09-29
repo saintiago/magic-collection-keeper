@@ -31,6 +31,7 @@ import {
   text,
 } from '../../shared/controls.js';
 import { UI_LIMITS } from '../../shared/limits.js';
+import { reportUiFailure, type UiNotices } from '../../shared/notices.js';
 import { readUiCatalogFinish, uiCatalogFinishes, uiFinishLabel } from '../../shared/vocabulary.js';
 import {
   copyChangeTool,
@@ -40,7 +41,12 @@ import {
   type UiCopyChange,
   type UiCopyCorrection,
 } from './copy-edits.js';
-import { applyAction, outcomeText, type UiOperationOutcome } from './operations.js';
+import {
+  applyAction,
+  outcomeText,
+  reportUiOperation,
+  type UiOperationOutcome,
+} from './operations.js';
 import { printingChoiceGuidance, singlePrintingChoice } from './printing-choice.js';
 
 /** Draft of the collection's bulk change controls. */
@@ -55,9 +61,17 @@ export interface UiCopyBulkEditorOptions {
   readonly access: UiCopyAccess;
   /** Aborted when the view closes; a dispatched change stops then. */
   readonly signal: AbortSignal;
+  /**
+   * Floating notices of the shell: the editor reports the failures of the changes it dispatches,
+   * so they stay visible after the view is left (docs/ui/navigation.md#error-notices).
+   */
+  readonly notices?: UiNotices;
   /** Draft a previous visit retained, when it carried one. */
   readonly restored?: unknown;
 }
+
+/** Notice identity of the bulk copy changes of one view. */
+const bulkNotice = 'copy-bulk';
 
 /**
  * The bulk copy change editor: the values its controls apply beside the actions the list presents
@@ -152,6 +166,7 @@ export function createCopyBulkEditor(options: UiCopyBulkEditorOptions): UiCopyBu
         (outcome) => {
           applying = false;
           paintOutcome(outcome);
+          reportUiOperation(options.notices, bulkNotice, outcome);
         },
       );
     },
@@ -263,6 +278,11 @@ export interface UiCopyEditorOptions {
   readonly restored?: unknown;
   /** Aborted when the view closes; the editor drops late results then. */
   readonly signal: AbortSignal;
+  /**
+   * Floating notices of the shell: the editor reports the failures of the corrections it
+   * dispatches and of the recovery reads it presents (docs/ui/navigation.md#error-notices).
+   */
+  readonly notices?: UiNotices;
   /** Location the saved copy's printing details are presented at. */
   printingHref(copy: PhysicalCopy): string;
 }
@@ -330,6 +350,8 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
   save.id = 'copy-save';
   save.textContent = 'Save changes';
   const reload = button(document, 'copy-reload', 'Reload copy');
+  /** Notice identity of this copy's corrections: an update replaces the presented failure. */
+  const copyNotice = `copy:${saved.copyId}`;
   const form = document.createElement('form');
   form.id = 'copy-form';
   form.append(
@@ -580,6 +602,15 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
     }
     if (current === work) {
       copyStatus.textContent = outcome.message ?? 'Saved.';
+      // A failure of the correction stays visible after the view is left, with the recovery read
+      // that reviews the recorded copy beside the draft the form keeps
+      // (docs/ui/navigation.md#error-notices).
+      reportUiOperation(options.notices, copyNotice, outcome, {
+        label: 'Reload the copy',
+        run: () => {
+          void reloadCopy();
+        },
+      });
     }
     if (outcome.status === 'conflict') {
       // The copy changed meanwhile: its current state is offered for review while the draft
@@ -599,6 +630,14 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
       return;
     }
     copyStatus.textContent = result.status === 'read' ? 'Reloaded the copy.' : readProblem(result);
+    if (result.status !== 'read') {
+      reportUiFailure(options.notices, copyNotice, readProblem(result), {
+        label: 'Reload the copy',
+        run: () => {
+          void reloadCopy();
+        },
+      });
+    }
   }
 
   /**

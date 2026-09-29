@@ -45,6 +45,7 @@ function importPage(): UiPageDefinition {
         cardViews: context.modules.cardViews,
         accountId,
         catalog: context.capabilities.catalog,
+        notices: context.notices,
         signal: context.signal,
       };
 
@@ -83,6 +84,7 @@ function importPage(): UiPageDefinition {
         accountId,
         importId: context.capabilities.capture.createImportId(),
         device: context.device,
+        notices: context.notices,
         signal: context.signal,
         reviewChanged: (change) => {
           void reviewEditor.reconcileCapture(change);

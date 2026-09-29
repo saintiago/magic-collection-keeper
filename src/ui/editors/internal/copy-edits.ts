@@ -209,17 +209,26 @@ async function applyCopyChange(
   guidance: string,
 ): Promise<UiOperationOutcome> {
   if (change === null) {
-    return { status: 'failed', message: guidance };
+    // Nothing was dispatched: the message stays beside the control that still needs a value.
+    return { status: 'failed', message: guidance, validation: true };
   }
   const copyIds: string[] = [];
   for (const target of request.selection.targets) {
     if (target.kind !== 'copy') {
-      return { status: 'failed', message: 'Select physical copies to change them.' };
+      return {
+        status: 'failed',
+        message: 'Select physical copies to change them.',
+        validation: true,
+      };
     }
     copyIds.push(target.copyId);
   }
   if (copyIds.length === 0) {
-    return { status: 'failed', message: 'Select the physical copies to change.' };
+    return {
+      status: 'failed',
+      message: 'Select the physical copies to change.',
+      validation: true,
+    };
   }
   let copies: readonly PhysicalCopy[];
   try {

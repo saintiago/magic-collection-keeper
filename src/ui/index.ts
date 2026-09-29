@@ -56,8 +56,10 @@ export {
   type UiPageHandle,
   type UiPageName,
   type UiPageRegistry,
+  type UiRetainedRelease,
   type UiView,
   type UiViewSnapshot,
+  type UiViewStateStore,
 } from './navigation/index.js';
 export {
   createUserInterface,

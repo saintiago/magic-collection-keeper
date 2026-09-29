@@ -32,6 +32,7 @@ import type { CardViews, UiCardList, UiEntryOwnership } from '../../card-views/i
 import { UI_LIMITS } from '../../shared/limits.js';
 import { controlLabel, replaceChildrenKeepingFocus } from '../../shared/controls.js';
 import type { UiDialogs } from '../../shared/dialogs.js';
+import { reportUiFailure, type UiNotices } from '../../shared/notices.js';
 import { readRetainedList, readState } from '../../shared/state.js';
 import type { UiActionIntent } from '../../shared/actions.js';
 import { readUiCollectionLevel } from '../../shared/vocabulary.js';
@@ -50,8 +51,21 @@ import {
   type UiTagAccess,
   type UiTagKind,
 } from './tag-edits.js';
-import { applyAction, outcomeText, type UiOperationOutcome } from './operations.js';
+import {
+  applyAction,
+  outcomeText,
+  reportUiOperation,
+  type UiOperationOutcome,
+} from './operations.js';
 import { printingChoiceGuidance, singlePrintingChoice } from './printing-choice.js';
+
+/** Notice identities of the organization operations, one per operation a view presents. */
+const tagListReadNotice = 'tags:list';
+const tagCreateNotice = 'tags:create';
+const tagViewReadNotice = 'tag:read';
+const tagViewRenameNotice = 'tag:rename';
+const tagViewAddNotice = 'tag:add';
+const tagViewLocationsNotice = 'tag:locations';
 
 /** The reported presentation of one list's retention, or null when this visit restored none. */
 function presentedOf<Context>(list: UiCardList<Context>): Promise<void> | null {
@@ -85,6 +99,12 @@ export interface UiTagEditorContext {
   readonly dialogs: UiDialogs;
   /** Aborted when the view closes; late results must not change a replacement view. */
   readonly signal: AbortSignal;
+  /**
+   * Floating notices of the shell: the editors report the operation and service failures they
+   * present, so a failure stays visible after the view is left
+   * (docs/ui/navigation.md#error-notices).
+   */
+  readonly notices?: UiNotices;
 }
 
 export interface UiTagListEditorOptions extends UiTagEditorContext {
@@ -230,10 +250,25 @@ export function createTagListEditor(options: UiTagListEditorOptions): UiTagListE
       // for review while the unsaved label stays in the form.
       void readWindow(tags.length);
     }
-    createStatus.textContent =
+    const message =
       outcome.status === 'unknown'
         ? 'The outcome is unknown. Check whether the tag appears in the list before retrying.'
         : (outcome.message ?? `Created “${wanted}”.`);
+    createStatus.textContent = message;
+    // The unsaved label stays beside the field; the failure stays visible as the shell's notice
+    // with the recovery read that checks what the account actually holds
+    // (docs/ui/navigation.md#error-notices).
+    reportUiOperation(
+      options.notices,
+      tagCreateNotice,
+      { status: outcome.status, message },
+      {
+        label: 'Check the tags',
+        run: () => {
+          void readWindow(tags.length);
+        },
+      },
+    );
     paint();
   }
 
@@ -269,6 +304,9 @@ export function createTagListEditor(options: UiTagListEditorOptions): UiTagListE
       }
     }
     row.status.textContent = outcome.message ?? 'Renamed the tag.';
+    // The row keeps the unsaved label for the retry; the notice keeps the failure visible when
+    // the view is left (docs/ui/navigation.md#error-notices).
+    reportUiOperation(options.notices, `tags:rename:${tag.tagId}`, outcome);
     if (outcome.status === 'conflict') {
       // The tag changed meanwhile: its saved state is offered for review while the unsaved
       // label stays in the row for the retry.
@@ -335,6 +373,12 @@ export function createTagListEditor(options: UiTagListEditorOptions): UiTagListE
       error = readMessage(cause, 'The tags could not be loaded.');
       loading = false;
       paint();
+      reportUiFailure(options.notices, tagListReadNotice, error, {
+        label: 'Load the tags again',
+        run: () => {
+          void readWindow(cover, preserved);
+        },
+      });
       return;
     }
     if (closed || current !== version) {
@@ -358,6 +402,7 @@ export function createTagListEditor(options: UiTagListEditorOptions): UiTagListE
     loading = false;
     error = null;
     paint();
+    options.notices?.dismiss(tagListReadNotice);
   }
 
   /** Appends the next page of tags, retiring the oldest beyond the retained window. */
@@ -404,6 +449,16 @@ export function createTagListEditor(options: UiTagListEditorOptions): UiTagListE
     }
     loading = false;
     paint();
+    if (error !== null) {
+      reportUiFailure(options.notices, tagListReadNotice, error, {
+        label: 'Load the tags again',
+        run: () => {
+          void readWindow(tags.length);
+        },
+      });
+    } else {
+      options.notices?.dismiss(tagListReadNotice);
+    }
   }
 
   /** Starts one window-changing read: it supersedes every read the page started earlier. */
@@ -770,9 +825,15 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
       return;
     }
     if (read === null || read.system) {
-      presentMissing(
-        read === null ? failure : 'System tags are managed through their own lifecycle operations.',
-      );
+      const problem =
+        read === null ? failure : 'System tags are managed through their own lifecycle operations.';
+      presentMissing(problem);
+      if (read === null && failure !== null) {
+        // A tag the account could not read is a service failure: the view presents the back
+        // destination beside it and the notice keeps the failure visible
+        // (docs/ui/navigation.md#error-notices).
+        reportUiFailure(options.notices, tagViewReadNotice, failure);
+      }
       presented.resolve();
       return;
     }
@@ -897,6 +958,9 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
       }
     }
     renameStatus.textContent = outcome.message ?? 'Renamed the tag.';
+    // The unsaved label stays beside the field; the notice keeps the failure visible after the
+    // view is left (docs/ui/navigation.md#error-notices).
+    reportUiOperation(options.notices, tagViewRenameNotice, outcome);
     // A committed rename reacquires the association sequence through CardList's own change
     // invalidation; the page owns no repair read of its lists.
     if (outcome.status === 'conflict') {
@@ -955,6 +1019,7 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
         loading: false,
         error: null,
       };
+      options.notices?.dismiss(tagViewLocationsNotice);
     } catch (cause) {
       if (closed || current !== locationVersion) {
         return;
@@ -964,11 +1029,21 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
         void readLocations(null);
         return;
       }
+      const problem = readMessage(cause, 'The other locations could not be loaded.');
       locations = {
         ...locations,
         loading: false,
-        error: readMessage(cause, 'The other locations could not be loaded.'),
+        error: problem,
       };
+      // The next page of destinations is a service read of this view: its failure stays visible
+      // beside the control and as the shell's notice with the same retry
+      // (docs/ui/navigation.md#error-notices).
+      reportUiFailure(options.notices, tagViewLocationsNotice, problem, {
+        label: 'Load the locations again',
+        run: () => {
+          void readLocations(locations.continuation);
+        },
+      });
     }
     paintLocations();
   }
@@ -1069,6 +1144,9 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
     }
     adding = false;
     presentAddOutcome(outcome);
+    // The picker keeps the failure beside its own controls; the notice keeps it visible after the
+    // view is left (docs/ui/navigation.md#error-notices).
+    reportUiOperation(options.notices, tagViewAddNotice, outcome);
     if (outcome.unknown > 0) {
       // Earlier committed notifications cannot establish a later uncertain write. Reconcile after
       // every unknown aggregate outcome; known commits already reacquire the list through the
@@ -1454,6 +1532,9 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
     if (closed) {
       return;
     }
+    // The association row keeps its unsaved input and its own message; the notice keeps the
+    // failure visible when the view is left (docs/ui/navigation.md#error-notices).
+    reportUiOperation(options.notices, `tag:association:${association.associationId}`, outcome);
     if (outcome.status === 'committed') {
       const draft = drafts.get(association.associationId);
       if (field === undefined) {

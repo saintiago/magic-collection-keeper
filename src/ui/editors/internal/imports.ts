@@ -32,7 +32,7 @@ import type {
 import type { UiActionIntent } from '../../shared/actions.js';
 import type { CardViews } from '../../card-views/index.js';
 import type { UiActionRequest, UiOperationAction, UiOperationOutcome } from './operations.js';
-import { applyAction, outcomeText } from './operations.js';
+import { applyAction, outcomeText, reportUiOperation } from './operations.js';
 import { printingChoiceGuidance, singlePrintingChoice } from './printing-choice.js';
 import {
   button,
@@ -50,6 +50,7 @@ import {
 } from '../../shared/controls.js';
 import type { UiDialogs } from '../../shared/dialogs.js';
 import { UI_LIMITS } from '../../shared/limits.js';
+import { reportUiFailure, type UiNotices } from '../../shared/notices.js';
 import { readRetainedList, readState } from '../../shared/state.js';
 import {
   cardListEntryKey,
@@ -139,6 +140,25 @@ export interface UiImportEditorContext {
   readonly catalog: Catalog;
   /** Aborted when the view closes; late results must not change a replacement view. */
   readonly signal: AbortSignal;
+  /**
+   * Floating notices of the shell: the editors report the operation and service failures they
+   * present, so a failure stays visible after the view is left
+   * (docs/ui/navigation.md#error-notices).
+   */
+  readonly notices?: UiNotices;
+}
+
+/** Notice identities of the Import editors, one per operation a view presents. */
+const manualStagingNotice = 'import-manual';
+const manualRecoveryNotice = 'import-manual-recovery';
+const sourceImportNotice = 'import-source';
+const reviewReadNotice = 'import-review';
+const reviewConfirmNotice = 'import-confirm';
+const reviewDiscardNotice = 'import-discard';
+
+/** Notice identity of one pending entry's own review. */
+function reviewEntryNotice(entryId: string): string {
+  return `import-entry:${entryId}`;
 }
 
 /** One outstanding confirmation the review presents until UserCards establishes its outcome. */
@@ -395,6 +415,15 @@ export function createManualImportEditor(
     addingToReview = false;
     resultsStatus.dataset.uiOutcomeStatus = outcome.status;
     resultsStatus.textContent = outcome.message ?? outcomeText(outcome.status);
+    // Field validation stays with the form; a staging that failed or whose outcome is not
+    // established stays visible as the shell's notice while the retained attempt keeps its own
+    // retry (docs/ui/navigation.md#error-notices).
+    reportUiOperation(
+      options.notices,
+      manualStagingNotice,
+      outcome,
+      outcome.status === 'unknown' ? pendingStagingRetry() : undefined,
+    );
   }
 
   /** Searches the catalog for the printings the manual entry form names. */
@@ -434,6 +463,7 @@ export function createManualImportEditor(
         status: 'unknown',
         message:
           'The pending manual staging is still unresolved. Retry it before adding more lines.',
+        validation: true,
       };
     }
     const wantedQuantity = readQuantity(quantity, constraints.quantity.copy);
@@ -441,6 +471,7 @@ export function createManualImportEditor(
       return {
         status: 'failed',
         message: `Choose a quantity from 1 to ${constraints.quantity.copy}.`,
+        validation: true,
       };
     }
     const wantedFinish = readFinishValue(finish.value);
@@ -459,7 +490,11 @@ export function createManualImportEditor(
       });
     }
     if (lines.length === 0) {
-      return { status: 'failed', message: 'Select the printings to add to review.' };
+      return {
+        status: 'failed',
+        message: 'Select the printings to add to review.',
+        validation: true,
+      };
     }
     // One request stages at most the number of lines the provider bound accepts, so a selection
     // larger than one request is staged through further bounded requests, each line carrying the
@@ -534,7 +569,7 @@ export function createManualImportEditor(
     recoveringStaging = true;
     paintManualRecovery();
     let inReview = 0;
-    let message: string | null = null;
+    let failure: UiOperationOutcome | null = null;
     try {
       for (const attempt of retainedStagingAttempts()) {
         const outcome = await retryRetainedAttempt(
@@ -557,17 +592,40 @@ export function createManualImportEditor(
           inReview += outcome.record.staged;
           continue;
         }
-        message = outcome.message;
+        failure = { status: outcome.status, message: outcome.message };
         break;
       }
     } finally {
       recoveringStaging = false;
       paintManualRecovery();
     }
-    status.textContent = message ?? (inReview === 0 ? stagedMessage(0) : stagedMessage(inReview));
+    status.textContent =
+      failure?.message ?? (inReview === 0 ? stagedMessage(0) : stagedMessage(inReview));
+    // A retry that did not establish the outcome leaves the attempt retained: the notice keeps
+    // the result visible with the explicit retry that replays that same attempt.
+    if (failure !== null) {
+      reportUiOperation(
+        options.notices,
+        manualRecoveryNotice,
+        failure,
+        failure.status === 'unknown' ? pendingStagingRetry() : undefined,
+      );
+    } else {
+      options.notices?.dismiss(manualRecoveryNotice);
+    }
     // The committed lines were reacquired by their change notifications; only an unresolved
     // outcome needs the review's own read of the entries.
-    options.onChanged(message !== null);
+    options.onChanged(failure !== null);
+  }
+
+  /** The recovery action of a manual staging: replay the attempt the account still retains. */
+  function pendingStagingRetry(): { readonly label: string; run(): void } {
+    return {
+      label: 'Retry the pending staging',
+      run: () => {
+        void recoverManualStaging();
+      },
+    };
   }
 
   /** Whether each printed search result can enter the manual import. */
@@ -851,10 +909,20 @@ export function createImportReviewEditor(
       if (disposed || read !== sessionsRead) {
         return;
       }
-      reviewStatus.textContent = `The pending imports could not be read: ${readMessage(
+      const problem = `The pending imports could not be read: ${readMessage(
         cause,
         'unknown failure',
       )}`;
+      reviewStatus.textContent = problem;
+      // Reading the pending imports is a service read of this view: the notice keeps its failure
+      // visible with the refresh that repeats the read
+      // (docs/ui/navigation.md#error-notices).
+      reportUiFailure(options.notices, reviewReadNotice, problem, {
+        label: 'Refresh the imports',
+        run: () => {
+          void reconcile();
+        },
+      });
       return;
     }
     if (disposed || read !== sessionsRead) {
@@ -864,6 +932,7 @@ export function createImportReviewEditor(
     sessions = append ? [...sessions, ...page.sessions] : [...page.sessions];
     sessionsContinuation = page.continuation;
     paintSessions();
+    options.notices?.dismiss(reviewReadNotice);
   }
 
   /** Draws the session control and the control that reads further session pages. */
@@ -1438,10 +1507,14 @@ export function createImportReviewEditor(
           (await resolvePrintings(options.catalog, [printingId])).get(printingId) ?? null;
       } catch (cause) {
         if (!disposed && sessionId === record.entry.sessionId) {
-          report(
-            editor,
-            `The selected printing could not be read: ${readMessage(cause, 'unknown failure')}`,
-          );
+          const problem = `The selected printing could not be read: ${readMessage(
+            cause,
+            'unknown failure',
+          )}`;
+          report(editor, problem);
+          // The row keeps the message beside the printing it names; the notice keeps the service
+          // failure visible after the view is left (docs/ui/navigation.md#error-notices).
+          reportUiFailure(options.notices, reviewEntryNotice(record.entry.entryId), problem);
         }
         return;
       }
@@ -1469,6 +1542,9 @@ export function createImportReviewEditor(
     if (disposed) {
       return;
     }
+    // The row keeps its unsaved review input and its own message; the notice keeps a review that
+    // was not saved visible when the view is left (docs/ui/navigation.md#error-notices).
+    reportUiOperation(options.notices, reviewEntryNotice(record.entry.entryId), outcome);
     if (outcome.status === 'committed' && outcome.record !== null) {
       // Only the input this review committed leaves; a draft the owner changed while the request
       // was in flight stays for the next review.
@@ -1521,8 +1597,13 @@ export function createImportReviewEditor(
       printings.delete(record.entry.entryId);
       releasePrintingPicker(editor.entry.key);
       messages.delete(editor.entry.key);
+      options.notices?.dismiss(reviewEntryNotice(record.entry.entryId));
     } else {
-      report(editor, outcome.message ?? 'The entry was not discarded.');
+      const problem = outcome.message ?? 'The entry was not discarded.';
+      report(editor, problem);
+      // The row keeps the failure beside the entry it names; the notice keeps it visible after
+      // the view is left (docs/ui/navigation.md#error-notices).
+      reportUiFailure(options.notices, reviewEntryNotice(record.entry.entryId), problem);
     }
     await reconcile(outcome.status !== 'committed');
   }
@@ -1556,6 +1637,13 @@ export function createImportReviewEditor(
       outcome.status === 'committed'
         ? 'The import was discarded; no copies were created.'
         : (outcome.message ?? 'The import was not discarded.');
+    if (outcome.status === 'committed') {
+      options.notices?.dismiss(reviewDiscardNotice);
+    } else {
+      // Discarding the import is an operation like any other: its failure stays visible after the
+      // view is left (docs/ui/navigation.md#error-notices).
+      reportUiOperation(options.notices, reviewDiscardNotice, outcome);
+    }
     if (outcome.status === 'committed' && presentedSession === sessionId) {
       // Only the discarded import's own review input ends; the unsaved work of another import the
       // view still presents stays (docs/ui/architecture.md#state-ownership-and-restoration).
@@ -1586,11 +1674,16 @@ export function createImportReviewEditor(
       return {
         status: 'failed',
         message: 'Check the outstanding confirmation outcome before confirming more entries.',
+        validation: true,
       };
     }
     const presentedSession = sessionId;
     if (presentedSession === null) {
-      return { status: 'failed', message: 'Read the pending import before confirming it.' };
+      return {
+        status: 'failed',
+        message: 'Read the pending import before confirming it.',
+        validation: true,
+      };
     }
     const chosen: ConfirmImportEntryInput[] = [];
     for (const target of request.selection.targets) {
@@ -1605,12 +1698,13 @@ export function createImportReviewEditor(
         return {
           status: 'failed',
           message: 'Reload the pending import before confirming these entries.',
+          validation: true,
         };
       }
       chosen.push({ entryId: target.entryId, expectedRevision: revision });
     }
     if (chosen.length === 0) {
-      return { status: 'failed', message: 'Select the entries to confirm.' };
+      return { status: 'failed', message: 'Select the entries to confirm.', validation: true };
     }
     // One request confirms at most the number of entries the provider bound accepts, so a larger
     // explicit selection is confirmed through further bounded requests whose operation identities
@@ -1777,6 +1871,7 @@ export function createImportReviewEditor(
       paintConfirmation();
     }
     if (outcome.status === 'committed' && outcome.record !== null) {
+      options.notices?.dismiss(reviewConfirmNotice);
       forgetConfirmed(outstanding);
       const message = confirmationMessage(outcome.record.copies.length, outcome.message);
       reviewStatus.textContent = message;
@@ -1784,6 +1879,25 @@ export function createImportReviewEditor(
       return;
     }
     reviewStatus.textContent = outcome.message ?? 'The confirmation outcome could not be read.';
+    // A confirmation whose outcome is still not established stays visible as the shell's notice
+    // with the same explicit recovery of its recorded outcome
+    // (docs/ui/navigation.md#error-notices).
+    reportUiOperation(
+      options.notices,
+      reviewConfirmNotice,
+      { status: outcome.status, message: reviewStatus.textContent },
+      confirmationCheck(),
+    );
+  }
+
+  /** The recovery action of a confirmation: read the outcome its retained operation recorded. */
+  function confirmationCheck(): { readonly label: string; run(): void } {
+    return {
+      label: 'Check the confirmation outcome',
+      run: () => {
+        void recoverPendingConfirmation();
+      },
+    };
   }
 
   /** Keeps one message with its entry, so a redraw of the row presents it again. */
@@ -1869,6 +1983,10 @@ export function createImportReviewEditor(
     }
     pendingStatus.dataset.uiOutcomeStatus = outcome.status;
     pendingStatus.textContent = outcome.message ?? outcomeText(outcome.status);
+    // The list keeps the confirmation beside the explicit selection; the notice keeps an
+    // unresolved confirmation visible after the view is left, with the recorded outcome that
+    // establishes what the confirmation created (docs/ui/navigation.md#error-notices).
+    reportUiOperation(options.notices, reviewConfirmNotice, outcome, confirmationCheck());
   }
 
   /**
@@ -2254,17 +2372,38 @@ export function createSourceImportEditor(
     }
     const result = outcome.record;
     if (result === null) {
-      report(outcome.message ?? 'The source lines were not added to review.');
+      const problem = outcome.message ?? 'The source lines were not added to review.';
+      report(problem);
       if (outcome.status === 'unknown') {
         // The rows may have committed: the review reads what the account holds instead of
         // inferring whether this source staged anything.
         options.onChanged();
       }
+      // The source form keeps its input; a source whose outcome is not established stays visible
+      // as the shell's notice with the retained import's own reopen
+      // (docs/ui/navigation.md#error-notices, docs/ui/editors.md#internal-design).
+      reportUiOperation(
+        options.notices,
+        sourceImportNotice,
+        { status: outcome.status, message: problem },
+        outcome.status === 'unknown'
+          ? { label: 'Reopen the retained import', run: reopenRetainedSource }
+          : undefined,
+      );
       return;
     }
     status.textContent = sourceImportMessage(result);
+    options.notices?.dismiss(sourceImportNotice);
     rows.replaceChildren(...result.rows.map((row) => sourceRow(document, row)));
     options.onStaged(result.session.sessionId);
+  }
+
+  /** Reopens the oldest import the account still retains, exactly as its waiting row does. */
+  function reopenRetainedSource(): void {
+    const attempt = unfinishedSources()[0];
+    if (attempt !== undefined) {
+      void reopenSource(attempt.operationId, attempt.request);
+    }
   }
 
   /**
@@ -2294,10 +2433,20 @@ export function createSourceImportEditor(
     }
     const result = outcome.record;
     if (result === null) {
-      status.textContent = outcome.message ?? 'The source lines were not read back into review.';
+      const problem = outcome.message ?? 'The source lines were not read back into review.';
+      status.textContent = problem;
+      // Reopening a retained import is an operation of this view: its failure stays visible as the
+      // shell's notice with the same explicit reopen (docs/ui/navigation.md#error-notices).
+      reportUiOperation(
+        options.notices,
+        sourceImportNotice,
+        { status: outcome.status, message: problem },
+        { label: 'Reopen the retained import', run: reopenRetainedSource },
+      );
       return;
     }
     status.textContent = sourceImportMessage(result);
+    options.notices?.dismiss(sourceImportNotice);
     rows.replaceChildren(...result.rows.map((row) => sourceRow(document, row)));
     options.onStaged(result.session.sessionId);
   }

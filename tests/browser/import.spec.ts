@@ -669,6 +669,13 @@ test('rereads an already open import after an unknown staging outcome', async ({
   await page.click('#import-results [data-ui-tool="add-to-review"]');
   const staged = await requested<Record<string, unknown>>(page, 'stage');
   await control(page, 'fail', staged.id, { code: 'busy', message: 'Response lost after commit.' });
+  // The staging outcome is not established: the editor keeps the retained attempt and the shell's
+  // notice keeps the failure visible with that same explicit retry
+  // (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:import-manual"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice.getByRole('button', { name: 'Retry the pending staging' })).toBeVisible();
   const sessions = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
   await settle(page, 'settleSessions', sessions.id, [session()]);
   const reread = await requested<UiImportEntriesRequest>(page, 'entries', 1);
@@ -1180,6 +1187,17 @@ test('recovers a lost confirmation whose pending entries are gone', async ({ pag
   expect(lost.arguments).toBe(confirmation.arguments.operationId);
   await control(page, 'fail', lost.id, { code: 'unavailable', message: 'Offline.' });
   await expect(page.locator('#import-recover')).toBeVisible();
+  // The unresolved confirmation is an operation failure of the presented view: the floating
+  // notice keeps it visible after the view is left, with the recorded outcome that establishes
+  // what the confirmation created (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:import-confirm"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice.locator('.ui-notice-mark')).toHaveText('Error:');
+  await expect(notice.locator('.ui-notice-spinner')).toBeHidden();
+  await expect(
+    notice.getByRole('button', { name: 'Check the confirmation outcome' }),
+  ).toBeVisible();
 
   // Reading the pending import finds the confirmed session without any pending entry left.
   const listing = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
@@ -1208,6 +1226,8 @@ test('recovers a lost confirmation whose pending entries are gone', async ({ pag
     'Confirmed: 1 physical copy created. This confirmation had already been recorded; the copies ' +
       'it created are listed.',
   );
+  // The established outcome ends the notice of the confirmation it resolved.
+  await expect(notice).toHaveCount(0);
   const afterRecovery = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
   await settle(page, 'settleSessions', afterRecovery.id, []);
   expect(errors).toEqual([]);
