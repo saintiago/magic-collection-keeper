@@ -153,6 +153,7 @@ export function createNavigation(options: NavigationOptions): Navigation {
   const main = document.createElement('main');
   root.replaceChildren(header, main);
   const notices = createNoticeHost(root);
+  const pageActionNotices = new Set<string>();
 
   let account: UiAccount | null = null;
   let view: UiView | null = null;
@@ -783,12 +784,20 @@ export function createNavigation(options: NavigationOptions): Navigation {
     return {
       show(notice: UiNotice) {
         if (live()) {
-          notices.show({ ...notice, id: `${prefix}${notice.id}` });
+          const id = `${prefix}${notice.id}`;
+          if (notice.action == null) {
+            pageActionNotices.delete(id);
+          } else {
+            pageActionNotices.add(id);
+          }
+          notices.show({ ...notice, id });
         }
       },
       dismiss(id: string) {
         if (live()) {
-          notices.dismiss(`${prefix}${id}`);
+          const ownedId = `${prefix}${id}`;
+          pageActionNotices.delete(ownedId);
+          notices.dismiss(ownedId);
         }
       },
     };
@@ -1052,6 +1061,9 @@ export function createNavigation(options: NavigationOptions): Navigation {
   function closePage(): void {
     teardownGeneration = generation;
     generation += 1;
+    // Failures remain visible, but recovery belongs to the mounted view that supplied it.
+    notices.retireActions(pageActionNotices);
+    pageActionNotices.clear();
     releaseRestoration();
     const controller = pageController;
     const handle = pageHandle;

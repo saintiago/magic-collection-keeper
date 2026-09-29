@@ -484,6 +484,42 @@ test('retained handles are released through their owning factory on eviction and
   expect(errors).toEqual([]);
 });
 
+for (const loading of ['deferred', 'failed'] as const) {
+  test(`interrupted ${loading} restoration preserves the retained resource owner`, async ({
+    page,
+  }) => {
+    const errors = await openShell(page, '#/tags', { retainedResources: true });
+    await page.locator('#resource-open').click();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+    await page.evaluate(() => {
+      (
+        globalThis as unknown as { keeperUiControl: UiShellControl }
+      ).keeperUiControl.deferNextPage();
+    });
+    await page.goBack();
+    await expect(page.locator('[data-ui-page-loading]')).toBeVisible();
+    if (loading === 'failed') {
+      await rejectDeferredPage(page);
+      await expect(page.locator('[data-ui-page-unavailable]')).toBeVisible();
+    }
+    await page.goForward();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+    expect(await retainedResources(page)).toBe(1);
+    await page.evaluate(() => {
+      (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl.dispose();
+    });
+    expect(await retainedResources(page)).toBe(0);
+    expect((await notes(page)).filter((note) => note.startsWith('released:'))).toEqual([
+      'released:resource-1',
+    ]);
+    if (loading === 'deferred') {
+      await resolveDeferredPage(page);
+      expect(await retainedResources(page)).toBe(0);
+    }
+    expect(errors).toEqual([]);
+  });
+}
+
 test('sign-out removes private presentation state and ends the session', async ({ page }) => {
   await openShell(page, '#/');
   await page.getByLabel('Search cards').fill('lightning bolt');
@@ -1229,6 +1265,7 @@ test('a reported failure survives navigation and a closed page reports no notice
   await page.getByRole('link', { name: 'Open tags' }).click();
   await expect(page.getByRole('heading', { name: 'Tags' })).toBeVisible();
   await expect(notice).toBeVisible();
+  await expect(notice.getByRole('button', { name: 'Check the saved state' })).toHaveCount(0);
   await notice.getByRole('button', { name: 'Dismiss' }).click();
   await expect(notice).toHaveCount(0);
 

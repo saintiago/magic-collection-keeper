@@ -274,6 +274,44 @@ const wishlistCounts: readonly (readonly [string, SearchCount])[] = [
   ['printing:printing-1', { owned: 1, locations: 1, intended: 2 }],
 ];
 
+test('a tag-read notice retires its recovery action on departure and reattaches on return', async ({
+  page,
+}) => {
+  const errors = await openTags(page, '#/tags');
+  const listing = await requested<UiTagsListRequest>(page, 'listTags');
+  await control(page, 'fail', listing.id, { code: 'unavailable', message: 'Tags are offline.' });
+  const notice = page.locator('[data-ui-notice]').filter({ hasText: 'Tags are offline.' });
+  await notice.getByRole('button', { name: 'Load the tags again' }).click();
+  const retry = await requested<UiTagsListRequest>(page, 'listTags', 1);
+  await control(page, 'fail', retry.id, { code: 'unavailable', message: 'Tags are offline.' });
+  await expect(notice.getByRole('button', { name: 'Load the tags again' })).toBeVisible();
+
+  type TrackedView = { departedTags: WeakRef<Element> };
+  await page.locator('#tags-list').evaluate((element) => {
+    (globalThis as unknown as TrackedView).departedTags = new WeakRef(element);
+  });
+  await page.getByRole('link', { name: 'Home', exact: true }).click();
+  await expect(notice).toContainText('Tags are offline.');
+  await expect(notice.getByRole('button', { name: 'Load the tags again' })).toHaveCount(0);
+  await expect(notice.getByRole('button', { name: 'Dismiss' })).toBeVisible();
+  await page.requestGC();
+  expect(
+    await page.evaluate(
+      () => (globalThis as unknown as TrackedView).departedTags.deref() === undefined,
+    ),
+  ).toBe(true);
+
+  await page.goBack();
+  const restored = await requested<UiTagsListRequest>(page, 'listTags', 2);
+  await control(page, 'fail', restored.id, { code: 'unavailable', message: 'Tags are offline.' });
+  await expect(notice).toHaveCount(1);
+  await notice.getByRole('button', { name: 'Load the tags again' }).click();
+  const recovery = await requested<UiTagsListRequest>(page, 'listTags', 3);
+  await settle(page, 'settleListTags', recovery.id, { tags: [tag()], continuation: null });
+  await expect(notice).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('lists the account’s tags and keeps an unsaved rename after a conflict', async ({ page }) => {
   const errors = await openTags(page, '#/tags');
   const listing = await requested<UiTagsListRequest>(page, 'listTags');

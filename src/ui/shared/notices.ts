@@ -30,7 +30,7 @@ export interface UiNotice {
   readonly severity: UiNoticeSeverity;
   /** User-facing text of the notice; only this text is rendered, so external values stay safe. */
   readonly message: string;
-  /** Relevant recovery action the reporter supplied, or absent when none applies. */
+  /** Relevant recovery; page-supplied actions expire on departure while the notice text remains. */
   readonly action?: UiNoticeAction | null;
 }
 

@@ -26,6 +26,8 @@ export type {
 
 /** The notice presentation of one shell. */
 export interface UiNoticeHost extends UiNotices {
+  /** Keeps notice text but drops recovery callbacks belonging to a departed page. */
+  retireActions(ids: Iterable<string>): void;
   /** Removes every presented notice; the account the shell presented ended. */
   clear(): void;
   /** Releases the presentation region; the shell is closing. */
@@ -123,7 +125,17 @@ export function createNoticeHost(parent: Element): UiNoticeHost {
   parent.append(region);
   const presented = new Map<string, PresentedNotice>();
 
-  return { show, dismiss, clear, dispose };
+  return { show, dismiss, retireActions, clear, dispose };
+
+  function retireActions(ids: Iterable<string>): void {
+    for (const id of ids) {
+      const current = presented.get(id);
+      if (current !== undefined) {
+        current.notice = { ...current.notice, action: null };
+        paint(current);
+      }
+    }
+  }
 
   function show(notice: UiNotice): void {
     const current = presented.get(notice.id);
@@ -164,6 +176,8 @@ export function createNoticeHost(parent: Element): UiNoticeHost {
    * operation neither duplicates the notice nor drops the focus a keyboard user gave its controls.
    */
   function createPresented(notice: UiNotice): PresentedNotice {
+    // Listeners keep only the identity, never the initial report's view-owned callback.
+    const id = notice.id;
     const element = document.createElement('div');
     element.className = 'ui-notice';
     element.dataset.uiNotice = notice.id;
@@ -185,7 +199,7 @@ export function createNoticeHost(parent: Element): UiNoticeHost {
     action.dataset.uiNoticeAction = '';
     action.addEventListener('click', () => {
       // The action of the notice reported now, never of a superseded update.
-      presented.get(notice.id)?.notice.action?.run();
+      presented.get(id)?.notice.action?.run();
     });
     const dismissButton = document.createElement('button');
     dismissButton.type = 'button';
@@ -193,7 +207,7 @@ export function createNoticeHost(parent: Element): UiNoticeHost {
     dismissButton.dataset.uiNoticeDismiss = '';
     dismissButton.textContent = 'Dismiss';
     dismissButton.addEventListener('click', () => {
-      dismiss(notice.id);
+      dismiss(id);
     });
     element.append(spinner, mark, message, action, dismissButton);
     return { notice, element, spinner, mark, message, action, dismiss: dismissButton };

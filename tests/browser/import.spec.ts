@@ -724,9 +724,21 @@ test('keeps one line identity when a staging response is lost and retries it exp
   );
   expect(await control<unknown[]>(page, 'stage')).toHaveLength(1);
 
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:import-manual"]');
+  await expect(notice).toContainText('The staging outcome is unknown');
+  await notice.getByRole('button', { name: 'Retry the pending staging' }).click();
+  const unresolved = await requested<Record<string, unknown>>(page, 'stage', 1);
+  expect(unresolved.arguments).toEqual(first.arguments);
+  await control(page, 'fail', unresolved.id, { code: 'unavailable', message: 'Still offline.' });
+  await expect(page.locator('#import-manual-recover')).toBeEnabled();
+  await expect(page.locator('[data-ui-notice]')).toHaveCount(1);
+  await expect(notice).toContainText('The staging outcome is unknown');
+  const retryRefresh = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
+  await settle(page, 'settleSessions', retryRefresh.id, []);
+
   // Retrying the retained attempt replays the line identity it was begun with.
   await page.click('#import-manual-recover');
-  const second = await requested<Record<string, unknown>>(page, 'stage', 1);
+  const second = await requested<Record<string, unknown>>(page, 'stage', 2);
   const secondLine = (second.arguments.entries as readonly Record<string, unknown>[])[0];
   expect(secondLine?.entryId).toBe(firstLine?.entryId);
   await settle(page, 'settleStage', second.id, {
@@ -739,7 +751,8 @@ test('keeps one line identity when a staging response is lost and retries it exp
     'Those lines were already in review; no new entries were added.',
   );
   await expect(page.locator('#import-manual-recovery')).toBeHidden();
-  const reconciled = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
+  await expect(page.locator('[data-ui-notice]')).toHaveCount(0);
+  const reconciled = await requested<UiImportSessionsRequest>(page, 'sessions', 3);
   await settle(page, 'settleSessions', reconciled.id, [session()]);
   const entriesRead = await requested<UiImportEntriesRequest>(page, 'entries', 0);
   await settle(page, 'settleEntries', entriesRead.id, { session: session(), entries: [entry()] });

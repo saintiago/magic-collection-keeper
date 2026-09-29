@@ -777,7 +777,7 @@ test('a lost staging outcome stays visible as a shell notice with its recovery a
   });
 
   // The status line keeps the staging outcome beside the controls; the floating notice keeps the
-  // unknown capture visible after the view is left, with the recovery that replays it
+  // unknown capture visible after the view is left, with recovery while the view is mounted
   // (docs/ui/navigation.md#error-notices, docs/ui/capture-controls.md#presentation-and-lifetime).
   const notice = page.locator('[data-ui-notice="navigation:page:alice:import-capture"]');
   await expect(notice).toBeVisible();
@@ -794,6 +794,16 @@ test('a lost staging outcome stays visible as a shell notice with its recovery a
   expect(replay.arguments).toEqual(capture.arguments);
   const camera = await control<{ opened: number }>(page, 'camera');
   expect(camera.opened).toBe(1);
+  await control(page, 'fail', replay.id, {
+    code: 'unavailable',
+    message: 'The service is still unavailable.',
+  });
+  await expect(notice.getByRole('button', { name: 'Recover the capture' })).toBeVisible();
+  await page.getByRole('link', { name: 'Home', exact: true }).click();
+  await expect(notice).toContainText('The staging outcome is unknown.');
+  await expect(notice.getByRole('button', { name: 'Recover the capture' })).toHaveCount(0);
+  await notice.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(notice).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
