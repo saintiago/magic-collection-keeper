@@ -1556,6 +1556,99 @@ for (const reloadTiming of ['before', 'after'] as const) {
   });
 }
 
+for (const readOutcome of ['record', 'absence', 'failure'] as const) {
+  for (const reloadTiming of ['before', 'after'] as const) {
+    test(`an earlier reload establishing ${readOutcome} ${reloadTiming} correction rejection reconciles its own notice`, async ({
+      page,
+    }) => {
+      const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+      await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+      await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+      await settleCard(page, 'card-1', { cards: [cardRecord()] });
+
+      await page.locator('#copy-reload').click();
+      await failCopyRead(page, (await copyRead(page, 1)).id, {
+        code: 'unavailable',
+        message: 'The service could not be reached.',
+      });
+      const readNotice = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1:read"]');
+      await expect(readNotice).toContainText('The service could not be reached.');
+      await page.locator('#copy-reload').click();
+      const reload = await copyRead(page, 2);
+      await page.locator('#copy-condition-choice').selectOption('DMG');
+      await page.getByRole('button', { name: 'Save changes' }).click();
+      const saved = await correction(page);
+      const completeReload = async () => {
+        if (readOutcome === 'failure') {
+          await failCopyRead(page, reload.id, {
+            code: 'unavailable',
+            message: 'The copy service is still unavailable.',
+          });
+          await expect(readNotice).toContainText('The copy service is still unavailable.');
+        } else {
+          await settleCopyRead(
+            page,
+            reload.id,
+            readOutcome === 'record' ? [storedCopy({ condition: 'LP', revision: 5 })] : [],
+          );
+          await expect(readNotice).toHaveCount(0);
+        }
+      };
+      if (reloadTiming === 'before') {
+        await completeReload();
+        await expect(page.locator('#copy-status')).toHaveText('Saving…');
+      }
+      await failCorrection(page, saved.id, {
+        code: 'invalid-request',
+        message: 'This correction is not valid.',
+      });
+      if (reloadTiming === 'after') {
+        await completeReload();
+      }
+      await expect(page.locator('#copy-status')).toHaveText('This correction is not valid.');
+      await expect(
+        page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1"]'),
+      ).toContainText('This correction is not valid.');
+      if (readOutcome === 'record') {
+        await expect(page.locator('#copy-saved')).toContainText('lightly played');
+      }
+      await expect(page.locator('#copy-condition-choice')).toHaveValue('DMG');
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+for (const newestOutcome of ['success', 'failure'] as const) {
+  test(`an obsolete reload cannot change the read notice after a newer ${newestOutcome}`, async ({
+    page,
+  }) => {
+    const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+    await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+    await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+    await settleCard(page, 'card-1', { cards: [cardRecord()] });
+
+    await page.locator('#copy-reload').click();
+    const older = await copyRead(page, 1);
+    await page.locator('#copy-reload').click();
+    const newer = await copyRead(page, 2);
+    const readNotice = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1:read"]');
+    const failure = { code: 'unavailable', message: 'The service could not be reached.' };
+    if (newestOutcome === 'success') {
+      await settleCopyRead(page, newer.id, [storedCopy({ revision: 5 })]);
+      await failCopyRead(page, older.id, failure);
+      await expect(readNotice).toHaveCount(0);
+      await expect(page.locator('#copy-status')).toHaveText('Reloaded the copy.');
+    } else {
+      await failCopyRead(page, newer.id, failure);
+      await expect(readNotice).toContainText(failure.message);
+      await settleCopyRead(page, older.id, [storedCopy()]);
+      await expect(readNotice).toContainText(failure.message);
+      await expect(page.locator('#copy-status')).toHaveText(failure.message);
+    }
+    expect(errors).toEqual([]);
+  });
+}
+
 for (const failure of [
   { code: 'conflict', message: 'The copy changed since you read it.' },
   { code: 'invalid-request', message: 'This correction is not valid.' },
