@@ -722,6 +722,37 @@ test('a detail read that fails is reported with a retry', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test('a failed detail read clears when reopening presents the card', async ({ page }) => {
+  const errors = await openCollection(page, '#/cards/card-1');
+  const request = await page.evaluate(() =>
+    (
+      globalThis as unknown as { keeperCollectionControl: UiCollectionControl }
+    ).keeperCollectionControl.catalogRequests(),
+  );
+  await page.evaluate((id) => {
+    (
+      globalThis as unknown as { keeperCollectionControl: UiCollectionControl }
+    ).keeperCollectionControl.failCatalog(id, 'The catalog is unavailable.');
+  }, request[0]!.id);
+  await expect(page.locator('#card-details-failure')).toHaveText('The catalog is unavailable.');
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:card-details"]');
+  await expect(notice).toContainText('The catalog is unavailable.');
+
+  // Leaving the details keeps the failure visible; its recovery belonged to the view that is gone.
+  await page.getByRole('link', { name: 'Collection', exact: true }).click();
+  await settleSearch(page, (await searchRequest(page)).id, searchPage([]));
+  await expect(page).toHaveURL(/#\/collection$/);
+  await expect(notice).toContainText('The catalog is unavailable.');
+
+  // Back opens the details again: the read that presents the card reconciles the failure of the
+  // read the replaced view presented (docs/ui/navigation.md#error-notices).
+  await page.goBack();
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await expect(page.locator('#card-name')).toHaveText('Lightning Bolt');
+  await expect(notice).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('a copy presents its stored attributes and corrects them as one change', async ({ page }) => {
   const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
   const read = await copyRead(page);
