@@ -2461,6 +2461,7 @@ for (const priorUnknown of [false, true]) {
 
 /** One parsed line of the Lightning Bolt paste the source journeys present. */
 const boltSourceLine = {
+  printingId: null,
   name: 'Lightning Bolt',
   section: null,
   set: 'M11',

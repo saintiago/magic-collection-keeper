@@ -76,6 +76,12 @@ An aggregated deck quantity rejected by the current target public contract is a 
 blocker until the target implements the intended-quantity contract. Preserve the complete quantity;
 do not reinterpret it as ownership, truncate it or split one association silently.
 
+Pending Moxfield lines retain `original.printing_id` and `original.finish` separately from
+reviewed values so restaging uses the same source identity. Missing or invalid original printing
+or finish is a compatibility blocker. A null legacy printing is also insufficient: the pinned
+adapter discards invalid references and defaults named attributes, so an exact named-source key
+cannot be recovered reliably. Older plans without this evidence must be prepared again.
+
 Pending tag/location intentions currently have no corresponding target entry field. Such entries
 are preserved but block the plan. Entries exceeding current confirmation limits and candidates
 that cannot be represented also block; the converter neither drops nor silently splits them.
@@ -155,9 +161,8 @@ Before any owner-data migration:
    verified prior environment and reconcile before reopening it. Once new writes exist, reverting
    traffic alone would lose them; resolving them is part of rollback approval.
 
-The target loader, durable evidence/readback adapter, real backup rehearsal and cutover are still
-outstanding. Deployment and migration have separate evidence: a deployable build is not proof of
-a migrated collection.
+The real backup rehearsal and cutover are still outstanding. Deployment and migration have separate
+evidence: a deployable build is not proof of a migrated collection.
 
 ## Preparation verification
 
@@ -169,9 +174,9 @@ SQLite adapter with a temporary synthetic database and verify it remains unchang
 CLI's blocked outcome and refusal to overwrite files.
 
 ```sh
-npm test -- tests/component/migration/prepare.test.ts tests/integration/migration-export.test.ts
+npm test -- tests/component/migration/prepare.test.ts tests/component/usercards/migration-loading.test.ts tests/integration/migration-export.test.ts
 npm run typecheck
 ```
 
-Passing these tests verifies offline preparation behavior. The execution gates above require
-additional loader tests and actual authorized rehearsal evidence.
+Passing these tests verifies offline preparation and the loader's repeat-safe loading and readback.
+The execution gates above still require actual authorized rehearsal evidence.

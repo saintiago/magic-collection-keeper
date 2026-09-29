@@ -576,7 +576,10 @@ describe('usercards source imports', () => {
       'staged',
     ]);
     expect(result.rows[1]).toMatchObject({
-      line: { problem: 'The catalog does not publish this printing; choose one during review.' },
+      line: {
+        printingId: 'printing-not-published',
+        problem: 'The catalog does not publish this printing; choose one during review.',
+      },
     });
     expect(result.rows[2]).toMatchObject({
       line: { problem: null },
@@ -600,6 +603,7 @@ describe('usercards source imports', () => {
       counterspellPrinting.printingId,
       m10Printing.printingId,
     ]);
+    expect(pending.entries[1]?.sourceLine?.printingId).toBe('printing-not-published');
     expect(pending.entries.map((entry) => entry.finish)).toEqual([
       'nonfoil',
       null,

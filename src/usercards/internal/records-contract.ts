@@ -1,6 +1,7 @@
 import { type CatalogResolver, type Finish } from '../../catalog/index.js';
 import type { UserCardsSqlTransactor } from './executor.js';
 import { type ImportOperations } from './import-contract.js';
+import { type MigrationOperations } from './migration-contract.js';
 import {
   type Association,
   type AssociationId,
@@ -194,9 +195,11 @@ export interface CopyLocationResult {
  * The UserCards contract for private records. Every operation takes Application's trusted user
  * context and scopes the referenced records and changes to that account; a read never returns or
  * reveals another account's record, and a change either commits completely or reports a distinct
- * failure (docs/user-cards.md#interface).
+ * failure (docs/user-cards.md#interface). Loading a verified migration plan is part of the same
+ * contract: it loads only into an empty account and is repeat-safe
+ * (docs/migration.md#rehearsal-and-execution-gates).
  */
-export interface UserCards extends ImportOperations {
+export interface UserCards extends ImportOperations, MigrationOperations {
   readCopies(context: TrustedUserContext, copyIds: readonly CopyId[]): Promise<CopyReadResult>;
   createCopies(context: TrustedUserContext, input: CreateCopiesInput): Promise<CopyChangeResult>;
   correctCopy(context: TrustedUserContext, input: CorrectCopyInput): Promise<CopyChangeResult>;

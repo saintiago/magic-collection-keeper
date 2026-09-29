@@ -1,5 +1,7 @@
 import { createImportOperations } from './import-service.js';
 import { createPostgresImportStore } from './imports.js';
+import { createPostgresMigrationStore } from './migration.js';
+import { createMigrationOperations } from './migration-service.js';
 import { createPostgresOrganizationStore } from './organization.js';
 import { createPostgresCopyStore } from './postgres.js';
 import type { UserCards, UserCardsDependencies } from './records-contract.js';
@@ -24,5 +26,6 @@ export function createUserCards(dependencies: UserCardsDependencies): UserCards 
     ...createCopyOperations(records),
     ...createOrganizationOperations(records),
     ...createImportOperations({ store: createPostgresImportStore(sql), catalog }),
+    ...createMigrationOperations({ store: createPostgresMigrationStore(sql), catalog }),
   };
 }

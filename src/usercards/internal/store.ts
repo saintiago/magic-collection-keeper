@@ -1,4 +1,6 @@
 import type { Finish, PrintingId } from '../../catalog/index.js';
+import type { MigrationReadback } from './migration-contract.js';
+import type { MigrationBatch } from './migration-plan.js';
 import type {
   Association,
   AssociationTargetLevel,
@@ -630,4 +632,108 @@ export interface ImportStore {
   confirm(accountId: string, plan: ConfirmationPlan): Promise<ConfirmationOutcome>;
   /** Reads the recorded outcome of one operation, or `null` when the account has none. */
   recover(accountId: string, operationId: string): Promise<ImportReceiptData | null>;
+}
+
+/** What one migration records about itself beside its durable source archive. */
+export interface MigrationRecord {
+  /**
+   * Verified source snapshot identity this migration loads. It identifies the migration inside the
+   * account: presenting another plan under the same identity is conflicting input, and another
+   * identity on an account that already holds records is refused.
+   */
+  readonly migrationId: string;
+  readonly planDigest: string;
+  readonly sourceDigest: string;
+  /** Batches this plan is loaded in. */
+  readonly batchCount: number;
+}
+
+/** One recorded batch, identified by the digest of exactly the records it wrote. */
+export interface MigrationBatchReceipt {
+  readonly index: number;
+  readonly fingerprint: string;
+}
+
+/** Durable progress of one recorded migration. */
+export interface MigrationProgress {
+  readonly state: 'loading' | 'completed';
+  /** Recorded batch receipts, ordered by batch index. */
+  readonly batches: readonly MigrationBatchReceipt[];
+  /** Position of the last query-visible batch; null while the plan published none. */
+  readonly publicationPosition: string | null;
+}
+
+export type MigrationStartOutcome =
+  /** The migration was recorded now, or its identical recording was returned. */
+  | { readonly outcome: 'started'; readonly progress: MigrationProgress }
+  | { readonly outcome: 'recorded'; readonly progress: MigrationProgress }
+  /**
+   * Another plan is recorded for this source snapshot, or the target account already holds private
+   * records: a migration loads into an empty account and never mixes with other input.
+   */
+  | {
+      readonly outcome: 'conflict';
+      readonly reason: 'recorded-input' | 'nonempty-account';
+    };
+
+/**
+ * The progress already recorded for one source snapshot, read without writing anything, so a
+ * completed migration is recognizable before the target Catalog is consulted.
+ */
+export type MigrationRecordedOutcome =
+  | { readonly outcome: 'recorded'; readonly progress: MigrationProgress }
+  /** The account recorded another plan for this source snapshot. */
+  | { readonly outcome: 'conflict'; readonly reason: 'recorded-input' };
+
+export type MigrationBatchOutcome =
+  | { readonly outcome: 'applied'; readonly publicationPosition: string | null }
+  /** The identical batch was already recorded; nothing was written again. */
+  | { readonly outcome: 'replayed'; readonly publicationPosition: string | null }
+  /** A different batch is recorded at this index; the presented plan is not this migration. */
+  | { readonly outcome: 'conflict' };
+
+export type MigrationReadbackOutcome =
+  | { readonly outcome: 'read'; readonly readback: MigrationReadback }
+  /** The account records no migration. */
+  | { readonly outcome: 'absent' }
+  /** The recorded migration did not complete, so its records are not a reconciled outcome. */
+  | { readonly outcome: 'incomplete' };
+
+/**
+ * Private migration storage (docs/migration.md#rehearsal-and-execution-gates). One migration is
+ * identified per account by the verified source snapshot it loads; its archive, its batch receipts
+ * and its records commit through the account's own private records, every query-visible batch
+ * publishes normally, and the readback reads the authoritative records rather than a consumer's
+ * projection.
+ */
+export interface MigrationStore {
+  /**
+   * Reads the progress already recorded for this source snapshot without writing anything, or null
+   * when the account records no migration for it. A recorded snapshot whose plan, source or batch
+   * count differs is conflicting input, reported as the same conflict `start` reports.
+   */
+  recorded(accountId: string, record: MigrationRecord): Promise<MigrationRecordedOutcome | null>;
+  /**
+   * Records the migration and its archive when the account holds no records yet, or returns the
+   * progress already recorded for this snapshot. Another plan under a recorded snapshot, or any
+   * further migration on an account that already holds private records, reports a conflict.
+   */
+  start(
+    accountId: string,
+    record: MigrationRecord,
+    archive: readonly string[],
+  ): Promise<MigrationStartOutcome>;
+  /**
+   * Applies one batch, its replay receipt and its publication in one transaction, or returns the
+   * recorded receipt when the identical batch already committed.
+   */
+  applyBatch(
+    accountId: string,
+    migrationId: string,
+    batch: MigrationBatch,
+  ): Promise<MigrationBatchOutcome>;
+  /** Records the completed migration with the position of its last query-visible batch. */
+  complete(accountId: string, migrationId: string): Promise<MigrationProgress>;
+  /** Reads the completed migration's private records and archive digest for reconciliation. */
+  readReadback(accountId: string): Promise<MigrationReadbackOutcome>;
 }

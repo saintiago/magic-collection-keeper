@@ -24,8 +24,6 @@
  * holds the session, so a concurrent review or import of the same list cannot overstage it.
  */
 
-import { createHash } from 'node:crypto';
-
 import { z } from 'zod';
 
 import {
@@ -48,6 +46,7 @@ import {
   type TrustedUserContext,
 } from './model.js';
 import { createMoxfieldDeckSource, type MoxfieldDeckSource } from './moxfield.js';
+import { sourceLineKey } from './source-line-identity.js';
 import type { ImportStore, SourceLineStageInput } from './store.js';
 
 /** A pasted card list: text lines of `quantity name (SET) number` (docs/user-cards.md#source-imports). */
@@ -197,9 +196,9 @@ const stageSourceImportRequestSchema = z.discriminatedUnion('format', [
 type StageSourceImportRequest = z.infer<typeof stageSourceImportRequestSchema>;
 
 /**
- * One parsed source line, before the catalog and the recorded state are consulted. `content` is the
- * line's identity inside its source without its quantity, so a quantity change is the same line
- * while a line that now names another printing is a different one.
+ * One parsed source line, before the catalog and the recorded state are consulted. Its identity
+ * inside its source is derived from these published attributes without the quantity, so a quantity
+ * change is the same line while a line that now names another printing is a different one.
  */
 interface ParsedSourceLine {
   readonly kind: 'line';
@@ -214,7 +213,6 @@ interface ParsedSourceLine {
   readonly quantity: number;
   /** Printing reference the source published; null when it named none. */
   readonly printingId: string | null;
-  readonly content: string;
 }
 
 /** One source row that could not be read into a card line. */
@@ -232,50 +230,6 @@ interface ResolvedSourceLine {
   readonly finish: Finish | null;
   /** Why the line needs the owner's review, or null when it resolved without one. */
   readonly problem: string | null;
-}
-
-/** Canonical card name of a line a source published without a printing reference. */
-function canonicalName(name: string): string {
-  return name
-    .normalize('NFKC')
-    .replace(/\s*\/+\s*/g, ' // ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
-
-/**
- * Identity of one line inside its source, without its quantity: a changed quantity is the same
- * line, while a line that now names another printing, edition or language is a different one.
- */
-function lineContent(line: {
-  readonly name: string | null;
-  readonly set: string | null;
-  readonly collectorNumber: string | null;
-  readonly language: string | null;
-  readonly finish: Finish | null;
-  readonly printingId: string | null;
-}): string {
-  const finish = line.finish ?? '';
-  return line.printingId === null
-    ? [
-        'named',
-        canonicalName(line.name ?? ''),
-        (line.set ?? '').toLowerCase(),
-        (line.collectorNumber ?? '').toLowerCase(),
-        (line.language ?? '').toLowerCase(),
-        finish,
-      ].join('\u0000')
-    : ['printing', line.printingId, finish].join('\u0000');
-}
-
-/**
- * Durable identity of one parsed line inside its import. Equivalent rows of one import share it, so
- * which row currently carries a quantity never decides whether that quantity is already covered
- * (docs/user-cards.md#source-imports).
- */
-function sourceLineKey(content: string): string {
-  return createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
 const pastedLineProblem = 'Use “quantity card name”, optionally followed by “(SET) number”.';
@@ -344,14 +298,6 @@ function parsePastedList(text: string): readonly ParsedSourceRow[] {
       finish,
       quantity,
       printingId: null,
-      content: lineContent({
-        name,
-        set,
-        collectorNumber,
-        language: null,
-        finish,
-        printingId: null,
-      }),
     });
   }
   return rows;
@@ -528,14 +474,6 @@ function parseMoxfieldDeck(document: unknown): readonly ParsedSourceRow[] {
         finish,
         quantity: line.data.quantity,
         printingId,
-        content: lineContent({
-          name: card.name,
-          set,
-          collectorNumber,
-          language,
-          finish,
-          printingId,
-        }),
       });
     }
   }
@@ -582,7 +520,6 @@ function parseReviewedWizardsLines(entries: readonly unknown[]): readonly Parsed
       finish,
       quantity,
       printingId: null,
-      content: lineContent({ name, set, collectorNumber, language, finish, printingId: null }),
     };
   });
 }
@@ -810,6 +747,7 @@ export function createSourceImports(
         }
         const resolved = resolveLine(row, printings);
         const line: ImportSourceLine = {
+          printingId: row.printingId,
           name: row.name,
           section: row.section,
           set: row.set,
@@ -822,7 +760,7 @@ export function createSourceImports(
         offered.push({
           line,
           input: {
-            sourceLineKey: sourceLineKey(row.content),
+            sourceLineKey: sourceLineKey(row),
             printingId: resolved.printingId,
             finish: resolved.finish,
             condition: null,

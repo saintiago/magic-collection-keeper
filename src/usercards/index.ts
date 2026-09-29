@@ -23,7 +23,10 @@
  * through this module or its browser operation facade (src/usercards/browser.ts), which owns the
  * operation lifecycle, the account-scoped attempts and the input constraints a browser consumer
  * presents; its internal modules stay private to the component (docs/architecture.md,
- * .dependency-cruiser.mjs).
+ * .dependency-cruiser.mjs). The component also owns loading a verified offline migration plan into
+ * an empty account: it retains the plan's source archive, applies it in repeat-safe batches whose
+ * records, replay receipt and publication commit together, and reads the result back for the
+ * offline reconciliation (docs/migration.md#ownership-and-interfaces).
  */
 
 export { UserCardsError, type UserCardsFailureCode } from './internal/errors.js';
@@ -106,6 +109,17 @@ export {
   type StageSourceImportInput,
   type WizardsPreconImport,
 } from './internal/source-imports.js';
+export {
+  type LoadMigrationPlanInput,
+  type MigrationLoadResult,
+  type MigrationOperations,
+  type MigrationReadback,
+} from './internal/migration-contract.js';
+export {
+  type MigrationPlan,
+  type MigrationPlanAccount,
+  type MigrationPlanState,
+} from './internal/migration-plan.js';
 export {
   USERCARDS_ACCOUNT_SCOPE_SQL,
   USERCARDS_ACCOUNT_SETTING,

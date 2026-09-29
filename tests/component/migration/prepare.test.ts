@@ -71,6 +71,38 @@ function draft(id: string) {
 }
 
 describe('offline migration preparation', () => {
+  it.each([
+    { finish: 'foil' },
+    { printing_id: null, finish: 'foil' },
+    { printing_id: '', finish: 'foil' },
+    { printing_id: 123, finish: 'foil' },
+    { printing_id: 'source-printing' },
+    { printing_id: 'source-printing', finish: 'unknown' },
+  ])('blocks Moxfield drafts with insufficient original replay evidence: %j', (original) => {
+    const raw = fixture();
+    const pending = draft('moxfield-draft');
+    raw.accounts[0]!.documents.push(
+      doc('import-drafts', pending.id, {
+        ...pending,
+        provider: 'moxfield',
+        rows: [
+          {
+            ...pending.rows[0],
+            printing_id: 'bolt',
+            original: { name: 'Lightning Bolt', ...original },
+          },
+        ],
+      }),
+    );
+    const plan = prepareMigration(raw);
+    expect(plan.state).toBe('blocked');
+    expect(plan.issues).toContainEqual(
+      expect.objectContaining({ code: 'source-replay-compatibility' }),
+    );
+    expect(plan.archive).toEqual(raw);
+    expect(() => verifyPlan(plan)).toThrow('unresolved blockers');
+  });
+
   it('expands ownership, keeps unknown condition explicit and never mutates its input', () => {
     const raw = fixture();
     raw.accounts[0]!.inventory[0]!.condition = 'UNK';

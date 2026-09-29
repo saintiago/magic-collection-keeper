@@ -1,26 +1,47 @@
 import { canonical } from './legacy.js';
 import { verifyPlan, type MigrationPlan } from './prepare.js';
-import type {
-  Association,
-  ImportEntry,
-  ImportSession,
-  PhysicalCopy,
-  Tag,
-} from '../../src/usercards/index.js';
+import type { ImportEntry, MigrationReadback } from '../../src/usercards/index.js';
 
-/** Readback from the isolated target, using provider contracts; not a writer or a Search result. */
-export interface MigrationReadback {
-  accountId: string;
-  copies: readonly PhysicalCopy[];
-  /** IDs carrying the provider's system ownership membership. */
-  ownedCopyIds: readonly string[];
-  /** User-defined tags and memberships, excluding provider-managed system records. */
-  tags: readonly Tag[];
-  associations: readonly Association[];
-  sessions: readonly ImportSession[];
-  pending: readonly ImportEntry[];
-  /** Digest of the durable private legacy archive and its replay evidence. */
-  archiveDigest: string;
+/**
+ * Readback from the isolated target: the provider-owned private readback contract UserCards
+ * supplies for reconciliation (`readMigrationReadback`), never a writer or a Search result.
+ */
+export type { MigrationReadback };
+
+/**
+ * The reviewed pending state reconciliation compares: the entry's identity, reviewed values and
+ * retained source line, without the plan's conversion references. Both sides are projected, so the
+ * plan's extra evidence and the readback's own record shape cannot decide the comparison.
+ */
+function pendingCheck(entry: ImportEntry) {
+  const {
+    entryId,
+    sessionId,
+    position,
+    state,
+    cardId,
+    printingId,
+    finish,
+    condition,
+    quantity,
+    revision,
+    candidates,
+    sourceLine,
+  } = entry;
+  return {
+    entryId,
+    sessionId,
+    position,
+    state,
+    cardId,
+    printingId,
+    finish,
+    condition,
+    quantity,
+    revision,
+    candidates,
+    sourceLine,
+  };
 }
 
 /** Exact per-identity reconciliation catches offsetting losses that aggregate totals conceal. */
@@ -60,38 +81,18 @@ export function reconcileMigration(
       })),
       associations: expected.associations,
       sessions: expected.sessions,
-      pending: expected.pending.map((entry) => {
-        const {
-          entryId,
-          sessionId,
-          position,
-          state,
-          printingId,
-          finish,
-          condition,
-          quantity,
-          revision,
-          candidates,
-          sourceLine,
-        } = entry;
-        return {
-          entryId,
-          sessionId,
-          position,
-          state,
-          printingId,
-          finish,
-          condition,
-          quantity,
-          revision,
-          candidates,
-          sourceLine,
-        };
-      }),
+      pending: expected.pending.map(pendingCheck),
+    };
+    const recorded = {
+      copies: found.copies,
+      tags: found.tags,
+      associations: found.associations,
+      sessions: found.sessions,
+      pending: found.pending.map(pendingCheck),
     };
     for (const key of ['copies', 'tags', 'associations', 'sessions', 'pending'] as const) {
       const sorted = (rows: readonly unknown[]) => rows.map(canonical).sort();
-      if (canonical(sorted(checks[key])) !== canonical(sorted(found[key])))
+      if (canonical(sorted(checks[key])) !== canonical(sorted(recorded[key])))
         failures.push(`${expected.accountId}: ${key} mismatch`);
     }
     if (

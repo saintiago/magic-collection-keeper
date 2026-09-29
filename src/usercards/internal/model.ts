@@ -111,6 +111,8 @@ export interface ImportCandidate {
  * replay of the same import can recognize the line from this identity.
  */
 export interface ImportSourceLine {
+  /** Printing reference the source published, independent of the reviewed printing. */
+  readonly printingId: string | null;
   /** Card name the source published; null when it named none. */
   readonly name: string | null;
   /** Deck section the line belongs to, for example `mainboard`; null for a flat list. */
@@ -261,6 +263,17 @@ export const USERCARDS_LIMITS = {
   defaultImportPageSize: 50,
   minImportPageSize: 1,
   maxImportPageSize: 100,
+  /**
+   * Most records one migration batch carries. A batch commits its records, its replay receipt and
+   * any query-visible publication together, so this bounds a migration's commit while a larger
+   * plan loads as further batches (docs/migration.md#rehearsal-and-execution-gates).
+   */
+  maxMigrationBatchRecords: 100,
+  /**
+   * Longest archive chunk one durable migration evidence row carries. 12288 code units encode to
+   * at most 48 KiB, so one evidence row stays below the deployed read transport's per-row bound.
+   */
+  maxMigrationArchiveChunkLength: 12_288,
 } as const;
 
 /** Verified account identity Application derives from authentication, never from a caller field. */
