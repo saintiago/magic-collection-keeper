@@ -2111,13 +2111,15 @@ export function createSourceImportEditor(
   options.signal.addEventListener(
     'abort',
     () => {
-      disposed = true;
+      dispose();
     },
     { once: true },
   );
   /** Whether a source is being parsed or a waiting import reopened; one import in flight. */
   let sourcing = false;
   let reopening = false;
+  /** Identity of the unresolved source operation currently reported by this editor. */
+  let recoveryOperationId: string | null = null;
 
   const heading = text(document, 'h3', 'import-source-heading', 'Import a source');
   const form = document.createElement('form');
@@ -2188,6 +2190,15 @@ export function createSourceImportEditor(
   });
   paintForm();
   paintWaiting();
+  const unsubscribe = access.subscribe(() => {
+    if (!disposed) {
+      paintWaiting();
+      reconcileSourceRecovery();
+    }
+  });
+  if (disposed) {
+    unsubscribe();
+  }
 
   return {
     nodes: sourceEnabled ? [heading, form, status, waiting, rows, sourceNote] : [],
@@ -2203,10 +2214,49 @@ export function createSourceImportEditor(
             lines: sourceLines.value,
           }
         : null,
-    dispose: () => {
-      disposed = true;
-    },
+    dispose,
   };
+
+  function dispose(): void {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    unsubscribe();
+  }
+
+  /** A retired attempt no longer has an unresolved outcome for this view to recover. */
+  function reconcileSourceRecovery(): void {
+    if (recoveryOperationId !== null && access.resume(recoveryOperationId) === null) {
+      recoveryOperationId = null;
+      options.notices?.dismiss(sourceImportNotice);
+      status.textContent = '';
+    }
+  }
+
+  function reportSourceOutcome(
+    operationId: string,
+    outcome: UiChangeCommit<SourceImportResult>,
+    problem: string,
+  ): void {
+    recoveryOperationId =
+      outcome.status === 'unknown' && access.resume(operationId) !== null ? operationId : null;
+    // Discard can retire the attempt while reopening is still pending. Its late observation
+    // must not restore feedback that directs the user to an import the provider abandoned.
+    if (outcome.status === 'unknown' && recoveryOperationId === null) {
+      options.notices?.dismiss(sourceImportNotice);
+      status.textContent = '';
+      return;
+    }
+    reportUiOperation(
+      options.notices,
+      sourceImportNotice,
+      { status: outcome.status, message: problem },
+      recoveryOperationId === null
+        ? undefined
+        : { label: 'Reopen the retained import', run: reopenRetainedSource },
+    );
+  }
 
   /**
    * Draws the fields of the selected source method. Only the fields the method needs are
@@ -2356,7 +2406,7 @@ export function createSourceImportEditor(
     const request = sourceRequest(input);
     sourcing = true;
     paintForm();
-    let outcome: UiChangeCommit<SourceImportResult>;
+    let outcome: Awaited<ReturnType<typeof beginSourceImport>>;
     try {
       // The account retains the new import before its request is dispatched, so the waiting list
       // presents it while its outcome is still open (docs/user-cards.md#browser-operation-lifecycle).
@@ -2384,26 +2434,21 @@ export function createSourceImportEditor(
       // The source form keeps its input; a source whose outcome is not established stays visible
       // as the shell's notice with the retained import's own reopen
       // (docs/ui/navigation.md#error-notices, docs/ui/editors.md#internal-design).
-      reportUiOperation(
-        options.notices,
-        sourceImportNotice,
-        { status: outcome.status, message: problem },
-        outcome.status === 'unknown'
-          ? { label: 'Reopen the retained import', run: reopenRetainedSource }
-          : undefined,
-      );
+      reportSourceOutcome(outcome.operationId, outcome, problem);
       return;
     }
+    recoveryOperationId = null;
     status.textContent = sourceImportMessage(result);
     options.notices?.dismiss(sourceImportNotice);
     rows.replaceChildren(...result.rows.map((row) => sourceRow(document, row)));
     options.onStaged(result.session.sessionId);
   }
 
-  /** Reopens the oldest import the account still retains, exactly as its waiting row does. */
+  /** Reopens the reported operation, never another import that happens to remain retained. */
   function reopenRetainedSource(): void {
-    const attempt = unfinishedSources()[0];
-    if (attempt !== undefined) {
+    reconcileSourceRecovery();
+    const attempt = recoveryOperationId === null ? null : access.resume(recoveryOperationId);
+    if (attempt?.kind === 'stageSourceImport') {
       void reopenSource(attempt.operationId, attempt.request);
     }
   }
@@ -2439,14 +2484,10 @@ export function createSourceImportEditor(
       status.textContent = problem;
       // Reopening a retained import is an operation of this view: its failure stays visible as the
       // shell's notice with the same explicit reopen (docs/ui/navigation.md#error-notices).
-      reportUiOperation(
-        options.notices,
-        sourceImportNotice,
-        { status: outcome.status, message: problem },
-        { label: 'Reopen the retained import', run: reopenRetainedSource },
-      );
+      reportSourceOutcome(operationId, outcome, problem);
       return;
     }
+    recoveryOperationId = null;
     status.textContent = sourceImportMessage(result);
     options.notices?.dismiss(sourceImportNotice);
     rows.replaceChildren(...result.rows.map((row) => sourceRow(document, row)));

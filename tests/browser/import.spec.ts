@@ -2578,6 +2578,77 @@ const sourceMethods = [
   },
 ] as const;
 
+for (const scenario of ['single', 'older retained', 'reopening'] as const) {
+  const olderAttempt = scenario === 'older retained';
+  test(`source recovery follows its reported attempt through discard (${scenario})`, async ({
+    page,
+  }) => {
+    const errors = await openImport(page, '#/import');
+    await settle(page, 'settleSessions', (await requested(page, 'sessions')).id, []);
+    if (olderAttempt) {
+      await page.fill('#import-source-text', '1 Counterspell');
+      await page.click('#import-source-submit');
+      const older = await requested<StageSourceImportInput>(page, 'source');
+      await control(page, 'fail', older.id, {
+        code: 'unavailable',
+        message: 'Older response lost.',
+      });
+      await expect(page.locator('#import-source-status')).toHaveText(sourceOutcomeUnknown);
+      await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, []);
+    }
+    const index = olderAttempt ? 1 : 0;
+    await page.fill('#import-source-text', '4 Lightning Bolt');
+    await page.click('#import-source-submit');
+    const started = await requested<StageSourceImportInput>(page, 'source', index);
+    await control(page, 'fail', started.id, { code: 'unavailable', message: 'Response lost.' });
+    const notice = page.locator('[data-ui-notice="navigation:page:alice:import-source"]');
+    await expect(notice).toContainText(sourceOutcomeUnknown);
+    const recorded = session({ sessionId: started.arguments.sessionId, sourceKind: 'pasted-list' });
+    await settle(page, 'settleSessions', (await requested(page, 'sessions', index + 1)).id, [
+      recorded,
+    ]);
+    await settle(page, 'settleEntries', (await requested(page, 'entries')).id, {
+      session: recorded,
+      entries: [entry({ sessionId: recorded.sessionId, printingId: null, finish: null })],
+    });
+    await notice.getByRole('button', { name: 'Reopen the retained import' }).click();
+    const reopened = await requested<StageSourceImportInput>(page, 'source', index + 1);
+    expect(reopened.arguments).toEqual(started.arguments);
+    if (scenario !== 'reopening') {
+      await control(page, 'fail', reopened.id, { code: 'unavailable', message: 'Still unknown.' });
+      await expect(page.locator('#import-source-submit')).toBeEnabled();
+    }
+    await page.click('#import-discard-session');
+    await page
+      .locator('dialog', { hasText: 'Discard this import?' })
+      .getByRole('button', { name: 'Discard import' })
+      .click();
+    const discarded = await requested(page, 'discardSession');
+    await settle(page, 'settleDiscardSession', discarded.id, {
+      ...recorded,
+      state: 'discarded',
+      pendingEntries: 0,
+      discardedEntries: 1,
+      revision: 3,
+    });
+    await expect(notice).toHaveCount(0);
+    await expect(page.locator(`[data-ui-source-waiting="${recorded.sessionId}"]`)).toHaveCount(0);
+    await expect(page.locator('#import-source-status')).toBeEmpty();
+    if (scenario === 'reopening') {
+      await control(page, 'fail', reopened.id, { code: 'unavailable', message: 'Late response.' });
+      await expect(page.locator('#import-source-submit')).toBeEnabled();
+      await expect(notice).toHaveCount(0);
+    }
+    if (olderAttempt) {
+      const older = await requested<StageSourceImportInput>(page, 'source');
+      await reopenWaitingImport(page, older.arguments.sessionId);
+      const retry = await requested<StageSourceImportInput>(page, 'source', index + 2);
+      expect(retry.arguments).toEqual(older.arguments);
+    }
+    expect(errors).toEqual([]);
+  });
+}
+
 for (const method of sourceMethods) {
   for (const secondOutcome of ['rejected', 'committed', 'unknown'] as const) {
     test(`keeps an unresolved ${method.format} import when another input is ${secondOutcome}`, async ({
