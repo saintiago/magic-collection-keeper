@@ -5,7 +5,8 @@ import {
   type CardListEntryImage,
   type CardListFragmentResult,
 } from '../../src/card-list/index.js';
-import { createCardViews } from '../../src/ui/index.js';
+import { createCardViews, createEditors, createCaptureControls } from '../../src/ui/index.js';
+import { installCollectionHarness } from './collection.harness.js';
 
 const entry: CardListEntry = {
   key: 'printing:bolt',
@@ -88,3 +89,92 @@ export function installDetailHarness() {
   };
 }
 export type DetailControl = ReturnType<typeof installDetailHarness>;
+
+/** Real page, views, lists and editor over a controlled detail source. */
+export function installDetailPageHarness(level: 'card' | 'copy') {
+  const base = createCardViews();
+  let refresh: (() => void) | undefined;
+  let loads = 0;
+  const cardViews: ReturnType<typeof createCardViews> = {
+    ...base,
+    detail(options) {
+      return base.detail({
+        ...options,
+        create(listOptions) {
+          const list = options.create(listOptions);
+          refresh = () => list.refresh();
+          return list;
+        },
+        source: {
+          async load() {
+            loads += 1;
+            return {
+              status: 'page',
+              continuation: null,
+              current: true,
+              entries: [
+                {
+                  ...entry,
+                  key: `${level}:bolt`,
+                  target:
+                    level === 'card'
+                      ? { kind: 'card', cardId: 'bolt' }
+                      : { kind: 'copy', copyId: 'copy' },
+                  basic: {
+                    ...entry.basic!,
+                    printing: { ...entry.basic!.printing!, finishes: ['nonfoil', 'foil'] },
+                  },
+                  ...(level === 'copy'
+                    ? {
+                        detail: {
+                          absent: null,
+                          copy: {
+                            copyId: 'copy',
+                            printingId: 'bolt',
+                            revision: loads,
+                            finish: 'nonfoil',
+                            condition: 'NM',
+                          },
+                        },
+                      }
+                    : {}),
+                },
+              ],
+            };
+          },
+        },
+      });
+    },
+    list(options) {
+      return base.list({
+        ...options,
+        source: {
+          load: async () => ({
+            status: 'page',
+            entries: [entry],
+            continuation: null,
+            current: true,
+          }),
+        },
+      });
+    },
+  };
+  const shell = installCollectionHarness(document.getElementById('root'), {
+    cardViews,
+    editors: createEditors({ cardViews }),
+    captureControls: createCaptureControls,
+  });
+  shell.navigate({
+    page: 'card',
+    cardId: 'bolt',
+    printingId: level === 'copy' ? 'bolt' : null,
+    copyId: level === 'copy' ? 'copy' : null,
+  });
+  return {
+    refresh: () => refresh?.(),
+    loads: () => loads,
+    corrections: () => shell.corrections(),
+    dispose: () => shell.dispose(),
+  };
+}
+export type DetailPageControl = ReturnType<typeof installDetailPageHarness>;

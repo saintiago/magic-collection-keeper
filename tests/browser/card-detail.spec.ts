@@ -2,11 +2,12 @@
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { build } from 'esbuild';
-import type { DetailControl } from './card-detail.harness.js';
+import type { DetailControl, DetailPageControl } from './card-detail.harness.js';
 import type { UiCollectionControl } from './collection.harness.js';
 
 declare global {
   var keeperDetail: DetailControl;
+  var keeperDetailRefresh: DetailPageControl;
   var keeperDetailPage: UiCollectionControl;
   var keeperDetailLifetimes: {
     disposed: number;
@@ -14,7 +15,7 @@ declare global {
     fail(): void;
     recompose(): void;
   }[];
-  var keeperDetailChildren: { disposed: number }[];
+  var keeperDetailChildren: { disposed: number; restoredCurrent: boolean }[];
 }
 
 async function bundle(contents: string): Promise<string> {
@@ -63,8 +64,11 @@ for (const recoverFailure of [false, true]) {
       await page.evaluate(() => keeperDetail.finish(true));
       await expect(page.getByText('Image unavailable', { exact: true })).toBeVisible();
       await expect(page.locator('#printing-image')).toHaveCount(0);
-      await page.evaluate(() => keeperDetail.reload());
+      await page.getByRole('button', { name: 'Retry printing image' }).click();
       await expect.poll(() => page.evaluate(() => keeperDetail.state().reads)).toBe(3);
+      await expect(page.getByText('Loading printing image…')).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Lightning Bolt' })).toBeVisible();
+      await draft.focus();
       await page.evaluate(() => keeperDetail.finish(false));
       await expect(page.locator('#printing-image')).toBeAttached();
       await expect(page.getByText('Image unavailable', { exact: true })).toHaveCount(0);
@@ -78,6 +82,73 @@ for (const recoverFailure of [false, true]) {
     });
     await page.evaluate(() => keeperDetail.dispose());
     expect(errors).toEqual([]);
+  });
+}
+
+for (const level of ['card', 'copy'] as const) {
+  test(`${level} detail refresh preserves current child state across repeated recomposition`, async ({
+    page,
+  }) => {
+    await page.route('http://keeper-detail.test/**', (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: '<!doctype html><html><body><div id="root"></div></body></html>',
+      }),
+    );
+    await page.goto('http://keeper-detail.test/');
+    await page.addScriptTag({
+      type: 'module',
+      content: await bundle(`
+        import { installDetailPageHarness } from './tests/browser/card-detail.harness.ts';
+        globalThis.keeperDetailRefresh = installDetailPageHarness(${JSON.stringify(level)});
+      `),
+    });
+    if (level === 'copy') {
+      await expect(page.getByRole('combobox', { name: 'Condition', exact: true })).toHaveValue(
+        'NM',
+      );
+      await page.getByRole('combobox', { name: 'Condition', exact: true }).selectOption('DMG');
+      await page.getByRole('combobox', { name: 'Finish', exact: true }).selectOption('foil');
+    } else {
+      await page.getByRole('checkbox').check();
+    }
+    for (let refresh = 1; refresh <= 2; refresh++) {
+      await page.evaluate(() => keeperDetailRefresh.refresh());
+      await expect.poll(() => page.evaluate(() => keeperDetailRefresh.loads())).toBe(refresh + 1);
+      if (level === 'copy') {
+        await expect(page.getByRole('combobox', { name: 'Condition', exact: true })).toHaveValue(
+          refresh === 1 ? 'DMG' : 'LP',
+        );
+        await expect(page.getByRole('combobox', { name: 'Finish', exact: true })).toHaveValue(
+          'foil',
+        );
+        await page.getByRole('combobox', { name: 'Condition', exact: true }).selectOption('LP');
+      } else {
+        if (refresh === 1) {
+          await expect(page.getByRole('checkbox')).toBeChecked();
+          await page.getByRole('checkbox').uncheck();
+        } else {
+          await expect(page.getByRole('checkbox')).not.toBeChecked();
+        }
+      }
+    }
+    if (level === 'copy') {
+      await page.getByRole('button', { name: 'Save changes' }).click();
+      await expect
+        .poll(() => page.evaluate(() => keeperDetailRefresh.corrections()))
+        .toEqual([
+          expect.objectContaining({
+            input: {
+              copyId: 'copy',
+              expectedRevision: 3,
+              printingId: 'bolt',
+              finish: 'foil',
+              condition: 'LP',
+            },
+          }),
+        ]);
+    }
+    await page.evaluate(() => keeperDetailRefresh.dispose());
   });
 }
 
@@ -107,15 +178,17 @@ for (const [level, departure] of [
       globalThis.keeperDetailChildren = [];
       const level = ${JSON.stringify(level)};
       const base = createCardViews();
-      function child() {
-        const record = { disposed: 0 };
+      let lastCaptured;
+      function child(restored) {
+        const record = { disposed: 0, restoredCurrent: lastCaptured === undefined || restored === lastCaptured };
+        const retained = { printingId: 'bolt', finish: 'foil', condition: 'DMG' };
         keeperDetailChildren.push(record);
-        return { dispose() { record.disposed++; }, capture: () => null };
+        return { dispose() { record.disposed++; }, capture() { lastCaptured = retained; return retained; } };
       }
       const cardViews = { ...base,
         list(options) {
           if (options.container.id !== 'card-printings') return base.list(options);
-          return { ...child(), restoration: null };
+          return { ...child(options.restored), restoration: null };
         },
         detail(options) {
         const presented = Promise.withResolvers();
@@ -136,8 +209,8 @@ for (const [level, departure] of [
         return { nodes: [element], presented: presented.promise, dispose() { record.disposed++; } };
       } };
       globalThis.keeperDetailPage = installCollectionHarness(document.getElementById('root'), {
-        cardViews, editors: { ...createEditors({ cardViews }), copy() {
-          return { ...child(), element: document.createElement('input'), printingLink: document.createElement('a') };
+        cardViews, editors: { ...createEditors({ cardViews }), copy(options) {
+          return { ...child(options.restored), element: document.createElement('input'), printingLink: document.createElement('a') };
         } }, captureControls: createCaptureControls,
       });
       keeperDetailPage.navigate({ page: 'card', cardId: 'bolt', printingId: level === 'card' ? null : 'bolt', copyId: level === 'copy' ? 'copy' : null });
@@ -158,6 +231,9 @@ for (const [level, departure] of [
       .first()
       .click();
     await expect(page.getByText('Independent detail', { exact: false })).toBeVisible();
+    expect(
+      await page.evaluate(() => keeperDetailChildren.every((child) => child.restoredCurrent)),
+    ).toBe(true);
     expect(
       await page.evaluate(() => keeperDetailLifetimes.map((record) => record.disposed)),
     ).toEqual([1, 0]);

@@ -27,12 +27,7 @@ import type {
 } from '../../../card-list/index.js';
 
 import type { CardViewDetail, UiCardList } from '../../card-views/index.js';
-import {
-  createCopyAccess,
-  uiCopyReadNoticeId,
-  type UiCopyDraft,
-  type UiCopyEditor,
-} from '../../editors/index.js';
+import { createCopyAccess, uiCopyReadNoticeId, type UiCopyEditor } from '../../editors/index.js';
 import { uiHref, type UiPageDefinition, type UiView } from '../../navigation/index.js';
 import { UI_LIMITS } from '../../shared/limits.js';
 import { reportUiFailure } from '../../shared/notices.js';
@@ -52,7 +47,7 @@ export function createCardDetailsPage(): UiPageDefinition {
       /** The card view this page presents; the level is fixed for the page's lifetime. */
       const cardView: Extract<UiView, { page: 'card' }> = view;
       const document = container.ownerDocument;
-      const restored = readPageState(context.restored?.state);
+      let retained = readPageState(context.restored?.state);
       const status = document.createElement('p');
       status.id = 'card-details-status';
       status.setAttribute('role', 'status');
@@ -118,6 +113,8 @@ export function createCardDetailsPage(): UiPageDefinition {
       }
 
       function disposeContent(): void {
+        // Recomposition and retry restore the latest child state, not just the history entry.
+        retained = readPageState(captureState());
         copyEditor?.dispose();
         copyEditor = null;
         printings?.dispose();
@@ -143,10 +140,13 @@ export function createCardDetailsPage(): UiPageDefinition {
        */
       function captureState(): unknown | null {
         if (cardView.copyId !== null) {
-          const draft = copyEditor?.capture() ?? readCopyDraft(restored);
+          if (copyEditor === null) {
+            return retained;
+          }
+          const draft = copyEditor.capture();
           return draft === null ? null : { draft };
         }
-        return printings === null ? restored : { list: printings.capture() };
+        return printings === null ? retained : { list: printings.capture() };
       }
 
       /**
@@ -338,7 +338,7 @@ export function createCardDetailsPage(): UiPageDefinition {
           card,
           printing: entry.basic?.printing ?? null,
           notices: context.notices,
-          restored: restored?.draft,
+          restored: retained?.draft,
           signal: context.signal,
           printingHref: (saved) => uiHref(viewOfCard(cardId, saved.printingId, null)),
         });
@@ -368,7 +368,7 @@ export function createCardDetailsPage(): UiPageDefinition {
           context: card.cardId,
           accountId: context.account.accountId,
           pageSize: UI_LIMITS.printingPage,
-          restored: readListState<string>(restored),
+          restored: readListState<string>(retained),
           presentation: context.modules.cardViews.openEntries({
             document,
             idPrefix: 'card-printing',
@@ -462,26 +462,6 @@ export function createCardDetailsPage(): UiPageDefinition {
       }
     },
   };
-}
-
-/** The copy draft a history entry kept, or null when this visit restored none. */
-function readCopyDraft(state: Readonly<Record<string, unknown>> | null): UiCopyDraft | null {
-  const draft = state?.draft;
-  if (typeof draft !== 'object' || draft === null || Array.isArray(draft)) {
-    return null;
-  }
-  const values = draft as Readonly<Record<string, unknown>>;
-  const printingId = values.printingId;
-  const finish = values.finish;
-  const condition = values.condition;
-  if (
-    typeof printingId !== 'string' ||
-    typeof finish !== 'string' ||
-    typeof condition !== 'string'
-  ) {
-    return null;
-  }
-  return { printingId, finish, condition };
 }
 
 function readMessage(cause: unknown, fallback: string): string {

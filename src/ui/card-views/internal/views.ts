@@ -223,7 +223,13 @@ export function createCardViews(): CardViews {
         }
         // Enrichment can change without changing the entry or generation. Reconcile only its
         // region, preserving the mounted children and their focus while fragments arrive.
-        imageHost.replaceChildren(...imageNodes(document, options.identity, snapshot));
+        imageHost.replaceChildren(
+          ...imageNodes(document, options.identity, snapshot, (key) => {
+            if (!disposed) {
+              list.reloadFragment(key, 'images');
+            }
+          }),
+        );
         settle();
       };
       const unsubscribe = list.subscribe(paint);
@@ -356,13 +362,19 @@ function imageNodes(
   document: Document,
   identity: 'card' | 'printing' | 'none',
   snapshot: CardListSnapshot<unknown>,
+  retryImage: (key: string) => void,
 ): readonly Node[] {
   if (identity !== 'printing') {
     return [];
   }
-  const state = snapshot.entries[0]?.fragments.get('images');
-  if (state?.status === 'failed') {
-    return [line(document, 'printing-image-status', state.message)];
+  const entry = snapshot.entries[0];
+  const state = entry?.fragments.get('images');
+  if (entry !== undefined && state?.status === 'failed') {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = 'Retry printing image';
+    retry.addEventListener('click', () => retryImage(entry.entry.key));
+    return [line(document, 'printing-image-status', state.message), retry];
   }
   if (state?.status === 'loading') {
     return [line(document, 'printing-image-status', 'Loading printing image…')];
