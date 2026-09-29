@@ -1890,7 +1890,10 @@ export function createImportReviewEditor(
   }
 
   /** The recovery action of a confirmation: read the outcome its retained operation recorded. */
-  function confirmationCheck(): { readonly label: string; run(): void } {
+  function confirmationCheck(): { readonly label: string; run(): void } | undefined {
+    if (confirmation === null) {
+      return undefined;
+    }
     return {
       label: 'Check the confirmation outcome',
       run: () => {

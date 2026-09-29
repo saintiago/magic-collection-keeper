@@ -352,6 +352,8 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
   const reload = button(document, 'copy-reload', 'Reload copy');
   /** Notice identity of this copy's corrections: an update replaces the presented failure. */
   const copyNotice = `copy:${saved.copyId}`;
+  // A successful read resolves its service failure, never an uncertain correction.
+  const copyReadNotice = `${copyNotice}:read`;
   const form = document.createElement('form');
   form.id = 'copy-form';
   form.append(
@@ -630,14 +632,6 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
       return;
     }
     copyStatus.textContent = result.status === 'read' ? 'Reloaded the copy.' : readProblem(result);
-    if (result.status !== 'read') {
-      reportUiFailure(options.notices, copyNotice, readProblem(result), {
-        label: 'Reload the copy',
-        run: () => {
-          void reloadCopy();
-        },
-      });
-    }
   }
 
   /**
@@ -648,21 +642,35 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
    */
   async function readCurrent(): Promise<UiCopyReadResult> {
     const current = ++work;
+    let result: UiCopyReadResult;
     try {
       const read = await access.read([saved.copyId], options.signal);
       const found = read.copies[0] ?? null;
       if (found === null) {
-        return { work: current, status: 'missing' };
+        result = { work: current, status: 'missing' };
+      } else {
+        presentCopy(found);
+        result = { work: current, status: 'read', copy: found };
       }
-      presentCopy(found);
-      return { work: current, status: 'read', copy: found };
     } catch (cause) {
-      return {
+      result = {
         work: current,
         status: 'failed',
         message: readMessage(cause, 'The copy could not be reloaded.'),
       };
     }
+    // Both explicit reloads and conflict reconciliation settle the same read failure.
+    if (!disposed && current === work) {
+      if (result.status === 'read') {
+        options.notices?.dismiss(copyReadNotice);
+      } else {
+        reportUiFailure(options.notices, copyReadNotice, readProblem(result), {
+          label: 'Reload the copy',
+          run: () => void reloadCopy(),
+        });
+      }
+    }
+    return result;
   }
 
   /**

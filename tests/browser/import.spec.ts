@@ -1188,6 +1188,48 @@ test('confirms a selection larger than one provider request', async ({ page }) =
   expect(errors).toEqual([]);
 });
 
+for (const duringRecovery of [false, true]) {
+  test(`a rejected confirmation removes unavailable recovery actions (recovery: ${duringRecovery})`, async ({
+    page,
+  }) => {
+    const errors = await openPendingReview(page, [entry()]);
+    await page.locator('#import-pending [data-ui-select]').check();
+    await page.click('#import-pending [data-ui-tool="confirm-import"]');
+    const confirmation = await requested(page, 'confirm');
+    const notice = page.locator('[data-ui-notice="navigation:page:alice:import-confirm"]');
+    if (duringRecovery) {
+      await control(page, 'fail', confirmation.id, {
+        code: 'unavailable',
+        message: 'Lost response',
+      });
+      await control(page, 'fail', (await requested(page, 'recover')).id, {
+        code: 'unavailable',
+        message: 'Offline',
+      });
+      await expect(page.locator('#import-recover')).toBeEnabled();
+      await notice.getByRole('button', { name: 'Check the confirmation outcome' }).click();
+      await settle(page, 'settleRecover', (await requested(page, 'recover', 1)).id, {
+        outcome: 'absent',
+      });
+      await expect(notice).toContainText('not recorded');
+    } else {
+      await control(page, 'fail', confirmation.id, {
+        code: 'conflict',
+        message: 'Review changed.',
+      });
+      await expect(notice).toContainText('Review changed.');
+      expect(await control<unknown[]>(page, 'recover')).toHaveLength(0);
+    }
+    await expect(page.locator('#import-recover')).toBeHidden();
+    await expect(
+      notice.getByRole('button', { name: 'Check the confirmation outcome' }),
+    ).toHaveCount(0);
+    await expect(notice.getByRole('button', { name: 'Dismiss' })).toBeVisible();
+    expect(await control<unknown[]>(page, 'confirm')).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+}
+
 test('recovers a lost confirmation whose pending entries are gone', async ({ page }) => {
   const errors = await openPendingReview(page, [entry()]);
   const row = page.locator('#import-pending [data-ui-entry="pending:entry-1"]');

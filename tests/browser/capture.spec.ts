@@ -213,6 +213,29 @@ test('a refused camera reports the failure and starts no recognition work', asyn
   expect(await control(page, 'recognitions')).toEqual([]);
   const camera = await control<{ opened: number }>(page, 'camera');
   expect(camera.opened).toBe(1);
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:import-capture"]');
+  await notice.getByRole('button', { name: 'Start the camera again' }).click();
+  expect((await control<{ opened: number }>(page, 'camera')).opened).toBe(2);
+  expect(errors).toEqual([]);
+});
+
+test('a running camera failure offers no unavailable restart action', async ({ page }) => {
+  const errors = await openCapture(page);
+  await settleSessions(page, 0, []);
+  const time = new Date('2026-09-29T00:00:00Z');
+  await page.clock.install({ time });
+  await page.clock.pauseAt(time);
+  await control(page, 'failPreparation', 'Recognition preparation failed.');
+  await page.click('#import-camera-start');
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:import-capture"]');
+  await expect(notice).toContainText('Recognition is unavailable.');
+  await expect(page.locator('#import-camera-stop')).toBeVisible();
+  await expect(notice.getByRole('button', { name: 'Start the camera again' })).toHaveCount(0);
+  await expect(notice.getByRole('button', { name: 'Recover the capture' })).toHaveCount(0);
+  await page.clock.runFor(2000);
+  await expect(notice).toHaveCount(0);
+  expect((await control<readonly unknown[]>(page, 'preparations')).length).toBeGreaterThan(1);
+  expect((await control<{ opened: number }>(page, 'camera')).opened).toBe(1);
   expect(errors).toEqual([]);
 });
 
@@ -1032,12 +1055,15 @@ test('repeated lost responses retain the capture and its final alternatives thro
     await expect(page.locator('#import-camera-status')).toContainText(
       'later alternatives are not yet verified',
     );
-    await recover.tap();
+    const notice = page.locator('[data-ui-notice="navigation:page:alice:import-capture"]');
+    await expect(notice).toContainText('later alternatives are not yet verified');
+    await notice.getByRole('button', { name: 'Recover the capture' }).tap();
     const attachmentReplay = await requested<AttachImportCandidatesInput>(page, 'attachments', 1);
     expect(attachmentReplay.arguments).toEqual(attached.arguments);
     const repeated = await userCards.attachImportCandidates(account, attachmentReplay.arguments);
     expect(repeated.entry).toEqual(stored.entry);
     await control(page, 'settleAttach', attachmentReplay.id, repeated);
+    await expect(notice).toHaveCount(0);
     await expect(recover).toBeHidden();
     await expect(page.locator('#import-camera-status')).toHaveAttribute(
       'data-ui-capture-cue',
@@ -1111,7 +1137,7 @@ for (const { name, reading } of unusableComparisons) {
   });
 }
 
-for (const outcome of ['admitted', 'suppressed'] as const) {
+for (const outcome of ['admitted', 'suppressed', 'unresolved'] as const) {
   test(`a capture without later readings can recover its ${outcome} decision after camera stop`, async ({
     page,
   }) => {
@@ -1130,7 +1156,9 @@ for (const outcome of ['admitted', 'suppressed'] as const) {
     await control(page, 'fail', first.id, { code: 'unavailable', message: 'Response lost.' });
     await expect(page.locator('#import-camera-status')).toContainText('staging outcome is unknown');
     await expect(page.locator('#import-camera-start')).toBeDisabled();
-    await page.getByRole('button', { name: 'Recover capture' }).click();
+    const notice = page.locator('[data-ui-notice="navigation:page:alice:import-capture"]');
+    await expect(notice).toContainText('staging outcome is unknown');
+    await notice.getByRole('button', { name: 'Recover the capture' }).click();
     const replay = await requested<StageCaptureInput>(page, 'captures', 1);
     expect(replay.arguments).toEqual(first.arguments);
     await control(page, 'settleCapture', replay.id, {
@@ -1143,8 +1171,9 @@ for (const outcome of ['admitted', 'suppressed'] as const) {
     await expect(page.locator('#import-camera-start')).toBeEnabled();
     await expect(page.locator('#import-camera-status')).toHaveAttribute(
       'data-ui-capture-cue',
-      outcome === 'admitted' ? 'accepted' : 'repeat',
+      outcome === 'admitted' ? 'accepted' : outcome === 'suppressed' ? 'repeat' : 'error',
     );
+    await expect(notice).toHaveCount(0);
     expect(await control(page, 'attachments')).toEqual([]);
     expect(errors).toEqual([]);
   });
@@ -1209,6 +1238,9 @@ test('a definite first attachment rejection does not leave capture waiting for r
   await expect(page.locator('#import-camera-status')).toHaveText(
     'No more alternatives fit in this entry.',
   );
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:import-capture"]');
+  await expect(notice).toContainText('No more alternatives fit in this entry.');
+  await expect(notice.getByRole('button', { name: 'Recover the capture' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Recover capture' })).toBeHidden();
   await expect(page.locator('#import-camera-status')).toHaveAttribute(
     'data-ui-capture-cue',

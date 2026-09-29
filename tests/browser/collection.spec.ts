@@ -823,8 +823,19 @@ test('a lost response stays unknown while current attributes and a guarded retry
   await expect(page.getByRole('button', { name: 'Save changes' })).toBeEnabled();
 
   await page.getByRole('button', { name: 'Reload copy' }).click();
-  await settleCopyRead(page, (await copyRead(page, 2)).id, [storedCopy({ revision: 6 })]);
+  await failCopyRead(page, (await copyRead(page, 2)).id, {
+    code: 'unavailable',
+    message: 'The reload could not reach the service.',
+  });
+  const readNotice = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1:read"]');
+  await expect(readNotice).toContainText('The reload could not reach the service.');
+  await expect(notice).toContainText('The outcome is unknown.');
+  await readNotice.getByRole('button', { name: 'Reload the copy' }).click();
+  await settleCopyRead(page, (await copyRead(page, 3)).id, [storedCopy({ revision: 6 })]);
   await expect(page.locator('#copy-status')).toHaveText('Reloaded the copy.');
+  await expect(readNotice).toHaveCount(0);
+  // Reading current attributes never establishes whether the earlier correction committed.
+  await expect(notice).toContainText('The outcome is unknown.');
   await expect(page.locator('#copy-finish-choice')).toHaveValue('foil');
   await page.getByRole('button', { name: 'Save changes' }).click();
   const retry = await correction(page, 1);
@@ -1223,24 +1234,49 @@ test('presents details, lists and printing choices through the supplied CardView
   expect(errors).toEqual([]);
 });
 
-test('a failed reload is reported as a failure, not as a missing copy', async ({ page }) => {
-  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
-  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
-  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
-  await settleCard(page, 'card-1', { cards: [cardRecord()] });
-  await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], null);
+for (const recovery of ['reload', 'conflict read'] as const) {
+  test(`a failed copy read clears after a successful ${recovery}`, async ({ page }) => {
+    const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+    await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+    await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+    await settleCard(page, 'card-1', { cards: [cardRecord()] });
+    await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], null);
 
-  await page.locator('#copy-reload').click();
-  await failCopyRead(page, (await copyRead(page, 1)).id, {
-    code: 'unavailable',
-    message: 'The service could not be reached.',
+    await page.locator('#copy-reload').click();
+    await failCopyRead(page, (await copyRead(page, 1)).id, {
+      code: 'unavailable',
+      message: 'The service could not be reached.',
+    });
+
+    // An unavailable read does not establish that the account lost the copy.
+    await expect(page.locator('#copy-status')).toHaveText('The service could not be reached.');
+    await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · nonfoil · near mint');
+    const notice = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1:read"]');
+    await expect(notice).toContainText('The service could not be reached.');
+    if (recovery === 'reload') {
+      await notice.getByRole('button', { name: 'Reload the copy' }).click();
+    } else {
+      await page.locator('#copy-condition-choice').selectOption('LP');
+      await page.getByRole('button', { name: 'Save changes' }).click();
+      await failCorrection(page, (await correction(page)).id, {
+        code: 'conflict',
+        message: 'The copy changed.',
+      });
+    }
+    await settleCopyRead(page, (await copyRead(page, 2)).id, [storedCopy()]);
+    if (recovery === 'reload') {
+      await expect(page.locator('#copy-status')).toHaveText('Reloaded the copy.');
+    } else {
+      await expect(
+        page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1"]'),
+      ).toContainText('The copy changed since you read it.');
+      await expect(page.locator('#copy-condition-choice')).toHaveValue('LP');
+    }
+    await expect(notice).toHaveCount(0);
+    expect(await corrections(page)).toHaveLength(recovery === 'reload' ? 0 : 1);
+    expect(errors).toEqual([]);
   });
-
-  // An unavailable read does not establish that the account lost the copy.
-  await expect(page.locator('#copy-status')).toHaveText('The service could not be reached.');
-  await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · nonfoil · near mint');
-  expect(errors).toEqual([]);
-});
+}
 
 test('an older reload never replaces the state a save committed', async ({ page }) => {
   const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
