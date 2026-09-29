@@ -10,6 +10,8 @@
  * these public entry points only (docs/architecture.md, .dependency-cruiser.mjs).
  */
 
+import type { SearchIndexingProgress } from './internal/progress.js';
+
 export {
   SEARCH_PROGRESS_DEFAULT_WINDOW_MS,
   createSearchProgress,
@@ -17,6 +19,15 @@ export {
   type SearchIndexingProgressDependencies,
   type SearchIndexingStatus,
 } from './internal/progress.js';
+/**
+ * The observable account-scoped status a presentation shell consumes: the current status, its
+ * changes and a recheck that checks progress without repeating the write that produced it
+ * (docs/search.md#freshness).
+ */
+export type SearchIndexingObservable = Pick<
+  SearchIndexingProgress,
+  'status' | 'subscribe' | 'recheck'
+>;
 // The declared bounds of a query and of an observation; a browser consumer that batches explicit
 // positions uses the same provider-owned bound the service validates against.
 export { SEARCH_LIMITS } from './internal/limits.js';

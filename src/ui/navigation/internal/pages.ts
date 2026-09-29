@@ -1,28 +1,28 @@
 /**
- * Page contract of the UserInterface (docs/user-interface.md#pages-and-navigation,
- * docs/user-interface.md#state-ownership-and-restoration).
+ * Page contract of the Navigation module (docs/ui/navigation.md#interface, docs/ui/pages.md).
  *
- * The shell owns routes, navigation and the frame; a page implementation owns one dedicated page's
- * content and supplies the sources and tools its lists use. Pages are mounted with the supplied
- * capabilities, the verified account, the state the history entry retained and a signal that is
- * aborted when the view closes. A page implements the state the shell keeps for its entry itself:
- * it captures its form state together with the states its CardLists expose and hands the same
- * representation back when the entry returns, so navigation retains an opaque page-state reference
- * it never inspects (docs/user-interface.md#state-ownership-and-restoration).
+ * Navigation owns routes, navigation, the frame and the lifetime of the mounted page; a page
+ * implementation owns one dedicated page's content, composes the presentation modules UI
+ * composition supplied it and supplies the sources and tools its lists use. Pages are mounted with
+ * the supplied capabilities, the verified account, the state the history entry retained and a
+ * signal that is aborted when the view closes. A page implements the state the shell keeps for its
+ * entry itself: it captures its form state together with the states its children expose and hands
+ * the same representation back when the entry returns, so Navigation retains an opaque page-state
+ * reference it never inspects (docs/ui/architecture.md#state-ownership-and-restoration).
  *
  * A page whose content arrives asynchronously reports when it has presented the history entry the
  * shell supplied it, so the shell restores that entry's scroll offset and focused element over the
  * presented content and an interrupted restoration keeps the context the entry had
- * (docs/user-interface.md#pages-and-navigation).
+ * (docs/ui/navigation.md#internal-design).
  */
 
-import type { UserInterfaceCapabilities } from '../../application/index.js';
-import type { CaptureBrowserDevice } from '../../capture/index.js';
+import type { UserInterfaceCapabilities } from '../../../application/index.js';
+import type { CaptureBrowserDevice } from '../../../capture/index.js';
 
-import type { UiNotices } from '../shared/notices.js';
-import type { UiPresentationModules } from './composition.js';
+import type { UiPresentationModules } from '../../shared/modules.js';
 import type { UiDialogs } from './dialogs.js';
 import type { UiAccount } from './identity.js';
+import type { UiNotices } from './notices.js';
 import type { UiViewSnapshot } from './restoration.js';
 import type { UiPageName, UiView } from './routes.js';
 
@@ -46,7 +46,7 @@ export interface UiPageContext {
   /**
    * State this page retained for the history entry, or null when the entry kept none. The same
    * page interprets it; navigation neither reads nor restricts its shape
-   * (docs/user-interface.md#state-ownership-and-restoration).
+   * (docs/ui/architecture.md#state-ownership-and-restoration).
    */
   readonly restored: UiViewSnapshot | null;
   /** Navigates to another view and keeps this one's state for the way back. */
@@ -59,7 +59,9 @@ export interface UiPageContext {
   readonly dialogs: UiDialogs;
   /**
    * Notice capability of the shell: the operation and service failures a page reports stay visible
-   * under their identity after the page is left (docs/ui/navigation.md#error-notices).
+   * under their identity after the page is left, scoped to the account that presented them, and
+   * Navigation owns the presentation
+   * (docs/ui/navigation.md#error-notices).
    */
   readonly notices: UiNotices;
 }
@@ -80,7 +82,7 @@ export interface UiPageHandle {
    * supersedes the restored context — explicit input taking over, or a failed restore — reports
    * that through this same result. A page that presents another view from this hook hands the entry
    * over to that view, which captures and restores its own interaction context
-   * (docs/user-interface.md#pages-and-navigation).
+   * (docs/ui/navigation.md).
    */
   presented?(): void | Promise<void>;
   /** Releases the page; the shell has already aborted the context signal. */

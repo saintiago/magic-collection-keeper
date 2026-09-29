@@ -1,6 +1,6 @@
 /**
- * Browsing pages of the UserInterface (docs/user-interface.md#pages-and-navigation,
- * docs/user-interface.md#browsing-and-organization, docs/user-interface.md#cardlist).
+ * Browsing pages of the UserInterface (docs/ui/navigation.md,
+ * docs/ui/pages.md#page-map, docs/card-list.md).
  *
  * Home presents bounded, account-isolated recent card activity: the cards the account opened while
  * browsing, read back through the list boundary, beside the search entry that opens the catalog.
@@ -11,18 +11,17 @@
  * and records it as the account's activity; both pages keep their form input and query
  * bookkeeping in the shell's bounded state and hand the state of their list back through CardList's
  * own capture and restoration contract, so the list decides how to re-acquire the window it held
- * (docs/user-interface.md#state-ownership-and-restoration). Every provider value renders as text.
+ * (docs/ui/architecture.md#state-ownership-and-restoration). Every provider value renders as text.
  *
  * The activity of an account ends with that account, whatever page the shell presents when it
- * leaves it (docs/user-interface.md#capture-and-review).
+ * leaves it (docs/ui/capture-controls.md).
  */
 
-import type { CardListCatalogQuery } from '../../card-list/index.js';
+import type { CardListCatalogQuery } from '../../../card-list/index.js';
 
-import { UI_LIMITS } from '../shared/limits.js';
-import type { UiPageDefinition } from './pages.js';
+import { UI_LIMITS } from '../../shared/limits.js';
+import { uiHref, type UiPageDefinition, type UiView } from '../../navigation/index.js';
 import { cardViewOf, pageHandle, readListState, readPageState } from './page-support.js';
-import { uiHref, type UiView } from './routes.js';
 
 /**
  * The browsing pages Application's capabilities present: Home and the catalog/search page. They

@@ -1,6 +1,6 @@
 /**
- * Page support of the UserInterface (docs/user-interface.md#pages-and-navigation,
- * docs/user-interface.md#state-ownership-and-restoration).
+ * Page support of the UserInterface (docs/ui/navigation.md,
+ * docs/ui/architecture.md#state-ownership-and-restoration).
  *
  * The dedicated pages compose the same building blocks around their own query and their own lists:
  * the bounded text field and select controls of a query form, the entry presentation that opens the
@@ -10,11 +10,10 @@
  * representation opaque to the others.
  */
 
-import type { CardListEntry } from '../../card-list/index.js';
+import type { CardListEntry } from '../../../card-list/index.js';
 
-import type { UiCardList } from '../card-views/index.js';
-import type { UiPageHandle } from './pages.js';
-import type { UiView } from './routes.js';
+import type { UiCardList } from '../../card-views/index.js';
+import type { UiPageHandle, UiView } from '../../navigation/index.js';
 
 // The field controls live with the shared presentation code; pages keep importing them from the
 // page support they already use.
@@ -24,13 +23,16 @@ export {
   searchInput,
   selectControl,
   type UiSelectOption,
-} from '../shared/controls.js';
-export { readRetainedList as readListState, readState as readPageState } from '../shared/state.js';
+} from '../../shared/controls.js';
+export {
+  readRetainedList as readListState,
+  readState as readPageState,
+} from '../../shared/state.js';
 
 /**
  * One page's handle: the page keeps its own form state beside the state its list retains, and it
  * reports the list's restoration lifecycle while the list is still acquiring a retained window
- * (docs/user-interface.md#state-ownership-and-restoration).
+ * (docs/ui/architecture.md#state-ownership-and-restoration).
  */
 export function pageHandle<Context>(
   list: UiCardList<Context>,

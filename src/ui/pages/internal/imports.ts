@@ -17,9 +17,9 @@ import type {
   UiManualImportEditor,
   UiManualImportDraft,
   UiSourceImportEditor,
-} from '../editors/index.js';
-import { createImportAccess } from '../editors/index.js';
-import type { UiPageDefinition } from './pages.js';
+} from '../../editors/index.js';
+import { createImportAccess } from '../../editors/index.js';
+import type { UiPageDefinition } from '../../navigation/index.js';
 import { readPageState } from './page-support.js';
 
 /** The Import page: manual entry and source import beside one import's pending review. */
@@ -97,7 +97,7 @@ function importPage(): UiPageDefinition {
           manual: captureManualDraft(manual),
           // The unsaved source input stays with the entry as well: returning to the view keeps the
           // edits to retry, while the account keeps the identity of an import whose outcome was
-          // not reported (docs/user-interface.md#source-imports).
+          // not reported (docs/ui/editors.md).
           source: source.capture(),
           review: reviewEditor.capture().review,
           // The reviewed revisions of the explicit selection stay with the entry, so a

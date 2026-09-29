@@ -1112,6 +1112,13 @@ describe('browser application', () => {
     // (docs/architecture.md#composition-and-replacement).
     expect(capabilities?.capture.create).toBeTypeOf('function');
     expect(capabilities?.capture.createImportId()).toBeTypeOf('string');
+    // Application connects UserCards' committed positions to Search's progress tracker and hands
+    // the shell the tracker of the authenticated account alone (docs/application.md#interface).
+    expect(capabilities?.indexing(accountId).status()).toMatchObject({
+      accountId,
+      state: 'idle',
+    });
+    expect(() => capabilities?.indexing('cognito-someone-else')).toThrow(/authenticated account/);
     expect(application.userInterface).toEqual({ constructed: true });
   });
 
@@ -1151,6 +1158,11 @@ describe('browser application', () => {
       .subscribe((value) => positions.push(value.position));
     expect(positions).toEqual(['20']);
     unsubscribe();
+    // The same tracker is the observable status the shell presents: the committed position stays
+    // outstanding until Search reports it incorporated (docs/ui/navigation.md#indexing-notice).
+    const indexing = capabilities.indexing(id);
+    expect(indexing.status().state).toBe('indexing');
+    expect(indexing.status().outstanding).toEqual(['20']);
     expect(progressSignals).toHaveLength(1);
     expect(progressSignals[0]!.aborted).toBe(false);
     app.endSession();

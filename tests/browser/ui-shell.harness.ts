@@ -27,6 +27,7 @@ import {
 } from '../../src/ui/index.js';
 import type { SearchClient, UserInterfaceCapabilities } from '../../src/application/index.js';
 import type { Catalog } from '../../src/catalog/index.js';
+import type { SearchIndexingStatus } from '../../src/search/browser.js';
 
 import { unusedUserCards } from './unused-usercards.js';
 import { unusedCapture } from './unused-capture.js';
@@ -53,6 +54,20 @@ export interface UiShellControl {
   shiftAsyncLayout(): void;
   /** Result requests the asynchronous page holds, waiting for the journey to answer them. */
   asyncPending(): number;
+  /** Publishes one indexing status of an account, as Search's progress tracker would. */
+  publishIndexing(
+    accountId: string,
+    state: SearchIndexingStatus['state'],
+    outstanding?: readonly string[],
+  ): void;
+  /** Status checks the notice's retry action requested; a status check repeats no write. */
+  indexingChecks(accountId: string): number;
+  /** Listeners one account's progress tracker still holds. */
+  indexingListeners(accountId: string): number;
+  /** Resolves the deferred page factory of the late-factory journeys. */
+  resolveDeferredPage(): void;
+  /** Rejects the deferred page factory of the late-factory journeys. */
+  rejectDeferredPage(): void;
   /** Notes the harness recorded, oldest first. */
   log(): string[];
   /** Releases the shell and its listeners. */
@@ -75,6 +90,10 @@ export interface UiShellStart {
    * page that redirects while presenting the entry does; `replace` keeps no way back to the entry.
    */
   readonly presentedRedirect?: 'navigate' | 'replace';
+  /** Presents the notices fixture on Collection instead of the plain fixture. */
+  readonly pageNotices?: boolean;
+  /** Registers the Tags page behind a factory the journey resolves or rejects on demand. */
+  readonly deferredPages?: boolean;
 }
 
 /** Installs the shell into `root`; its identity starts signed in unless `signedOut` is set. */
@@ -135,6 +154,17 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     counts: () => Promise.reject(new Error('The shell journey reads no private counts.')),
     observe: () => Promise.reject(new Error('The shell journey observes no progress.')),
   };
+  const indexing = createControlledIndexing();
+  const deferred = start.deferredPages === true ? createDeferredPage(document, log) : null;
+  const pageDefinitions = fixturePages(
+    document,
+    log,
+    start.asyncResults === true ? asyncResults : null,
+    start.presentedRedirect ?? null,
+    start.rejectRedirect === true,
+    start.listResults,
+    start.pageNotices === true,
+  );
   const capabilities: UserInterfaceCapabilities = {
     settings: {
       environment: 'test',
@@ -155,6 +185,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       userCards: unusedUserCards,
     }),
     capture: unusedCapture(unusedUserCards),
+    indexing: (accountId) => indexing.tracker(accountId),
   };
   const shell: UserInterface = createUserInterface({
     root,
@@ -173,14 +204,15 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
         }
       },
     },
-    pages: fixturePages(
-      document,
-      log,
-      start.asyncResults === true ? asyncResults : null,
-      start.presentedRedirect ?? null,
-      start.rejectRedirect === true,
-      start.listResults,
-    ),
+    pages:
+      deferred === null
+        ? pageDefinitions
+        : {
+            load: (page) =>
+              page === 'tags'
+                ? deferred.load()
+                : (pageDefinitions.find((definition) => definition.page === page) ?? null),
+          },
   });
 
   function report(next: UiAccount | null): void {
@@ -227,6 +259,12 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       asyncResults.grow();
     },
     asyncPending: () => asyncResults.pending(),
+    publishIndexing: (accountId, state, outstanding) =>
+      indexing.publish(accountId, state, outstanding),
+    indexingChecks: (accountId) => indexing.checks(accountId),
+    indexingListeners: (accountId) => indexing.listeners(accountId),
+    resolveDeferredPage: () => deferred?.resolve(),
+    rejectDeferredPage: () => deferred?.reject(),
     log: () => [...log],
     dispose: () => {
       shell.dispose();
@@ -242,6 +280,7 @@ function fixturePages(
   presentedRedirect: 'navigate' | 'replace' | null,
   rejectRedirect: boolean,
   listResults: UiShellStart['listResults'],
+  pageNotices: boolean,
 ): readonly UiPageDefinition[] {
   return [
     listResults !== undefined
@@ -251,7 +290,7 @@ function fixturePages(
         : asyncHomePage(document, log, asyncResults, presentedRedirect, rejectRedirect),
     catalogPage(document),
     cardPage(document, log),
-    collectionPage(document),
+    pageNotices ? noticesPage(document, log) : collectionPage(document),
     statePage(document),
     redirectPage(document, log),
     devicePage(document, log),
@@ -657,6 +696,160 @@ function collectionPage(document: Document): UiPageDefinition {
       tail.style.height = '3000px';
       container.append(marker, lead, open, tail);
     },
+  };
+}
+
+/**
+ * Notices fixture: the page reports the operation failures it presents through the notice
+ * capability Navigation supplies it, so a journey can prove identity updates, the recovery action,
+ * the dismiss control and the fencing of a page the shell left
+ * (docs/ui/navigation.md#error-notices).
+ */
+function noticesPage(document: Document, log: string[]): UiPageDefinition {
+  return {
+    page: 'collection',
+    mount(container, context) {
+      const marker = document.createElement('p');
+      marker.id = 'notices-page';
+      marker.textContent = 'Notices page';
+      const report = noticeButton(document, 'notice-report', 'Report failure', () => {
+        context.notices.show({
+          id: 'operation-1',
+          severity: 'error',
+          message: 'Saving could not be confirmed.',
+          action: { label: 'Check the saved state', run: () => log.push('notice-action') },
+        });
+      });
+      const progress = noticeButton(document, 'notice-progress', 'Report progress', () => {
+        context.notices.show({ id: 'operation-1', severity: 'progress', message: 'Saving…' });
+      });
+      const dismiss = noticeButton(document, 'notice-dismiss', 'Dismiss failure', () => {
+        context.notices.dismiss('operation-1');
+      });
+      const open = document.createElement('a');
+      open.id = 'notice-open';
+      open.href = uiHref({ page: 'tags' });
+      open.textContent = 'Open tags';
+      container.append(marker, report, progress, dismiss, open);
+      context.signal.addEventListener('abort', () => {
+        // A closed page still holds work: its late report must reach no notice of the new view.
+        document.defaultView?.setTimeout(() => {
+          context.notices.show({ id: 'late-1', severity: 'error', message: 'Late failure' });
+          log.push('late-notice-reported');
+        }, 50);
+      });
+    },
+  };
+}
+
+/** One control of a fixture that reports the journey's choice. */
+function noticeButton(
+  document: Document,
+  id: string,
+  label: string,
+  run: () => void,
+): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.id = id;
+  button.textContent = label;
+  button.addEventListener('click', run);
+  return button;
+}
+
+/** Controlled indexing progress of the shell journeys: one tracker state per account. */
+interface ControlledIndexing {
+  tracker(accountId: string): {
+    status(): SearchIndexingStatus;
+    subscribe(listener: (status: SearchIndexingStatus) => void): () => void;
+    recheck(): void;
+  };
+  publish(
+    accountId: string,
+    state: SearchIndexingStatus['state'],
+    outstanding?: readonly string[],
+  ): void;
+  checks(accountId: string): number;
+  listeners(accountId: string): number;
+}
+
+function createControlledIndexing(): ControlledIndexing {
+  const accounts = new Map<
+    string,
+    {
+      status: SearchIndexingStatus;
+      readonly listeners: Set<(status: SearchIndexingStatus) => void>;
+      checks: number;
+    }
+  >();
+  const stateOf = (accountId: string) => {
+    const current = accounts.get(accountId);
+    if (current !== undefined) {
+      return current;
+    }
+    const created = {
+      status: { accountId, state: 'idle' as const, outstanding: [], revisions: null },
+      listeners: new Set<(status: SearchIndexingStatus) => void>(),
+      checks: 0,
+    };
+    accounts.set(accountId, created);
+    return created;
+  };
+  return {
+    tracker(accountId) {
+      const state = stateOf(accountId);
+      return {
+        status: () => state.status,
+        subscribe: (listener) => {
+          state.listeners.add(listener);
+          return () => {
+            state.listeners.delete(listener);
+          };
+        },
+        recheck: () => {
+          state.checks += 1;
+        },
+      };
+    },
+    publish(accountId, state, outstanding = []) {
+      const current = stateOf(accountId);
+      current.status = { ...current.status, state, outstanding: [...outstanding] };
+      for (const listener of [...current.listeners]) {
+        listener(current.status);
+      }
+    },
+    checks: (accountId) => stateOf(accountId).checks,
+    listeners: (accountId) => stateOf(accountId).listeners.size,
+  };
+}
+
+/**
+ * Deferred Tags factory of the late-factory journeys: Navigation resolves the route while this
+ * factory is still loading, and the journey decides whether it resolves or rejects afterwards.
+ */
+interface DeferredPage {
+  load(): Promise<UiPageDefinition>;
+  resolve(): void;
+  reject(): void;
+}
+
+function createDeferredPage(document: Document, log: string[]): DeferredPage {
+  const pending = Promise.withResolvers<UiPageDefinition>();
+  return {
+    load: () => pending.promise,
+    resolve: () => {
+      pending.resolve({
+        page: 'tags',
+        mount(container) {
+          const marker = document.createElement('p');
+          marker.id = 'deferred-marker';
+          marker.textContent = 'Deferred page';
+          container.append(marker);
+          log.push('deferred-mounted');
+        },
+      });
+    },
+    reject: () => pending.reject(new Error('The tags page could not be loaded.')),
   };
 }
 

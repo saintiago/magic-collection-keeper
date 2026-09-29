@@ -41,8 +41,8 @@ import {
   type UiAccount,
   type UiIdentity,
   type UserInterface,
+  type UiPresentationModules,
 } from '../../src/ui/index.js';
-import type { UiPresentationModules } from '../../src/ui/internal/composition.js';
 
 import { browserAttemptStorage, unusedUserCardsClient } from './unused-usercards.js';
 import { unusedCapture } from './unused-capture.js';
@@ -291,6 +291,7 @@ export function installCollectionHarness(
     userCards,
     cardList,
     capture: unusedCapture(userCards),
+    indexing: idleProgress,
   };
   const shell: UserInterface = createUserInterface({
     root,

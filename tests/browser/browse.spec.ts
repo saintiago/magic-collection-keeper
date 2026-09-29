@@ -611,9 +611,12 @@ test('a failed sign-out keeps the live page and its recent activity', async ({ p
 
   // The session never ended, so the page stays live and its activity stays with the account.
   await expect(page.locator('#card-level')).toHaveText('card-bolt/-/-');
-  await expect(page.locator('#ui-root > p[role="status"]')).toHaveText(
-    'Authentication unavailable',
-  );
+  // Signing out is a service failure with no field to hold it: it is reported as a floating error
+  // notice with a textual indicator (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:sign-out"]');
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice.locator('.ui-notice-mark')).toHaveText('Error:');
+  await expect(notice).toContainText('Authentication unavailable');
   await page.getByRole('link', { name: 'Home', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Recent cards' })).toBeVisible();
   await expect(page.locator('[data-ui-entry="card:card-bolt"]')).toContainText('Lightning Bolt');

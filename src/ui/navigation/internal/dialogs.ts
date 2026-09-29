@@ -1,13 +1,13 @@
 /**
- * Brief dialogs for small auxiliary actions (docs/user-interface.md#pages-and-navigation).
+ * Brief dialogs for small auxiliary actions (docs/ui/navigation.md).
  *
  * A dialog asks one question and reports the user's decision; closing the view it belongs to
  * cancels it. Only text the caller supplied is rendered, so external text stays safe.
  */
 
-import type { UiDialogs } from '../shared/dialogs.js';
+import type { UiDialogs } from '../../shared/dialogs.js';
 
-export type { UiDialogOptions, UiDialogs } from '../shared/dialogs.js';
+export type { UiDialogOptions, UiDialogs } from '../../shared/dialogs.js';
 
 export interface UiDialogHost extends UiDialogs {
   /** Cancels every open dialog; the presented view is closing. */
