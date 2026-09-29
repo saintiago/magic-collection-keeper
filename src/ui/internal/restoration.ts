@@ -18,7 +18,7 @@
  * that opened it, so a history entry that survives a reload never reads another store's snapshot.
  */
 
-import { UI_LIMITS } from './limits.js';
+import { UI_LIMITS } from '../shared/limits.js';
 
 /** What the shell restores when history returns to a view. */
 export interface UiViewSnapshot {

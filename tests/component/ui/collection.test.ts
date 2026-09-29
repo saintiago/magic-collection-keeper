@@ -459,12 +459,14 @@ describe('bulk copy changes', () => {
       guidance: 'Choose the finish to apply.',
     });
 
-    const outcome = await tool.tool.invoke({
-      targets: [
-        { kind: 'copy', copyId: 'copy-1' },
-        { kind: 'copy', copyId: 'copy-2' },
-      ],
-      selection: { keys: ['copy:copy-1', 'copy:copy-2'], targets: [] },
+    const outcome = await tool.apply({
+      selection: {
+        keys: ['copy:copy-1', 'copy:copy-2'],
+        targets: [
+          { kind: 'copy', copyId: 'copy-1' },
+          { kind: 'copy', copyId: 'copy-2' },
+        ],
+      },
       signal: new AbortController().signal,
     });
 
@@ -509,12 +511,14 @@ describe('bulk copy changes', () => {
       guidance: 'Choose the condition to apply.',
     });
 
-    const outcome = await tool.tool.invoke({
-      targets: [
-        { kind: 'copy', copyId: 'copy-1' },
-        { kind: 'copy', copyId: 'copy-2' },
-      ],
-      selection: { keys: ['copy:copy-1', 'copy:copy-2'], targets: [] },
+    const outcome = await tool.apply({
+      selection: {
+        keys: ['copy:copy-1', 'copy:copy-2'],
+        targets: [
+          { kind: 'copy', copyId: 'copy-1' },
+          { kind: 'copy', copyId: 'copy-2' },
+        ],
+      },
       signal: new AbortController().signal,
     });
 
@@ -539,9 +543,11 @@ describe('bulk copy changes', () => {
       guidance: 'Choose the finish to apply.',
     });
 
-    const outcome = await tool.tool.invoke({
-      targets: [{ kind: 'card', cardId: 'card-1' }],
-      selection: { keys: ['card:card-1'], targets: [] },
+    const outcome = await tool.apply({
+      selection: {
+        keys: ['card:card-1'],
+        targets: [{ kind: 'card', cardId: 'card-1' }],
+      },
       signal: new AbortController().signal,
     });
 
@@ -562,9 +568,11 @@ describe('bulk copy changes', () => {
       guidance: 'Choose the finish to apply to the selected copies.',
     });
 
-    const outcome = await tool.tool.invoke({
-      targets: [{ kind: 'copy', copyId: 'copy-1' }],
-      selection: { keys: ['copy:copy-1'], targets: [] },
+    const outcome = await tool.apply({
+      selection: {
+        keys: ['copy:copy-1'],
+        targets: [{ kind: 'copy', copyId: 'copy-1' }],
+      },
       signal: new AbortController().signal,
     });
 

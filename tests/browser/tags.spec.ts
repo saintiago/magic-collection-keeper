@@ -33,33 +33,49 @@ const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const harnessPath = path.join(repoRoot, 'tests', 'browser', 'tags.harness.ts');
 const tagsPageHtml = '<!doctype html><html><body><div id="ui-root"></div></body></html>';
 
+const replacementPath = path.join(repoRoot, 'tests', 'browser', 'replacement-modules.ts');
+
 let bundle: Promise<string> | null = null;
+let replacementBundle: Promise<string> | null = null;
 
 /** Bundles the organization pages with the journey harness, as a deployment bundles the UI. */
 function tagsBundle(): Promise<string> {
-  bundle ??= (async () => {
-    const result = await build({
-      stdin: {
-        contents: [
-          `import { installTagsHarness } from ${JSON.stringify(harnessPath)};`,
-          "globalThis.keeperTagsControl = installTagsHarness(document.getElementById('ui-root'));",
-        ].join('\n'),
-        resolveDir: repoRoot,
-        sourcefile: 'tags-consumer.ts',
-        loader: 'ts',
-      },
-      bundle: true,
-      format: 'esm',
-      platform: 'browser',
-      write: false,
-    });
-    const [output] = result.outputFiles ?? [];
-    if (output === undefined) {
-      throw new Error('esbuild produced no browser bundle.');
-    }
-    return output.text;
-  })();
+  bundle ??= bundleOf([
+    `import { installTagsHarness } from ${JSON.stringify(harnessPath)};`,
+    "globalThis.keeperTagsControl = installTagsHarness(document.getElementById('ui-root'));",
+  ]);
   return bundle;
+}
+
+/** The same pages over a replacement CardViews module (docs/ui/architecture.md#replacement-check). */
+function replacementTagsBundle(): Promise<string> {
+  replacementBundle ??= bundleOf([
+    `import { installTagsHarness } from ${JSON.stringify(harnessPath)};`,
+    `import { replacementModules } from ${JSON.stringify(replacementPath)};`,
+    "globalThis.keeperTagsControl = installTagsHarness(document.getElementById('ui-root'), replacementModules());",
+  ]);
+  return replacementBundle;
+}
+
+/** Bundles one journey entry as a deployment bundles the UI. */
+async function bundleOf(lines: readonly string[]): Promise<string> {
+  const result = await build({
+    stdin: {
+      contents: lines.join('\n'),
+      resolveDir: repoRoot,
+      sourcefile: 'tags-consumer.ts',
+      loader: 'ts',
+    },
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    write: false,
+  });
+  const [output] = result.outputFiles ?? [];
+  if (output === undefined) {
+    throw new Error('esbuild produced no browser bundle.');
+  }
+  return output.text;
 }
 
 /** Serves a fresh document for the organization pages, enters it at `hash` and loads the UI. */
@@ -73,6 +89,21 @@ async function openTags(page: Page, hash: string): Promise<string[]> {
   );
   await page.goto(`http://keeper-tags.test/${hash}`);
   await page.addScriptTag({ content: await tagsBundle(), type: 'module' });
+  await page.waitForFunction(() => Reflect.has(globalThis, 'keeperTagsControl'));
+  return errors;
+}
+
+/** Serves a fresh document for the organization pages over a replacement module. */
+async function openReplacementTags(page: Page, hash: string): Promise<string[]> {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => {
+    errors.push(String(error));
+  });
+  await page.route('http://keeper-tags.test/**', (route) =>
+    route.fulfill({ contentType: 'text/html', body: tagsPageHtml }),
+  );
+  await page.goto(`http://keeper-tags.test/${hash}`);
+  await page.addScriptTag({ content: await replacementTagsBundle(), type: 'module' });
   await page.waitForFunction(() => Reflect.has(globalThis, 'keeperTagsControl'));
   return errors;
 }
@@ -765,10 +796,11 @@ test('reads further printings when the exact one is not on the first page', asyn
     continuation: 'printing-page-2',
   });
 
-  // The first page is not the whole choice set: the row offers the continuation of the rest.
-  await expect(page.locator('#tag-refine-more-association-1')).toBeVisible();
-  await expect(page.locator('#tag-refine-association-1 option')).toHaveText(['M11 149 · en']);
-  await page.click('#tag-refine-more-association-1');
+  // The first page is not the whole choice set: the picker offers the continuation of the rest.
+  const picker = page.locator('[data-ui-printing-picker="association-1"]');
+  await expect(picker.locator('[data-ui-more]')).toBeVisible();
+  await expect(picker.locator('[data-ui-entry]')).toHaveCount(1);
+  await picker.locator('[data-ui-more]').click();
   const second = await requested<{
     readonly cardId: string;
     readonly options: { readonly continuation?: string };
@@ -782,13 +814,9 @@ test('reads further printings when the exact one is not on the first page', asyn
     continuation: null,
   });
 
-  await expect(page.locator('#tag-refine-association-1 option')).toHaveText([
-    'M11 149 · en',
-    'STA 109 · en',
-  ]);
-  await expect(page.locator('#tag-refine-more-association-1')).toBeHidden();
-  await page.selectOption('#tag-refine-association-1', 'printing-2');
-  await page.click('#tag-refine-save-association-1');
+  await expect(picker.locator('[data-ui-entry]')).toHaveCount(2);
+  await expect(picker.locator('[data-ui-more]')).toBeHidden();
+  await choosePrintingIn(page, 'association-1', 'printing-2');
   const change = await requested<Record<string, unknown>>(page, 'changeAssociation');
   expect(change.arguments).toEqual({
     associationId: 'association-1',
@@ -1058,8 +1086,7 @@ test('refines a card association to one exact printing', async ({ page }) => {
     continuation: null,
   });
 
-  await page.selectOption('#tag-refine-association-1', 'printing-1');
-  await page.click('#tag-refine-save-association-1');
+  await choosePrintingIn(page, 'association-1', 'printing-1');
   const change = await requested<Record<string, unknown>>(page, 'changeAssociation');
   expect(change.arguments).toEqual({
     associationId: 'association-1',
@@ -1323,6 +1350,17 @@ async function openCardAssociation(page: Page, continuation: string | null = nul
   await expect(page.locator('#tag-quantity-association-1')).toHaveValue('2');
 }
 
+/** Chooses one printing through a row's picker: select the entry and choose it. */
+async function choosePrintingIn(
+  page: Page,
+  associationId: string,
+  printingId: string,
+): Promise<void> {
+  const picker = page.locator(`[data-ui-printing-picker="${associationId}"]`);
+  await picker.locator(`[data-ui-select="printing:${printingId}"]`).check();
+  await picker.locator('[data-ui-tool="refine-printing"]').click();
+}
+
 async function printingPage(
   page: Page,
   index: number,
@@ -1339,6 +1377,34 @@ async function printingPage(
   });
 }
 
+test('renders association entries through the supplied CardViews module', async ({ page }) => {
+  const errors = await openReplacementTags(page, '#/tags/tag-wish');
+  await scriptCounts(page, [['card:card-bolt', { owned: 1, locations: 0, intended: 1 }]]);
+  const read = await requested<readonly string[]>(page, 'readTags');
+  await settle(page, 'settleReadTags', read.id, [
+    tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
+  ]);
+  const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
+  await settle(page, 'settleListAssociations', listing.id, {
+    associations: [association({ targetLevel: 'card', targetId: 'card-bolt', quantity: 1 })],
+  });
+  await settleCatalog(page, 0, { cards: [boltCard] });
+
+  // The row's basic information comes from the supplied module, so replacing CardViews replaces
+  // the tag association rendering too (docs/ui/cardviews.md#interface).
+  const row = page.locator('#tag-associations [data-ui-entry="association:association-1"]');
+  await expect(row.locator('[data-ui-replacement-basic]')).toHaveText(
+    'REPLACEMENT association:association-1 Lightning Bolt',
+  );
+
+  // The refinement offers the card's printings through the supplied picker as well.
+  await page.click('#tag-refine-choose-association-1');
+  await expect(
+    row.locator('[data-ui-printing-picker="association-1"] [data-ui-replacement-picker]'),
+  ).toHaveText('REPLACEMENT PICKER');
+  expect(errors).toEqual([]);
+});
+
 test('refining preserves a separately drafted quantity and a later edit during save', async ({
   page,
 }) => {
@@ -1346,7 +1412,7 @@ test('refining preserves a separately drafted quantity and a later edit during s
   await page.fill('#tag-quantity-association-1', '9');
   await page.click('#tag-refine-choose-association-1');
   await printingPage(page, 0, [boltPrinting]);
-  await page.click('#tag-refine-save-association-1');
+  await choosePrintingIn(page, 'association-1', 'printing-1');
   const change = await requested(page, 'changeAssociation');
   await settle(page, 'settleChangeAssociation', change.id, association({ revision: 2 }));
   const refresh = await requested(page, 'listAssociations', 1);
@@ -1380,14 +1446,16 @@ test('printing reads retry after initial failure and complete into the current e
 }) => {
   await openCardAssociation(page, 'next');
   await page.click('#tag-refine-choose-association-1');
+  const picker = page.locator('[data-ui-printing-picker="association-1"]');
   await settle(page, 'fail', (await requested(page, 'printingsRequests')).id, {
     code: 'unavailable',
     message: 'Offline',
   });
-  await expect(page.locator('#tag-refine-more-association-1')).toHaveText('Retry printings');
-  await page.click('#tag-refine-more-association-1');
+  await expect(picker.locator('[data-ui-status]')).toHaveText('Offline');
+  await expect(picker.locator('[data-ui-retry]')).toBeVisible();
+  await picker.locator('[data-ui-retry]').click();
   await requested(page, 'printingsRequests', 1);
-  await page.locator('#tag-associations [data-ui-more]').click();
+  await page.locator('#tag-associations > [data-ui-card-list] > [data-ui-more]').click();
   const more = await requested(page, 'listAssociations', 1);
   await settle(page, 'settleListAssociations', more.id, {
     associations: [
@@ -1397,9 +1465,8 @@ test('printing reads retry after initial failure and complete into the current e
   await settleCatalog(page, 1, { cards: [counterspellCard] });
   await expect(page.locator('#tag-quantity-second')).toBeVisible();
   await printingPage(page, 1, [boltPrinting]);
-  await expect(page.locator('#tag-refine-association-1')).toBeEnabled();
-  await expect(page.locator('#tag-refine-save-association-1')).toBeEnabled();
-  await expect(page.locator('#tag-refine-status-association-1')).toHaveCount(0);
+  await expect(picker.locator('[data-ui-status]')).toHaveText('');
+  await expect(picker.locator('[data-ui-entry]')).toHaveCount(1);
 });
 
 test('retains an unloaded printing choice through Back and expired Catalog pagination', async ({
@@ -1408,9 +1475,20 @@ test('retains an unloaded printing choice through Back and expired Catalog pagin
   await openCardAssociation(page);
   await page.click('#tag-refine-choose-association-1');
   await printingPage(page, 0, [boltPrinting], 'next');
-  await page.click('#tag-refine-more-association-1');
+  let picker = page.locator('[data-ui-printing-picker="association-1"]');
+  await picker.locator('[data-ui-more]').click();
   await printingPage(page, 1, [staBolt]);
-  await page.selectOption('#tag-refine-association-1', staBolt.printingId);
+  await choosePrintingIn(page, 'association-1', 'printing-2');
+  // The change was rejected, so the intended printing stays the row's unsaved draft.
+  await settle(page, 'fail', (await requested(page, 'changeAssociation')).id, {
+    code: 'invalid-request',
+    message: 'The association was not saved.',
+  });
+  await expect(page.locator('#tag-association-status-association-1')).toHaveText(
+    'The association was not saved.',
+  );
+
+  // Leaving the view and returning keeps the draft while its data loads again.
   await control(page, 'navigate', { page: 'tags' });
   await page.goBack();
   await settle(page, 'settleReadTags', (await requested(page, 'readTags', 1)).id, [
@@ -1421,10 +1499,11 @@ test('retains an unloaded printing choice through Back and expired Catalog pagin
   });
   await settleCatalog(page, 1, { cards: [boltCard] });
   await page.click('#tag-refine-choose-association-1');
+  picker = page.locator('[data-ui-printing-picker="association-1"]');
   await printingPage(page, 2, [boltPrinting], 'expired');
-  await expect(page.locator('#tag-refine-association-1')).toHaveValue('printing-2');
-  await expect(page.locator('#tag-refine-save-association-1')).toBeDisabled();
-  await page.click('#tag-refine-more-association-1');
+  // The loaded page does not carry the intended printing yet; the expired cursor restarts the
+  // picker's list from its first page instead of repeating the unusable continuation.
+  await picker.locator('[data-ui-more]').click();
   const expired = await requested(page, 'printingsRequests', 3);
   await settle(page, 'fail', expired.id, (await organizationContinuationFailures()).printings);
   const restarted = await requested<{ options: { continuation?: string } }>(
@@ -1434,10 +1513,12 @@ test('retains an unloaded printing choice through Back and expired Catalog pagin
   );
   expect(restarted.arguments.options.continuation).toBeUndefined();
   await printingPage(page, 4, [staBolt]);
-  await expect(page.locator('#tag-refine-association-1')).toHaveValue('printing-2');
-  await page.click('#tag-refine-save-association-1');
+
+  // The draft kept the intended printing: the picker presents it as the selection again.
+  await expect(picker.locator('[data-ui-select="printing:printing-2"]')).toBeChecked();
+  await choosePrintingIn(page, 'association-1', 'printing-2');
   expect(
-    (await requested<Record<string, unknown>>(page, 'changeAssociation')).arguments.targetId,
+    (await requested<Record<string, unknown>>(page, 'changeAssociation', 1)).arguments.targetId,
   ).toBe('printing-2');
 });
 
@@ -2074,3 +2155,144 @@ for (const trigger of ['rename', 'expired continuation'] as const) {
     });
   }
 }
+
+test('keeps association selection and paging independent of its nested printing picker', async ({
+  page,
+}) => {
+  await openCardAssociation(page, 'associations-next');
+  const parentSelection = page.locator('[data-ui-select="association:association-1"]');
+  await parentSelection.check();
+  await page.click('#tag-refine-choose-association-1');
+  await printingPage(page, 0, [boltPrinting], 'printing-next');
+  const picker = page.locator('[data-ui-printing-picker="association-1"]');
+  await picker.locator('[data-ui-select]').check();
+  await picker.getByRole('button', { name: 'Clear selection' }).click();
+  await expect(parentSelection).toBeChecked();
+  await picker.locator('[data-ui-more]').click();
+  await printingPage(page, 1, [{ ...boltPrinting, printingId: 'other-printing' }]);
+  await expect(picker.locator('[data-ui-entry]')).toHaveCount(2);
+  expect(await control<unknown[]>(page, 'listAssociations')).toHaveLength(1);
+  await expect(parentSelection).toBeChecked();
+});
+
+for (const outcome of ['committed', 'conflict'] as const) {
+  test(`keeps nested printing picker focus when a quantity save is ${outcome}`, async ({
+    page,
+  }) => {
+    await openCardAssociation(page);
+    await page.fill('#tag-quantity-association-1', '4');
+    await page.click('#tag-quantity-save-association-1');
+    const change = await requested(page, 'changeAssociation');
+    await page.click('#tag-refine-choose-association-1');
+    await printingPage(page, 0, [boltPrinting]);
+    const choice = page.locator(`[data-ui-select="printing:${boltPrinting.printingId}"]`);
+    await choice.focus();
+    const saved = association({
+      targetLevel: 'card',
+      targetId: boltCard.cardId,
+      quantity: outcome === 'committed' ? 4 : 3,
+      revision: 2,
+    });
+    if (outcome === 'committed') {
+      await settle(page, 'settleChangeAssociation', change.id, saved);
+    } else {
+      await settle(page, 'fail', change.id, { code: 'conflict', message: 'Changed' });
+      await settle(page, 'settleReadAssociations', (await requested(page, 'readAssociations')).id, [
+        saved,
+      ]);
+    }
+    await expect(choice).toBeFocused();
+    if (outcome === 'committed') {
+      await settle(
+        page,
+        'settleListAssociations',
+        (await requested(page, 'listAssociations', 1)).id,
+        {
+          associations: [saved],
+        },
+      );
+      await settleCatalog(page, 1, { cards: [boltCard] });
+    } else {
+      await expect(page.locator('#tag-association-status-association-1')).toContainText('Changed');
+    }
+    await expect(page.locator('#tag-quantity-association-1')).toHaveValue('4');
+    await expect(choice).toBeFocused();
+    await choice.press('Space');
+    await expect(choice).toBeChecked();
+    await expect(page.locator('[data-ui-select="association:association-1"]')).not.toBeChecked();
+  });
+}
+
+test('rejects ambiguous refinement choices after a rejected first choice', async ({ page }) => {
+  await openCardAssociation(page);
+  await page.click('#tag-refine-choose-association-1');
+  await printingPage(page, 0, [boltPrinting, { ...boltPrinting, printingId: 'other-printing' }]);
+  await choosePrintingIn(page, 'association-1', boltPrinting.printingId);
+  await settle(page, 'fail', (await requested(page, 'changeAssociation')).id, {
+    code: 'invalid-request',
+    message: 'Review the choice',
+  });
+  await expect(page.locator('#tag-association-status-association-1')).toContainText(
+    'Review the choice',
+  );
+  await choosePrintingIn(page, 'association-1', 'other-printing');
+  await expect(page.locator('#tag-association-status-association-1')).toHaveText(
+    'Select exactly one printing, then choose it.',
+  );
+  expect(await control<unknown[]>(page, 'changeAssociation')).toHaveLength(1);
+  const picker = page.locator('[data-ui-printing-picker="association-1"]');
+  await picker.locator(`[data-ui-select="printing:${boltPrinting.printingId}"]`).uncheck();
+  await picker.locator('[data-ui-tool="refine-printing"]').click();
+  expect(
+    (await requested<Record<string, unknown>>(page, 'changeAssociation', 1)).arguments.targetId,
+  ).toBe('other-printing');
+});
+
+test('replaces an open refinement picker when conflict recovery changes the card', async ({
+  page,
+}) => {
+  await openCardAssociation(page);
+  await page.click('#tag-refine-choose-association-1');
+  await printingPage(page, 0, [boltPrinting]);
+  await page.fill('#tag-quantity-association-1', '9');
+  await page.click('#tag-quantity-save-association-1');
+  await settle(page, 'fail', (await requested(page, 'changeAssociation')).id, {
+    code: 'conflict',
+    message: 'Changed',
+  });
+  const current = association({
+    targetLevel: 'card',
+    targetId: counterspellCard.cardId,
+    quantity: 3,
+    revision: 7,
+  });
+  await settle(page, 'settleReadAssociations', (await requested(page, 'readAssociations')).id, [
+    current,
+  ]);
+  await settle(page, 'settleListAssociations', (await requested(page, 'listAssociations', 1)).id, {
+    associations: [current],
+  });
+  await settleCatalog(page, 1, { cards: [counterspellCard] });
+  const printing = {
+    ...boltPrinting,
+    printingId: 'printing-counter',
+    cardId: counterspellCard.cardId,
+  };
+  const request = await requested<{ cardId: string }>(page, 'printingsRequests', 1);
+  expect(request.arguments.cardId).toBe(counterspellCard.cardId);
+  await settle(page, 'settlePrintings', request.id, {
+    cardId: counterspellCard.cardId,
+    cardExists: true,
+    revision: catalogRevision,
+    printings: [printing],
+    continuation: null,
+  });
+  const picker = page.locator('[data-ui-printing-picker="association-1"]');
+  await expect(picker).toContainText('Counterspell');
+  await expect(picker).not.toContainText('Lightning Bolt');
+  await expect(page.locator('#tag-quantity-association-1')).toHaveValue('9');
+  await choosePrintingIn(page, 'association-1', printing.printingId);
+  expect(
+    (await requested<Record<string, unknown>>(page, 'changeAssociation', 1)).arguments,
+  ).toMatchObject({ targetId: printing.printingId, expectedRevision: 7 });
+});

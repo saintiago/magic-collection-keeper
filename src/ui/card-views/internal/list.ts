@@ -15,8 +15,7 @@
  * result back through the same contract.
  */
 
-import { runAction } from './actions.js';
-import type { UiOperationOutcome, UiListAction } from './actions.js';
+import type { UiActionIntent, UiListAction } from '../../shared/actions.js';
 
 import {
   cardListFragmentKinds,
@@ -34,15 +33,15 @@ import {
   type CardListOptions,
   type CardListRetained,
   type CardListSnapshot,
-} from '../../card-list/index.js';
+} from '../../../card-list/index.js';
 
-import { observeUiInput } from './interaction.js';
+import { observeUiInput } from '../../shared/interaction.js';
 
 export type {
   CardListEntryImage as UiEntryImage,
   CardListEntryOwnership as UiEntryOwnership,
   CardListEntryTag as UiEntryTag,
-} from '../../card-list/index.js';
+} from '../../../card-list/index.js';
 
 /** Presentation adjustments over the default rendering of the list's information. */
 export interface UiCardListPresentation {
@@ -74,8 +73,15 @@ export interface UiCardListOptions<Context = unknown> {
   readonly restored?: CardListRetained<Context> | null;
   /** Fragment readers; kinds without one are not presented. */
   readonly fragments?: CardListFragmentReaders;
-  /** Tools presented for the explicit selection, in order. */
+  /** Advisory actions presented for the explicit selection, in order. */
   readonly tools?: readonly UiListAction[];
+  /**
+   * Reports the user's action intent over the list's explicit selection. The consumer that
+   * supplied the actions owns execution, its pending state and the presentation of the outcome;
+   * the view reports the intent the user expressed and nothing more
+   * (docs/ui/card-views.md#interface, docs/ui/editors.md#interface).
+   */
+  onAction?(intent: UiActionIntent): void;
   /** Committed-change notifications of the account; the list reacquires affected content. */
   readonly changes?: CardListChangeSource;
   /** Presentation adjustments over the default rendering. */
@@ -123,8 +129,6 @@ export interface UiCardList<Context = unknown> {
   setSelected(key: string, selected: boolean): void;
   /** Unselects every entry. */
   clearSelection(): void;
-  /** Invokes one tool for the explicit selection; null when nothing was invoked. */
-  invoke(toolId: string): Promise<UiOperationOutcome | null>;
   /** Observes the list's own snapshots; the returned call stops delivery. */
   subscribe(listener: (snapshot: CardListSnapshot<Context>) => void): () => void;
   /** Releases the view and the list behind it. */
@@ -177,9 +181,6 @@ export function createCardListView<Context>(
     button.disabled = true;
     toolbar.append(button);
   }
-  const outcomeLine = document.createElement('p');
-  outcomeLine.dataset.uiOutcome = '';
-  outcomeLine.setAttribute('role', 'status');
   const entriesHost = document.createElement('ul');
   entriesHost.dataset.uiEntries = '';
   const statusLine = document.createElement('p');
@@ -193,7 +194,7 @@ export function createCardListView<Context>(
   retryButton.type = 'button';
   retryButton.textContent = 'Retry';
   retryButton.dataset.uiRetry = '';
-  section.append(toolbar, outcomeLine, entriesHost, statusLine, moreButton, retryButton);
+  section.append(toolbar, entriesHost, statusLine, moreButton, retryButton);
   container.replaceChildren(section);
 
   const list = options.create<Context>({
@@ -216,7 +217,6 @@ export function createCardListView<Context>(
   let renderedGeneration = -1;
   let renderedEntries = new Map<string, string>();
   let renderedFragments = new Map<string, CardListFragmentState>();
-  let invocation: AbortController | null = null;
   let disposed = false;
   let pendingEditorFocus: (() => boolean) | null = null;
   const editorInteraction = new AbortController();
@@ -257,6 +257,14 @@ export function createCardListView<Context>(
     );
   }
   render(list.snapshot());
+  // The view is mounted for the lifetime of the page that supplies the signal: closing that page
+  // releases the presentation together with the list behind it, so no rendered DOM, focus
+  // listener or window input observer outlives the view (docs/ui/card-views.md#interface).
+  if (options.signal?.aborted === true) {
+    dispose();
+  } else {
+    options.signal?.addEventListener('abort', dispose, { once: true });
+  }
 
   return {
     snapshot: () => list.snapshot(),
@@ -293,7 +301,6 @@ export function createCardListView<Context>(
     reloadFragments: (kind) => list.reloadFragments(kind),
     setSelected: (key, selected) => list.setSelected(key, selected),
     clearSelection: () => list.clearSelection(),
-    invoke,
     subscribe: (listener) => list.subscribe(listener),
     dispose,
   };
@@ -306,34 +313,17 @@ export function createCardListView<Context>(
     list.demand({ entries: list.snapshot().acquired + pageSize });
   }
 
-  /** Invokes one tool for the explicit selection and presents the outcome it reports. */
-  async function invoke(toolId: string): Promise<UiOperationOutcome | null> {
-    if (disposed || invocation !== null) {
-      return null;
+  /**
+   * Reports one user action over the explicit selection the list observed. Only an action every
+   * selected entry reports available is emitted, so a consumer never acts on a subset of the
+   * selection or on an entry whose identity changed
+   * (docs/card-list.md#selection-and-restoration).
+   */
+  function reportAction(toolId: string): void {
+    if (disposed || !list.snapshot().tools.some((tool) => tool.id === toolId && tool.available)) {
+      return;
     }
-    const action = tools.get(toolId);
-    if (
-      action === undefined ||
-      !list.snapshot().tools.some((tool) => tool.id === toolId && tool.available)
-    ) {
-      return null;
-    }
-    const controller = new AbortController();
-    invocation = controller;
-    renderTools(list.snapshot());
-    const selection = list.actionContext();
-    const outcome = await runAction(action, {
-      targets: selection.targets,
-      selection,
-      signal: controller.signal,
-    });
-    if (disposed || invocation !== controller) {
-      return null;
-    }
-    invocation = null;
-    renderTools(list.snapshot());
-    renderOutcome(outcome);
-    return outcome;
+    options.onAction?.({ id: toolId, selection: list.actionContext() });
   }
 
   /** Renders one published snapshot: the window, its fragments, its selection and its controls. */
@@ -646,7 +636,7 @@ export function createCardListView<Context>(
     for (const state of snapshot.tools) {
       const button = toolbar.querySelector<HTMLButtonElement>(`[data-ui-tool="${state.id}"]`);
       if (button !== null) {
-        button.disabled = disposed || invocation !== null || !state.available;
+        button.disabled = disposed || !state.available;
       }
     }
   }
@@ -697,16 +687,6 @@ export function createCardListView<Context>(
     statusLine.textContent = parts.join(' ');
   }
 
-  function renderOutcome(outcome: UiOperationOutcome | null): void {
-    if (outcome === null) {
-      outcomeLine.textContent = '';
-      outcomeLine.removeAttribute('data-ui-outcome-status');
-      return;
-    }
-    outcomeLine.dataset.uiOutcomeStatus = outcome.status;
-    outcomeLine.textContent = outcome.message ?? outcomeText(outcome.status);
-  }
-
   function renderBasic(entry: CardListEntry): Node {
     return cardListBasicContent(document, entry);
   }
@@ -726,6 +706,14 @@ export function createCardListView<Context>(
   function preserveEditorFocus(): (() => boolean) | null {
     const active = document.activeElement;
     if (!(active instanceof HTMLElement) || !entriesHost.contains(active)) return null;
+    if (!ownsInput(active)) {
+      // Reconciliation can detach a surviving child view with its parent row or fragment.
+      // Restore its actual control only; child keys and input still belong to the child list.
+      return () => {
+        if (entriesHost.contains(active)) active.focus({ preventScroll: true });
+        return true;
+      };
+    }
     const focus = readEntryFocus();
     const row = active.closest<HTMLElement>('[data-ui-entry]');
     const path: number[] = [];
@@ -750,7 +738,11 @@ export function createCardListView<Context>(
         for (const index of path) replacement = replacement?.children.item(index) ?? null;
         if (replacement?.tagName !== active.tagName) replacement = null;
       }
-      if (replacement instanceof HTMLElement && entriesHost.contains(replacement)) {
+      if (
+        replacement instanceof HTMLElement &&
+        entriesHost.contains(replacement) &&
+        ownsInput(replacement)
+      ) {
         if (
           value !== null &&
           (replacement instanceof HTMLInputElement ||
@@ -775,7 +767,7 @@ export function createCardListView<Context>(
   /** The control of one entry that holds keyboard focus, so a re-rendering of the window keeps it. */
   function readEntryFocus(): CardListFocus | null {
     const active = document.activeElement;
-    if (active === null || !entriesHost.contains(active)) {
+    if (active === null || !entriesHost.contains(active) || !ownsInput(active)) {
       return null;
     }
     const row = active.closest('[data-ui-entry]');
@@ -807,7 +799,7 @@ export function createCardListView<Context>(
     }
     if (focus.control === 'element') {
       const control = document.getElementById(focus.id);
-      if (control !== null && entriesHost.contains(control)) {
+      if (control !== null && entriesHost.contains(control) && ownsInput(control)) {
         control.focus({ preventScroll: true });
       }
       return;
@@ -829,7 +821,8 @@ export function createCardListView<Context>(
     }
     const slot = row?.fragments.get(focus.kind);
     // A fragment that now shows a retry keeps the button focused; another state keeps the slot.
-    const control = slot?.querySelector<HTMLElement>('[data-ui-fragment-retry]') ?? slot;
+    const retry = slot?.querySelector<HTMLElement>('[data-ui-fragment-retry]');
+    const control = retry !== undefined && retry !== null && ownsInput(retry) ? retry : slot;
     if (control !== undefined) {
       control.focus();
     }
@@ -847,8 +840,11 @@ export function createCardListView<Context>(
   }
 
   /** Reports the logical position this presentation shows to the list that retains it. */
-  function reportPosition(): void {
-    if (disposed) {
+  function reportPosition(event?: Event): void {
+    if (
+      disposed ||
+      (event?.target instanceof Element && event.target !== container && !ownsInput(event.target))
+    ) {
       return;
     }
     list.reportPosition({
@@ -857,11 +853,19 @@ export function createCardListView<Context>(
     });
   }
 
+  /** Nested views translate their own controls, selection and focus through their own list. */
+  function ownsInput(element: Element): boolean {
+    return element.closest('[data-ui-card-list]') === section;
+  }
+
   function onClick(event: Event): void {
     if (disposed) {
       return;
     }
     const target = event.target as Element | null;
+    if (target === null || !ownsInput(target)) {
+      return;
+    }
     const control =
       target?.closest?.(
         '[data-ui-more],[data-ui-retry],[data-ui-tool],[data-ui-fragment-retry],[data-ui-clear-selection]',
@@ -883,7 +887,7 @@ export function createCardListView<Context>(
     }
     const toolId = control.getAttribute('data-ui-tool');
     if (toolId !== null) {
-      void invoke(toolId);
+      reportAction(toolId);
       return;
     }
     const kind = control.getAttribute('data-ui-fragment-retry');
@@ -898,16 +902,16 @@ export function createCardListView<Context>(
       return;
     }
     const input = event.target as HTMLInputElement | null;
-    if (input === null || input.type !== 'checkbox') {
+    if (input === null || input.type !== 'checkbox' || !ownsInput(input)) {
       return;
     }
     const row = input.closest('[data-ui-entry]');
-    if (row !== null) {
+    if (row !== null && input.hasAttribute('data-ui-select')) {
       list.setSelected(row.getAttribute('data-ui-entry') ?? '', input.checked);
       return;
     }
     const group = input.closest('[data-ui-group]');
-    if (group !== null) {
+    if (group !== null && input.hasAttribute('data-ui-group-select')) {
       const header = groupHeaders.get(group.getAttribute('data-ui-group') ?? '');
       if (header !== undefined) {
         list.setGroupSelected(header.keys, input.checked);
@@ -920,8 +924,7 @@ export function createCardListView<Context>(
       return;
     }
     disposed = true;
-    invocation?.abort();
-    invocation = null;
+    options.signal?.removeEventListener('abort', dispose);
     unsubscribe();
     interaction.abort();
     editorInteraction.abort();
@@ -1003,20 +1006,6 @@ function fragmentSlotKey(key: string, kind: CardListFragmentKind): string {
 /** What a definitive empty fragment presents. */
 function fragmentAbsent(kind: CardListFragmentKind): string {
   return kind === 'tools' ? 'No tools available' : `No ${fragmentLabel(kind)}`;
-}
-
-/** Human text of one operation outcome, used when the outcome carries no message of its own. */
-function outcomeText(status: UiOperationOutcome['status']): string {
-  switch (status) {
-    case 'committed':
-      return 'Saved.';
-    case 'conflict':
-      return 'The change conflicts with a newer version; review and retry.';
-    case 'failed':
-      return 'The action failed. Please retry.';
-    case 'unknown':
-      return 'The outcome is unknown; recover the recorded operation outcome.';
-  }
 }
 
 function isFragmentKind(value: string): value is CardListFragmentKind {

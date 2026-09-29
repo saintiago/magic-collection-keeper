@@ -13,9 +13,11 @@
  */
 
 import type {
-  UiOperationOutcome,
+  UiActionIntent,
   UiListAction as UiCardListTool,
-} from '../../src/ui/internal/actions.js';
+  UiOperationOutcome,
+} from '../../src/ui/index.js';
+import { applyAction, outcomeText } from '../../src/ui/index.js';
 
 import {
   createCardList,
@@ -153,7 +155,6 @@ export interface UiCardListControl {
   install(id: string, options?: UiCardListInstall): void;
   /** Presents another query context through the list. */
   refine(id: string, context: string | null | undefined): void;
-  invoke(id: string, toolId: string): Promise<UiOperationOutcome | null>;
   refresh(id: string): void;
   loadMore(id: string): void;
   setSelected(id: string, key: string, selected: boolean): void;
@@ -223,6 +224,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
   const document = root.ownerDocument;
   const lists = new Map<string, UiCardList<string | null | undefined>>();
   const containers = new Map<string, HTMLElement>();
+  const outcomeLines = new Map<string, HTMLElement>();
   const controllers = new Map<string, AbortController>();
   const pages: PageRecord[] = [];
   const fragments: UiCardListFragmentRequest[] = [];
@@ -251,11 +253,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
       for (const kind of options.fragments ?? []) {
         readers[kind] = fragmentReader(id, kind);
       }
-      const tools: UiCardListTool[] = (options.tools ?? []).map((tool) => ({
-        id: tool.id,
-        label: tool.label,
-        tool: toolInvocation(id, tool.id),
-      }));
+      const tools: UiCardListTool[] = [...(options.tools ?? [])];
       const controller = new AbortController();
       controllers.set(id, controller);
       const listeners = options.changes === true ? new Set<(change: UiListChange) => void>() : null;
@@ -279,6 +277,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
             }),
         fragments: readers as unknown as UiCardListFragments,
         tools,
+        onAction: (intent: UiActionIntent) => reportIntent(id, tools, intent, controller.signal),
         ...(listeners === null
           ? {}
           : {
@@ -313,6 +312,14 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
               : {}),
         signal: controller.signal,
       });
+      // The journey presents the outcome of the actions the list reports, as an editor that
+      // supplies them does: the list emits the intent and the consumer owns the operation's
+      // pending state and its outcome (docs/ui/card-views.md#interface, docs/ui/editors.md).
+      const outcomeLine = document.createElement('p');
+      outcomeLine.dataset.uiOutcome = '';
+      outcomeLine.setAttribute('role', 'status');
+      container.append(outcomeLine);
+      outcomeLines.set(id, outcomeLine);
       lists.set(id, installed);
       const restoration = installed.restoration;
       restorations.set(
@@ -332,9 +339,6 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     },
     refine(id, context) {
       list(id).refine(context);
-    },
-    invoke(id, toolId) {
-      return list(id).invoke(toolId);
     },
     refresh(id) {
       list(id).refresh();
@@ -626,30 +630,40 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     };
   }
 
-  function toolInvocation(
-    id: string,
-    tool: string,
-  ): {
-    invoke(request: {
-      readonly targets: readonly UiListEntry['target'][];
-      readonly selection: { readonly keys: readonly string[] };
-    }): Promise<UiOperationOutcome>;
-  } {
-    return {
-      invoke(request) {
-        const requestId = next();
-        invocations.push({
-          id: requestId,
-          list: id,
-          tool,
-          targets: request.targets.map(describeTarget),
-          selection: [...request.selection.keys],
-        });
-        return new Promise<UiOperationOutcome>((resolve, reject) => {
-          pendingTools.set(requestId, { resolve, reject });
-        });
-      },
-    };
+  /**
+   * Reports one action the list emitted and runs it as the consumer does: the journey records the
+   * explicit target context, one operation settles later, and the journey presents the outcome the
+   * operation established (docs/ui/card-views.md#interface, docs/ui/editors.md#interface).
+   */
+  function reportIntent(
+    listId: string,
+    tools: readonly UiCardListTool[],
+    intent: UiActionIntent,
+    signal: AbortSignal,
+  ): void {
+    const requestId = next();
+    invocations.push({
+      id: requestId,
+      list: listId,
+      tool: intent.id,
+      targets: intent.selection.targets.map(describeTarget),
+      selection: [...intent.selection.keys],
+    });
+    const label = tools.find((tool) => tool.id === intent.id)?.label ?? intent.id;
+    const operation = new Promise<UiOperationOutcome>((resolve, reject) => {
+      pendingTools.set(requestId, { resolve, reject });
+    });
+    void applyAction(
+      { id: intent.id, label, apply: () => operation },
+      { selection: intent.selection, signal },
+    ).then((outcome) => {
+      const line = outcomeLines.get(listId);
+      if (line === undefined) {
+        return;
+      }
+      line.dataset.uiOutcomeStatus = outcome.status;
+      line.textContent = outcome.message ?? outcomeText(outcome.status);
+    });
   }
 }
 

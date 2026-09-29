@@ -851,6 +851,24 @@ test('Back and Forward restore the catalog query, its controls, focus and select
   expect(errors).toEqual([]);
 });
 
+test('restores the Home search draft when navigating away and back', async ({ page }) => {
+  const errors = await openBrowse(page, '#/');
+  await expect(page.getByRole('heading', { name: 'Recent cards' })).toBeVisible();
+
+  // The expression the owner typed is Home's unsaved draft; it is not the query of a submitted
+  // search (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
+  await page.getByLabel('Search cards').fill('unsaved bolt query');
+
+  // Leaving Home for another activity and returning presents the draft again.
+  await page.getByRole('link', { name: 'Catalog', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Catalog and search' })).toBeVisible();
+  await settleSearch(page, (await searchRequest(page)).id, searchPage([]));
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Recent cards' })).toBeVisible();
+  await expect(page.getByLabel('Search cards')).toHaveValue('unsaved bolt query');
+  expect(errors).toEqual([]);
+});
+
 test('Back and Forward restore the result window, its scroll and the focused result', async ({
   page,
 }) => {

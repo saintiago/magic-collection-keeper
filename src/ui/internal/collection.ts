@@ -20,35 +20,12 @@
 
 import { type CardListCollectionQuery } from '../../card-list/index.js';
 
-import { createCardListView } from './card-list.js';
-import {
-  copyChangeTool,
-  createCopyAccess,
-  uiCopyConditions,
-  type UiCopyChange,
-} from './copy-edits.js';
+import { createCopyAccess } from '../editors/index.js';
 import { createCardDetailsPage } from './card-details.js';
-import { UI_LIMITS } from './limits.js';
-import {
-  controlLabel,
-  openEntryPresentation,
-  pageHandle,
-  readListState,
-  readPageState,
-  searchForm,
-  searchInput,
-  selectControl,
-} from './page-support.js';
+import { UI_LIMITS } from '../shared/limits.js';
+import { cardViewOf, pageHandle, readListState, readPageState } from './page-support.js';
 import type { UiPageDefinition } from './pages.js';
-import {
-  readUiCatalogFinish,
-  readUiCollectionLevel,
-  uiCatalogFinishes,
-  uiCollectionLevels,
-  uiFinishLabel,
-  uiHref,
-  type UiView,
-} from './routes.js';
+import { uiHref, type UiView } from './routes.js';
 
 /** The two collection views: the account's collection and one card's details. */
 export function createCollectionPages(): readonly UiPageDefinition[] {
@@ -66,33 +43,27 @@ function collectionPage(): UiPageDefinition {
       }
       const document = container.ownerDocument;
       const restored = readPageState(context.restored?.state);
-      const input = searchInput(document, 'collection-search');
-      input.value = view.query;
-      const level = collectionLevelSelect(document);
-      level.id = 'collection-level';
-      level.value = view.level;
-      const form = searchForm(
-        document,
-        input,
-        [controlLabel(document, 'Level', level)],
-        'Search collection',
-      );
       const refresh = document.createElement('button');
       refresh.type = 'button';
       refresh.id = 'collection-refresh';
       refresh.textContent = 'Refresh collection';
 
-      const changes = copyChangesFieldset(document);
+      const account = context.capabilities.userCards.account(context.account.accountId);
+      const copies = createCopyAccess(account);
+      const changes = context.modules.editors.copyBulk({
+        document,
+        access: copies,
+        signal: context.signal,
+        restored,
+      });
       const heading = document.createElement('h2');
       heading.textContent = 'Your collection';
       const listHost = document.createElement('div');
       listHost.id = 'collection-results';
-      container.append(form, refresh, changes.fieldset, heading, listHost);
+      container.append(refresh, changes.element, heading, listHost);
 
-      const account = context.capabilities.userCards.account(context.account.accountId);
-      const copies = createCopyAccess(account);
       const bindings = context.capabilities.cardList.account(context.account.accountId);
-      const list = createCardListView<CardListCollectionQuery>({
+      const list = context.modules.cardViews.list<CardListCollectionQuery>({
         container: listHost,
         create: context.capabilities.cardList.create,
         source: bindings.collectionQuery(),
@@ -111,24 +82,14 @@ function collectionPage(): UiPageDefinition {
             .account(context.account.accountId)
             .copyTools(['apply-finish', 'apply-condition']),
         },
-        tools: [
-          copyChangeTool({
-            id: 'apply-finish',
-            label: 'Apply finish',
-            access: copies,
-            change: () => readFinishChange(changes.finish),
-            guidance: 'Choose the finish to apply to the selected copies.',
-          }),
-          copyChangeTool({
-            id: 'apply-condition',
-            label: 'Apply condition',
-            access: copies,
-            change: () => readConditionChange(changes.condition),
-            guidance: 'Choose the condition to apply to the selected copies.',
-          }),
-        ],
+        tools: changes.actions,
+        onAction: (intent) => changes.apply(intent),
         presentation: {
-          ...openEntryPresentation(document, 'collection-entry'),
+          ...context.modules.cardViews.openEntries({
+            document,
+            idPrefix: 'collection-entry',
+            href: (entry) => openableHref(entry),
+          }),
           renderFragment(kind, entry) {
             // Only copies offer bulk changes; other entries present no tool availability at all.
             return kind === 'tools' && entry.target.kind !== 'copy'
@@ -138,40 +99,28 @@ function collectionPage(): UiPageDefinition {
         },
         signal: context.signal,
       });
-      form.addEventListener('submit', (event) => {
-        event.preventDefault();
-        const next = collectionView({
-          text: input.value.trim(),
-          level: readUiCollectionLevel(level.value),
-        });
-        if (uiHref(next) === uiHref(view)) {
-          // The same view is already presented: restart its result instead of adding an entry.
-          list.refresh();
-          return;
-        }
-        context.navigate(next);
+      const queryEditor = context.modules.editors.collectionQuery({
+        document,
+        applied: collectionQueryOf(view),
+        restored,
+        onSubmit: (criteria) => {
+          const next = collectionView(criteria);
+          if (uiHref(next) === uiHref(view)) {
+            // The same view is already presented: restart its result instead of adding an entry.
+            list.refresh();
+            return;
+          }
+          context.navigate(next);
+        },
       });
+      container.prepend(queryEditor.element);
       refresh.addEventListener('click', () => {
         list.refresh();
       });
 
-      if (typeof restored?.query === 'string') {
-        input.value = restored.query;
-      }
-      if (typeof restored?.level === 'string') {
-        level.value = readUiCollectionLevel(restored.level);
-      }
-      if (typeof restored?.finish === 'string') {
-        changes.finish.value = restored.finish;
-      }
-      if (typeof restored?.condition === 'string') {
-        changes.condition.value = restored.condition;
-      }
       return pageHandle(list, () => ({
-        query: input.value,
-        level: level.value,
-        finish: changes.finish.value,
-        condition: changes.condition.value,
+        ...queryEditor.capture(),
+        ...changes.capture(),
         list: list.capture(),
       }));
     },
@@ -188,100 +137,8 @@ function collectionView(query: CardListCollectionQuery): UiView {
   return { page: 'collection', query: query.text, level: query.level };
 }
 
-/** Result level control of the collection page. */
-function collectionLevelSelect(document: Document): HTMLSelectElement {
-  return selectControl(
-    document,
-    uiCollectionLevels.map((level) => ({
-      value: level,
-      label: level === 'card' ? 'Cards' : level === 'printing' ? 'Printings' : 'Physical copies',
-    })),
-    'card',
-  );
-}
-
-/** The controls whose values the bulk copy changes apply, beside the list that acts on them. */
-function copyChangesFieldset(document: Document): {
-  readonly fieldset: HTMLFieldSetElement;
-  readonly finish: HTMLSelectElement;
-  readonly condition: HTMLSelectElement;
-} {
-  const fieldset = document.createElement('fieldset');
-  fieldset.id = 'collection-changes';
-  const legend = document.createElement('legend');
-  legend.textContent = 'Bulk copy changes';
-  const hint = document.createElement('p');
-  hint.textContent =
-    'Select physical copies in the list, choose a value and apply it to the whole selection.';
-  const finish = document.createElement('select');
-  finish.id = 'collection-finish';
-  finish.append(placeholderOption(document, 'Choose finish'), ...finishOptions(document));
-  const condition = document.createElement('select');
-  condition.id = 'collection-condition';
-  condition.append(
-    placeholderOption(document, 'Choose condition'),
-    valueOption(document, 'unknown', 'Unknown'),
-    ...uiCopyConditions.map((condition) =>
-      valueOption(document, condition, conditionName(condition)),
-    ),
-  );
-  fieldset.append(
-    legend,
-    hint,
-    controlLabel(document, 'Finish to apply', finish),
-    controlLabel(document, 'Condition to apply', condition),
-  );
-  return { fieldset, finish, condition };
-}
-
-/** The finish one bulk control names, or null while it names none. */
-function readFinishChange(select: HTMLSelectElement): UiCopyChange | null {
-  const finish = readUiCatalogFinish(select.value);
-  return finish === null ? null : { finish };
-}
-
-/** The condition one bulk control names, or null while it names none. */
-function readConditionChange(select: HTMLSelectElement): UiCopyChange | null {
-  switch (select.value) {
-    case '':
-      return null;
-    case 'unknown':
-      return { condition: null };
-    default:
-      return uiCopyConditions.includes(select.value as (typeof uiCopyConditions)[number])
-        ? { condition: select.value as (typeof uiCopyConditions)[number] }
-        : null;
-  }
-}
-
-/** Whether the presented entries offer the bulk copy changes; only copies can be changed. */
-function placeholderOption(document: Document, label: string): HTMLOptionElement {
-  return valueOption(document, '', label);
-}
-
-function finishOptions(document: Document): HTMLOptionElement[] {
-  return uiCatalogFinishes.map((finish) => valueOption(document, finish, uiFinishLabel(finish)));
-}
-
-function valueOption(document: Document, value: string, label: string): HTMLOptionElement {
-  const option = document.createElement('option');
-  option.value = value;
-  option.textContent = label;
-  return option;
-}
-
-/** Display name of one condition code. */
-function conditionName(condition: (typeof uiCopyConditions)[number]): string {
-  switch (condition) {
-    case 'NM':
-      return 'Near mint';
-    case 'LP':
-      return 'Lightly played';
-    case 'MP':
-      return 'Moderately played';
-    case 'HP':
-      return 'Heavily played';
-    case 'DMG':
-      return 'Damaged';
-  }
+/** Location one presented entry opens, or null when it carries no openable identity. */
+function openableHref(entry: Parameters<typeof cardViewOf>[0]): string | null {
+  const target = cardViewOf(entry);
+  return target === null ? null : uiHref(target);
 }

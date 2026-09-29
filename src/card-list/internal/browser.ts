@@ -81,7 +81,8 @@ export interface CardListAccountBindings {
   catalogQuery(): CardListSource<CardListCatalogQuery>;
   collectionQuery(): CardListSource<CardListCollectionQuery>;
   pickerQuery(): CardListSource<CardListPickerQuery>;
-  cardPrintings(card: CardRecord): CardListSource<string>;
+  /** The published printings of one card the consumer names; the source keeps their identity. */
+  cardPrintings(card: Pick<CardRecord, 'cardId' | 'name'>): CardListSource<string>;
   printingImages(): CardListFragmentReader<readonly CardListEntryImage[]>;
   /** Ownership counts of explicit entries, optionally with one tag's intended quantity. */
   ownership(tagId: string | null): CardListFragmentReader<CardListEntryOwnership>;

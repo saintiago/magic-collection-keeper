@@ -307,6 +307,20 @@ async function selectAllRendered(page: Page, host: string): Promise<void> {
 }
 
 /** Presents the pending review of one account that already has a manual import. */
+/**
+ * Chooses one printing through a pending row's picker: the owner selects the entry the search
+ * presents and expresses the explicit choice over it.
+ */
+async function chooseImportPrinting(
+  page: Page,
+  entryId: string,
+  printingId: string,
+): Promise<void> {
+  const picker = page.locator(`[data-ui-import-printing-picker="pending:${entryId}"]`);
+  await picker.locator(`[data-ui-select="printing:${printingId}"]`).check();
+  await picker.locator('[data-ui-tool="choose-printing"]').click();
+}
+
 async function openPendingReview(
   page: Page,
   entries: readonly ImportEntry[],
@@ -431,7 +445,7 @@ test('stages a manual printing into review and only its confirmation creates cop
     session: session({ state: 'confirmed', pendingEntries: 0, confirmedEntries: 2, revision: 5 }),
     entries: [],
   });
-  await expect(page.locator('#import-pending')).toHaveText('No pending entries to review.');
+  await expect(page.locator('#import-pending-list')).toHaveText('No pending entries to review.');
   expect(errors).toEqual([]);
 });
 
@@ -489,8 +503,9 @@ test('resolves an unresolved pending entry before confirming it', async ({ page 
   await page.click('#import-printing-find-entry-capture');
   const search = await requested<Record<string, unknown>>(page, 'searches');
   await settle(page, 'settleSearch', search.id, searchPage([m10]));
-  // The finding row offers the printing the search resolved, and the review saves it by its id.
-  await page.selectOption('#import-review-printing-entry-capture', m10.printingId);
+  // The row's picker offers the printing the search resolved, and the review saves it by its id.
+  await chooseImportPrinting(page, 'entry-capture', m10.printingId);
+  await expect(page.locator('#import-review-printing-entry-capture')).toHaveText('M10 146 · en');
   await page.selectOption('#import-review-finish-entry-capture', 'nonfoil');
   await page.selectOption('#import-review-condition-entry-capture', 'NM');
   await page.fill('#import-review-quantity-entry-capture', '1');
@@ -531,6 +546,47 @@ test('resolves an unresolved pending entry before confirming it', async ({ page 
   expect(errors).toEqual([]);
 });
 
+test('reads further printing pages of a review search and saves an exact printing', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry({ printingId: null, finish: null })]);
+  await page.fill('#import-printing-query-entry-1', 'Lightning Bolt');
+  await page.click('#import-printing-find-entry-1');
+  const search = await requested<Record<string, unknown>>(page, 'searches');
+  await settle(page, 'settleSearch', search.id, searchSlice([m11], 'printing-page-2'));
+  const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
+  await expect(picker.locator('[data-ui-entry]')).toHaveCount(1);
+
+  // The exact printing is beyond the first page: the picker offers the continuation of the rest,
+  // owned by the list it is built over (docs/card-list.md#interface).
+  await picker.locator('[data-ui-more]').click();
+  const next = await requested<Record<string, unknown>>(page, 'searches', 1);
+  expect(next.arguments.continuation).toBe('printing-page-2');
+  await settle(page, 'settleSearch', next.id, searchSlice([m10], null));
+  await expect(picker.locator('[data-ui-entry]')).toHaveCount(2);
+  await expect(picker.locator('[data-ui-more]')).toBeHidden();
+
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await page.selectOption('#import-review-finish-entry-1', 'nonfoil');
+  await page.click('#import-review-save-entry-1');
+  const review = await requested<Record<string, unknown>>(page, 'review');
+  expect(review.arguments).toMatchObject({ printingId: m10.printingId, finish: 'nonfoil' });
+  await settle(page, 'settleReview', review.id, {
+    entry: entry({ printingId: m10.printingId, finish: 'nonfoil', revision: 4 }),
+    session: session({ revision: 5 }),
+  });
+  const refreshed = await requested<UiImportEntriesRequest>(page, 'entries', 1);
+  await settle(page, 'settleEntries', refreshed.id, {
+    session: session({ revision: 5 }),
+    entries: [entry({ printingId: m10.printingId, finish: 'nonfoil', revision: 4 })],
+  });
+  await expect(
+    page.locator('#import-pending [data-ui-entry="pending:entry-1"] [data-ui-import-printing]'),
+  ).toHaveText('Printing: M10 146 · en');
+  expect(errors).toEqual([]);
+});
+
 test('reports an indexing printing search instead of offering no printing', async ({ page }) => {
   const errors = await openPendingReview(page, [
     entry({
@@ -553,11 +609,12 @@ test('reports an indexing printing search instead of offering no printing', asyn
     revisions: null,
   });
 
-  const status = page.locator('#import-entry-status-entry-capture');
-  await expect(status).toHaveText(
-    'The printings could not be read: The search results are still being indexed.',
+  const picker = page.locator('[data-ui-import-printing-picker="pending:entry-capture"]');
+  await expect(picker.locator('[data-ui-status]')).toHaveText(
+    'The search results are still being indexed.',
   );
-  await expect(status).not.toContainText('published no printing');
+  await expect(picker.locator('[data-ui-entry]')).toHaveCount(0);
+  await expect(page.locator('#import-entry-status-entry-capture')).toBeEmpty();
   expect(errors).toEqual([]);
 });
 
@@ -704,7 +761,7 @@ test('discards one pending entry and one import without creating copies', async 
     entries: [],
   });
   await expect(page.locator('#import-session')).toBeDisabled();
-  await expect(page.locator('#import-pending')).toHaveText('No pending entries to review.');
+  await expect(page.locator('#import-pending-list')).toHaveText('No pending entries to review.');
 
   await page.click('#import-refresh');
   const listing = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
@@ -759,7 +816,7 @@ test('keeps every stored review value while one attribute is corrected', async (
   const errors = await openPendingReview(page, [
     entry({ finish: 'foil', condition: 'NM', quantity: 1 }),
   ]);
-  await expect(page.locator('#import-review-printing-entry-1')).toHaveValue(m11.printingId);
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M11 149 · en');
 
   // Correcting one attribute must keep the reviewed printing, finish and condition of the entry.
   await page.fill('#import-review-quantity-entry-1', '2');
@@ -773,7 +830,7 @@ test('keeps every stored review value while one attribute is corrected', async (
     entries: [entry({ finish: 'foil', condition: 'NM', quantity: 1 })],
   });
 
-  await expect(page.locator('#import-review-printing-entry-1')).toHaveValue(m11.printingId);
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M11 149 · en');
   await expect(page.locator('#import-review-finish-entry-1')).toHaveValue('foil');
   await expect(page.locator('#import-review-condition-entry-1')).toHaveValue('NM');
   await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('2');
@@ -790,7 +847,9 @@ test('offers the finish options of the printing a review selects', async ({ page
   await page.click('#import-printing-find-entry-1');
   const search = await requested<Record<string, unknown>>(page, 'searches');
   await settle(page, 'settleSearch', search.id, searchPage([m11]));
-  await page.selectOption('#import-review-printing-entry-1', m11.printingId);
+  await chooseImportPrinting(page, 'entry-1', m11.printingId);
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M11 149 · en');
+  // The record of the chosen printing is read, so the finish control follows its finishes.
   await expect(page.locator('#import-review-finish-entry-1 option[value="foil"]')).toHaveCount(1);
 
   await page.selectOption('#import-review-finish-entry-1', 'foil');
@@ -1130,7 +1189,7 @@ test('recovers a lost confirmation whose pending entries are gone', async ({ pag
     session: session({ state: 'confirmed', pendingEntries: 0, confirmedEntries: 1, revision: 6 }),
     entries: [],
   });
-  await expect(page.locator('#import-pending')).toHaveText('No pending entries to review.');
+  await expect(page.locator('#import-pending-list')).toHaveText('No pending entries to review.');
 
   // The kept operation identity recovers the outcome without any pending entry or selection.
   const recovery = await requested<string>(page, 'recover', 1);
@@ -1309,40 +1368,54 @@ for (const obsolete of ['success', 'failure', 'edited query', 'changed session']
     await page.fill('#import-printing-query-entry-1', 'older');
     await page.click('#import-printing-find-entry-1');
     const older = await requested(page, 'searches');
+    const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
     await page.fill('#import-printing-query-entry-1', 'newer');
+
     if (obsolete === 'changed session') {
+      // Selecting another import releases the row's picker: the obsolete search cannot present
+      // through a view that no longer holds it.
       await page.selectOption('#import-session', 'capture');
       const otherRead = await requested(page, 'entries', 1);
       await settle(page, 'settleEntries', otherRead.id, {
         session: other,
         entries: [entry({ entryId: 'other', sessionId: 'capture' })],
       });
+      await settle(page, 'settleSearch', older.id, searchPage([m10]));
+      await expect(page.locator('[data-ui-import-printing-picker="pending:entry-1"]')).toHaveCount(
+        0,
+      );
       await page.selectOption('#import-session', 'manual');
       const back = await requested(page, 'entries', 2);
       await settle(page, 'settleEntries', back.id, { session: session(), entries: [entry()] });
-    } else if (obsolete !== 'edited query') {
-      await page.click('#import-printing-find-entry-1');
-      const newer = await requested(page, 'searches', 1);
-      if (obsolete === 'failure') {
-        await control(page, 'fail', older.id, { code: 'unavailable', message: 'Obsolete failure' });
-        await expect(page.locator('#import-entry-status-entry-1')).toHaveText(
-          'Searching for printings…',
-        );
-      }
-      await settle(page, 'settleSearch', newer.id, searchPage([m10]));
-      await expect(page.locator('#import-review-printing-entry-1 option')).toHaveCount(3);
+      await expect(page.locator('#import-printing-query-entry-1')).toHaveValue('newer');
+      expect(errors).toEqual([]);
+      return;
     }
-    if (obsolete !== 'failure') {
-      await settle(page, 'settleSearch', older.id, searchPage(obsolete === 'success' ? [] : [m10]));
+
+    if (obsolete === 'edited query') {
+      // The typed expression stays the row's draft; the picker presents the search the owner
+      // submitted, and the list owns ignoring an answer a newer search superseded.
+      await settle(page, 'settleSearch', older.id, searchPage([m10]));
+      await expect(page.locator('#import-printing-query-entry-1')).toHaveValue('newer');
+      await expect(picker.locator('[data-ui-entry]')).toHaveCount(1);
+      expect(errors).toEqual([]);
+      return;
     }
-    // Redraw from page state as well as checking the current controls, so a detached editor
-    // cannot hide an obsolete result stored for the next render.
-    await page.selectOption('#import-review-printing-entry-1', m11.printingId);
-    await expect(page.locator('#import-printing-query-entry-1')).toHaveValue('newer');
-    await expect(page.locator('#import-entry-status-entry-1')).toBeEmpty();
-    await expect(page.locator('#import-review-printing-entry-1 option')).toHaveCount(
-      obsolete === 'success' || obsolete === 'failure' ? 3 : 2,
-    );
+
+    // A further search refines the picker's own list; the obsolete answer never replaces it.
+    await page.click('#import-printing-find-entry-1');
+    const newer = await requested(page, 'searches', 1);
+    if (obsolete === 'failure') {
+      await control(page, 'fail', older.id, { code: 'unavailable', message: 'Obsolete failure' });
+    }
+    await settle(page, 'settleSearch', newer.id, searchPage([m10]));
+    await expect(picker.locator('[data-ui-status]')).toHaveText('');
+    await expect(picker.locator('[data-ui-entry]')).toHaveCount(1);
+    if (obsolete === 'success') {
+      await settle(page, 'settleSearch', older.id, searchPage([]));
+      await expect(picker.locator('[data-ui-entry]')).toHaveCount(1);
+      await expect(picker.locator('[data-ui-status]')).toHaveText('');
+    }
     expect(errors).toEqual([]);
   });
 }
@@ -1658,30 +1731,42 @@ for (const context of ['Back', 'another search', 'missing lookup', 'failed looku
   test(`resolves the selected printing finish after ${context}`, async ({ page }) => {
     const errors = await openPendingReview(page, [entry()]);
     const foil: PrintingRecord = { ...m10, finishes: ['foil'] };
-    await scriptCatalog(page, { cards: [boltCard], printings: [m11, foil] });
+    const unreadable = context === 'missing lookup' || context === 'failed lookup';
+    // The record of the printing the row reads may be missing (or its read may fail): the choice
+    // keeps its identity while the finish control falls back to the published vocabulary.
+    await scriptCatalog(page, {
+      cards: [boltCard],
+      printings: unreadable ? [m11] : [m11, foil],
+    });
     await page.fill('#import-printing-query-entry-1', 'set:m10');
     await page.click('#import-printing-find-entry-1');
     const search = await requested(page, 'searches');
     await settle(page, 'settleSearch', search.id, searchPage([foil]));
-    await page.selectOption('#import-review-printing-entry-1', foil.printingId);
-    await expect(page.locator('#import-review-finish-entry-1')).toHaveValue('');
+    await chooseImportPrinting(page, 'entry-1', foil.printingId);
+    if (unreadable) {
+      await expect(page.locator('#import-review-printing-entry-1')).toHaveText(
+        `Printing ${foil.printingId}`,
+      );
+      await expect(page.locator('#import-review-finish-entry-1')).toHaveValue('nonfoil');
+    } else {
+      await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+      await expect(page.locator('#import-review-finish-entry-1')).toHaveValue('');
+    }
     if (context === 'another search') {
       await page.fill('#import-printing-query-entry-1', 'set:m11');
       await page.click('#import-printing-find-entry-1');
       const newer = await requested(page, 'searches', 1);
       await settle(page, 'settleSearch', newer.id, searchPage([m11]));
-      await expect(page.locator('#import-review-printing-entry-1')).toHaveValue(foil.printingId);
-    } else {
+      await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+    } else if (context === 'Back') {
       await control(page, 'navigate', { page: 'home' });
       await control(page, 'back');
       const sessions = await requested(page, 'sessions', 1);
       await settle(page, 'settleSessions', sessions.id, [session()]);
       const entries = await requested(page, 'entries', 1);
       await settle(page, 'settleEntries', entries.id, { session: session(), entries: [entry()] });
-      await expect(page.locator('#import-review-printing-entry-1')).toHaveValue(foil.printingId);
+      await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
     }
-    if (context === 'missing lookup')
-      await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
     const catalogCount = (await control<unknown[]>(page, 'catalogRequests')).length;
     if (context === 'failed lookup') await control(page, 'scriptCatalog', null);
     await page.click('#import-review-save-entry-1');
@@ -1689,12 +1774,15 @@ for (const context of ['Back', 'another search', 'missing lookup', 'failed looku
       const lookup = await requested(page, 'catalogRequests', catalogCount);
       await control(page, 'fail', lookup.id, { code: 'unavailable', message: 'Offline' });
     }
-    if (context === 'missing lookup' || context === 'failed lookup') {
+    if (unreadable) {
+      // A chosen printing the review cannot read is never saved as another printing.
       await expect(page.locator('#import-entry-status-entry-1')).toContainText(
         context === 'missing lookup' ? 'unavailable' : 'could not be read',
       );
       expect(await control<unknown[]>(page, 'review')).toHaveLength(0);
-      await expect(page.locator('#import-review-printing-entry-1')).toHaveValue(foil.printingId);
+      await expect(page.locator('#import-review-printing-entry-1')).toHaveText(
+        `Printing ${foil.printingId}`,
+      );
       await expect(page.locator('#import-printing-query-entry-1')).toHaveValue('set:m10');
     } else {
       const review = await requested<Record<string, unknown>>(page, 'review');
@@ -2899,6 +2987,16 @@ test('releases replaced import editor controls while preserving drafts and selec
   page,
 }) => {
   const errors = await openPendingReview(page, [entry()]);
+  const client = await page.context().newCDPSession(page);
+  const observers = async (): Promise<number> => {
+    const counted = await client.send('Runtime.evaluate', {
+      expression: "getEventListeners(document)['focusin']?.length ?? 0",
+      includeCommandLineAPI: true,
+      returnByValue: true,
+    });
+    return counted.result.value as number;
+  };
+  const baseline = await observers();
   await page.fill('#import-review-quantity-entry-1', '5');
   await page.locator('#import-pending [data-ui-select]').check();
   type TrackedEditors = { retiredEditors: WeakRef<Element>[] };
@@ -2906,6 +3004,19 @@ test('releases replaced import editor controls while preserving drafts and selec
     (globalThis as unknown as TrackedEditors).retiredEditors = [];
   });
   for (let index = 1; index <= 6; index += 1) {
+    await page.fill(`#import-printing-query-entry-${index}`, 'Bolt');
+    await page.click(`#import-printing-find-entry-${index}`);
+    await settle(
+      page,
+      'settleSearch',
+      (await requested(page, 'searches', index - 1)).id,
+      searchSlice([m10], null),
+    );
+    await expect(page.locator('[data-ui-import-printing-picker] [data-ui-entry]')).toHaveCount(1);
+    expect(await observers()).toBe(baseline + 1);
+    await page.locator('[data-ui-import-printing-picker]').evaluate((picker) => {
+      (globalThis as unknown as TrackedEditors).retiredEditors.push(new WeakRef(picker));
+    });
     await page.locator('[data-ui-import-editor]').evaluate((editor) => {
       (globalThis as unknown as TrackedEditors).retiredEditors.push(new WeakRef(editor));
     });
@@ -2920,6 +3031,7 @@ test('releases replaced import editor controls while preserving drafts and selec
     await expect(
       page.locator(`[data-ui-import-editor="pending:entry-${index + 1}"]`),
     ).toBeVisible();
+    expect(await observers()).toBe(baseline);
   }
   await page.requestGC();
   expect(
@@ -2964,3 +3076,232 @@ test('preserves the focused review choice and draft through a printing correctio
   await expect(condition).toHaveValue('LP');
   expect(errors).toEqual([]);
 });
+
+test('keeps pending selection and paging independent of its nested printing picker', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry()]);
+  // Give the parent a continuation so a bubbled Load more would issue an observable read.
+  await page.click('#import-refresh');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+    continuation: 'pending-next',
+  });
+  const parentSelection = page.locator('[data-ui-select="pending:entry-1"]');
+  await parentSelection.check();
+  await page.fill('#import-printing-query-entry-1', 'Bolt');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchSlice([m11], 'printing-next'),
+  );
+  const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
+  await picker.locator('[data-ui-select]').check();
+  await picker.getByRole('button', { name: 'Clear selection' }).click();
+  await expect(parentSelection).toBeChecked();
+  await picker.locator('[data-ui-more]').click();
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches', 1)).id,
+    searchSlice([m10], null),
+  );
+  await expect(picker.locator('[data-ui-entry]')).toHaveCount(2);
+  expect(await control<unknown[]>(page, 'entries')).toHaveLength(2);
+  await expect(parentSelection).toBeChecked();
+  expect(errors).toEqual([]);
+});
+
+test('rejects ambiguous review choices and applies cached choices to the refreshed row', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.fill('#import-printing-query-entry-1', 'Bolt');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchSlice([m10, m11], null),
+  );
+  const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await page.click('#import-refresh');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches', 1)).id,
+    searchSlice([m10, m11], null),
+  );
+  await chooseImportPrinting(page, 'entry-1', m11.printingId);
+  await expect(page.locator('#import-entry-status-entry-1')).toHaveText(
+    'Select exactly one printing, then choose it.',
+  );
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  expect(await control<unknown[]>(page, 'review')).toHaveLength(0);
+  await picker.locator(`[data-ui-select="printing:${m10.printingId}"]`).uncheck();
+  await picker.locator('[data-ui-tool="choose-printing"]').click();
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M11 149 · en');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches', 2)).id,
+    searchSlice([m10, m11], null),
+  );
+  await picker.locator('[data-ui-clear-selection]').click();
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await page.click('#import-review-save-entry-1');
+  expect((await requested<Record<string, unknown>>(page, 'review')).arguments.printingId).toBe(
+    m10.printingId,
+  );
+  expect(errors).toEqual([]);
+});
+
+test('saves the chosen printing while its catalog lookup is pending', async ({ page }) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.fill('#import-printing-query-entry-1', 'Bolt');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchSlice([m10], null),
+  );
+  const reads = (await control<unknown[]>(page, 'catalogRequests')).length;
+  await control(page, 'scriptCatalog', null);
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  const lookup = await requested(page, 'catalogRequests', reads);
+  // Save validates the chosen record separately; leave the earlier enrichment read pending.
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11, m10] });
+  // Submit before Catalog answers, without a row refresh to repaint the form for us.
+  await page.click('#import-review-save-entry-1');
+  expect((await requested<Record<string, unknown>>(page, 'review')).arguments).toMatchObject({
+    printingId: m10.printingId,
+    finish: 'nonfoil',
+  });
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText(
+    `Printing ${m10.printingId}`,
+  );
+  // A reopened picker remains independently usable when the earlier lookup redraws the form.
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches', 1)).id,
+    searchSlice([m10], null),
+  );
+  const choice = page.locator(`[data-ui-select="printing:${m10.printingId}"]`);
+  await choice.focus();
+  await settle(page, 'settleCatalog', lookup.id, { printings: [m10] });
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await expect(choice).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test('keeps nested printing picker focus when a review save refreshes its parent', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry()]);
+  await page.fill('#import-review-quantity-entry-1', '2');
+  await page.click('#import-review-save-entry-1');
+  const review = await requested(page, 'review');
+  await page.fill('#import-printing-query-entry-1', 'Bolt');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchSlice([m10], null),
+  );
+  const choice = page.locator('[data-ui-select="printing:printing-m10-146-en"]');
+  await choice.focus();
+  await settle(page, 'settleReview', review.id, {
+    entry: entry({ quantity: 2, revision: 4 }),
+    session: session({ revision: 5 }),
+  });
+  await expect(choice).toBeFocused();
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session({ revision: 5 }),
+    entries: [entry({ quantity: 2, revision: 4 })],
+  });
+  await expect(page.locator('#import-review-quantity-entry-1')).toHaveValue('2');
+  await expect(choice).toBeFocused();
+  await choice.press('Space');
+  await expect(choice).toBeChecked();
+  await expect(page.locator('[data-ui-select="pending:entry-1"]')).not.toBeChecked();
+  expect(errors).toEqual([]);
+});
+
+for (const superseded of [false, true]) {
+  test(`resolves a printing choice across row replacement (superseded: ${superseded})`, async ({
+    page,
+  }) => {
+    const errors = await openPendingReview(page, [entry()]);
+    await page.fill('#import-printing-query-entry-1', 'Bolt');
+    await page.click('#import-printing-find-entry-1');
+    await settle(
+      page,
+      'settleSearch',
+      (await requested(page, 'searches')).id,
+      searchSlice([m10, m11], null),
+    );
+    const picker = page.locator('[data-ui-import-printing-picker="pending:entry-1"]');
+    await expect(picker.locator('[data-ui-entry]')).toHaveCount(2);
+    const reads = (await control<unknown[]>(page, 'catalogRequests')).length;
+    await control(page, 'scriptCatalog', null);
+    await chooseImportPrinting(page, 'entry-1', m10.printingId);
+    const lookup = await requested(page, 'catalogRequests', reads);
+    await scriptCatalog(page, { cards: [boltCard], printings: [m11, m10] });
+    await page.click('#import-refresh');
+    await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+    await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+      session: session(),
+      entries: [entry()],
+    });
+    await expect(page.locator('#import-review-printing-entry-1')).toHaveText(
+      `Printing ${m10.printingId}`,
+    );
+    if (superseded) {
+      await page.click('#import-printing-find-entry-1');
+      await settle(
+        page,
+        'settleSearch',
+        (await requested(page, 'searches', 1)).id,
+        searchSlice([m10, m11], null),
+      );
+      await picker.locator('[data-ui-clear-selection]').click();
+      await chooseImportPrinting(page, 'entry-1', m11.printingId);
+      await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M11 149 · en');
+    }
+    // Resolving the older choice must neither paint detached controls nor clear a newer finish.
+    await settle(page, 'settleCatalog', lookup.id, { printings: [{ ...m10, finishes: ['foil'] }] });
+    await expect(page.locator('#import-review-printing-entry-1')).toHaveText(
+      superseded ? 'M11 149 · en' : 'M10 146 · en',
+    );
+    if (superseded) {
+      await expect(page.locator('#import-review-finish-entry-1')).toHaveValue('nonfoil');
+    } else {
+      await page.selectOption('#import-review-finish-entry-1', 'foil');
+    }
+    await page.click('#import-review-save-entry-1');
+    expect((await requested<Record<string, unknown>>(page, 'review')).arguments).toMatchObject({
+      printingId: superseded ? m11.printingId : m10.printingId,
+      finish: superseded ? 'nonfoil' : 'foil',
+    });
+    expect(errors).toEqual([]);
+  });
+}

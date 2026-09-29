@@ -62,6 +62,7 @@ import {
   type UiView,
   type UserInterface,
 } from '../../src/ui/index.js';
+import type { UiPresentationModules } from '../../src/ui/internal/composition.js';
 
 import { browserAttemptStorage, unusedUserCardsClient } from './unused-usercards.js';
 import { unusedCapture } from './unused-capture.js';
@@ -204,7 +205,10 @@ function referenceKey(reference: UiTagsCountsRequest['references'][number]): str
 }
 
 /** Installs the organization pages into `root`; identity starts signed in. */
-export function installTagsHarness(root: Element | null): UiTagsControl {
+export function installTagsHarness(
+  root: Element | null,
+  modules?: UiPresentationModules,
+): UiTagsControl {
   if (root === null) {
     throw new Error('The organization journey needs its root element.');
   }
@@ -407,6 +411,7 @@ export function installTagsHarness(root: Element | null): UiTagsControl {
     capabilities,
     identity,
     pages: createOrganizationPages(),
+    ...(modules === undefined ? {} : { modules }),
   });
 
   function report(next: UiAccount | null): void {

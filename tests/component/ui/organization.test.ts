@@ -363,14 +363,16 @@ describe('copy locations', () => {
 
 describe('adding selected entries to a tag', () => {
   const request = (target: { kind: 'card' | 'printing' | 'copy'; id: string }) => ({
-    targets: [
-      target.kind === 'card'
-        ? { kind: 'card' as const, cardId: target.id }
-        : target.kind === 'printing'
-          ? { kind: 'printing' as const, printingId: target.id }
-          : { kind: 'copy' as const, copyId: target.id },
-    ],
-    selection: { keys: ['key-1'], targets: [] },
+    selection: {
+      keys: ['key-1'],
+      targets: [
+        target.kind === 'card'
+          ? { kind: 'card' as const, cardId: target.id }
+          : target.kind === 'printing'
+            ? { kind: 'printing' as const, printingId: target.id }
+            : { kind: 'copy' as const, copyId: target.id },
+      ],
+    },
     signal: new AbortController().signal,
   });
 
@@ -394,7 +396,7 @@ describe('adding selected entries to a tag', () => {
       guidance: 'Choose an intended quantity.',
     });
 
-    const outcome = await tool.tool.invoke(request({ kind: 'card', id: 'card-bolt' }));
+    const outcome = await tool.apply(request({ kind: 'card', id: 'card-bolt' }));
 
     expect(outcome.status).toBe('committed');
     expect(created).toEqual([
@@ -421,7 +423,7 @@ describe('adding selected entries to a tag', () => {
       guidance: 'Choose an intended quantity.',
     });
 
-    const outcome = await tool.tool.invoke(request({ kind: 'printing', id: 'printing-1' }));
+    const outcome = await tool.apply(request({ kind: 'printing', id: 'printing-1' }));
 
     expect(created).toEqual([
       { tagId: 'tag-to-buy', targetLevel: 'printing', targetId: 'printing-1', quantity: 1 },
@@ -455,12 +457,14 @@ describe('adding selected entries to a tag', () => {
       guidance: 'Choose an intended quantity.',
     });
 
-    const outcome = await tool.tool.invoke({
-      targets: [
-        { kind: 'card', cardId: 'card-bolt' },
-        { kind: 'printing', printingId: 'printing-2' },
-      ],
-      selection: { keys: ['key-1', 'key-2'], targets: [] },
+    const outcome = await tool.apply({
+      selection: {
+        keys: ['key-1', 'key-2'],
+        targets: [
+          { kind: 'card', cardId: 'card-bolt' },
+          { kind: 'printing', printingId: 'printing-2' },
+        ],
+      },
       signal: new AbortController().signal,
     });
 
@@ -499,12 +503,14 @@ describe('adding selected entries to a tag', () => {
       guidance: 'Choose an intended quantity.',
     });
 
-    const outcome = await tool.tool.invoke({
-      targets: [
-        { kind: 'card', cardId: 'card-bolt' },
-        { kind: 'printing', printingId: 'printing-2' },
-      ],
-      selection: { keys: ['key-1', 'key-2'], targets: [] },
+    const outcome = await tool.apply({
+      selection: {
+        keys: ['key-1', 'key-2'],
+        targets: [
+          { kind: 'card', cardId: 'card-bolt' },
+          { kind: 'printing', printingId: 'printing-2' },
+        ],
+      },
       signal: new AbortController().signal,
     });
 
@@ -537,9 +543,11 @@ describe('adding selected entries to a tag', () => {
       quantity: () => 2,
       guidance: 'Choose quantity.',
     });
-    const outcome = await tool.tool.invoke({
-      targets: ['one', 'two', 'three'].map((cardId) => ({ kind: 'card' as const, cardId })),
-      selection: { keys: [], targets: [] },
+    const outcome = await tool.apply({
+      selection: {
+        keys: [],
+        targets: ['one', 'two', 'three'].map((cardId) => ({ kind: 'card' as const, cardId })),
+      },
       signal: new AbortController().signal,
     });
     expect(outcome.status).toBe('unknown');
@@ -574,7 +582,7 @@ describe('adding selected entries to a tag', () => {
       quantity: () => null,
       guidance: 'Choose an intended quantity.',
     });
-    expect((await location.tool.invoke(request({ kind: 'copy', id: 'copy-1' }))).status).toBe(
+    expect((await location.apply(request({ kind: 'copy', id: 'copy-1' }))).status).toBe(
       'committed',
     );
     expect(moves).toEqual([{ copyId: 'copy-1', locationTagId: 'tag-binder', expectedRevision: 5 }]);
@@ -597,9 +605,7 @@ describe('adding selected entries to a tag', () => {
       quantity: () => 1,
       guidance: 'Choose an intended quantity.',
     });
-    expect((await deck.tool.invoke(request({ kind: 'copy', id: 'copy-1' }))).status).toBe(
-      'committed',
-    );
+    expect((await deck.apply(request({ kind: 'copy', id: 'copy-1' }))).status).toBe('committed');
     expect(memberships).toEqual([{ tagId: 'tag-burn', targetLevel: 'copy', targetId: 'copy-1' }]);
   });
 });

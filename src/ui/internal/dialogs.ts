@@ -5,18 +5,9 @@
  * cancels it. Only text the caller supplied is rendered, so external text stays safe.
  */
 
-export interface UiDialogOptions {
-  readonly title: string;
-  readonly message: string;
-  readonly confirmLabel: string;
-  readonly cancelLabel: string;
-}
+import type { UiDialogs } from '../shared/dialogs.js';
 
-/** Dialogs the shell provides to the page it presents. */
-export interface UiDialogs {
-  /** Asks one brief question; false when the user cancels or the view closes. */
-  confirm(options: UiDialogOptions): Promise<boolean>;
-}
+export type { UiDialogOptions, UiDialogs } from '../shared/dialogs.js';
 
 export interface UiDialogHost extends UiDialogs {
   /** Cancels every open dialog; the presented view is closing. */
