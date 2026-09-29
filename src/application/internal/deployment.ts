@@ -206,6 +206,10 @@ export function readInteractiveEnvironment(
   const clusterArn = requiredVariable(environment, 'KEEPER_DATABASE_CLUSTER_ARN');
   const database = requiredVariable(environment, 'KEEPER_DATABASE_NAME');
   const readerSecretArn = requiredVariable(environment, 'KEEPER_DATABASE_READER_SECRET_ARN');
+  const searchQuerySecretArn = requiredVariable(
+    environment,
+    'KEEPER_DATABASE_SEARCH_QUERY_SECRET_ARN',
+  );
   const userCardsWriterSecretArn = requiredVariable(
     environment,
     'KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN',
@@ -232,6 +236,10 @@ export function readInteractiveEnvironment(
     browser: { apiBaseUrl },
     resources: {
       catalogDatabase: { resourceArn: clusterArn, secretArn: readerSecretArn, database },
+      // Search reads its own projection with its own query role: the reader credential reaches
+      // the Catalog and UserCards views, which Search's query implementation must not use
+      // (docs/data-architecture.md#access-and-deployment).
+      searchDatabase: { resourceArn: clusterArn, secretArn: searchQuerySecretArn, database },
       userCardsDatabase: {
         resourceArn: clusterArn,
         secretArn: userCardsWriterSecretArn,
@@ -302,7 +310,13 @@ function readRuntimeIdentity(environment: Readonly<Record<string, string | undef
 export interface IndexingJobConfiguration {
   readonly environment: string;
   readonly region: string;
+  /** Search's own projection-maintenance credential; it reaches Search's tables only. */
   readonly database: DeploymentDatabaseSettings;
+  /** Provider publication readers, one credential per provider, trusted for indexing only. */
+  readonly publications: {
+    readonly catalog: DeploymentDatabaseSettings;
+    readonly userCards: DeploymentDatabaseSettings;
+  };
   /** Accounts this explicit run indexes besides the checkpoints the projection already holds. */
   readonly accounts: readonly string[];
   /** Whether the run builds a replacement generation instead of catching up in place. */
@@ -311,22 +325,41 @@ export interface IndexingJobConfiguration {
 
 /**
  * Reads the background indexing job's settings. The job holds one credential — the Search indexing
- * role of docs/data-architecture.md#access-and-deployment — and never a provider's writer secret or
- * an end user's read credential. The accounts and the rebuild mode are per-run inputs, so an
- * explicit run can index a newly named account or start a replacement generation without changing
- * this definition.
+ * role of docs/data-architecture.md#access-and-deployment — that maintains Search's projection,
+ * and one provider-publication credential per provider for the facts it projects. Neither is a
+ * provider's writer secret or an end user's read credential, and the indexing credential reaches
+ * no provider relation. The accounts and the rebuild mode are per-run inputs, so an explicit run
+ * can index a newly named account or start a replacement generation without changing this
+ * definition.
  */
 export function readIndexingJobEnvironment(
   environment: Readonly<Record<string, string | undefined>>,
 ): IndexingJobConfiguration {
   const runtime = readRuntimeIdentity(environment);
+  const clusterArn = requiredVariable(environment, 'KEEPER_DATABASE_CLUSTER_ARN');
+  const database = requiredVariable(environment, 'KEEPER_DATABASE_NAME');
   return {
     environment: runtime.environment,
     region: runtime.region,
     database: {
-      clusterArn: requiredVariable(environment, 'KEEPER_DATABASE_CLUSTER_ARN'),
+      clusterArn,
       secretArn: requiredVariable(environment, 'KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN'),
-      database: requiredVariable(environment, 'KEEPER_DATABASE_NAME'),
+      database,
+    },
+    publications: {
+      catalog: {
+        clusterArn,
+        secretArn: requiredVariable(environment, 'KEEPER_DATABASE_CATALOG_PUBLICATION_SECRET_ARN'),
+        database,
+      },
+      userCards: {
+        clusterArn,
+        secretArn: requiredVariable(
+          environment,
+          'KEEPER_DATABASE_USERCARDS_PUBLICATION_SECRET_ARN',
+        ),
+        database,
+      },
     },
     accounts: readIndexingAccounts(environment),
     rebuild: optionalBooleanVariable(environment, 'KEEPER_INDEXING_REBUILD'),
@@ -752,7 +785,11 @@ export interface InteractiveDeployment {
   dispose(): void;
 }
 
-/** Composes the interactive runtime: the reader credential and the UserCards writer credential. */
+/**
+ * Composes the interactive runtime: the published-view reader credential, Search's own query
+ * credential and the UserCards writer credential. Search queries never run as the reader, so they
+ * cannot reach the Catalog or UserCards views (docs/data-architecture.md#access-and-deployment).
+ */
 export function createInteractiveDeployment(
   options: InteractiveDeploymentOptions,
 ): InteractiveDeployment {
@@ -774,6 +811,12 @@ export function createInteractiveDeployment(
         resourceArn: resources.catalogDatabase.resourceArn,
         secretArn: resources.catalogDatabase.secretArn,
         database: resources.catalogDatabase.database,
+      }),
+      searchSql: createDataApiTransactor({
+        client,
+        resourceArn: resources.searchDatabase.resourceArn,
+        secretArn: resources.searchDatabase.secretArn,
+        database: resources.searchDatabase.database,
       }),
       writeSql: createDataApiTransactor({
         client,
@@ -1062,9 +1105,10 @@ function translateJobFailure(cause: unknown, message: string): ApplicationError 
 
 /**
  * One bounded pass of the background indexing job: the run applies the provider publications the
- * scope covers to Search's own projection and reports what it left behind. The job holds only the
- * Search indexing credential — its projection maintenance plus trusted publication reads — and
- * never a provider's writer credential or the end user's reader credential
+ * scope covers to Search's own projection and reports what it left behind. The job holds the
+ * Search indexing credential, which maintains Search's own projection and reaches no provider
+ * relation, and one trusted publication credential per provider for the facts it projects; it
+ * never holds a provider's writer credential or the end user's reader credential
  * (docs/data-architecture.md#access-and-deployment). A run that does not catch up is a successful,
  * resumable pass: start another run instead of resubmitting a write.
  */
@@ -1088,18 +1132,31 @@ export async function runIndexingJob(options: IndexingJobOptions): Promise<Index
   const dataApi =
     options.dataApi ?? createRdsDataApiClient(new RDSDataClient({ region: configuration.region }));
   try {
-    // One credential carries the run: it maintains Search's projection and reads the Catalog and
-    // UserCards publications, and no statement of this run is another component's write.
+    // Search's projection writer holds no provider privilege; each provider publication is read
+    // with the credential that provider granted for indexing, and no statement of this run is
+    // another component's write.
     const sql = createDataApiTransactor({
       client: dataApi,
       resourceArn: configuration.database.clusterArn,
       secretArn: configuration.database.secretArn,
       database: configuration.database.database,
     });
+    const catalogPublicationSql = createDataApiTransactor({
+      client: dataApi,
+      resourceArn: configuration.publications.catalog.clusterArn,
+      secretArn: configuration.publications.catalog.secretArn,
+      database: configuration.publications.catalog.database,
+    });
+    const userCardsPublicationSql = createDataApiTransactor({
+      client: dataApi,
+      resourceArn: configuration.publications.userCards.clusterArn,
+      secretArn: configuration.publications.userCards.secretArn,
+      database: configuration.publications.userCards.database,
+    });
     const indexer = createSearchIndexer({
       sql,
-      catalog: createCatalogPublication({ sql }),
-      userCards: createUserCardsPublication({ sql }),
+      catalog: createCatalogPublication({ sql: catalogPublicationSql }),
+      userCards: createUserCardsPublication({ sql: userCardsPublicationSql }),
     });
     const request: SearchIndexingRequest = {
       accounts: configuration.accounts,

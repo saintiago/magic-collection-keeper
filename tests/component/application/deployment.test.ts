@@ -40,6 +40,8 @@ const interactiveEnvironment: Record<string, string> = {
   KEEPER_DATABASE_NAME: 'keeper',
   KEEPER_DATABASE_READER_SECRET_ARN:
     'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-reader',
+  KEEPER_DATABASE_SEARCH_QUERY_SECRET_ARN:
+    'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-search-query',
   KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN:
     'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-usercards-writer',
   KEEPER_SNAPSHOT_BUCKET: 'keeper-test-snapshots',
@@ -61,7 +63,11 @@ const catalogJobEnvironment: Record<string, string> = {
   KEEPER_SNAPSHOT_PREFIX: 'snapshots/',
 };
 
-/** The variables the background indexing job receives; it holds only the Search indexing secret. */
+/**
+ * The variables the background indexing job receives: Search's indexing secret and one
+ * publication reader per provider, and no provider writer or end-user reader credential
+ * (docs/data-architecture.md#access-and-deployment).
+ */
 const indexingJobEnvironment: Record<string, string> = {
   KEEPER_ENVIRONMENT: 'test',
   AWS_REGION: 'us-east-1',
@@ -69,6 +75,10 @@ const indexingJobEnvironment: Record<string, string> = {
   KEEPER_DATABASE_NAME: 'keeper',
   KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN:
     'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-search-indexing',
+  KEEPER_DATABASE_CATALOG_PUBLICATION_SECRET_ARN:
+    'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-catalog-publication',
+  KEEPER_DATABASE_USERCARDS_PUBLICATION_SECRET_ARN:
+    'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-usercards-publication',
 };
 
 /** A Data API port that records the calls the transactor issues. */
@@ -168,6 +178,20 @@ describe('deployment configuration', () => {
         secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-search-indexing',
         database: 'keeper',
       },
+      publications: {
+        catalog: {
+          clusterArn: 'arn:aws:rds:us-east-1:123456789012:cluster:keeper-test',
+          secretArn:
+            'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-catalog-publication',
+          database: 'keeper',
+        },
+        userCards: {
+          clusterArn: 'arn:aws:rds:us-east-1:123456789012:cluster:keeper-test',
+          secretArn:
+            'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-usercards-publication',
+          database: 'keeper',
+        },
+      },
       accounts: [],
       rebuild: false,
     });
@@ -186,11 +210,16 @@ describe('deployment configuration', () => {
     expect(configuration.rebuild).toBe(true);
   });
 
-  it('requires the Search indexing credential and rejects an unreadable rebuild mode', () => {
+  it('requires Search’s indexing and publication credentials and rejects an unreadable rebuild mode', () => {
     const missing = { ...indexingJobEnvironment };
     delete missing['KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN'];
     expect(() => readIndexingJobEnvironment(missing)).toThrow(
       /KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN/,
+    );
+    const withoutPublication = { ...indexingJobEnvironment };
+    delete withoutPublication['KEEPER_DATABASE_CATALOG_PUBLICATION_SECRET_ARN'];
+    expect(() => readIndexingJobEnvironment(withoutPublication)).toThrow(
+      /KEEPER_DATABASE_CATALOG_PUBLICATION_SECRET_ARN/,
     );
     expect(() =>
       readIndexingJobEnvironment({ ...indexingJobEnvironment, KEEPER_INDEXING_REBUILD: 'yes' }),

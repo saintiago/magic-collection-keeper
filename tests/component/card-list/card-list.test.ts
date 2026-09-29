@@ -24,6 +24,7 @@ import {
   type CardListSource,
   type CardListSourceRequest,
 } from '../../../src/card-list/index.js';
+import type { PhysicalCopy } from '../../../src/usercards/index.js';
 
 /** One source request a controlled list issued. */
 interface SourceRequest {
@@ -1096,6 +1097,81 @@ describe('outcomes the contract keeps distinct', () => {
 });
 
 describe('review regressions', () => {
+  it('publishes the presentation facts and detail record of a typed detail entry', async () => {
+    const controlled = controlledSource();
+    const list = createCardList(options(controlled.source));
+    const copy: PhysicalCopy = {
+      copyId: 'copy-1',
+      printingId: 'printing-1',
+      finish: 'foil',
+      condition: 'NM',
+      revision: 4,
+    };
+    controlled.settle(1, {
+      entries: [
+        {
+          key: 'copy:copy-1',
+          target: { kind: 'copy', copyId: 'copy-1' },
+          basic: {
+            card: {
+              cardId: 'card-1',
+              name: 'Lightning Bolt',
+              matchedName: null,
+              typeLine: 'Instant',
+              rulesText: 'Lightning Bolt deals 3 damage to any target.',
+            },
+            printing: {
+              printingId: 'printing-1',
+              edition: 'M11',
+              collectorNumber: '149',
+              language: 'en',
+              finishes: ['nonfoil', 'foil'],
+            },
+          },
+          quantity: null,
+          detail: { absent: null, copy },
+        },
+      ],
+    });
+    await settle();
+
+    // The component publishes the detail presentation it was handed: a detail view renders the
+    // level from the entry instead of reading the provider itself
+    // (docs/ui/pages.md#page-map).
+    expect(list.snapshot().entries[0]?.entry).toMatchObject({
+      basic: {
+        card: { typeLine: 'Instant' },
+        printing: { finishes: ['nonfoil', 'foil'] },
+      },
+      detail: { absent: null, copy },
+    });
+    list.dispose();
+  });
+
+  it('reports an unreadable detail entry instead of presenting it without its level', async () => {
+    const controlled = controlledSource();
+    const list = createCardList(options(controlled.source));
+    controlled.settle(1, {
+      entries: [
+        {
+          key: 'card:card-1',
+          target: { kind: 'card', cardId: 'card-1' },
+          basic: {
+            card: { cardId: 'card-1', name: 'Lightning Bolt', matchedName: null },
+            printing: null,
+          },
+          quantity: null,
+          detail: { absent: 'somewhere-else', copy: null } as unknown as CardListEntry['detail'],
+        },
+      ],
+    });
+    await settle();
+
+    expect(list.snapshot().entries).toEqual([]);
+    expect(list.snapshot().error).toContain('unreadable');
+    list.dispose();
+  });
+
   it('requeues a retained ready refresh when another key in its batch is invalidated', async () => {
     const controlled = controlledSource();
     const reads: {

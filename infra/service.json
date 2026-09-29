@@ -39,6 +39,12 @@
       "AllowedPattern": "^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/.+@sha256:[0-9a-f]{64}$",
       "Description": "Immutable image URI of the background indexing job in the foundation's indexing repository, pinned by digest."
     },
+    "IndexingScheduleExpression": {
+      "Type": "String",
+      "Default": "rate(15 minutes)",
+      "AllowedPattern": "^(rate|cron)\\([^)]+\\)$",
+      "Description": "EventBridge Scheduler expression that starts the next finite background indexing run, so committed changes keep reaching Search without an operator starting tasks. rate(15 minutes) bounds ordinary indexing lag to roughly one cadence; a run that does not catch up is resumed by the next start."
+    },
     "TitleModelId": {
       "Type": "String",
       "Default": "amazon.nova-lite-v1:0",
@@ -289,6 +295,11 @@
                 "Fn::Sub": "keeper-${Environment}-database-reader-secret-arn"
               }
             },
+            "KEEPER_DATABASE_SEARCH_QUERY_SECRET_ARN": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "keeper-${Environment}-search-query-secret-arn"
+              }
+            },
             "KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN": {
               "Fn::ImportValue": {
                 "Fn::Sub": "keeper-${Environment}-usercards-writer-secret-arn"
@@ -315,7 +326,7 @@
     "ApiFunctionRole": {
       "Type": "AWS::IAM::Role",
       "Properties": {
-        "Description": "Interactive API runtime: transaction-capable RDS Data API access, the published-view reader secret, the UserCards writer secret and its own log group",
+        "Description": "Interactive API runtime: transaction-capable RDS Data API access, the published-view reader secret, the Search query secret, the UserCards writer secret and its own log group",
         "AssumeRolePolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [
@@ -360,6 +371,11 @@
                     {
                       "Fn::ImportValue": {
                         "Fn::Sub": "keeper-${Environment}-database-reader-secret-arn"
+                      }
+                    },
+                    {
+                      "Fn::ImportValue": {
+                        "Fn::Sub": "keeper-${Environment}-search-query-secret-arn"
                       }
                     },
                     {
@@ -813,6 +829,22 @@
                     "Fn::Sub": "keeper-${Environment}-search-indexing-secret-arn"
                   }
                 }
+              },
+              {
+                "Name": "KEEPER_DATABASE_CATALOG_PUBLICATION_SECRET_ARN",
+                "Value": {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "keeper-${Environment}-catalog-publication-secret-arn"
+                  }
+                }
+              },
+              {
+                "Name": "KEEPER_DATABASE_USERCARDS_PUBLICATION_SECRET_ARN",
+                "Value": {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "keeper-${Environment}-usercards-publication-secret-arn"
+                  }
+                }
               }
             ]
           }
@@ -826,7 +858,7 @@
     "IndexingTaskRole": {
       "Type": "AWS::IAM::Role",
       "Properties": {
-        "Description": "Background indexing job: maintain Search's projection through the RDS Data API with the Search indexing secret and log to its own group",
+        "Description": "Background indexing job: maintain Search's projection through the RDS Data API with the Search indexing secret, read the Catalog and UserCards publications with their own publication secrets, and log to its own group",
         "AssumeRolePolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [
@@ -858,14 +890,26 @@
                   }
                 },
                 {
-                  "Sid": "SearchIndexingSecret",
+                  "Sid": "DatabaseSecrets",
                   "Effect": "Allow",
                   "Action": "secretsmanager:GetSecretValue",
-                  "Resource": {
-                    "Fn::ImportValue": {
-                      "Fn::Sub": "keeper-${Environment}-search-indexing-secret-arn"
+                  "Resource": [
+                    {
+                      "Fn::ImportValue": {
+                        "Fn::Sub": "keeper-${Environment}-search-indexing-secret-arn"
+                      }
+                    },
+                    {
+                      "Fn::ImportValue": {
+                        "Fn::Sub": "keeper-${Environment}-catalog-publication-secret-arn"
+                      }
+                    },
+                    {
+                      "Fn::ImportValue": {
+                        "Fn::Sub": "keeper-${Environment}-usercards-publication-secret-arn"
+                      }
                     }
-                  }
+                  ]
                 },
                 {
                   "Sid": "Logs",
@@ -937,6 +981,101 @@
           { "Key": "Environment", "Value": { "Ref": "Environment" } },
           { "Key": "Application", "Value": "magic-collection-keeper" }
         ]
+      }
+    },
+    "IndexingScheduleRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "Description": "EventBridge Scheduler start of the finite background indexing task: it may start exactly that task definition and pass only its own two roles",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Service": "scheduler.amazonaws.com" },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "StartIndexingTask",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "StartTheIndexingTask",
+                  "Effect": "Allow",
+                  "Action": "ecs:RunTask",
+                  "Resource": { "Ref": "IndexingTaskDefinition" },
+                  "Condition": {
+                    "ArnLike": {
+                      "ecs:cluster": { "Fn::GetAtt": ["EcsCluster", "Arn"] }
+                    }
+                  }
+                },
+                {
+                  "Sid": "PassTheTaskRoles",
+                  "Effect": "Allow",
+                  "Action": "iam:PassRole",
+                  "Resource": [
+                    { "Fn::GetAtt": ["IndexingTaskRole", "Arn"] },
+                    { "Fn::GetAtt": ["IndexingTaskExecutionRole", "Arn"] }
+                  ],
+                  "Condition": {
+                    "StringEquals": { "iam:PassedToService": "ecs-tasks.amazonaws.com" }
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          { "Key": "Environment", "Value": { "Ref": "Environment" } },
+          { "Key": "Application", "Value": "magic-collection-keeper" }
+        ]
+      }
+    },
+    "IndexingSchedule": {
+      "Type": "AWS::Scheduler::Schedule",
+      "Properties": {
+        "Name": { "Fn::Sub": "keeper-${Environment}-indexing" },
+        "Description": "Starts the next finite background indexing run, so committed changes reach Search without an operator starting a task. Each start is one bounded, resumable pass; failures and incomplete passes are retried by the next start.",
+        "ScheduleExpression": { "Ref": "IndexingScheduleExpression" },
+        "ScheduleExpressionTimezone": "UTC",
+        "FlexibleTimeWindow": { "Mode": "OFF" },
+        "State": "ENABLED",
+        "Target": {
+          "Arn": { "Fn::GetAtt": ["EcsCluster", "Arn"] },
+          "RoleArn": { "Fn::GetAtt": ["IndexingScheduleRole", "Arn"] },
+          "EcsParameters": {
+            "TaskDefinitionArn": { "Ref": "IndexingTaskDefinition" },
+            "LaunchType": "FARGATE",
+            "TaskCount": 1,
+            "NetworkConfiguration": {
+              "AwsvpcConfiguration": {
+                "Subnets": {
+                  "Fn::Split": [
+                    ",",
+                    {
+                      "Fn::ImportValue": {
+                        "Fn::Sub": "keeper-${Environment}-public-subnet-ids"
+                      }
+                    }
+                  ]
+                },
+                "SecurityGroups": [
+                  {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "keeper-${Environment}-task-security-group-id"
+                    }
+                  }
+                ],
+                "AssignPublicIp": "ENABLED"
+              }
+            }
+          }
+        }
       }
     },
     "OriginAccessControl": {

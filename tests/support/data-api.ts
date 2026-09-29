@@ -26,18 +26,41 @@ export interface DataApiTestClient extends DataApiClient {
   };
 }
 
-export function createDataApiTestClient(database: TestDatabase): DataApiTestClient {
+/**
+ * Roles one credential runs as. A case that verifies the deployment's grants maps each secret ARN
+ * to the PostgreSQL role its secret names, so the statements a composition issues execute with
+ * exactly the privileges that credential has in a deployed cluster. Without a map every statement
+ * runs as the connection's own user.
+ */
+export interface DataApiTestClientOptions {
+  readonly roles?: Readonly<Record<string, string>>;
+}
+
+export function createDataApiTestClient(
+  database: TestDatabase,
+  options: DataApiTestClientOptions = {},
+): DataApiTestClient {
   const executed: { readonly sql: string; readonly secretArn: string | null }[] = [];
   const counts = { begun: 0, committed: 0, rolledBack: 0 };
   let sequence = 0;
+  const roles = options.roles ?? {};
+  const roleOf = (input: Readonly<Record<string, unknown>>): string | null => {
+    const secretArn = input['secretArn'];
+    return typeof secretArn === 'string' ? (roles[secretArn] ?? null) : null;
+  };
   return {
     async send(command: DataApiCommand): Promise<Readonly<Record<string, unknown>>> {
       switch (command.name) {
-        case 'BeginTransaction':
+        case 'BeginTransaction': {
           await database.exec('begin');
+          const role = roleOf(command.input);
+          if (role !== null) {
+            await database.exec(`set local role ${role}`);
+          }
           counts.begun += 1;
           sequence += 1;
           return { transactionId: `test-transaction-${sequence}` };
+        }
         case 'CommitTransaction':
           await database.exec('commit');
           counts.committed += 1;
@@ -55,8 +78,20 @@ export function createDataApiTestClient(database: TestDatabase): DataApiTestClie
             secretArn: typeof secretArn === 'string' ? secretArn : null,
           });
           const bound = bindNamedParameters(statement, readParameters(input['parameters']));
-          const rows = await database.query(bound.text, bound.values);
-          return { formattedRecords: JSON.stringify(rows) };
+          const role = input['transactionId'] === undefined ? roleOf(input) : null;
+          if (role === null) {
+            const rows = await database.query(bound.text, bound.values);
+            return { formattedRecords: JSON.stringify(rows) };
+          }
+          // A statement outside a transaction runs in its own implicit transaction, so the
+          // credential's role is set for that statement only.
+          await database.exec(`set local role ${role}`);
+          try {
+            const rows = await database.query(bound.text, bound.values);
+            return { formattedRecords: JSON.stringify(rows) };
+          } finally {
+            await database.exec('reset role');
+          }
         }
       }
     },

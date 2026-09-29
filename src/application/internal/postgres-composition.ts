@@ -30,10 +30,16 @@ import { resolveApplicationConfiguration } from './configuration.js';
 
 export interface ApplicationResources {
   /**
-   * Reader role: the published Catalog views and Search's published projection, with the
-   * transaction-local account scope Search's private queries bind.
+   * Reader role: the published Catalog and UserCards views the interactive operations read.
    */
   readonly readSql: UserCardsSqlTransactor;
+  /**
+   * Search's own query role: its published projection only, with the transaction-local account
+   * scope Search's private queries bind. It reaches no provider relation, so a Search query can
+   * never fall back to Catalog or UserCards storage
+   * (docs/data-architecture.md#access-and-deployment).
+   */
+  readonly searchSql: UserCardsSqlTransactor;
   /** Private writer role, supplied only to the owner of private mutations. */
   readonly writeSql: UserCardsSqlTransactor;
   /**
@@ -73,15 +79,20 @@ export function createPostgresApplication(
   const resources = dependencies?.resources;
   const sql = resources?.writeSql;
   const readSql = resources?.readSql;
+  const searchSql = resources?.searchSql;
   const synchronization = resources?.catalogSynchronization;
   const searchIndexing = resources?.searchIndexing;
   if (
     typeof readSql?.query !== 'function' ||
     typeof readSql?.transaction !== 'function' ||
+    typeof searchSql?.query !== 'function' ||
+    typeof searchSql?.transaction !== 'function' ||
     typeof sql?.query !== 'function' ||
     typeof sql?.transaction !== 'function'
   ) {
-    throw new TypeError('The PostgreSQL composition requires transaction executors.');
+    throw new TypeError(
+      'The PostgreSQL composition requires the reader, Search query and private writer executors.',
+    );
   }
   if (
     synchronization !== null &&
@@ -118,12 +129,12 @@ export function createPostgresApplication(
           })
         : null,
       search: createSearch({
-        sql: readSql,
+        sql: searchSql,
         withAccountScope: <T>(
           accountId: string,
           work: (scoped: SearchSqlExecutor) => Promise<T>,
         ): Promise<T> =>
-          readSql.transaction(async (statements) => {
+          searchSql.transaction(async (statements) => {
             await statements.query(SEARCH_ACCOUNT_SCOPE_SQL, { account_id: accountId });
             return work(statements);
           }),

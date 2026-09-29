@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Magic Collection Keeper rebuild foundation (docs/operations.md#infrastructure, docs/tech-stack.md#aws-stack). Defines the isolated network, the private Aurora PostgreSQL Serverless v2 cluster reached through the RDS Data API, the private browser, source-snapshot and deployment-artifact buckets, the container-image repositories, the published-view reader secret, one writer secret per mutating component, the Search indexing secret and the shared alarm topic. It creates no compute and no periodic work, and it retains stateful resources on deletion. Deploy the service stack afterwards with the same Environment value.",
+  "Description": "Magic Collection Keeper rebuild foundation (docs/operations.md#infrastructure, docs/tech-stack.md#aws-stack). Defines the isolated network, the private Aurora PostgreSQL Serverless v2 cluster reached through the RDS Data API, the private browser, source-snapshot and deployment-artifact buckets, the container-image repositories, the published-view reader secret, one writer secret per mutating component, Search's query and indexing secrets, one publication-reader secret per provider and the shared alarm topic. It creates no compute and no periodic work, and it retains stateful resources on deletion. Deploy the service stack afterwards with the same Environment value.",
   "Parameters": {
     "Environment": {
       "Type": "String",
@@ -69,7 +69,25 @@
       "Type": "String",
       "Default": "keeper_search_indexing",
       "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
-      "Description": "PostgreSQL role that maintains Search's private projection and reads the Catalog and UserCards publications. The schema bootstrap creates it with the generated password of the Search indexing secret, grants it Search's indexing privileges plus both provider publication grants, and grants it no provider writer or private-record access; only the background indexing job receives that credential."
+      "Description": "PostgreSQL role that maintains Search's private projection. The schema bootstrap creates it with the generated password of the Search indexing secret and grants it Search's indexing privileges only, so it reaches no provider relation; only the background indexing job receives this credential."
+    },
+    "SearchQueryRoleName": {
+      "Type": "String",
+      "Default": "keeper_search_query",
+      "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
+      "Description": "PostgreSQL role that reads Search's published projection only. The schema bootstrap creates it with the generated password of the Search query secret and applies Search's reader grants; the interactive API answers Search queries with it, so a query cannot reach Catalog or UserCards storage."
+    },
+    "CatalogPublicationRoleName": {
+      "Type": "String",
+      "Default": "keeper_catalog_publication",
+      "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
+      "Description": "PostgreSQL role that reads the Catalog publication contract: the published records and the durable change stream, and no Catalog mutation. The schema bootstrap creates it with the generated password of the Catalog publication secret; only the background indexing job receives that credential."
+    },
+    "UserCardsPublicationRoleName": {
+      "Type": "String",
+      "Default": "keeper_usercards_publication",
+      "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
+      "Description": "PostgreSQL role that reads the UserCards publication contract: the account register, the published records and the durable change stream, and no private mutation. The schema bootstrap creates it with the generated password of the UserCards publication secret; only the background indexing job receives that credential."
     },
     "SnapshotPrefix": {
       "Type": "String",
@@ -87,7 +105,7 @@
               { "Fn::Equals": [{ "Ref": "ReaderRoleName" }, { "Ref": "UserCardsWriterRoleName" }] }
             ]
           },
-          "AssertDescription": "The published-view reader role and the UserCards writer role must be different PostgreSQL roles."
+          "AssertDescription": "The published-view reader role and the UserCards writer role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
         },
         {
           "Assert": {
@@ -95,7 +113,46 @@
               { "Fn::Equals": [{ "Ref": "ReaderRoleName" }, { "Ref": "CatalogWriterRoleName" }] }
             ]
           },
-          "AssertDescription": "The published-view reader role and the Catalog writer role must be different PostgreSQL roles."
+          "AssertDescription": "The published-view reader role and the Catalog writer role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              { "Fn::Equals": [{ "Ref": "ReaderRoleName" }, { "Ref": "SearchIndexingRoleName" }] }
+            ]
+          },
+          "AssertDescription": "The published-view reader role and the Search indexing role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              { "Fn::Equals": [{ "Ref": "ReaderRoleName" }, { "Ref": "SearchQueryRoleName" }] }
+            ]
+          },
+          "AssertDescription": "The published-view reader role and the Search query role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [{ "Ref": "ReaderRoleName" }, { "Ref": "CatalogPublicationRoleName" }]
+              }
+            ]
+          },
+          "AssertDescription": "The published-view reader role and the Catalog publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "ReaderRoleName" },
+                  { "Ref": "UserCardsPublicationRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The published-view reader role and the UserCards publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
         },
         {
           "Assert": {
@@ -108,15 +165,7 @@
               }
             ]
           },
-          "AssertDescription": "The UserCards writer role and the Catalog writer role must be different PostgreSQL roles, so one component's credential cannot mutate the other's private schema."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              { "Fn::Equals": [{ "Ref": "ReaderRoleName" }, { "Ref": "SearchIndexingRoleName" }] }
-            ]
-          },
-          "AssertDescription": "The published-view reader role and the Search indexing role must be different PostgreSQL roles."
+          "AssertDescription": "The UserCards writer role and the Catalog writer role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
         },
         {
           "Assert": {
@@ -129,7 +178,46 @@
               }
             ]
           },
-          "AssertDescription": "The UserCards writer role and the Search indexing role must be different PostgreSQL roles."
+          "AssertDescription": "The UserCards writer role and the Search indexing role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "UserCardsWriterRoleName" },
+                  { "Ref": "SearchQueryRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The UserCards writer role and the Search query role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "UserCardsWriterRoleName" },
+                  { "Ref": "CatalogPublicationRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The UserCards writer role and the Catalog publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "UserCardsWriterRoleName" },
+                  { "Ref": "UserCardsPublicationRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The UserCards writer role and the UserCards publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
         },
         {
           "Assert": {
@@ -142,7 +230,121 @@
               }
             ]
           },
-          "AssertDescription": "The Catalog writer role and the Search indexing role must be different PostgreSQL roles, so the indexing credential cannot mutate a provider's private schema."
+          "AssertDescription": "The Catalog writer role and the Search indexing role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [{ "Ref": "CatalogWriterRoleName" }, { "Ref": "SearchQueryRoleName" }]
+              }
+            ]
+          },
+          "AssertDescription": "The Catalog writer role and the Search query role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "CatalogWriterRoleName" },
+                  { "Ref": "CatalogPublicationRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The Catalog writer role and the Catalog publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "CatalogWriterRoleName" },
+                  { "Ref": "UserCardsPublicationRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The Catalog writer role and the UserCards publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "SearchIndexingRoleName" },
+                  { "Ref": "SearchQueryRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The Search indexing role and the Search query role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "SearchIndexingRoleName" },
+                  { "Ref": "CatalogPublicationRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The Search indexing role and the Catalog publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "SearchIndexingRoleName" },
+                  { "Ref": "UserCardsPublicationRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The Search indexing role and the UserCards publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "SearchQueryRoleName" },
+                  { "Ref": "CatalogPublicationRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The Search query role and the Catalog publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "SearchQueryRoleName" },
+                  { "Ref": "UserCardsPublicationRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The Search query role and the UserCards publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "CatalogPublicationRoleName" },
+                  { "Ref": "UserCardsPublicationRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The Catalog publication role and the UserCards publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
         }
       ]
     }
@@ -436,10 +638,62 @@
       "UpdateReplacePolicy": "Retain",
       "Properties": {
         "Description": {
-          "Fn::Sub": "Search indexing credential of the keeper-${Environment} Aurora cluster; maintains Search's projection and reads the Catalog and UserCards publications, and only the background indexing job consumes it through the RDS Data API"
+          "Fn::Sub": "Search indexing credential of the keeper-${Environment} Aurora cluster; maintains Search's private projection and reaches no provider relation, and only the background indexing job consumes it through the RDS Data API"
         },
         "GenerateSecretString": {
           "SecretStringTemplate": { "Fn::Sub": "{\"username\":\"${SearchIndexingRoleName}\"}" },
+          "GenerateStringKey": "password",
+          "PasswordLength": 32,
+          "ExcludeCharacters": "\"@/\\"
+        }
+      }
+    },
+    "SearchQuerySecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Description": {
+          "Fn::Sub": "Search query credential of the keeper-${Environment} Aurora cluster; reads Search's published projection only, and only the interactive API consumes it through the RDS Data API"
+        },
+        "GenerateSecretString": {
+          "SecretStringTemplate": { "Fn::Sub": "{\"username\":\"${SearchQueryRoleName}\"}" },
+          "GenerateStringKey": "password",
+          "PasswordLength": 32,
+          "ExcludeCharacters": "\"@/\\"
+        }
+      }
+    },
+    "CatalogPublicationSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Description": {
+          "Fn::Sub": "Catalog publication credential of the keeper-${Environment} Aurora cluster; reads the Catalog published records and change stream without mutation, and only the background indexing job consumes it through the RDS Data API"
+        },
+        "GenerateSecretString": {
+          "SecretStringTemplate": {
+            "Fn::Sub": "{\"username\":\"${CatalogPublicationRoleName}\"}"
+          },
+          "GenerateStringKey": "password",
+          "PasswordLength": 32,
+          "ExcludeCharacters": "\"@/\\"
+        }
+      }
+    },
+    "UserCardsPublicationSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Description": {
+          "Fn::Sub": "UserCards publication credential of the keeper-${Environment} Aurora cluster; reads the account register, published records and change stream without private mutation, and only the background indexing job consumes it through the RDS Data API"
+        },
+        "GenerateSecretString": {
+          "SecretStringTemplate": {
+            "Fn::Sub": "{\"username\":\"${UserCardsPublicationRoleName}\"}"
+          },
           "GenerateStringKey": "password",
           "PasswordLength": 32,
           "ExcludeCharacters": "\"@/\\"
@@ -722,6 +976,25 @@
       "Value": { "Ref": "SearchIndexingSecret" },
       "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-search-indexing-secret-arn" } }
     },
+    "DatabaseSearchQuerySecretArn": {
+      "Description": "Secrets Manager reference of the Search query credential.",
+      "Value": { "Ref": "SearchQuerySecret" },
+      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-search-query-secret-arn" } }
+    },
+    "DatabaseCatalogPublicationSecretArn": {
+      "Description": "Secrets Manager reference of the Catalog publication credential.",
+      "Value": { "Ref": "CatalogPublicationSecret" },
+      "Export": {
+        "Name": { "Fn::Sub": "keeper-${Environment}-catalog-publication-secret-arn" }
+      }
+    },
+    "DatabaseUserCardsPublicationSecretArn": {
+      "Description": "Secrets Manager reference of the UserCards publication credential.",
+      "Value": { "Ref": "UserCardsPublicationSecret" },
+      "Export": {
+        "Name": { "Fn::Sub": "keeper-${Environment}-usercards-publication-secret-arn" }
+      }
+    },
     "DatabaseMasterSecretArn": {
       "Description": "RDS-managed master credential. Only the schema bootstrap step of a deployment reads it; no runtime component uses it.",
       "Value": { "Fn::GetAtt": ["DatabaseCluster", "MasterUserSecret.SecretArn"] }
@@ -755,6 +1028,10 @@
       "Description": "Push and image-URI prefix of the catalog job repository.",
       "Value": { "Fn::GetAtt": ["CatalogRepository", "RepositoryUri"] }
     },
+    "CatalogRepositoryName": {
+      "Description": "Name the catalog job repository has in ECR, so a push or describe-images command names the repository this stack created instead of a guessed one.",
+      "Value": { "Ref": "CatalogRepository" }
+    },
     "IndexingRepositoryArn": {
       "Description": "Container repository of the background indexing job.",
       "Value": { "Fn::GetAtt": ["IndexingRepository", "Arn"] },
@@ -764,9 +1041,17 @@
       "Description": "Push and image-URI prefix of the background indexing job repository.",
       "Value": { "Fn::GetAtt": ["IndexingRepository", "RepositoryUri"] }
     },
+    "IndexingRepositoryName": {
+      "Description": "Name the background indexing job repository has in ECR, so a push or describe-images command names the repository this stack created instead of a guessed one.",
+      "Value": { "Ref": "IndexingRepository" }
+    },
     "RecognitionRepositoryUri": {
       "Description": "Push and image-URI prefix of the recognition repository.",
       "Value": { "Fn::GetAtt": ["RecognitionRepository", "RepositoryUri"] }
+    },
+    "RecognitionRepositoryName": {
+      "Description": "Name the recognition repository has in ECR, so a push or describe-images command names the repository this stack created instead of a guessed one.",
+      "Value": { "Ref": "RecognitionRepository" }
     },
     "AlarmTopicArn": {
       "Description": "Topic the alarms of this environment publish to. Subscribe an operator endpoint to it.",

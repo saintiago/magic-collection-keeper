@@ -80,6 +80,12 @@ export {
   resolveCards,
   resolvePrintings,
 } from './internal/bindings/catalog.js';
+export {
+  detailTargetSource,
+  type CardListDetailBindingOptions,
+  type CardListDetailCopyReader,
+  type CardListDetailTarget,
+} from './internal/bindings/detail.js';
 export { usercardsChanges, type CardListUserCardsChanges } from './internal/bindings/usercards.js';
 export {
   cardListFragmentKinds,
@@ -87,8 +93,10 @@ export {
   type CardListChange,
   type CardListChangeSource,
   type CardListEntry,
+  type CardListEntryAbsence,
   type CardListEntryBasic,
   type CardListEntryCard,
+  type CardListEntryDetail,
   type CardListEntryImage,
   type CardListEntryOwnership,
   type CardListEntryPrinting,

@@ -34,7 +34,9 @@ flowchart LR
 A successful domain write commits to its owner's storage. Search visibility follows when indexing
 applies the corresponding publication. Process incremental changes continuously through background
 work; an ordinary edit does not require a full reindex. Indexing is part of Search and is independent
-of browser requests and open pages.
+of browser requests and open pages. Activation starts finite background tasks — the deployment may
+do that on a schedule — and each pass stays bounded and resumable, so an unfinished or failed run is
+continued by a later start instead of being skipped.
 
 Use a transactional outbox in each authoritative relational store: commit the domain change and its
 durable publication together. The provider exposes committed publications through its own interface.

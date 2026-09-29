@@ -200,7 +200,9 @@ async function verifyManifestArtifacts(
     ...manifest.artifacts.browser.files,
     ...(manifest.artifacts.browser.settings === null ? [] : [manifest.artifacts.browser.settings]),
     manifest.artifacts.catalog,
+    manifest.artifacts.catalog.dockerfile,
     manifest.artifacts.indexing,
+    manifest.artifacts.indexing.dockerfile,
   ];
   for (const file of recorded) {
     await verifyRecordedFile(outDir, file);
@@ -474,6 +476,10 @@ function readArtifactManifest(value: unknown): ArtifactManifest {
   for (const file of recorded) {
     readArtifactFile(file);
   }
+  // Every background job's container definition is a release byte of its own: verified like the
+  // module it packages (docs/release-checklist.md#source-completion).
+  readArtifactFile(readRecord(artifacts?.['catalog'])?.['dockerfile']);
+  readArtifactFile(readRecord(artifacts?.['indexing'])?.['dockerfile']);
   return value as ArtifactManifest;
 }
 

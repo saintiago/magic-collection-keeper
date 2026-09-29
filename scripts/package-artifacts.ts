@@ -64,8 +64,13 @@ export interface ArtifactManifest {
       readonly files: readonly ArtifactFile[];
       readonly settings: ArtifactFile | null;
     };
-    readonly catalog: ArtifactFile & { readonly dockerfile: string };
-    readonly indexing: ArtifactFile & { readonly dockerfile: string };
+    /**
+     * The job module and the container definition that packages it. Both are release bytes: the
+     * deployment builds the image from this Dockerfile, so the evidence has to verify it too
+     * (docs/release-checklist.md#source-completion).
+     */
+    readonly catalog: ArtifactFile & { readonly dockerfile: ArtifactFile };
+    readonly indexing: ArtifactFile & { readonly dockerfile: ArtifactFile };
   };
 }
 
@@ -147,11 +152,11 @@ export async function packageArtifacts(
       },
       catalog: {
         ...(await describeFile(outDir, artifactLayout.catalogEntry)),
-        dockerfile: artifactLayout.catalogDockerfile,
+        dockerfile: await describeFile(outDir, artifactLayout.catalogDockerfile),
       },
       indexing: {
         ...(await describeFile(outDir, artifactLayout.indexingEntry)),
-        dockerfile: artifactLayout.indexingDockerfile,
+        dockerfile: await describeFile(outDir, artifactLayout.indexingDockerfile),
       },
     },
   };

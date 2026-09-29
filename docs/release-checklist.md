@@ -115,7 +115,8 @@ The artifacts of a release are immutable, so a rollback restores identities inst
 - **Browser.** Re-upload the retained packaged `browser/` directory, or the bucket's previous object
   versions, and invalidate the distribution again ([Update](../infra/README.md#update)).
 - **Background jobs.** Catalog synchronization and background indexing take effect on their next
-  explicit runs, because each task definition pins one image digest
+  runs — the next explicit catalog run and the next scheduled or explicit indexing start — because
+  each task definition pins one image digest
   ([background jobs](../infra/README.md#background-jobs)).
 - **Failed create or update.** CloudFormation rolls back automatically;
   `aws cloudformation continue-update-rollback` continues an interrupted rollback. A failed create

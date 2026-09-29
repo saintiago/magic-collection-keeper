@@ -74,9 +74,9 @@ describe('packaging the deployable artifacts', () => {
     expect(manifest.version).toMatch(/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/);
     expect(manifest.artifacts.backend.file).toBe(artifactLayout.backendArchive);
     expect(manifest.artifacts.browser.directory).toBe(artifactLayout.browserDirectory);
-    expect(manifest.artifacts.catalog.dockerfile).toBe(artifactLayout.catalogDockerfile);
+    expect(manifest.artifacts.catalog.dockerfile.file).toBe(artifactLayout.catalogDockerfile);
     expect(manifest.artifacts.indexing.file).toBe(artifactLayout.indexingEntry);
-    expect(manifest.artifacts.indexing.dockerfile).toBe(artifactLayout.indexingDockerfile);
+    expect(manifest.artifacts.indexing.dockerfile.file).toBe(artifactLayout.indexingDockerfile);
     expect(manifest.artifacts.browser.settings?.file).toBe(artifactLayout.browserSettings);
 
     const recorded = [
@@ -86,7 +86,9 @@ describe('packaging the deployable artifacts', () => {
         ? []
         : [manifest.artifacts.browser.settings]),
       manifest.artifacts.catalog,
+      manifest.artifacts.catalog.dockerfile,
       manifest.artifacts.indexing,
+      manifest.artifacts.indexing.dockerfile,
     ];
     expect(recorded.length).toBeGreaterThanOrEqual(5);
     for (const artifact of recorded) {

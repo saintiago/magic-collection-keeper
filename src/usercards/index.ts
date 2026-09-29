@@ -114,6 +114,8 @@ export {
 export {
   USERCARDS_PUBLICATION_LIMITS,
   createUserCardsPublication,
+  type UserCardsAccountsPage,
+  type UserCardsAccountsRequest,
   type UserCardsAssociationRecord,
   type UserCardsChange,
   type UserCardsChangePosition,

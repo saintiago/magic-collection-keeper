@@ -589,12 +589,17 @@ describe('search indexing', () => {
   });
 
   it('holds a new account pending while its snapshot references an unpublished printing', async () => {
-    // The generation is published with the catalog only; the account joins it later.
+    // The generation is published with the catalog only: the account has published nothing yet,
+    // so the provider's register does not list it.
+    alice.register([]);
     await indexer.index();
     expect(await generationState()).toEqual([{ generation_id: '1', state: 'published' }]);
+    alice.register([accountId]);
     alice.replaceSnapshot({ position: '4', records: [binderTag, boltCopy, staCopy] });
 
-    const pending = await indexer.index({ accounts: [accountId] });
+    // A routine run covers the account the provider's register reports, without an operator
+    // naming it, and holds it pending while its publication cannot resolve.
+    const pending = await indexer.index();
 
     expect(pending).toMatchObject({
       published: true,

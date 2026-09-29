@@ -174,10 +174,35 @@ export interface UserCardsChangesPage {
   readonly position: UserCardsChangePosition;
 }
 
-/** The snapshot and change contract Search reads (docs/user-cards.md#query-surface). */
+/**
+ * One page of the account register: the accounts whose published private data a consumer has to
+ * cover. It carries identities only — never a record, position or quantity — and pages in a
+ * stable order so a bounded sweep can continue where it stopped.
+ */
+export interface UserCardsAccountsRequest {
+  /** Accounts one page carries, from 1 to {@link USERCARDS_PUBLICATION_LIMITS}.maxPageSize. */
+  readonly pageSize?: number;
+  /** Continuation of the previous page of the same register; omitted to start it. */
+  readonly continuation?: string;
+}
+
+export interface UserCardsAccountsPage {
+  /** Accounts that published private data, ordered by identity; may be empty. */
+  readonly accounts: readonly string[];
+  /** Continuation of the next page, or `null` when this page ends the register. */
+  readonly continuation: string | null;
+}
+
+/**
+ * The snapshot, change and register contract Search reads (docs/user-cards.md#query-surface). The
+ * register lets an indexing run cover the accounts that published data without an operator naming
+ * them and without reading the provider's private tables: it lists exactly the accounts whose
+ * publications the provider holds.
+ */
 export interface UserCardsPublication {
   readSnapshot(request: UserCardsSnapshotRequest): Promise<UserCardsSnapshotPage>;
   readChanges(request: UserCardsChangesRequest): Promise<UserCardsChangesPage>;
+  readAccounts(request?: UserCardsAccountsRequest): Promise<UserCardsAccountsPage>;
 }
 
 export interface UserCardsPublicationDependencies {
@@ -221,6 +246,18 @@ const changesRequestSchema = z
       .min(USERCARDS_PUBLICATION_LIMITS.minPageSize)
       .max(USERCARDS_PUBLICATION_LIMITS.maxPageSize)
       .optional(),
+  })
+  .strict();
+
+const accountsRequestSchema = z
+  .object({
+    pageSize: z
+      .number()
+      .int()
+      .min(USERCARDS_PUBLICATION_LIMITS.minPageSize)
+      .max(USERCARDS_PUBLICATION_LIMITS.maxPageSize)
+      .optional(),
+    continuation: z.string().min(1).max(identifierLength).optional(),
   })
   .strict();
 
@@ -463,6 +500,47 @@ export function createUserCardsPublication(
         accountId,
         changes: read.changes,
         position: read.changes.at(-1)?.position ?? parsed.data.position,
+      };
+    },
+
+    async readAccounts(request: UserCardsAccountsRequest = {}): Promise<UserCardsAccountsPage> {
+      const parsed = accountsRequestSchema.safeParse(request);
+      if (!parsed.success) {
+        throw new UserCardsError(
+          'invalid-request',
+          'An account register read takes a page size from ' +
+            `${USERCARDS_PUBLICATION_LIMITS.minPageSize} to ` +
+            `${USERCARDS_PUBLICATION_LIMITS.maxPageSize} and an optional continuation returned ` +
+            'by an earlier page.',
+        );
+      }
+      const pageSize = parsed.data.pageSize ?? USERCARDS_PUBLICATION_LIMITS.defaultPageSize;
+      const continuation = parsed.data.continuation ?? null;
+      // The register is provider state, not an account's published records: it reads the rows the
+      // trusted publication grant reaches and never binds an account.
+      const rows = await readRows(
+        sql,
+        `select account_id
+           from usercards_private.account_state
+          where account_id > coalesce(:after, '')
+          order by account_id
+          limit :page_limit`,
+        { after: continuation, page_limit: pageSize + 1 },
+        'The published accounts could not be read.',
+      );
+      const accounts: string[] = [];
+      for (const row of rows) {
+        const accountId = row?.account_id;
+        if (typeof accountId !== 'string' || accountId.length === 0) {
+          throw new UserCardsError('unavailable', 'The account register is not readable.');
+        }
+        accounts.push(accountId);
+      }
+      const hasMore = accounts.length > pageSize;
+      const page = hasMore ? accounts.slice(0, pageSize) : accounts;
+      return {
+        accounts: page,
+        continuation: hasMore ? (page.at(-1) ?? null) : null,
       };
     },
   };

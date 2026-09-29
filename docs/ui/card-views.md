@@ -17,6 +17,11 @@ Provide [Pages](pages.md) and [Editors](editors.md) with card/list/detail and pi
 open-target and action intents carrying the instance's explicit target context. Retained list state
 passes through untouched. Returning a selection does not mean selecting everything in a query.
 
+A detail view receives the [CardList](../card-list.md) description of the typed target it presents
+and creates that level's instance through the supplied factory, renders the identity and images the
+published entry carries and composes the nodes its consumer supplies for that entry. It reports the
+level's own load, so a page never reads card or copy content to present a detail level.
+
 ## Internal design
 
 - **Window renderer:** reconcile stable visible keys with a bounded set of mounted elements.

@@ -11,8 +11,14 @@
  * (docs/card-list.md#interface).
  */
 
-import type { CardListEntry, CardListToolSelection } from '../../../card-list/index.js';
-import type { CardRecord, PrintingRecord } from '../../../catalog/index.js';
+import type {
+  CardListEntry,
+  CardListEntryAbsence,
+  CardListSnapshot,
+  CardListToolSelection,
+  CardListFragmentReaders,
+  CardListSource,
+} from '../../../card-list/index.js';
 
 import type { UiActionIntent } from '../../shared/actions.js';
 
@@ -72,26 +78,50 @@ export interface CardViewPickerOptions<Context> extends Omit<
 }
 
 /**
- * The detail one page presents for a published card or printing. The page owns the route, the
- * level it resolves and the related lists and editors it composes; the view owns the presentation
- * of the identity it is handed.
+ * The detail one page presents for a typed target — a card, one of its printings or one physical
+ * copy. The page owns the route and the children it composes into the level; the view creates the
+ * level's list through the supplied CardList capability, renders the identity the list publishes
+ * and reports the level's own load to the page, so a page never acquires card or copy content
+ * itself (docs/ui/pages.md#page-map, docs/ui/card-views.md#interface).
  */
-export interface CardViewDetailOptions {
+export interface CardViewDetailOptions<Context = unknown> {
   readonly document: Document;
-  /** Published card the detail presents. */
-  readonly card: CardRecord;
-  /** Published printing the level presents, or null at the card level. */
-  readonly printing: PrintingRecord | null;
-  /** Nodes the page composes into the detail after its own identity information. */
-  readonly content?: readonly Node[];
-  /** Navigation the page presents after the composed content. */
-  readonly navigation?: readonly Node[];
+  /** Application-selected CardList implementation; the view creates the level's list with it. */
+  readonly create: UiCardListOptions<Context>['create'];
+  /** Description of the level's content: one source of the published typed target. */
+  readonly source: CardListSource<Context>;
+  /** Target the description names. */
+  readonly context: Context;
+  /** Verified account the level belongs to. */
+  readonly accountId: string;
+  /** Entries one level read asks for. */
+  readonly pageSize: number;
+  /** Identity the view renders from the published entry: the level the route names. */
+  readonly identity: 'card' | 'printing' | 'none';
+  /** Fragment readers of the level, such as the printing images the identity presents. */
+  readonly fragments?: CardListFragmentReaders;
+  /**
+   * Nodes the page composes for the published entry, after the identity information: the level's
+   * related list or the editor it presents. The page keeps the children it creates here.
+   */
+  readonly content?: (entry: CardListEntry) => readonly Node[];
+  /** Navigation the page presents after the composed content, from the entry it published. */
+  readonly navigation?: (entry: CardListEntry) => readonly Node[];
+  /** Aborted when the page closes; the level stops loading and drops late results. */
+  readonly signal?: AbortSignal;
 }
 
-/** Presentation of one card or printing detail. */
+/** Presentation of one detail level. */
 export interface CardViewDetail {
   /** The detail's nodes in presentation order. */
   readonly nodes: readonly Node[];
+  /**
+   * Settles when the level presented the target's content or its explicit absence, and rejects
+   * when the level's read failed: the page reports that failure and its retry.
+   */
+  readonly presented: Promise<void>;
+  /** Releases the level's list and the content the page composed into it. */
+  dispose(): void;
 }
 
 /**
@@ -106,8 +136,8 @@ export interface CardViews {
   list<Context>(options: UiCardListOptions<Context>): UiCardList<Context>;
   /** Presentation that opens each entry through the location the page supplies. */
   openEntries(options: CardViewOpenOptions): CardViewEntryPresentation;
-  /** Presentation of one published card or printing detail. */
-  detail(options: CardViewDetailOptions): CardViewDetail;
+  /** Presentation of one typed detail target over a supplied CardList description. */
+  detail<Context>(options: CardViewDetailOptions<Context>): CardViewDetail;
   /** Builds one mounted picker list over the description a page or editor supplies. */
   picker<Context>(options: CardViewPickerOptions<Context>): UiCardList<Context>;
 }
@@ -135,33 +165,104 @@ export function createCardViews(): CardViews {
         },
       };
     },
-    detail(options) {
-      const document = options.document;
-      const printing = options.printing;
-      const nodes: Node[] =
-        printing === null
-          ? [
-              heading(document, 'card-name', options.card.name),
-              line(document, 'card-type', options.card.typeLine ?? 'Type not published'),
-              line(document, 'card-text', options.card.rulesText ?? 'No rules text published.'),
-            ]
-          : [
-              heading(document, 'printing-name', options.card.name),
-              line(document, 'printing-line', printingLine(printing)),
-              line(
-                document,
-                'printing-finishes',
-                printing.finishes.length === 0
-                  ? 'No finish published'
-                  : `Finishes: ${printing.finishes.join(', ')}`,
-              ),
-            ];
-      const image = printing === null ? null : printingImage(document, printing);
-      if (image !== null) {
-        nodes.push(image);
+    detail<Context>(options: CardViewDetailOptions<Context>): CardViewDetail {
+      const document = readDocument(options?.document);
+      const identity: Node[] = [];
+      const image: Node[] = [];
+      const content: Node[] = [];
+      const navigation: Node[] = [];
+      // The level is one typed target: the view presents the identity and the content the page
+      // composes, so it uses the headless list the supplied factory constructs instead of the
+      // rendered list presentation of a page.
+      const list = options.create<Context>({
+        source: options.source,
+        context: options.context,
+        accountId: options.accountId,
+        pageSize: options.pageSize,
+        ...(options.fragments === undefined ? {} : { fragments: options.fragments }),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      const presented = Promise.withResolvers<void>();
+      // A page that never awaits the level must not surface a rejection it did not report.
+      presented.promise.catch(() => {});
+      let settled = false;
+      let composedKey: string | null = null;
+      let composed: readonly Node[] = [];
+      let composedGeneration = -1;
+      /**
+       * Renders the identity and the composition of the published entry. The entry of one level is
+       * one target, so a snapshot that repeats it renders nothing again; a snapshot that supplies
+       * it after a refresh composes the content again for the entry the level presents now.
+       */
+      const identityHost = document.createElement('div');
+      identityHost.id = 'card-details-identity';
+      const paint = (snapshot: CardListSnapshot<Context>): void => {
+        const entry = snapshot.entries[0]?.entry ?? null;
+        if (entry === null) {
+          if (snapshot.error !== null) {
+            report(snapshot.error);
+            return;
+          }
+          if (!snapshot.loading) {
+            // The source supplied no entry without failing: the level has no content to present.
+            report('The details could not be presented.');
+          }
+          return;
+        }
+        const generation = snapshot.generation;
+        if (entry.key !== composedKey || generation !== composedGeneration) {
+          composedKey = entry.key;
+          composedGeneration = generation;
+          identity.splice(0, identity.length, ...identityNodes(document, options.identity, entry));
+          image.splice(0, image.length, ...imageNodes(document, options.identity, snapshot));
+          composed = entry.detail?.absent == null ? (options.content?.(entry) ?? []) : [];
+          content.splice(0, content.length, ...composed);
+          const links = entry.detail?.absent == null ? (options.navigation?.(entry) ?? []) : [];
+          navigation.splice(0, navigation.length, ...links);
+        }
+        if (options.identity === 'printing') {
+          // The identity presents the printing's image: demand that fragment for the one entry.
+          list.demand({ entries: 1, information: ['images'] });
+        }
+        settle();
+      };
+      list.subscribe((snapshot) => {
+        paint(snapshot);
+        render();
+      });
+      paint(list.snapshot());
+
+      function report(problem: string): void {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        presented.reject(new Error(problem));
       }
-      nodes.push(...(options.content ?? []), ...(options.navigation ?? []));
-      return { nodes };
+
+      function settle(): void {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        presented.resolve();
+      }
+
+      const contentHost = document.createElement('div');
+      contentHost.id = 'card-details-level';
+      const render = (): void => {
+        identityHost.replaceChildren(...identity, ...image);
+        contentHost.replaceChildren(...content, ...navigation);
+      };
+      render();
+      const nodes: Node[] = [identityHost, contentHost];
+      return {
+        nodes,
+        presented: presented.promise,
+        dispose: () => {
+          list.dispose();
+        },
+      };
     },
     picker(options) {
       const { choice, onChoose, ...rest } = options;
@@ -192,24 +293,110 @@ function line(document: Document, id: string, text: string): HTMLParagraphElemen
   return element;
 }
 
-/** One printing as the detail presents it: its edition, collector number and language. */
-function printingLine(printing: PrintingRecord): string {
-  return `${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
+/** The document a view creates its elements in. */
+function readDocument(document: Document | undefined): Document {
+  if (document === undefined || typeof document.createElement !== 'function') {
+    throw new TypeError('A CardViews detail view requires the document it creates elements in.');
+  }
+  return document;
 }
 
-/** The image of one printing, or null when the catalog publishes none. */
-function printingImage(document: Document, printing: PrintingRecord): HTMLImageElement | null {
-  const src =
-    printing.images.normal ??
-    printing.images.small ??
-    printing.images.large ??
-    printing.images.artCrop;
-  if (src === null) {
-    return null;
+/**
+ * The identity of one detail level, as the published entry presents it: a card's basic
+ * information, a printing's line and finishes, or the explicit missing panel of a target the
+ * provider does not publish. The copy level composes no identity of its own.
+ */
+function identityNodes(
+  document: Document,
+  identity: 'card' | 'printing' | 'none',
+  entry: CardListEntry,
+): readonly Node[] {
+  const absent = entry.detail?.absent ?? null;
+  if (absent !== null) {
+    return [missingPanel(document, missingMessage(absent))];
+  }
+  const basic = entry.basic;
+  if (basic === null) {
+    return [missingPanel(document, 'The details are not published.')];
+  }
+  if (identity === 'none') {
+    return [];
+  }
+  if (identity === 'card') {
+    return [
+      heading(document, 'card-name', basic.card.name),
+      line(document, 'card-type', basic.card.typeLine ?? 'Type not published'),
+      line(document, 'card-text', basic.card.rulesText ?? 'No rules text published.'),
+    ];
+  }
+  const printing = basic.printing;
+  if (printing === null) {
+    return [heading(document, 'printing-name', basic.card.name)];
+  }
+  const finishes = printing.finishes ?? [];
+  return [
+    heading(document, 'printing-name', basic.card.name),
+    line(document, 'printing-line', printingLine(printing)),
+    line(
+      document,
+      'printing-finishes',
+      finishes.length === 0 ? 'No finish published' : `Finishes: ${finishes.join(', ')}`,
+    ),
+  ];
+}
+
+/** The image of the presented printing, once its images fragment reports one. */
+function imageNodes(
+  document: Document,
+  identity: 'card' | 'printing' | 'none',
+  snapshot: CardListSnapshot<unknown>,
+): readonly Node[] {
+  if (identity !== 'printing') {
+    return [];
+  }
+  const state = snapshot.entries[0]?.fragments.get('images');
+  if (state?.status !== 'ready') {
+    return [];
+  }
+  const images = state.values as readonly { readonly src: string; readonly alt: string }[];
+  const visible = images[0];
+  if (visible === undefined) {
+    return [];
   }
   const image = document.createElement('img');
   image.id = 'printing-image';
-  image.src = src;
-  image.alt = printingLine(printing);
-  return image;
+  image.src = visible.src;
+  image.alt = visible.alt;
+  return [image];
+}
+
+/** The presentation one explicit absence shows. */
+function missingMessage(absent: CardListEntryAbsence): string {
+  switch (absent) {
+    case 'card':
+      return 'The catalog does not publish this card.';
+    case 'printing':
+      return 'The catalog does not publish this printing.';
+    case 'printing-card':
+      return 'The catalog does not publish the card of this printing.';
+    case 'copy':
+      return 'This account has no physical copy with that identity.';
+  }
+}
+
+/** One missing panel of a detail level. */
+function missingPanel(document: Document, message: string): HTMLParagraphElement {
+  const element = document.createElement('p');
+  element.id = 'card-details-missing';
+  element.textContent = message;
+  return element;
+}
+
+/** One printing as the detail presents it: its edition, collector number and language. */
+function printingLine(printing: {
+  readonly edition: string;
+  readonly collectorNumber: string;
+  readonly language: string;
+}): string {
+  return `${printing.edition} ${printing.collectorNumber} · ${printing.language}`;
 }

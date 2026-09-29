@@ -35,7 +35,11 @@ export function replacementModules() {
     detail(options) {
       const detail = base.detail(options);
       const line = mark(options.document, 'uiReplacementDetail', 'REPLACEMENT DETAIL');
-      return { nodes: [line, ...detail.nodes] };
+      return {
+        nodes: [line, ...detail.nodes],
+        presented: detail.presented,
+        dispose: () => detail.dispose(),
+      };
     },
     list(options) {
       return base.list(options);

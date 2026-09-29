@@ -39,6 +39,7 @@ import {
   type CardListSearchRead,
 } from './bindings/search.js';
 import { cardPrintingsSource, printingImagesReader } from './bindings/catalog.js';
+import { detailTargetSource, type CardListDetailTarget } from './bindings/detail.js';
 import { usercardsChanges } from './bindings/usercards.js';
 import { pendingEntriesBinding, type CardListPendingEntries } from './bindings/pending.js';
 import { tagAssociationsBinding, type CardListTagAssociations } from './bindings/associations.js';
@@ -83,6 +84,12 @@ export interface CardListAccountBindings {
   pickerQuery(): CardListSource<CardListPickerQuery>;
   /** The published printings of one card the consumer names; the source keeps their identity. */
   cardPrintings(card: Pick<CardRecord, 'cardId' | 'name'>): CardListSource<string>;
+  /**
+   * The published content of one typed detail target — a card, one of its printings or one
+   * physical copy of the account — as a one-entry list a detail view presents
+   * (docs/ui/pages.md#page-map, docs/ui/card-views.md#interface).
+   */
+  detailTarget(target: CardListDetailTarget): CardListSource<CardListDetailTarget>;
   printingImages(): CardListFragmentReader<readonly CardListEntryImage[]>;
   /** Ownership counts of explicit entries, optionally with one tag's intended quantity. */
   ownership(tagId: string | null): CardListFragmentReader<CardListEntryOwnership>;
@@ -183,6 +190,11 @@ export function createCardListBrowser(options: CardListBrowserOptions): CardList
         collectionQuery: () => collectionQuerySource(search),
         pickerQuery: () => pickerQuerySource(search),
         cardPrintings: (card) => cardPrintingsSource(catalog, card),
+        detailTarget: (target) =>
+          detailTargetSource(
+            { catalog, accountId, copies: { readCopies: facade().readCopies } },
+            target,
+          ),
         printingImages: () => printingImagesReader(catalog),
         ownership: (tagId) => entryOwnershipReader(counts, undefined, () => tagId),
         copyTools: (ids) => ({

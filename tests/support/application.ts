@@ -27,6 +27,7 @@ export interface TestConfiguration {
   browser: { apiBaseUrl: string };
   resources: {
     catalogDatabase: { resourceArn: string; secretArn: string; database: string };
+    searchDatabase: { resourceArn: string; secretArn: string; database: string };
     userCardsDatabase: { resourceArn: string; secretArn: string; database: string };
     catalogSnapshots: { bucket: string; prefix: string | null };
   };
@@ -46,6 +47,11 @@ export function testConfiguration(): TestConfiguration {
       catalogDatabase: {
         resourceArn: 'arn:aws:rds:us-east-1:123456789012:cluster:keeper-test',
         secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-test-db',
+        database: 'keeper',
+      },
+      searchDatabase: {
+        resourceArn: 'arn:aws:rds:us-east-1:123456789012:cluster:keeper-test',
+        secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-test-search',
         database: 'keeper',
       },
       userCardsDatabase: {

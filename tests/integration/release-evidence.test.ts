@@ -69,9 +69,9 @@ async function createRelease(options: ReleaseFixtureOptions = {}): Promise<strin
   const browserEntry = await describeFile(root, 'browser/app.js', 'browser bundle');
   const browserPage = await describeFile(root, 'browser/index.html', '<!doctype html>');
   const catalog = await describeFile(root, 'catalog/job.mjs', 'catalog job');
-  await write(root, 'catalog/Dockerfile', 'FROM scratch');
+  const catalogDockerfile = await describeFile(root, 'catalog/Dockerfile', 'FROM scratch');
   const indexing = await describeFile(root, 'indexing/job.mjs', 'indexing job');
-  await write(root, 'indexing/Dockerfile', 'FROM scratch');
+  const indexingDockerfile = await describeFile(root, 'indexing/Dockerfile', 'FROM scratch');
   const browserFiles: ArtifactFile[] = [browserEntry, browserPage];
   const recognition =
     options.recognition === true
@@ -91,8 +91,8 @@ async function createRelease(options: ReleaseFixtureOptions = {}): Promise<strin
         artifacts: {
           backend: { ...backend, entry: 'index.mjs' },
           browser: { directory: 'browser', files: browserFiles, settings: null },
-          catalog: { ...catalog, dockerfile: 'catalog/Dockerfile' },
-          indexing: { ...indexing, dockerfile: 'indexing/Dockerfile' },
+          catalog: { ...catalog, dockerfile: catalogDockerfile },
+          indexing: { ...indexing, dockerfile: indexingDockerfile },
         },
       },
       null,
@@ -252,7 +252,8 @@ describe('release acceptance evidence', () => {
     expect(evidence.version).toBe(version);
     expect(evidence.workingTree).toBe('clean');
     expect(evidence.stages.sourceCompletion.status).toBe('recorded');
-    expect(evidence.stages.sourceCompletion.verifiedFiles).toBe(5);
+    // Both background jobs contribute their module and the Dockerfile that packages it.
+    expect(evidence.stages.sourceCompletion.verifiedFiles).toBe(7);
     expect(evidence.stages.sourceCompletion.recognition).toBeNull();
     expect(evidence.stages.deployment.status).toBe('not-recorded');
     expect(evidence.stages.deployment.reason).toMatch(/authorization/);
@@ -279,6 +280,27 @@ describe('release acceptance evidence', () => {
     await write(indexing, 'indexing/job.mjs', 'tampered');
     await expect(prepareReleaseEvidence({ outDir: indexing, repoRoot })).rejects.toThrow(
       /indexing\/job\.mjs does not match/,
+    );
+  });
+
+  it('verifies both background-job container definitions as release bytes', async () => {
+    for (const dockerfile of ['catalog/Dockerfile', 'indexing/Dockerfile'] as const) {
+      const changed = await createRelease();
+      await write(
+        changed,
+        dockerfile,
+        'FROM public.ecr.aws/docker/library/node:24-slim\nENTRYPOINT ["node", "/unexpected.mjs"]\n',
+      );
+      await expect(
+        prepareReleaseEvidence({ outDir: changed, repoRoot }),
+        dockerfile,
+      ).rejects.toThrow(new RegExp(`${dockerfile} does not match`));
+    }
+
+    const missing = await createRelease();
+    await rm(path.join(missing, 'indexing/Dockerfile'));
+    await expect(prepareReleaseEvidence({ outDir: missing, repoRoot })).rejects.toThrow(
+      /indexing\/Dockerfile/,
     );
   });
 

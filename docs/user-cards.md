@@ -46,6 +46,9 @@ account, stable change identity, account-scoped revision and explicit upserts/re
 mutation's publication is complete, including coupled ownership/location changes. Snapshot and change
 handoff leaves no gap; expired positions require a new snapshot. Foreign or missing authorization
 fails closed. Trusted indexing access is granted separately from an end-user's read access.
+Also publish the register of accounts that hold published data — identities only, paginated in a
+stable order — so a trusted indexing run covers every account whose changes it has to apply without
+an operator naming each account and without reading private tables.
 Snapshot pages also identify the account's completed mutation positions within retained publication
 history that the snapshot incorporates. This metadata is bounded by the provider's retention window;
 position identities are opaque and numeric order alone never establishes account membership.

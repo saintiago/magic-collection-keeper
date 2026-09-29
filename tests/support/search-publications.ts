@@ -194,13 +194,22 @@ export interface UserCardsPublicationFixtureOptions {
   readonly changes?: readonly UserCardsChange[];
   /** Dropped history: a resume before this position fails like an expired one. */
   readonly expiredBelow?: string;
+  /**
+   * Accounts the fixture's register reports, in order; defaults to the fixture's own account,
+   * which describes an account that has published private data.
+   */
+  readonly accounts?: readonly string[];
 }
 
 export interface UserCardsPublicationFixture {
   readonly publication: UserCardsPublication;
   /** Positions the fixture was asked to resume from, in order. */
   readonly reads: readonly string[];
+  /** Accounts the register reported, in order, across every register read. */
+  readonly registerReads: readonly string[];
   publish(...changes: readonly UserCardsChange[]): void;
+  /** Replaces the register: the accounts the provider reports as holding published data. */
+  register(accounts: readonly string[]): void;
   /** Replaces the account's snapshot with another position and record set. */
   replaceSnapshot(snapshot: {
     readonly position: string;
@@ -218,7 +227,9 @@ export function createUserCardsPublicationFixture(
   let records = [...(options.records ?? [])];
   let changes = [...(options.changes ?? [])];
   let expiredBelow = options.expiredBelow ?? null;
+  let accounts = [...(options.accounts ?? [accountId])];
   const reads: string[] = [];
+  const registerReads: string[] = [];
   const token = (): string => `${accountId}@${position}`;
 
   const publication: UserCardsPublication = {
@@ -241,6 +252,23 @@ export function createUserCardsPublicationFixture(
         incorporatedPositions: [position],
         records: page,
         continuation: next < records.length ? encode({ token: token(), offset: next }) : null,
+      };
+    },
+
+    /** The fixture's register: the accounts it reports as holding published private data. */
+    async readAccounts(request: {
+      readonly pageSize?: number;
+      readonly continuation?: string;
+    }): Promise<{ accounts: readonly string[]; continuation: string | null }> {
+      const pageSize = request.pageSize ?? 500;
+      const start =
+        request.continuation === undefined ? 0 : accounts.indexOf(request.continuation) + 1;
+      const page = accounts.slice(start, start + pageSize);
+      registerReads.push(...page);
+      const next = start + page.length;
+      return {
+        accounts: page,
+        continuation: next < accounts.length ? (accounts[next - 1] ?? null) : null,
       };
     },
 
@@ -282,8 +310,12 @@ export function createUserCardsPublicationFixture(
   return {
     publication,
     reads,
+    registerReads,
     publish(...next: readonly UserCardsChange[]): void {
       changes = [...changes, ...next];
+    },
+    register(next): void {
+      accounts = [...next];
     },
     replaceSnapshot(snapshot): void {
       position = snapshot.position;
