@@ -70,6 +70,12 @@ export function createCardDetailsPage(): UiPageDefinition {
       let copyEditor: UiCopyEditor | null = null;
       /** The card level's printing list; the page keeps the state the list itself captured. */
       let printings: UiCardList<string> | null = null;
+      /**
+       * Newest load of the level the page presents. Each load fences its own results: a read a
+       * later load superseded never reports, presents or replaces the content the user sees, and
+       * creates no editor (docs/ui/architecture.md#asynchronous-presentation).
+       */
+      let loadAttempt = 0;
       const presented = Promise.withResolvers<void>();
       // A page whose presentation the shell never awaits must still not surface a rejection.
       presented.promise.catch(() => {});
@@ -113,27 +119,28 @@ export function createCardDetailsPage(): UiPageDefinition {
        * (docs/user-interface.md#state-ownership-and-restoration).
        */
       async function render(): Promise<void> {
+        const attempt = ++loadAttempt;
         status.textContent = 'Loading card details…';
         content.replaceChildren();
         copyEditor?.dispose();
         copyEditor = null;
         printings?.dispose();
         printings = null;
-        let level: UiLevelPresentation;
+        let level: UiLevelPresentation | null;
         try {
           level =
             cardView.copyId !== null
-              ? await copyLevel(cardView.copyId)
+              ? await copyLevel(cardView.copyId, attempt)
               : cardView.printingId !== null
                 ? await printingLevel(cardView.printingId)
                 : await cardLevel();
-          if (closed) {
+          if (!isCurrentLoad(attempt) || level === null) {
             return;
           }
           content.replaceChildren(...level.nodes);
           status.textContent = '';
         } catch (cause) {
-          if (closed) {
+          if (!isCurrentLoad(attempt)) {
             return;
           }
           content.replaceChildren(...failurePanel(cause));
@@ -150,14 +157,22 @@ export function createCardDetailsPage(): UiPageDefinition {
         } catch (cause) {
           // The retained printing window could not be presented: the page reports the interrupted
           // restoration while the list keeps the failure and its retry.
-          if (!closed) {
+          if (isCurrentLoad(attempt)) {
             presented.reject(cause);
           }
           return;
         }
-        if (!closed) {
+        if (isCurrentLoad(attempt)) {
           presented.resolve();
         }
+      }
+
+      /**
+       * Whether one load attempt is still the one the page presents
+       * (docs/ui/architecture.md#asynchronous-presentation).
+       */
+      function isCurrentLoad(attempt: number): boolean {
+        return !closed && attempt === loadAttempt;
       }
 
       function failurePanel(cause: unknown): readonly Node[] {
@@ -202,27 +217,37 @@ export function createCardDetailsPage(): UiPageDefinition {
        * The physical-copy level: the account's actual copy, its current attributes and the change
        * that corrects printing and language, finish and condition.
        */
-      async function copyLevel(copyId: string): Promise<UiLevelPresentation> {
+      async function copyLevel(
+        copyId: string,
+        attempt: number,
+      ): Promise<UiLevelPresentation | null> {
         const readNotice = uiCopyReadNoticeId(copyId);
         let read: UiCopyRead;
         try {
           read = await copies.read([copyId], context.signal);
         } catch (cause) {
-          // Reading the copy is a service failure with no field to hold it: the notice keeps the
-          // failure visible after the view is left, with the same explicit recovery
-          // (docs/ui/navigation.md#error-notices).
-          reportUiFailure(
-            context.notices,
-            readNotice,
-            readMessage(cause, 'The copy could not be loaded.'),
-            {
-              label: 'Load the copy again',
-              run: () => {
-                void render();
+          if (isCurrentLoad(attempt)) {
+            // Reading the copy is a service failure with no field to hold it: the notice keeps the
+            // failure visible after the view is left, with the same explicit recovery
+            // (docs/ui/navigation.md#error-notices).
+            reportUiFailure(
+              context.notices,
+              readNotice,
+              readMessage(cause, 'The copy could not be loaded.'),
+              {
+                label: 'Load the copy again',
+                run: () => {
+                  void render();
+                },
               },
-            },
-          );
+            );
+          }
           throw cause;
+        }
+        if (!isCurrentLoad(attempt)) {
+          // A later load of the level owns the page: this read reports nothing and presents
+          // nothing.
+          return null;
         }
         // The read established the copy's current state — its recorded attributes or its absence —
         // so it reconciles the failure of an earlier read, including one an editor presented
@@ -241,6 +266,10 @@ export function createCardDetailsPage(): UiPageDefinition {
         const printing = resolution.printings.get(copy.printingId) ?? null;
         const cardId = printing?.cardId ?? cardView.cardId;
         const card = await resolveCard(catalog, cardId);
+        if (!isCurrentLoad(attempt)) {
+          // The read of the copy and its catalog resolution belong to a load the page replaced.
+          return null;
+        }
         const editor = context.modules.editors.copy({
           document,
           access: copies,

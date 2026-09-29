@@ -1281,6 +1281,49 @@ test('a failed opening read of the copy level clears when a retry presents the c
   expect(errors).toEqual([]);
 });
 
+test('an obsolete opening read never replaces the copy a newer retry presented', async ({
+  page,
+}) => {
+  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+  await failCopyRead(page, (await copyRead(page)).id, {
+    code: 'unavailable',
+    message: 'The service could not be reached.',
+  });
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1:read"]');
+  await expect(page.locator('#card-details-failure')).toHaveText(
+    'The service could not be reached.',
+  );
+
+  // The page's Retry starts one read of the level, and the failure notice's own recovery a second
+  // one while the first is still pending: two overlapping loads, neither settled yet.
+  await page.getByRole('button', { name: 'Retry' }).click();
+  const retry = await copyRead(page, 1);
+  await notice.getByRole('button', { name: 'Load the copy again' }).click();
+  const recovered = await copyRead(page, 2);
+
+  // The newer load presents the copy its retry read and ends the notice the failure reported.
+  await settleCopyRead(page, recovered.id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · nonfoil · near mint');
+  await expect(notice).toHaveCount(0);
+  await page.locator('#copy-finish-choice').selectOption('foil');
+
+  // The superseded load answers: its failure neither replaces the presented editor nor the draft
+  // it holds, nor reports a read the newer load established
+  // (docs/ui/architecture.md#asynchronous-presentation).
+  await failCopyRead(page, retry.id, {
+    code: 'unavailable',
+    message: 'The service could not be reached.',
+  });
+  await expect(page.locator('#card-details-failure')).toHaveCount(0);
+  await expect(page.locator('#copy-form')).toBeVisible();
+  await expect(page.locator('#copy-finish-choice')).toHaveValue('foil');
+  await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · nonfoil · near mint');
+  await expect(page.locator('[data-ui-notice]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('a read that establishes the copy is absent reconciles its read failure', async ({ page }) => {
   const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
   await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
@@ -1346,6 +1389,44 @@ test('a successful copy read reconciles its read failure without resolving an un
   await expect(page.locator('#copy-status')).toHaveText('Reloaded the copy.');
   await expect(read).toHaveCount(0);
   await expect(change).toContainText('The outcome is unknown.');
+  expect(errors).toEqual([]);
+});
+
+test('a correction recovery that establishes absence reconciles the read failure', async ({
+  page,
+}) => {
+  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], null);
+
+  await page.locator('#copy-reload').click();
+  await failCopyRead(page, (await copyRead(page, 1)).id, {
+    code: 'unavailable',
+    message: 'The service could not be reached.',
+  });
+  const read = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1:read"]');
+  await expect(read).toContainText('The service could not be reached.');
+
+  // The change's response is lost: its recovery read answers that the account no longer holds the
+  // copy. The absence that read established ends the copy's read failure while the unresolved
+  // change stays reported under its own identity (docs/ui/navigation.md#error-notices).
+  await page.locator('#copy-finish-choice').selectOption('foil');
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await failCorrection(page, (await correction(page)).id, {
+    code: 'unavailable',
+    message: 'The service could not be reached.',
+  });
+  await settleCopyRead(page, (await copyRead(page, 2)).id, []);
+  await expect(page.locator('#copy-status')).toHaveText(
+    'The outcome is unknown. This copy is no longer in the collection.',
+  );
+  await expect(read).toHaveCount(0);
+  const change = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1"]');
+  await expect(change).toContainText(
+    'The outcome is unknown. This copy is no longer in the collection.',
+  );
   expect(errors).toEqual([]);
 });
 

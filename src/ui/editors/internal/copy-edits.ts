@@ -104,6 +104,13 @@ export interface UiCopyCorrectionOutcome {
   readonly message: string | null;
   /** The committed copy, or the copy a recovery read observed; null when it could not be read. */
   readonly copy: PhysicalCopy | null;
+  /**
+   * Whether this outcome established the copy's current state: the record a committed change or a
+   * recovery read reported, or the absence a recovery read established. A conflict, a definite
+   * failure and a recovery read that failed established nothing, so a view never presents them as
+   * the copy's state (docs/user-cards.md#interface, docs/ui/navigation.md#error-notices).
+   */
+  readonly established: boolean;
 }
 
 /**
@@ -124,7 +131,7 @@ export async function correctCopy(
       // presenting it as saved (docs/application.md#interface).
       return recoverCorrection(access, input.copyId, signal);
     }
-    return { status: 'committed', message: null, copy };
+    return { status: 'committed', message: null, copy, established: true };
   }
   if (outcome.state === 'rejected') {
     return outcome.failure.code === 'conflict'
@@ -132,12 +139,14 @@ export async function correctCopy(
           status: 'conflict',
           message: 'The copy changed since you read it. Reload it and review your change.',
           copy: null,
+          established: false,
         }
       : {
           status: 'failed',
           message:
             outcome.failure.message === '' ? 'The change was not saved.' : outcome.failure.message,
           copy: null,
+          established: false,
         };
   }
   return recoverCorrection(access, input.copyId, signal);
@@ -162,6 +171,8 @@ async function recoverCorrection(
       status: 'unknown',
       message: 'The outcome is unknown. Reload the copy before retrying.',
       copy: null,
+      // The read established nothing, so the failure of an earlier read stays reported.
+      established: false,
     };
   }
   return {
@@ -171,6 +182,10 @@ async function recoverCorrection(
         ? 'The outcome is unknown. This copy is no longer in the collection.'
         : 'The outcome is unknown. Reload the copy before retrying.',
     copy,
+    // The read answered: the copy's record or its absence is its current state, and the view
+    // reconciles the failure of an earlier read with it while the change stays unresolved
+    // (docs/ui/navigation.md#error-notices).
+    established: true,
   };
 }
 

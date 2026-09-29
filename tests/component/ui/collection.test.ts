@@ -297,7 +297,12 @@ describe('copy corrections', () => {
 
     const outcome = await correctCopy(access, correction());
 
-    expect(outcome).toEqual({ status: 'committed', message: null, copy: corrected });
+    expect(outcome).toEqual({
+      status: 'committed',
+      message: null,
+      copy: corrected,
+      established: true,
+    });
   });
 
   it('reports a revision conflict without touching the change', async () => {
@@ -310,6 +315,7 @@ describe('copy corrections', () => {
 
     expect(outcome.status).toBe('conflict');
     expect(outcome.copy).toBeNull();
+    expect(outcome.established).toBe(false);
     expect(outcome.message).toMatch(/changed since you read it/);
   });
 
@@ -325,6 +331,7 @@ describe('copy corrections', () => {
       status: 'failed',
       message: 'This account has no copy with that identity.',
       copy: null,
+      established: false,
     });
   });
 
@@ -356,6 +363,7 @@ describe('copy corrections', () => {
     // The unchanged revision does not establish a failure: the change may still commit.
     expect(outcome.status).toBe('unknown');
     expect(outcome.copy).toEqual(stored);
+    expect(outcome.established).toBe(true);
   });
 
   it('keeps a lost response uncertain when already matching attributes did not move', async () => {
@@ -411,10 +419,14 @@ describe('copy corrections', () => {
 
     const outcome = await correctCopy(access, correction());
 
+    // The absence the read established is the copy's current state, so a view reconciles the
+    // failure of an earlier read with it while the change stays unresolved
+    // (docs/ui/navigation.md#error-notices).
     expect(outcome).toEqual({
       status: 'unknown',
       message: 'The outcome is unknown. This copy is no longer in the collection.',
       copy: null,
+      established: true,
     });
   });
 
@@ -426,8 +438,11 @@ describe('copy corrections', () => {
 
     const outcome = await correctCopy(access, correction());
 
+    // The read established nothing, so neither the copy's read failure nor the change may be
+    // presented as settled (docs/ui/navigation.md#error-notices).
     expect(outcome.status).toBe('unknown');
     expect(outcome.copy).toBeNull();
+    expect(outcome.established).toBe(false);
   });
 });
 

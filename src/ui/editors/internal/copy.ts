@@ -602,10 +602,11 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
     }
     if (current === work) {
       copyStatus.textContent = outcome.message ?? 'Saved.';
-      if (outcome.copy !== null) {
-        // The record this outcome carries is the copy's current state: a committed change and a
-        // recovery read after an uncertain one both establish it, so either reconciles the copy's
-        // read failure (docs/ui/navigation.md#error-notices).
+      if (outcome.established) {
+        // The outcome established the copy's current state — the record a committed change
+        // reported, or the record or absence a recovery read established — so it reconciles the
+        // copy's read failure, while a recovery read that failed leaves it reported
+        // (docs/ui/navigation.md#error-notices).
         notices?.dismiss(copyReadNotice);
       }
       // The correction keeps its own notice identity: reading the copy establishes its stored
