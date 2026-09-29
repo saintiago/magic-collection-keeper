@@ -22,8 +22,15 @@
 import type { CardRecord, Catalog, PrintingRecord } from '../../catalog/index.js';
 
 import type { UiCardList } from '../card-views/index.js';
-import { createCopyAccess, type UiCopyDraft, type UiCopyEditor } from '../editors/index.js';
+import {
+  createCopyAccess,
+  uiCopyReadNoticeId,
+  type UiCopyDraft,
+  type UiCopyEditor,
+  type UiCopyRead,
+} from '../editors/index.js';
 import { UI_LIMITS } from '../shared/limits.js';
+import { reportUiFailure } from '../shared/notices.js';
 import { cardViewOf, readListState, readPageState, restoredPresentation } from './page-support.js';
 import type { UiPageDefinition } from './pages.js';
 import { uiHref, type UiView } from './routes.js';
@@ -196,7 +203,31 @@ export function createCardDetailsPage(): UiPageDefinition {
        * that corrects printing and language, finish and condition.
        */
       async function copyLevel(copyId: string): Promise<UiLevelPresentation> {
-        const read = await copies.read([copyId], context.signal);
+        const readNotice = uiCopyReadNoticeId(copyId);
+        let read: UiCopyRead;
+        try {
+          read = await copies.read([copyId], context.signal);
+        } catch (cause) {
+          // Reading the copy is a service failure with no field to hold it: the notice keeps the
+          // failure visible after the view is left, with the same explicit recovery
+          // (docs/ui/navigation.md#error-notices).
+          reportUiFailure(
+            context.notices,
+            readNotice,
+            readMessage(cause, 'The copy could not be loaded.'),
+            {
+              label: 'Load the copy again',
+              run: () => {
+                void render();
+              },
+            },
+          );
+          throw cause;
+        }
+        // The read established the copy's current state — its recorded attributes or its absence —
+        // so it reconciles the failure of an earlier read, including one an editor presented
+        // before this page replaced it (docs/ui/navigation.md#error-notices).
+        context.notices.dismiss(readNotice);
         const copy = read.copies[0] ?? null;
         if (copy === null) {
           return {
@@ -220,6 +251,7 @@ export function createCardDetailsPage(): UiPageDefinition {
           copy,
           card,
           printing,
+          notices: context.notices,
           restored: restored?.draft,
           signal: context.signal,
           printingHref: (saved) => uiHref(viewOfCard(cardId, saved.printingId, null)),

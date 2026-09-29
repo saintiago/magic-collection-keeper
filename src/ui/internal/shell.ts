@@ -20,10 +20,12 @@
 import type { UserInterfaceCapabilities } from '../../application/index.js';
 import type { CaptureBrowserDevice } from '../../capture/index.js';
 
+import { observeUiInput } from '../shared/interaction.js';
+import type { UiNotices } from '../shared/notices.js';
 import { createUiPresentationModules, type UiPresentationModules } from './composition.js';
 import { createDialogs, type UiDialogs } from './dialogs.js';
 import { readAccount, type UiAccount, type UiIdentity } from './identity.js';
-import { observeUiInput } from '../shared/interaction.js';
+import { createNoticeHost, type UiNotice } from './notices.js';
 import type { UiPageContext, UiPageDefinition, UiPageHandle } from './pages.js';
 import { createViewStateStore, type UiViewSnapshot } from './restoration.js';
 import {
@@ -124,6 +126,11 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
   root.replaceChildren(header, main, status);
+  // The floating notices of the shell: pages report their failures through the capability below,
+  // and the presentation outlives the page that reported one (docs/ui/navigation.md#error-notices).
+  const notices = createNoticeHost(root);
+  /** Notice identities a page reported a recovery action for; leaving the page retires them. */
+  const pageActionNotices = new Set<string>();
 
   let account: UiAccount | null = null;
   let view: UiView | null = null;
@@ -214,6 +221,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     }
     store.clear();
     releaseDevice();
+    notices.dispose();
     history.scrollRestoration = previousScrollRestoration;
     root.replaceChildren();
   }
@@ -236,6 +244,9 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     }
     closePage();
     store.clear();
+    // The notices of the presented view end with the account that presented them
+    // (docs/ui/navigation.md#error-notices).
+    notices.clear();
     if (previous !== null) {
       endAccount(previous.accountId);
       capabilities.request.endSession();
@@ -389,6 +400,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
         }
       },
       dialogs: pageDialogs(currentGeneration),
+      notices: pageNotices(currentGeneration, current.accountId),
     };
     const handle = pages.get(target.page)?.mount(container, context) ?? null;
     if (generation !== currentGeneration) {
@@ -584,6 +596,39 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     };
   }
 
+  /**
+   * Notice capability of one presented page: it reports the operation and service failures it
+   * presents under the account's identities, and a page the shell has left can no longer report
+   * one to the view that replaced it (docs/ui/navigation.md#error-notices).
+   */
+  function pageNotices(currentGeneration: number, accountId: string): UiNotices {
+    const prefix = `navigation:page:${accountId}:`;
+    const live = (): boolean =>
+      !disposed && generation === currentGeneration && account?.accountId === accountId;
+    return {
+      show(report: UiNotice) {
+        if (!live()) {
+          return;
+        }
+        const id = `${prefix}${report.id}`;
+        if (report.action == null) {
+          pageActionNotices.delete(id);
+        } else {
+          pageActionNotices.add(id);
+        }
+        notices.show({ ...report, id });
+      },
+      dismiss(id) {
+        if (!live()) {
+          return;
+        }
+        const owned = `${prefix}${id}`;
+        pageActionNotices.delete(owned);
+        notices.dismiss(owned);
+      },
+    };
+  }
+
   /** Device access lasts through synchronous teardown, but never into a replacement page. */
   function pageDevice(currentGeneration: number): CaptureBrowserDevice {
     const available = (): boolean =>
@@ -726,6 +771,9 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   function closePage(): void {
     teardownGeneration = generation;
     generation += 1;
+    // Failures remain visible, but recovery belongs to the mounted view that supplied it.
+    notices.retireActions(pageActionNotices);
+    pageActionNotices.clear();
     releaseRestoration();
     const controller = pageController;
     const handle = pageHandle;
