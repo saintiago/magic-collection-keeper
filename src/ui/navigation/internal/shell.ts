@@ -271,7 +271,6 @@ export function createNavigation(options: NavigationOptions): Navigation {
     notices.dispose();
     store.clear();
     releaseDevice();
-    notices.dispose();
     history.scrollRestoration = previousScrollRestoration;
     root.replaceChildren();
   }
