@@ -25,6 +25,7 @@ quantity, confirmation and account-isolation rules for all changes.
 | Stage or review imports           | Trusted context, session/entry identity, candidates or reviewed values and expected revision. | Updated pending state; no ownership change.                                     |
 | Confirm imports                   | Trusted context, operation ID, explicit destination/change and reviewed entry revisions.      | Receipt identifying the resulting associations or copies and committed outcome. |
 | Recover an operation              | Trusted context and operation ID.                                                             | Recorded outcome or explicit absence; never another user's result.              |
+| Load a migration plan             | Trusted offline plan, exact source digest and explicit target account.                        | Durable batch progress, final publication position and repeat-safe outcome.     |
 
 Import confirmation carries an operation ID scoped to the account. Replaying identical input returns
 its recorded outcome; reuse with different input fails. Other edits use record identity and revision
@@ -100,6 +101,7 @@ intent and interpret outcomes; stores own SQL, locking, atomic changes and persi
 | Confirmation and recovery | Validate reviewed entries and explicit destination, recognize replay and report the recorded outcome. | One transaction applies destination changes, retains source evidence, closes entries and records the receipt; only an ownership action creates copies and acquisitions. |
 | Source conversion         | Fetch and parse supported source formats into staging input.                                          | Provider data is input to staging; never writes owned copies directly.                                                                                                  |
 | Query publication         | Account-scoped snapshots and durable searchable changes.                                              | Authoritative changes and publication commit together; private storage remains inaccessible to consumers.                                                               |
+| Migration loading         | Apply a verified offline plan through provider-owned records and retain its source archive.           | One batch and its progress receipt commit together; query-visible batches publish normally.                                                                             |
 | Client operations         | Account-scoped attempt handles, recovery and local committed-change signals.                          | Retain only client attempt context; authoritative writes and receipts remain behind server operations.                                                                  |
 
 The import service composes pending reads, staging, review and confirmation. Its persistence layer has
