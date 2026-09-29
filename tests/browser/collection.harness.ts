@@ -90,6 +90,8 @@ export interface UiCollectionCorrection {
 export interface UiCollectionControl {
   log(): string[];
   readonly accountId: string | null;
+  /** Reports a verified sign-in of another account, as the deployment's authentication would. */
+  signInAs(accountId: string): void;
   searchRequests(): readonly UiCollectionSearchRequest[];
   settleSearch(id: number, page: SearchPage): void;
   failSearch(
@@ -359,6 +361,7 @@ export function installCollectionHarness(
     get accountId() {
       return account?.accountId ?? null;
     },
+    signInAs: (accountId) => report({ accountId, displayName: accountId }),
     searchRequests: () =>
       searches.map(({ record, isAborted }) => ({ ...record, aborted: isAborted() })),
     settleSearch: (id, page) => settle(pendingSearches, id, page, 'search'),

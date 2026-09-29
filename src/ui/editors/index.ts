@@ -98,6 +98,7 @@ export {
 export {
   createCopyBulkEditor,
   createCopyEditor,
+  uiCopyReadNoticeId,
   type UiCopyBulkDraft,
   type UiCopyBulkEditor,
   type UiCopyBulkEditorOptions,

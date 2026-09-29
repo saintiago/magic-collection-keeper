@@ -19,6 +19,7 @@
 import type { UserInterfaceCapabilities } from '../../application/index.js';
 import type { CaptureBrowserDevice } from '../../capture/index.js';
 
+import type { UiNotices } from '../shared/notices.js';
 import type { UiPresentationModules } from './composition.js';
 import type { UiDialogs } from './dialogs.js';
 import type { UiAccount } from './identity.js';
@@ -56,6 +57,11 @@ export interface UiPageContext {
   back(): void;
   /** Brief dialogs for small auxiliary actions. */
   readonly dialogs: UiDialogs;
+  /**
+   * Notice capability of the shell: the operation and service failures a page reports stay visible
+   * under their identity after the page is left (docs/ui/navigation.md#error-notices).
+   */
+  readonly notices: UiNotices;
 }
 
 /** What a page returns to the shell when the shell presents it. */

@@ -31,6 +31,7 @@ import {
   text,
 } from '../../shared/controls.js';
 import { UI_LIMITS } from '../../shared/limits.js';
+import { reportUiFailure, type UiNotices } from '../../shared/notices.js';
 import { readUiCatalogFinish, uiCatalogFinishes, uiFinishLabel } from '../../shared/vocabulary.js';
 import {
   copyChangeTool,
@@ -263,8 +264,24 @@ export interface UiCopyEditorOptions {
   readonly restored?: unknown;
   /** Aborted when the view closes; the editor drops late results then. */
   readonly signal: AbortSignal;
+  /**
+   * Notice capability of the shell the page presents: the read and the correction of this copy
+   * stay visible under their own identities after the view is left
+   * (docs/ui/navigation.md#error-notices).
+   */
+  readonly notices?: UiNotices;
   /** Location the saved copy's printing details are presented at. */
   printingHref(copy: PhysicalCopy): string;
+}
+
+/**
+ * Identity of the notice that reports the read of one physical copy
+ * (docs/ui/navigation.md#error-notices). It belongs to the copy rather than to the editor that
+ * performs one read, so a read that established the copy's current state reconciles the failure of
+ * an earlier read across an editor replacement.
+ */
+export function uiCopyReadNoticeId(copyId: string): string {
+  return `copy:${copyId}:read`;
 }
 
 /**
@@ -299,11 +316,16 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
     { once: true },
   );
   /**
-   * Sequence of the newest copy-state work of this form: feedback of a request a later operation
-   * superseded is not presented, so an obsolete reload never overwrites the outcome of a save
-   * that followed it.
+   * Fences inline read feedback when a newer read starts, a correction starts or a correction
+   * establishes state. Corrections are submitted one at a time and report their outcomes independently:
+   * starting a reload cannot supersede an unresolved write.
    */
   let work = 0;
+  /**
+   * Fences read notices only when another read starts or a correction establishes state.
+   * Submitting a correction cannot supersede an overlapping read's notice reconciliation.
+   */
+  let readNoticeWork = 0;
   /**
    * Full records of the printings the form knows: the picker presents basic information only, so
    * the finishes a chosen printing offers are read through Catalog on demand
@@ -330,6 +352,11 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
   save.id = 'copy-save';
   save.textContent = 'Save changes';
   const reload = button(document, 'copy-reload', 'Reload copy');
+  const notices = options.notices;
+  /** Notice identity of this copy's read; a read that established its state reconciles it. */
+  const copyReadNotice = uiCopyReadNoticeId(saved.copyId);
+  /** Notice identity of this copy's correction, which a successful read never resolves. */
+  const copyChangeNotice = `copy:${saved.copyId}`;
   const form = document.createElement('form');
   form.id = 'copy-form';
   form.append(
@@ -562,12 +589,15 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
   }
 
   async function saveCopy(): Promise<void> {
+    if (disposed || save.disabled) {
+      return;
+    }
     const input = correction();
     if (input === null) {
       copyStatus.textContent = 'Choose a printing, a finish and a condition before saving.';
       return;
     }
-    const current = ++work;
+    ++work;
     save.disabled = true;
     copyStatus.textContent = 'Saving…';
     const outcome = await correctCopy(access, input, options.signal);
@@ -578,8 +608,28 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
     if (outcome.copy !== null) {
       presentCopy(outcome.copy);
     }
-    if (current === work) {
-      copyStatus.textContent = outcome.message ?? 'Saved.';
+    copyStatus.textContent = outcome.message ?? 'Saved.';
+    if (outcome.established) {
+      // A committed record or a successful recovery read (including absence) reconciles the read
+      // failure. Pending reload feedback is now obsolete; it must not recreate that failure after
+      // the correction established state (docs/ui/navigation.md#error-notices).
+      ++work;
+      ++readNoticeWork;
+      notices?.dismiss(copyReadNotice);
+    }
+    // The correction keeps its own notice identity: reading the copy establishes its stored
+    // attributes, never that an unresolved change committed. Even an overlapping reload cannot
+    // suppress this operation's outcome
+    // (docs/ui/navigation.md#error-notices).
+    if (outcome.status === 'committed') {
+      notices?.dismiss(copyChangeNotice);
+    } else {
+      reportUiFailure(notices, copyChangeNotice, outcome.message ?? 'The change was not saved.', {
+        label: 'Reload the copy',
+        run: () => {
+          void reloadCopy();
+        },
+      });
     }
     if (outcome.status === 'conflict') {
       // The copy changed meanwhile: its current state is offered for review while the draft
@@ -609,21 +659,40 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
    */
   async function readCurrent(): Promise<UiCopyReadResult> {
     const current = ++work;
+    const noticeWork = ++readNoticeWork;
+    let result: UiCopyReadResult;
     try {
       const read = await access.read([saved.copyId], options.signal);
       const found = read.copies[0] ?? null;
       if (found === null) {
-        return { work: current, status: 'missing' };
+        result = { work: current, status: 'missing' };
+      } else {
+        presentCopy(found);
+        result = { work: current, status: 'read', copy: found };
       }
-      presentCopy(found);
-      return { work: current, status: 'read', copy: found };
     } catch (cause) {
-      return {
+      result = {
         work: current,
         status: 'failed',
         message: readMessage(cause, 'The copy could not be reloaded.'),
       };
     }
+    // A read that settled the copy — its recorded state or its absence — reconciles the failure of
+    // an earlier read; only a read that established nothing stays reported, with the reload that
+    // retries it (docs/ui/navigation.md#error-notices).
+    if (!disposed && noticeWork === readNoticeWork) {
+      if (result.status === 'failed') {
+        reportUiFailure(notices, copyReadNotice, result.message, {
+          label: 'Reload the copy',
+          run: () => {
+            void reloadCopy();
+          },
+        });
+      } else {
+        notices?.dismiss(copyReadNotice);
+      }
+    }
+    return result;
   }
 
   /**
