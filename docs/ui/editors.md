@@ -29,7 +29,9 @@ draft lifecycle where they are identical; do not build a universal schema-driven
 
 Keep printing, language, finish and condition editable for copies. Organization forms expose labels,
 intended quantities, card/printing specificity and explicit physical-copy moves. Review forms expose
-printing, finish, condition and quantity before explicit confirmation. Bulk actions retain exact
+card identity, quantity, optional printing specificity and the explicit import destination. Physical
+attributes are shown when adding owned copies. A deck can be accepted without choosing printings
+or claiming ownership. Bulk actions retain exact
 target references independently of which rows are visible.
 
 Source input collects supported text or references and displays progress, provenance, row errors and

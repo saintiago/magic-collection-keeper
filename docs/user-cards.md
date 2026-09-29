@@ -18,13 +18,13 @@ quantity, confirmation and account-isolation rules for all changes.
 
 ### Provided operations
 
-| Capability                        | Input                                                                                         | Result                                                             |
-| --------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Read private records              | Trusted user context and record references or a bounded pending-list query.                   | Authorized records, revisions and continuation where applicable.   |
-| Edit copies, tags or associations | Trusted context, explicit change and expected revision for existing records.                  | Committed affected records and their revisions, or a conflict.     |
-| Stage or review imports           | Trusted context, session/entry identity, candidates or reviewed values and expected revision. | Updated pending state; no ownership change.                        |
-| Confirm imports                   | Trusted context, operation ID and reviewed entry revisions.                                   | Receipt identifying the resulting copies and committed outcome.    |
-| Recover an operation              | Trusted context and operation ID.                                                             | Recorded outcome or explicit absence; never another user's result. |
+| Capability                        | Input                                                                                         | Result                                                                          |
+| --------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Read private records              | Trusted user context and record references or a bounded pending-list query.                   | Authorized records, revisions and continuation where applicable.                |
+| Edit copies, tags or associations | Trusted context, explicit change and expected revision for existing records.                  | Committed affected records and their revisions, or a conflict.                  |
+| Stage or review imports           | Trusted context, session/entry identity, candidates or reviewed values and expected revision. | Updated pending state; no ownership change.                                     |
+| Confirm imports                   | Trusted context, operation ID, explicit destination/change and reviewed entry revisions.      | Receipt identifying the resulting associations or copies and committed outcome. |
+| Recover an operation              | Trusted context and operation ID.                                                             | Recorded outcome or explicit absence; never another user's result.              |
 
 Import confirmation carries an operation ID scoped to the account. Replaying identical input returns
 its recorded outcome; reuse with different input fails. Other edits use record identity and revision
@@ -90,23 +90,23 @@ The public facade assembles focused operations. These are internal units, not se
 components. Public request/result types are independent of the concrete stores. Operations validate
 intent and interpret outcomes; stores own SQL, locking, atomic changes and persistence failures.
 
-| Unit                      | Owns                                                                         | State and write boundary                                                                                                           |
-| ------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Copies                    | Creation and correction of physical records; physical attribute validation.  | Copy and owned membership change atomically.                                                                                       |
-| Organization              | Tags, association targets and intended quantities; physical location moves.  | Association changes retain identity; a location move atomically replaces the previous membership.                                  |
-| Pending reads             | Bounded session and entry reads, ordering and revision-bound continuation.   | No ownership writes; reject a read assembled from inconsistent revisions.                                                          |
-| Staging                   | Manual entry admission, capture sequence and source-line reconciliation.     | Session, entries, candidates and admission receipts change under the session lock.                                                 |
-| Review                    | Explicit corrections, late candidate attachment and discard.                 | Revision checks preserve user edits; late evidence cannot rewrite reviewed fields.                                                 |
-| Confirmation and recovery | Validate reviewed entries, recognize replay and report the recorded outcome. | One transaction binds acquisition identities, creates copies/owned memberships/provenance, closes entries and records the receipt. |
-| Source conversion         | Fetch and parse supported source formats into staging input.                 | Provider data is input to staging; never writes owned copies directly.                                                             |
-| Query publication         | Account-scoped snapshots and durable searchable changes.                     | Authoritative changes and publication commit together; private storage remains inaccessible to consumers.                          |
-| Client operations         | Account-scoped attempt handles, recovery and local committed-change signals. | Retain only client attempt context; authoritative writes and receipts remain behind server operations.                             |
+| Unit                      | Owns                                                                                                  | State and write boundary                                                                                                                                                |
+| ------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Copies                    | Creation and correction of physical records; physical attribute validation.                           | Copy and owned membership change atomically.                                                                                                                            |
+| Organization              | Tags, association targets and intended quantities; physical location moves.                           | Association changes retain identity; a location move atomically replaces the previous membership.                                                                       |
+| Pending reads             | Bounded session and entry reads, ordering and revision-bound continuation.                            | No ownership writes; reject a read assembled from inconsistent revisions.                                                                                               |
+| Staging                   | Manual entry admission, capture sequence and source-line reconciliation.                              | Session, entries, candidates and admission receipts change under the session lock.                                                                                      |
+| Review                    | Explicit corrections, late candidate attachment and discard.                                          | Revision checks preserve user edits; late evidence cannot rewrite reviewed fields.                                                                                      |
+| Confirmation and recovery | Validate reviewed entries and explicit destination, recognize replay and report the recorded outcome. | One transaction applies destination changes, retains source evidence, closes entries and records the receipt; only an ownership action creates copies and acquisitions. |
+| Source conversion         | Fetch and parse supported source formats into staging input.                                          | Provider data is input to staging; never writes owned copies directly.                                                                                                  |
+| Query publication         | Account-scoped snapshots and durable searchable changes.                                              | Authoritative changes and publication commit together; private storage remains inaccessible to consumers.                                                               |
+| Client operations         | Account-scoped attempt handles, recovery and local committed-change signals.                          | Retain only client attempt context; authoritative writes and receipts remain behind server operations.                                                                  |
 
 The import service composes pending reads, staging, review and confirmation. Its persistence layer has
 the same divisions. Shared session access owns session locks, revision reads/advances and bounded entry
 hydration. Shared validation owns identifiers and input bounds. Neither becomes a second workflow
-coordinator. Copy insertion is reused inside confirmation's transaction, rather than calling a public
-copy operation that would start another transaction.
+coordinator. Destination operations are reused inside confirmation's transaction, rather than calling
+public operations that would start another transaction.
 
 ### Import state and identity
 
@@ -115,7 +115,8 @@ its own stable identity, even when another import has identical cards, quantitie
 Retrying, reopening or reconciling an existing import retains that identity. Contents and source URLs
 describe an import; they do not identify it or merge it with another import.
 
-An entry holds reviewed printing, finish, condition, quantity, candidate evidence and revision.
+An entry holds reviewed card identity, optional printing specificity, quantity, candidate evidence
+and revision. Physical attributes are relevant when the chosen action creates physical copies.
 Pending, confirmed and discarded are distinct states governed by the
 [import lifecycle](#import-and-capture-state). Session identity groups entries and tracks progress;
 it does not independently determine ownership or visibility.
@@ -124,7 +125,7 @@ Keep three identities separate:
 
 - Capture or staged-line identity records admission/replay of one input. Consecutive accepted identity
   is session state; unresolved input does not advance it.
-- Acquisition identity records which line content and occurrence within an import produced copies.
+- Acquisition identity applies only to an ownership action and records which line content and occurrence within an import produced copies.
   Replay within that import reuses its outcome; another import has independent acquisitions even
   when its contents are identical.
 - Operation identity records one confirmation request and its immutable result. Changed input under
@@ -149,9 +150,15 @@ association preserves its identity. System tags are managed through their lifecy
 Physical membership and card/printing intentions remain separate. Simple comparisons use identity
 and printing constraints; no stored copy-to-requirement allocation is required.
 
-A copy has at most one physical location: a binder, box, physical deck or another location. Moving
-it replaces that location association without changing ownership. Planned decks remain independent
-card/printing associations and do not reserve or relocate copies.
+A deck is a deck tag, not a location. It may contain only card-level associations, printing-specific
+associations or selected copy memberships. One copy can be associated with several decks. Deck
+quantities can exceed ownership; deck changes do not create, reserve or relocate copies.
+Intended quantities are positive integers, independent of request batch bounds. A transport or
+storage batch size must not impose a product ceiling on a deck's required quantity.
+
+A copy's current physical location, such as a binder or box, is a separate fact. Moving it changes
+that location association without removing deck memberships or changing ownership. Deck membership
+alone never establishes a current physical location.
 
 ## Import and capture state
 
@@ -161,14 +168,28 @@ presentation controls do not maintain a second authoritative import model. Raw f
 
 Staging persists entries with `system:import-pending` membership. These entries are visible only on
 the Import page and are excluded from ownership totals, ordinary searches and other lists. Enforce
-this distinction in the component's read contracts. Pending entries can lack a resolved printing or
-represent several copies; they are not yet individual physical-copy records.
+this distinction in the component's read contracts. Pending entries can represent card identities,
+optional printings or unresolved names. Their quantity has the meaning of the selected destination;
+they are not yet individual physical-copy records.
 
 Review and correction retain pending membership. Explicit confirmation validates the reviewed
-revision and atomically ends pending membership, creates the corresponding individual copies with
-provenance and gives them `system:owned` membership. The copies then become available through ordinary
-reads. There is no intermediate `system:ready` state. System memberships express this lifecycle and
-are managed by its operations, rather than edited independently.
+revision and atomically applies an explicit destination and change, ends pending membership and
+records the outcome and source evidence. Import does not imply ownership:
+
+- A deck or other tag destination creates or updates the reviewed card/printing associations and
+  their intended quantities. Resolving a card name is sufficient for a card-level deck entry.
+  Printing, finish, condition and owned-copy availability are not prerequisites for that entry.
+- Only an explicit add-to-ownership action creates individual physical copies, acquisition
+  provenance and `system:owned` memberships. That action requires valid printing and physical
+  attributes. Unknown condition remains explicit.
+
+Destination identity and the requested changes are part of confirmation's replay input. A retry
+cannot change them under the same operation identity. The source's provider, title or URL cannot
+choose ownership implicitly. Selecting a deck does not also add cards to the collection.
+
+Accepted destination records become available through ordinary reads. There is no intermediate
+`system:ready` state. System memberships express the review lifecycle and are managed by its
+operations, rather than edited independently.
 
 Consecutive accepted scan identities suppress repeated observation: A,A admits one entry; A,B,A
 admits all three. Explicit pending quantity represents repeated physical copies. Unresolved readings
@@ -185,10 +206,13 @@ Preserve the import identity and source provenance independently of editable lab
 the resulting physical-copy records. A reviewed Wizards list retains its official source reference;
 accepting a list does not imply automatic discovery or scraping of every preconstructed product.
 
-Parse each supported source into pending entries. Unresolved names or printings remain reviewable;
+Parse each supported source into pending entries. Preserve card names and quantities without
+requiring a printing. Resolve names to playable card identities for card-level associations; retain
+explicit printing choices when the user wants that specificity. Unresolved names or printings remain reviewable;
 unsupported formats and invalid rows produce explicit errors. Keep provider fetching and parsing
 inside this boundary. Source additions or removals alone never change physical ownership.
-Replay protection is scoped to the identified import and its acquisitions, including after migration.
+Replay protection is scoped to the identified import and its accepted changes, including after
+migration; acquisition replay applies only when copies were actually created.
 
 ## Persistence and recovery
 

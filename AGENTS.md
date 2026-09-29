@@ -75,6 +75,7 @@ All documents in `docs/` are relevant to the rebuild.
 - [Build and release operations](docs/operations.md)
 - [Release checklist](docs/release-checklist.md)
 - [Rebuild requirements](docs/requirements.md)
+- [Collection migration](docs/migration.md)
 - [Recognition baseline](docs/recognition-preservation.md)
 - [Implementation task inventory](docs/tasks/inventory.md)
 

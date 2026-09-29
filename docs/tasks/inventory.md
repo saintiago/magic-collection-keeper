@@ -16,7 +16,8 @@ record dependencies. This index groups tasks by subject and does not prescribe e
 
 ## Collection migration
 
-Deferred until after the rebuild; see [migration status](../requirements.md#collection-migration).
+Offline preparation is defined in [collection migration](../migration.md).
+Actual owner-data migration remains outside the rebuild queue.
 
 - [KAN-7: Specify collection migration and verified backup/recovery](https://malton-family.atlassian.net/browse/KAN-7)
 - [KAN-30: Provide an explicit migration path for existing collection data](https://malton-family.atlassian.net/browse/KAN-30)
@@ -40,6 +41,7 @@ Deferred until after the rebuild; see [migration status](../requirements.md#coll
 
 ## UserCards
 
+- [KAN-49: Separate deck import acceptance from physical ownership](https://malton-family.atlassian.net/browse/KAN-49)
 - [KAN-10: Implement UserCards physical-copy storage and account isolation](https://malton-family.atlassian.net/browse/KAN-10)
 - [KAN-11: Implement tags, associations and physical locations](https://malton-family.atlassian.net/browse/KAN-11)
 - [KAN-12: Implement pending imports, review and idempotent confirmation](https://malton-family.atlassian.net/browse/KAN-12)
