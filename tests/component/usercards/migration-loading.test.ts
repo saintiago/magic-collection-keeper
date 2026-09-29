@@ -25,7 +25,13 @@ import {
   type UserCardsSqlTransactor,
   type UserCardsSqlValue,
 } from '../../../src/usercards/index.js';
-import { bundle, legacyRevision, stableId } from '../../../scripts/migration/legacy.js';
+import {
+  bundle,
+  canonical,
+  digest,
+  legacyRevision,
+  stableId,
+} from '../../../scripts/migration/legacy.js';
 import { prepareMigration } from '../../../scripts/migration/prepare.js';
 import { reconcileMigration } from '../../../scripts/migration/reconcile.js';
 import { publishCatalog } from '../../support/catalog-database.js';
@@ -524,6 +530,119 @@ describe('usercards migration loading', () => {
     expect(readback.pending).toHaveLength(1);
     expect(readback.pending[0]!.quantity).toBe(1);
     expect(reconcileMigration(plan, [readback])).toEqual([]);
+  });
+
+  it('recognizes a migrated Moxfield line after its printing and finish were reviewed', async () => {
+    const sourceId = 'synthetic-moxfield-deck';
+    const publishedPrinting = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const raw = legacyExport();
+    const draft = raw.accounts[0]!.documents.find(
+      (document) => document.space === 'import-drafts',
+    )!;
+    draft.value = {
+      id: 'pending',
+      state: 'pending',
+      provider: 'moxfield',
+      source_id: sourceId,
+      url: `https://moxfield.com/decks/${sourceId}`,
+      rows: [
+        {
+          id: 'row-1',
+          printing_id: boltPrinting.printingId,
+          finish: 'nonfoil',
+          quantity: 2,
+          original: {
+            printing_id: publishedPrinting,
+            name: 'Lightning Bolt',
+            section: 'mainboard',
+            set: 'OLD',
+            collector_number: '1',
+            language: 'en',
+            finish: 'foil',
+            quantity: 2,
+          },
+        },
+      ],
+    };
+    const plan = prepareMigration(raw);
+    expect(plan.state).toBe('prepared');
+    await userCards.loadMigrationPlan(alice, { plan, sourceDigest: plan.sourceDigest });
+    const entry = plan.accounts[0]!.pending[0]!;
+    const sourceImports = createSourceImports({
+      sql: database.sql,
+      catalog,
+      decks: {
+        async readDeck() {
+          return {
+            name: 'Synthetic deck',
+            publicId: sourceId,
+            mainboard: {
+              cards: {
+                line: {
+                  quantity: 2,
+                  finish: 'foil',
+                  card: {
+                    name: 'Lightning Bolt',
+                    scryfall_id: publishedPrinting,
+                    set: 'OLD',
+                    cn: '1',
+                    lang: 'en',
+                  },
+                },
+              },
+            },
+          };
+        },
+      },
+    });
+    const staged = await sourceImports.stageSourceImport(alice, {
+      format: 'moxfield',
+      sessionId: entry.sessionId,
+      url: `https://moxfield.com/decks/${sourceId}`,
+    });
+    expect(staged.staged).toBe(0);
+    expect(staged.rows.map((row) => row.outcome)).toEqual(['pending']);
+    expect(staged.rows[0]!.entryId).toBe(entry.entryId);
+    const readback = await userCards.readMigrationReadback(alice);
+    expect(readback.pending).toHaveLength(1);
+    expect(readback.pending[0]).toMatchObject({
+      quantity: 2,
+      printingId: boltPrinting.printingId,
+      finish: 'nonfoil',
+      sourceLine: { printingId: publishedPrinting, finish: 'foil' },
+    });
+    expect(reconcileMigration(plan, [readback])).toEqual([]);
+    const changed = {
+      ...readback,
+      pending: readback.pending.map((pending) => ({
+        ...pending,
+        sourceLine: { ...pending.sourceLine!, printingId: boltPrinting.printingId },
+      })),
+    };
+    expect(reconcileMigration(plan, [changed])).toEqual([`${alice.accountId}: pending mismatch`]);
+  });
+
+  it('refuses older Moxfield plans without source printing evidence before writing', async () => {
+    const plan = prepareMigration(legacyExport());
+    plan.accounts[0]!.sessions[0] = { ...plan.accounts[0]!.sessions[0]!, sourceKind: 'moxfield' };
+    // Older preparation dropped this field even when the archive contained it.
+    for (const entry of plan.accounts[0]!.pending) {
+      const sourceLine = entry.sourceLine as unknown as Record<string, unknown>;
+      sourceLine.finish = 'foil';
+      delete sourceLine.printingId;
+    }
+    const content: Partial<typeof plan> = { ...plan };
+    delete content.planDigest;
+    plan.planDigest = digest(canonical(content));
+    const failure = await captureUserCardsError(
+      userCards.loadMigrationPlan(alice, { plan, sourceDigest: plan.sourceDigest }),
+    );
+    expect(failure.code).toBe('invalid-request');
+    expect(failure.message).toContain('Moxfield source replay identity');
+    expect((await userCards.listImportSessions(alice)).sessions).toEqual([]);
+    expect((await captureUserCardsError(userCards.readMigrationReadback(alice))).code).toBe(
+      'not-found',
+    );
   });
 
   it('reconciles the reviewed card identity of a pending entry', async () => {

@@ -747,6 +747,7 @@ export function createSourceImports(
         }
         const resolved = resolveLine(row, printings);
         const line: ImportSourceLine = {
+          printingId: row.printingId,
           name: row.name,
           section: row.section,
           set: row.set,

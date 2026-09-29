@@ -202,6 +202,7 @@ export function importSessionsFromRows(rows: readonly UserCardsSqlRow[]): Import
 
 /** One parsed source line as it is read back with its entry (docs/user-cards.md#source-imports). */
 export const importSourceLineJsonSchema = z.object({
+  printing_id: z.string().min(1).max(identifierLength).nullable().default(null),
   name: z.string().min(1).max(identifierLength).nullable(),
   section: z.string().min(1).max(identifierLength).nullable(),
   set: z.string().min(1).max(identifierLength).nullable(),
@@ -216,6 +217,7 @@ type ImportSourceLineJson = z.infer<typeof importSourceLineJsonSchema>;
 
 function importSourceLineFromJson(json: ImportSourceLineJson): ImportSourceLine {
   return {
+    printingId: json.printing_id,
     name: json.name,
     section: json.section,
     set: json.set,
@@ -230,6 +232,7 @@ function importSourceLineFromJson(json: ImportSourceLineJson): ImportSourceLine 
 /** Stored JSON form of one parsed source line, matching `importSourceLineJsonSchema`. */
 export function importSourceLinePayload(line: ImportSourceLine): string {
   return JSON.stringify({
+    printing_id: line.printingId,
     name: line.name,
     section: line.section,
     set: line.set,

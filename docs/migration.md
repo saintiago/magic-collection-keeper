@@ -76,6 +76,12 @@ An aggregated deck quantity rejected by the current target public contract is a 
 blocker until the target implements the intended-quantity contract. Preserve the complete quantity;
 do not reinterpret it as ownership, truncate it or split one association silently.
 
+Pending Moxfield lines retain `original.printing_id` and `original.finish` separately from
+reviewed values so restaging uses the same source identity. Missing or invalid original printing
+or finish is a compatibility blocker. A null legacy printing is also insufficient: the pinned
+adapter discards invalid references and defaults named attributes, so an exact named-source key
+cannot be recovered reliably. Older plans without this evidence must be prepared again.
+
 Pending tag/location intentions currently have no corresponding target entry field. Such entries
 are preserved but block the plan. Entries exceeding current confirmation limits and candidates
 that cannot be represented also block; the converter neither drops nor silently splits them.

@@ -1758,6 +1758,7 @@ function readImportSourceLine(value: unknown): ImportSourceLine | null {
     return null;
   }
   const line = readObject(value);
+  const printingId = line?.printingId ?? null;
   const name = line?.name ?? null;
   const section = line?.section ?? null;
   const set = line?.set ?? null;
@@ -1768,6 +1769,7 @@ function readImportSourceLine(value: unknown): ImportSourceLine | null {
   const problem = line?.problem ?? null;
   if (
     line === null ||
+    !isTextOrNull(printingId) ||
     !isTextOrNull(name) ||
     !isTextOrNull(section) ||
     !isTextOrNull(set) ||
@@ -1780,6 +1782,7 @@ function readImportSourceLine(value: unknown): ImportSourceLine | null {
     return null;
   }
   return {
+    printingId,
     name,
     section,
     set,

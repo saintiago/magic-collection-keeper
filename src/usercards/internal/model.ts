@@ -111,6 +111,8 @@ export interface ImportCandidate {
  * replay of the same import can recognize the line from this identity.
  */
 export interface ImportSourceLine {
+  /** Printing reference the source published, independent of the reviewed printing. */
+  readonly printingId: string | null;
   /** Card name the source published; null when it named none. */
   readonly name: string | null;
   /** Deck section the line belongs to, for example `mainboard`; null for a flat list. */

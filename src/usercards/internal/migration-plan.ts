@@ -77,6 +77,7 @@ const candidateSchema = z.object({
   evidence: identifierSchema,
 });
 const sourceLineSchema = z.object({
+  printingId: identifierSchema.nullable().default(null),
   name: identifierSchema.nullable(),
   section: identifierSchema.nullable(),
   set: identifierSchema.nullable(),
@@ -264,6 +265,11 @@ function verifyPlanAccount(account: MigrationPlanAccount): void {
   if (sessions.size !== account.sessions.length) {
     throw migrationPlanError('The migration plan repeats an import session.');
   }
+  const moxfieldSessions = new Set(
+    account.sessions
+      .filter((session) => session.sourceKind === 'moxfield')
+      .map((session) => session.sessionId),
+  );
   const entries = new Set<string>();
   const positions = new Map<string, Set<number>>();
   const pending = new Map<string, number>();
@@ -274,6 +280,14 @@ function verifyPlanAccount(account: MigrationPlanAccount): void {
     entries.add(entry.entryId);
     if (!sessions.has(entry.sessionId)) {
       throw migrationPlanError('A pending entry references an import the plan does not carry.');
+    }
+    if (
+      moxfieldSessions.has(entry.sessionId) &&
+      (entry.sourceLine?.printingId == null || entry.sourceLine.finish === null)
+    ) {
+      throw migrationPlanError(
+        'Moxfield source replay identity is unavailable; prepare a compatible plan from retained source evidence.',
+      );
     }
     const seen = positions.get(entry.sessionId) ?? new Set<number>();
     if (seen.has(entry.position)) {
@@ -328,17 +342,10 @@ export function migrationArchiveDigest(text: string): string {
  * derives from a parsed line (docs/user-cards.md#source-imports). It is computed from what the
  * source published and never from the reviewed values a user later set, so a source re-staged
  * after the migration recognizes the migrated quantity instead of staging it again. A retained
- * source line names a card; the reviewed printing stays out of the source-content identity.
+ * source line retains its published printing separately from the reviewed printing.
  */
 export function migrationSourceLineKey(line: ImportSourceLine): string {
-  return sourceLineKey({
-    name: line.name,
-    set: line.set,
-    collectorNumber: line.collectorNumber,
-    language: line.language,
-    finish: line.finish,
-    printingId: null,
-  });
+  return sourceLineKey(line);
 }
 
 /** One planned association with the kind of its tag, which the private association row stores. */
@@ -492,6 +499,7 @@ function entryTuple(entry: ImportEntry): readonly unknown[] {
     entry.sourceLine === null
       ? null
       : [
+          entry.sourceLine.printingId,
           entry.sourceLine.name,
           entry.sourceLine.section,
           entry.sourceLine.set,

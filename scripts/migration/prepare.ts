@@ -439,6 +439,28 @@ function preparePending(
       }
       const text = (key: string) =>
         typeof row.original[key] === 'string' ? (row.original[key] as string) : null;
+      // The pinned Moxfield adapter retains its published printing here, before review.
+      // A null reference is lossy in that adapter (it also defaults language), so it cannot
+      // establish the exact named-content identity used by current staging.
+      const publishedPrinting =
+        draft.provider === 'moxfield'
+          ? z
+              .string()
+              .min(1)
+              .max(USERCARDS_LIMITS.maxIdentifierLength)
+              .safeParse(row.original.printing_id)
+          : null;
+      const publishedFinish = finish.safeParse(row.original.finish);
+      if (
+        draft.provider === 'moxfield' &&
+        (!publishedPrinting?.success || !publishedFinish.success)
+      ) {
+        issue(
+          row.id,
+          'source-replay-compatibility',
+          'Moxfield source printing or finish is unavailable; replay identity cannot be preserved from the retained evidence.',
+        );
+      }
       target.pending.push({
         entryId,
         sessionId,
@@ -467,14 +489,13 @@ function preparePending(
               left.evidence.localeCompare(right.evidence),
           ),
         sourceLine: {
+          printingId: publishedPrinting?.success ? publishedPrinting.data : null,
           name: text('name'),
           section: text('section'),
           set: text('set'),
           collectorNumber: text('collector_number'),
           language: text('language'),
-          finish: finish.safeParse(row.original.finish).success
-            ? finish.parse(row.original.finish)
-            : null,
+          finish: publishedFinish.success ? publishedFinish.data : null,
           declaredQuantity:
             typeof row.original.quantity === 'number'
               ? z.number().int().positive().parse(row.original.quantity)
