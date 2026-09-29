@@ -1,32 +1,31 @@
 /**
- * Card details page of the UserInterface (docs/user-interface.md#pages-and-navigation,
- * docs/user-interface.md#browsing-and-organization, docs/user-cards.md#records-and-associations).
+ * Card details page of the UserInterface (docs/ui/navigation.md,
+ * docs/ui/pages.md#page-map, docs/user-cards.md#records-and-associations).
  *
  * One URL names the level the page presents: the card, one printing of it or one physical copy.
  * The card level presents the published card and its published printings through the list boundary,
  * whose bounded window, continuation, failure and restoration belong to the list and travel with
- * the page's own state (docs/user-interface.md#cardlist,
- * docs/user-interface.md#state-ownership-and-restoration). The printing level presents one
+ * the page's own state (docs/card-list.md,
+ * docs/ui/architecture.md#state-ownership-and-restoration). The printing level presents one
  * published version of the card. The copy level reads the account's actual copy through the private
  * UserCards contract and resolves the printing it references, so a corrected copy is presented with
  * the printing it now carries. The copy level corrects printing and language (the printing the copy
  * references), finish and condition as one change quoted by the revision the page read: a conflict
  * or a failed change keeps the unsaved draft for review and retry. After a lost response the current
  * copy is read for review while the outcome stays unknown; a saved outcome requires the change's
- * confirmed commitment (docs/user-interface.md#browsing-and-organization). The draft is page state the page
+ * confirmed commitment (docs/ui/pages.md#page-map). The draft is page state the page
  * keeps for its history entry, and a value the draft names stays presented while its catalog data is
  * still unavailable: the controls never replace the user's intended printing, language or finish
  * merely because the record that names it has not loaded. Every provider value renders as text.
  */
 
-import type { CardRecord, Catalog, PrintingRecord } from '../../catalog/index.js';
+import type { CardRecord, Catalog, PrintingRecord } from '../../../catalog/index.js';
 
-import type { UiCardList } from '../card-views/index.js';
-import { createCopyAccess, type UiCopyDraft, type UiCopyEditor } from '../editors/index.js';
-import { UI_LIMITS } from '../shared/limits.js';
+import type { UiCardList } from '../../card-views/index.js';
+import { createCopyAccess, type UiCopyDraft, type UiCopyEditor } from '../../editors/index.js';
+import { UI_LIMITS } from '../../shared/limits.js';
+import { uiHref, type UiPageDefinition, type UiView } from '../../navigation/index.js';
 import { cardViewOf, readListState, readPageState, restoredPresentation } from './page-support.js';
-import type { UiPageDefinition } from './pages.js';
-import { uiHref, type UiView } from './routes.js';
 
 /** What one level of the page presents: its content and the restoration its own list reports. */
 interface UiLevelPresentation {
@@ -84,7 +83,7 @@ export function createCardDetailsPage(): UiPageDefinition {
 
       /**
        * State this page retains for its history entry
-       * (docs/user-interface.md#state-ownership-and-restoration): the copy form's draft, or the
+       * (docs/ui/architecture.md#state-ownership-and-restoration): the copy form's draft, or the
        * card level's printing list exactly as the list captured it. The page never rebuilds a list
        * snapshot from loaded rows, and a view whose list is not composed yet — still loading or a
        * failed restore — keeps the state its entry handed back instead of overwriting it with a
@@ -103,7 +102,7 @@ export function createCardDetailsPage(): UiPageDefinition {
        * reports its presentation once the level's own work settled: the card level reports after
        * the retained printing window is presented again, so the shell restores the entry's
        * interaction over the presented printings
-       * (docs/user-interface.md#state-ownership-and-restoration).
+       * (docs/ui/architecture.md#state-ownership-and-restoration).
        */
       async function render(): Promise<void> {
         status.textContent = 'Loading card details…';
@@ -240,7 +239,7 @@ export function createCardDetailsPage(): UiPageDefinition {
       /**
        * The card level's content: the published printings are one bounded list over the Catalog
        * contract, so its window, continuation, failure and retry stay the list's own business and
-       * the page keeps the state it captured for the history entry (docs/user-interface.md#cardlist).
+       * the page keeps the state it captured for the history entry (docs/card-list.md).
        */
       function cardContent(card: CardRecord): UiLevelPresentation {
         const host = document.createElement('div');

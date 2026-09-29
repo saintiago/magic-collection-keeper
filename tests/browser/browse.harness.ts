@@ -218,6 +218,7 @@ export function installBrowseHarness(
     userCards: unusedUserCards,
     cardList,
     capture: unusedCapture(unusedUserCards),
+    indexing: idleProgress,
   };
   const pages: readonly UiPageDefinition[] = [...createBrowsePages(), cardPage(document)];
   const shell: UserInterface = createUserInterface({

@@ -1,29 +1,38 @@
 /**
- * The UserInterface shell (docs/user-interface.md#interface,
- * docs/user-interface.md#pages-and-navigation,
- * docs/user-interface.md#state-ownership-and-restoration).
+ * Shell of the Navigation module (docs/ui/navigation.md,
+ * docs/ui/architecture.md#modules-and-composition).
  *
- * The shell renders the frame, presents the dedicated page of the current URL and owns identity,
- * history navigation and the bounded, account-isolated retention of the state pages provide.
- * Navigation keeps the state of the view it leaves for the way back without inspecting it: the page
- * owns its representation and hands it back through the page contract. Closing a view aborts its
- * work and detaches its container so a late result cannot change the new view, and a changed account
- * clears the private presentation state, ends the authenticated session the transport serves and
- * reports the ended account to every page implementation.
+ * Navigation owns the routes of the dedicated pages, the persistent frame, the mounted page
+ * lifetime and the bounded, account-isolated retention of the state pages provide. UI composition
+ * registers the page factories it receives; Application supplies the account access and the public
+ * capabilities the pages present. Navigation mounts one page at a time, disposes the departed one
+ * and fences a factory result that a newer navigation or account change has obsoleted. A retained
+ * handle stays opaque: Navigation keeps it for its history entry and hands it back to its owning
+ * factory without inspecting its contents.
+ *
+ * The shell also presents the floating notices of the component: the indexing notice of the
+ * account-scoped progress Application connected to Search's browser indexing capability, and the
+ * operation and service failures the presented pages report through the notice capability. Closing
+ * a page aborts its work and detaches its container so a late result cannot change the new view; a
+ * changed account clears the private presentation state and its notices, ends the authenticated
+ * session the transport serves and reports the ended account to every page implementation.
  *
  * A page that presents a restored history entry asynchronously reports the presentation, so the
- * entry's scroll offset, focused element and visible anchor are restored over the presented content;
- * an interrupted restoration keeps the context the entry had instead of capturing the partially
- * presented view, and explicit user input takes the interaction over from the restoration.
+ * entry's scroll offset, focused element and visible anchor are restored over the presented
+ * content; an interrupted restoration keeps the context the entry had instead of capturing the
+ * partially presented view, and explicit user input takes the interaction over from the
+ * restoration.
  */
 
-import type { UserInterfaceCapabilities } from '../../application/index.js';
-import type { CaptureBrowserDevice } from '../../capture/index.js';
+import type { UserInterfaceCapabilities } from '../../../application/index.js';
+import type { CaptureBrowserDevice } from '../../../capture/index.js';
+import type { SearchIndexingObservable, SearchIndexingStatus } from '../../../search/browser.js';
 
-import { createUiPresentationModules, type UiPresentationModules } from './composition.js';
+import { observeUiInput } from '../../shared/interaction.js';
+import type { UiPresentationModules } from '../../shared/modules.js';
 import { createDialogs, type UiDialogs } from './dialogs.js';
 import { readAccount, type UiAccount, type UiIdentity } from './identity.js';
-import { observeUiInput } from '../shared/interaction.js';
+import { createNoticeHost, type UiNotice, type UiNotices } from './notices.js';
 import type { UiPageContext, UiPageDefinition, UiPageHandle } from './pages.js';
 import { createViewStateStore, type UiViewSnapshot } from './restoration.js';
 import {
@@ -36,7 +45,17 @@ import {
   type UiView,
 } from './routes.js';
 
-export interface UserInterfaceOptions {
+/**
+ * One page implementation, or — for a build that loads its pages on demand — the factory that
+ * loads it. Loading may be asynchronous; Navigation mounts the result only while the view that
+ * requested it still owns the shell (docs/ui/navigation.md#internal-design).
+ */
+export interface UiPageRegistry {
+  /** Implementation of one page, or null when this build presents none. */
+  load(page: UiPageName): UiPageDefinition | null | Promise<UiPageDefinition | null>;
+}
+
+export interface NavigationOptions {
   /** Element the shell renders the application frame and its pages into. */
   readonly root: Element;
   /** Public configuration, authenticated transport and component access from Application. */
@@ -45,17 +64,19 @@ export interface UserInterfaceOptions {
   readonly identity: UiIdentity;
   /** Device capability of this deployment; absent when the UI holds no device resources. */
   readonly device?: CaptureBrowserDevice;
-  /** Page implementations; a page without one presents the shell frame alone. */
-  readonly pages?: readonly UiPageDefinition[];
   /**
-   * Presentation modules of this build; the defaults compose the CardViews, Editors and
-   * CaptureControls implementations of the browser application
-   * (docs/ui/architecture.md#modules-and-composition).
+   * Registry the shell resolves the page of a route from, or the page implementations themselves;
+   * UI composition supplies them and a route without a page presents no content.
    */
-  readonly modules?: UiPresentationModules;
+  readonly pages?: readonly UiPageDefinition[] | UiPageRegistry;
+  /**
+   * Presentation modules UI composition supplies to the pages it mounts; the shell hands them to
+   * every page it presents (docs/ui/architecture.md#modules-and-composition).
+   */
+  readonly modules: UiPresentationModules;
 }
 
-export interface UserInterface {
+export interface Navigation {
   /** Verified account currently presented, or null while signed out. */
   readonly account: UiAccount | null;
   /** View currently presented, or null while signed out or on an unknown route. */
@@ -66,9 +87,15 @@ export interface UserInterface {
   replace(view: UiView): void;
   /** Follows navigation history back. */
   back(): void;
-  /** Releases listeners, page work and device resources. */
+  /** Releases listeners, page work, notices and device resources. */
   dispose(): void;
 }
+
+/** Notice identity of the account-scoped indexing progress, owned by the shell. */
+const indexingNotice = 'navigation:indexing';
+/** Notice identities of the shell's own sign-in and sign-out operations. */
+const signInNotice = 'navigation:sign-in';
+const signOutNotice = 'navigation:sign-out';
 
 /** Dedicated pages the primary navigation reaches; tag and card views are reached from them. */
 const primaryLinks: readonly { readonly view: UiView; readonly label: string }[] = [
@@ -82,13 +109,13 @@ const primaryLinks: readonly { readonly view: UiView; readonly label: string }[]
   { view: { page: 'import' }, label: 'Import' },
 ];
 
-export function createUserInterface(options: UserInterfaceOptions): UserInterface {
+export function createNavigation(options: NavigationOptions): Navigation {
   const root = readRoot(options?.root);
   const capabilities = readCapabilities(options?.capabilities);
   const identity = readIdentity(options?.identity);
   const device = readDevice(options?.device);
   const pages = readPages(options?.pages);
-  const modules = options?.modules ?? createUiPresentationModules();
+  const modules = readModules(options?.modules);
   const document = root.ownerDocument;
   const candidates = document.defaultView;
   if (candidates === null) {
@@ -97,7 +124,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   const browser: Window = candidates;
   const history = browser.history;
   const previousScrollRestoration = history.scrollRestoration;
-  // The shell owns restoration (docs/user-interface.md#pages-and-navigation): the browser's own
+  // The shell owns restoration (docs/ui/navigation.md): the browser's own
   // restoration would move the departing page before a traversal can capture its scroll offset.
   history.scrollRestoration = 'manual';
   const store = createViewStateStore();
@@ -120,10 +147,8 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   const header = document.createElement('header');
   header.append(nav, accountLabel, signOutButton);
   const main = document.createElement('main');
-  const status = document.createElement('p');
-  status.setAttribute('role', 'status');
-  status.setAttribute('aria-live', 'polite');
-  root.replaceChildren(header, main, status);
+  root.replaceChildren(header, main);
+  const notices = createNoticeHost(root);
 
   let account: UiAccount | null = null;
   let view: UiView | null = null;
@@ -135,6 +160,10 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   let signOutPending = false;
   let lastHref = '';
   let lastToken: string | null = null;
+  /** Account-scoped indexing progress Application supplied for the presented account. */
+  let indexing: SearchIndexingObservable | null = null;
+  /** Withdrawal of the subscription to that progress. */
+  let unsubscribeIndexing: (() => void) | null = null;
   /**
    * Whether the presented entry still keeps the interaction context it is restoring: the scroll
    * offset, focused element and visible anchor it had when the user left it. It holds from the
@@ -212,6 +241,8 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
       // Disposal ends the presented account's private state with the UI that presented it.
       endAccount(current.accountId);
     }
+    bindIndexing(null);
+    notices.dispose();
     store.clear();
     releaseDevice();
     history.scrollRestoration = previousScrollRestoration;
@@ -236,21 +267,27 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     }
     closePage();
     store.clear();
+    // The notices of the presented view end with the account that presented them, and the progress
+    // of the account the shell leaves is fenced before the next account is bound
+    // (docs/ui/navigation.md#indexing-notice).
+    bindIndexing(null);
+    notices.clear();
     if (previous !== null) {
       endAccount(previous.accountId);
       capabilities.request.endSession();
       releaseDevice();
     }
+    bindIndexing(next);
     render();
   }
 
   /**
    * Reports one account the shell leaves to every page implementation, whichever page is presented
    * at that moment, so private state a page keeps outside the entries of the shell's own store ends
-   * with the account that presented it (docs/user-interface.md#state-ownership-and-restoration).
+   * with the account that presented it (docs/ui/architecture.md#state-ownership-and-restoration).
    */
   function endAccount(accountId: string): void {
-    for (const definition of pages.values()) {
+    for (const definition of pages.loaded.values()) {
       definition.accountEnded?.(accountId);
     }
   }
@@ -267,7 +304,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     signOutPending = true;
     signOutButton.disabled = true;
     main.hidden = true;
-    status.textContent = 'Signing out…';
+    notices.show({ id: signOutNotice, severity: 'progress', message: 'Signing out…' });
     void finishSignOut();
   }
 
@@ -290,7 +327,14 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     }
     // Identity still reports the signed-in account, so the page was never closed and is live.
     main.hidden = false;
-    status.textContent = message ?? '';
+    if (message === null) {
+      notices.dismiss(signOutNotice);
+      return;
+    }
+    // Signing out is a service failure with no field to hold it: the floating error notice reports
+    // it, the live page keeps its work, and the enabled control offers the retry
+    // (docs/ui/navigation.md#error-notices).
+    notices.show({ id: signOutNotice, severity: 'error', message });
   }
 
   function requestSignIn(): void {
@@ -301,11 +345,16 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   }
 
   async function runIdentity(start: () => void | Promise<void>, fallback: string): Promise<void> {
-    status.textContent = '';
+    notices.dismiss(signInNotice);
     try {
       await start();
     } catch (cause) {
-      status.textContent = readMessage(cause, fallback);
+      notices.show({
+        id: signInNotice,
+        severity: 'error',
+        message: readMessage(cause, fallback),
+        action: { label: 'Sign in again', run: requestSignIn },
+      });
       return;
     }
     if (!disposed) {
@@ -317,7 +366,6 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   function render(): void {
     closePage();
     const current = account;
-    status.textContent = '';
     header.hidden = current === null;
     main.hidden = false;
     const target = current === null ? null : readUiView(browser.location.href);
@@ -389,8 +437,90 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
         }
       },
       dialogs: pageDialogs(currentGeneration),
+      notices: pageNotices(currentGeneration, current.accountId),
     };
-    const handle = pages.get(target.page)?.mount(container, context) ?? null;
+    resolvePage(target, container, context, heading, restored, currentGeneration, controller);
+  }
+
+  /**
+   * Resolves the page implementation of one route and mounts it. A registry may load the factory
+   * asynchronously: the resolved definition mounts only while the view that requested it still owns
+   * the shell, so a load a newer navigation or account change obsoleted neither renders into the
+   * page region of the replacement view nor keeps a handle of its own
+   * (docs/ui/navigation.md#internal-design).
+   */
+  function resolvePage(
+    target: UiView,
+    container: HTMLDivElement,
+    context: UiPageContext,
+    heading: HTMLHeadingElement,
+    restored: UiViewSnapshot | null,
+    currentGeneration: number,
+    controller: AbortController,
+  ): void {
+    let loading: UiPageDefinition | null | Promise<UiPageDefinition | null>;
+    try {
+      loading = pages.load(target.page);
+    } catch (cause) {
+      presentUnavailable(container, cause, currentGeneration);
+      return;
+    }
+    if (isThenable(loading)) {
+      // The route presents its loading state while the factory loads; the definition replaces it.
+      const pending = document.createElement('p');
+      pending.dataset.uiPageLoading = '';
+      pending.textContent = 'Loading…';
+      container.replaceChildren(pending);
+      void Promise.resolve(loading).then(
+        (definition) => {
+          mountPage(
+            definition,
+            container,
+            context,
+            heading,
+            restored,
+            currentGeneration,
+            controller,
+          );
+        },
+        (cause: unknown) => {
+          presentUnavailable(container, cause, currentGeneration);
+        },
+      );
+      return;
+    }
+    mountPage(loading, container, context, heading, restored, currentGeneration, controller);
+  }
+
+  /** Mounts one resolved page implementation, unless a newer view already owns the shell. */
+  function mountPage(
+    definition: UiPageDefinition | null,
+    container: HTMLDivElement,
+    context: UiPageContext,
+    heading: HTMLHeadingElement,
+    restored: UiViewSnapshot | null,
+    currentGeneration: number,
+    controller: AbortController,
+  ): void {
+    if (disposed || generation !== currentGeneration) {
+      // A factory that resolved after the shell left its view mounts nothing.
+      return;
+    }
+    if (definition === null) {
+      container.replaceChildren();
+      return;
+    }
+    if (definition.page !== context.view.page) {
+      presentUnavailable(
+        container,
+        new TypeError('A page factory loaded another page than the route it belongs to.'),
+        currentGeneration,
+      );
+      return;
+    }
+    pages.loaded.set(definition.page, definition);
+    container.replaceChildren();
+    const handle = definition.mount(container, context) ?? null;
     if (generation !== currentGeneration) {
       // The page presented another view while mounting; that view owns the shell's handle now.
       handle?.dispose?.();
@@ -399,6 +529,22 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
     pageHandle = handle;
     restoreInteraction(heading, restored);
     restorePresentedInteraction(handle, heading, restored, currentGeneration, controller.signal);
+  }
+
+  /** A route whose factory could not be loaded presents recoverable feedback instead of nothing. */
+  function presentUnavailable(
+    container: HTMLDivElement,
+    cause: unknown,
+    currentGeneration: number,
+  ): void {
+    if (disposed || generation !== currentGeneration) {
+      return;
+    }
+    container.replaceChildren();
+    const message = document.createElement('p');
+    message.dataset.uiPageUnavailable = '';
+    message.textContent = readMessage(cause, 'This page could not be loaded.');
+    container.append(message);
   }
 
   function renderPanel(heading: HTMLHeadingElement, content: readonly Node[]): void {
@@ -429,7 +575,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
    * content of that entry. A page whose sources supply entries only after the shell has mounted it
    * presents them asynchronously, so the entry's scroll offset, focused element and visible anchor
    * are restored over the presented content instead of over the empty page
-   * (docs/user-interface.md#state-ownership-and-restoration).
+   * (docs/ui/architecture.md#state-ownership-and-restoration).
    *
    * Until the page presents that snapshot the entry keeps the interaction context it is restoring:
    * Back, Forward or a link leaves that context in place instead of capturing the partially
@@ -556,7 +702,7 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
   /**
    * The presented entry stops keeping the interaction context it was restoring: from here on,
    * leaving it captures the interaction the presented view holds
-   * (docs/user-interface.md#state-ownership-and-restoration).
+   * (docs/ui/architecture.md#state-ownership-and-restoration).
    */
   function releaseRestoration(): void {
     restoringEntry = false;
@@ -580,6 +726,122 @@ export function createUserInterface(options: UserInterfaceOptions): UserInterfac
           return Promise.resolve(false);
         }
         return dialogs.confirm(options);
+      },
+    };
+  }
+
+  /**
+   * Notice capability of one presented page: it reports the operation and service failures it
+   * presents under the page's own identities, and a page the shell has left can no longer report
+   * one to the view that replaced it (docs/ui/navigation.md#error-notices).
+   */
+  function pageNotices(currentGeneration: number, accountId: string): UiNotices {
+    const prefix = `navigation:page:${accountId}:`;
+    const live = (): boolean =>
+      !disposed && generation === currentGeneration && account?.accountId === accountId;
+    return {
+      show(notice: UiNotice) {
+        if (live()) {
+          notices.show({ ...notice, id: `${prefix}${notice.id}` });
+        }
+      },
+      dismiss(id: string) {
+        if (live()) {
+          notices.dismiss(`${prefix}${id}`);
+        }
+      },
+    };
+  }
+
+  /**
+   * Binds the account-scoped indexing status Application supplies. Application replaces the
+   * tracker with the account, so the shell subscribes when the account changes, presents every
+   * published status and drops the binding of the account it left; the shell neither compares
+   * positions nor checks progress itself (docs/ui/navigation.md#indexing-notice).
+   */
+  function bindIndexing(current: UiAccount | null): void {
+    unsubscribeIndexing?.();
+    unsubscribeIndexing = null;
+    indexing = null;
+    notices.dismiss(indexingNotice);
+    if (current === null) {
+      return;
+    }
+    let progress: SearchIndexingObservable;
+    try {
+      progress = capabilities.indexing(current.accountId);
+    } catch {
+      // A composition without tracked progress of this account presents no indexing notice.
+      return;
+    }
+    if (progress.status().accountId !== current.accountId) {
+      // Progress of another account is never presented as this account's saving state.
+      return;
+    }
+    indexing = progress;
+    unsubscribeIndexing = progress.subscribe((status) => {
+      applyIndexingStatus(current.accountId, status);
+    });
+    applyIndexingStatus(current.accountId, progress.status());
+  }
+
+  /**
+   * Presents one published indexing status. The notice means the save succeeded and search results
+   * are catching up: it disappears once the known changes are incorporated, reports delayed or
+   * failed progress explicitly with a status check that repeats no write, and never invents a
+   * percentage (docs/ui/navigation.md#indexing-notice).
+   */
+  function applyIndexingStatus(accountId: string, status: SearchIndexingStatus): void {
+    if (disposed || status.accountId !== accountId || account?.accountId !== accountId) {
+      // A late status of the account the shell left never reaches another account's notice.
+      return;
+    }
+    switch (status.state) {
+      case 'idle':
+      case 'incorporated':
+        // Nothing known awaits indexing: no notice is presented.
+        notices.dismiss(indexingNotice);
+        return;
+      case 'indexing':
+        notices.show({
+          id: indexingNotice,
+          severity: 'progress',
+          message: 'Indexing your cards…',
+        });
+        return;
+      case 'delayed':
+        notices.show({
+          id: indexingNotice,
+          severity: 'status',
+          message: 'Indexing is delayed',
+          action: checkIndexing(),
+        });
+        return;
+      case 'unavailable':
+        notices.show({
+          id: indexingNotice,
+          severity: 'status',
+          message: 'The indexing status is unavailable',
+          action: checkIndexing(),
+        });
+        return;
+      case 'failed':
+        notices.show({
+          id: indexingNotice,
+          severity: 'error',
+          message: 'Indexing failed',
+          action: checkIndexing(),
+        });
+        return;
+    }
+  }
+
+  /** Status retry of the indexing notice; it checks progress and repeats no original write. */
+  function checkIndexing(): UiNotice['action'] {
+    return {
+      label: 'Check indexing status',
+      run: () => {
+        indexing?.recheck();
       },
     };
   }
@@ -813,6 +1075,7 @@ function readCapabilities(value: unknown): UserInterfaceCapabilities {
     typeof readObject(record.catalog)?.resolve !== 'function' ||
     typeof readObject(record.search)?.execute !== 'function' ||
     typeof userCards?.account !== 'function' ||
+    typeof record.indexing !== 'function' ||
     typeof request !== 'function' ||
     typeof (request as { endSession?: unknown }).endSession !== 'function'
   ) {
@@ -849,27 +1112,84 @@ function readDevice(value: unknown): CaptureBrowserDevice {
   return value as CaptureBrowserDevice;
 }
 
-function readPages(value: unknown): ReadonlyMap<UiPageName, UiPageDefinition> {
-  const pages = new Map<UiPageName, UiPageDefinition>();
+/** Page implementations of one shell and the definitions the shell has resolved so far. */
+interface UiPages extends UiPageRegistry {
+  /**
+   * Resolved implementations by page. A list registers every implementation it carries; a lazy
+   * registry only the ones a presented route resolved, which are the ones that can hold state.
+   */
+  readonly loaded: Map<UiPageName, UiPageDefinition>;
+}
+
+function readPages(value: unknown): UiPages {
   if (value === undefined) {
-    return pages;
+    return { load: () => null, loaded: new Map() };
   }
-  if (!Array.isArray(value)) {
-    throw new TypeError('Page implementations are supplied as a list.');
-  }
-  for (const entry of value) {
-    const definition = readObject(entry);
-    const name = definition?.page;
-    if (
-      definition === null ||
-      typeof definition.mount !== 'function' ||
-      !uiPageNames.includes(name as UiPageName)
-    ) {
-      throw new TypeError('A page implementation names one dedicated page and mounts it.');
+  if (Array.isArray(value)) {
+    // A list of implementations is the eager registry UI composition usually supplies.
+    const loaded = new Map<UiPageName, UiPageDefinition>();
+    for (const entry of value) {
+      const definition = readDefinition(entry);
+      loaded.set(definition.page, definition);
     }
-    pages.set(name as UiPageName, entry as UiPageDefinition);
+    return { load: (page) => loaded.get(page) ?? null, loaded };
   }
-  return pages;
+  const registry = readObject(value);
+  if (registry === null || typeof registry.load !== 'function') {
+    throw new TypeError('Page implementations are supplied as a list or a page registry.');
+  }
+  const load = registry.load as UiPageRegistry['load'];
+  return {
+    load: (page) => {
+      const result = load.call(registry, page);
+      return isThenable(result)
+        ? Promise.resolve(result).then((definition) =>
+            definition === null || definition === undefined ? null : readDefinition(definition),
+          )
+        : result === null || result === undefined
+          ? null
+          : readDefinition(result);
+    },
+    loaded: new Map(),
+  };
+}
+
+/** One registered page implementation; a value outside the contract is rejected. */
+function readDefinition(value: unknown): UiPageDefinition {
+  const definition = readObject(value);
+  const name = definition?.page;
+  if (
+    definition === null ||
+    typeof definition.mount !== 'function' ||
+    !uiPageNames.includes(name as UiPageName)
+  ) {
+    throw new TypeError('A page implementation names one dedicated page and mounts it.');
+  }
+  return value as UiPageDefinition;
+}
+
+/** Whether one page-registry result is a factory still loading. */
+function isThenable(value: unknown): value is Promise<UiPageDefinition | null> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
+}
+
+function readModules(value: unknown): UiPresentationModules {
+  const record = readObject(value);
+  if (
+    record === null ||
+    readObject(record.cardViews) === null ||
+    readObject(record.editors) === null ||
+    typeof record.captureControls !== 'function'
+  ) {
+    throw new TypeError(
+      'The UI composition supplies the CardViews, Editors and CaptureControls modules of its pages.',
+    );
+  }
+  return value as UiPresentationModules;
 }
 
 function readObject(value: unknown): Readonly<Record<string, unknown>> | null {

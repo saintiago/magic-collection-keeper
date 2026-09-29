@@ -10,10 +10,9 @@
  * (docs/ui/architecture.md#modules-and-composition). Every provider value renders as text.
  */
 
-import { createTagAccess } from '../editors/index.js';
-import type { UiPageDefinition } from './pages.js';
+import { createTagAccess } from '../../editors/index.js';
+import { uiHref, type UiPageDefinition } from '../../navigation/index.js';
 import { readPageState } from './page-support.js';
-import { uiHref } from './routes.js';
 
 /** The organization views: the account's tags and one tag's deck, wishlist, location or grouping. */
 export function createOrganizationPages(): readonly UiPageDefinition[] {

@@ -1,6 +1,6 @@
 /**
  * Account-isolated state the UserInterface keeps for a bounded number of history entries
- * (docs/user-interface.md#state-ownership-and-restoration).
+ * (docs/ui/architecture.md#state-ownership-and-restoration).
  *
  * A history entry carries an opaque token instead of view content: the shell opens the token when
  * it presents the entry and saves the page's own retained state beside the scroll offset, the
@@ -18,7 +18,7 @@
  * that opened it, so a history entry that survives a reload never reads another store's snapshot.
  */
 
-import { UI_LIMITS } from '../shared/limits.js';
+import { UI_LIMITS } from '../../shared/limits.js';
 
 /** What the shell restores when history returns to a view. */
 export interface UiViewSnapshot {

@@ -29,13 +29,9 @@ import {
   type BrowserCaptureDeviceOptions,
   type CaptureBrowserDevice,
 } from '../capture/index.js';
-import { createBrowsePages } from './internal/browse.js';
-import { createCollectionPages } from './internal/collection.js';
-import type { UiIdentity } from './internal/identity.js';
-import { createImportPages } from './internal/imports.js';
-import { createOrganizationPages } from './internal/organization.js';
+import { createUserInterface, type UserInterface } from './internal/composition.js';
+import type { UiIdentity } from './navigation/index.js';
 import { createCredentialPrompt } from './internal/sign-in-page.js';
-import { createUserInterface, type UserInterface } from './internal/shell.js';
 
 export interface BrowserDeploymentOptions {
   /** Element the shell renders into; the packaged page supplies `#keeper-root`. */
@@ -70,12 +66,6 @@ export function createBrowserDeployment(options: BrowserDeploymentOptions): Brow
   const settings = resolvePublicSettings(options?.settings);
   const root = readRoot(options?.root);
   const device = options?.device ?? createBrowserCaptureDevice(options?.deviceOptions ?? {});
-  const pages = [
-    ...createBrowsePages(),
-    ...createCollectionPages(),
-    ...createOrganizationPages(),
-    ...createImportPages(),
-  ];
   let userInterface: UserInterface | null = null;
   const application = createBrowserApplication({
     settings,
@@ -88,7 +78,6 @@ export function createBrowserDeployment(options: BrowserDeploymentOptions): Brow
         capabilities,
         identity: capabilities.identity,
         device,
-        pages,
       });
       return userInterface;
     },

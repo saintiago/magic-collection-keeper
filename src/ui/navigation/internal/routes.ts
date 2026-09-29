@@ -1,5 +1,5 @@
 /**
- * Routes of the UserInterface (docs/user-interface.md#pages-and-navigation).
+ * Routes of the UserInterface (docs/ui/navigation.md).
  *
  * Home, catalog/search, collection, tags, tag views, card details and import are dedicated pages.
  * A view is identified by the URL fragment, so a reload or a direct entry presents the same view
@@ -13,20 +13,20 @@
  * evaluates the same query and the text expression and the controls normalize into the same query
  * model (docs/search.md#scryfall-compatibility). A collection view names the text expression and
  * the card, printing or physical-copy level it presents over the account's owned records
- * (docs/user-interface.md#browsing-and-organization).
+ * (docs/ui/pages.md#page-map).
  */
 
 // Type-only imports keep the provider barrels out of a browser bundle: a value import would pull
 // the whole Catalog module, including its Node-only synchronization job, into the page.
-import type { Finish } from '../../catalog/index.js';
+import type { Finish } from '../../../catalog/index.js';
 import {
   readUiCatalogFinish,
   readUiCatalogLevel,
   readUiCollectionLevel,
   type UiCatalogLevel,
   type UiCollectionLevel,
-} from '../shared/vocabulary.js';
-import { UI_LIMITS } from '../shared/limits.js';
+} from '../../shared/vocabulary.js';
+import { UI_LIMITS } from '../../shared/limits.js';
 
 export {
   readUiCatalogFinish,
@@ -38,7 +38,7 @@ export {
   uiFinishLabel,
   type UiCatalogLevel,
   type UiCollectionLevel,
-} from '../shared/vocabulary.js';
+} from '../../shared/vocabulary.js';
 
 export const uiPageNames = [
   'home',

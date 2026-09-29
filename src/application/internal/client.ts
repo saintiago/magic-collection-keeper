@@ -25,7 +25,11 @@ import type {
   ListCardPrintingsOptions,
   PrintingRecord,
 } from '../../catalog/index.js';
-import { createSearchProgress, type SearchIndexingProgress } from '../../search/browser.js';
+import {
+  createSearchProgress,
+  type SearchIndexingObservable,
+  type SearchIndexingProgress,
+} from '../../search/browser.js';
 import { createCardListBrowser, type CardListBrowser } from '../../card-list/index.js';
 import { createCaptureBrowser, type CaptureBrowser } from '../../capture/index.js';
 import {
@@ -701,7 +705,7 @@ export function createUserCardsClient(request: RequestTransport): UserCardsBrows
   };
 }
 
-/** Component access and public configuration the UserInterface receives (docs/user-interface.md#interface). */
+/** Component access and public configuration the UserInterface receives (docs/application.md#interface). */
 export interface UserInterfaceCapabilities {
   readonly settings: PublicApplicationSettings;
   /** Verified-account capability of this environment's sign-in. */
@@ -728,6 +732,13 @@ export interface UserInterfaceCapabilities {
    * component's implementation or constructing its providers.
    */
   readonly capture: CaptureBrowser;
+  /**
+   * Account-scoped observable indexing status of the presented account, connected by this
+   * composition to UserCards' committed-change positions (docs/application.md#interface). The
+   * UserInterface shell presents it as its floating indexing notice and performs no indexing work
+   * of its own (docs/ui/navigation.md#indexing-notice).
+   */
+  readonly indexing: (accountId: string) => SearchIndexingObservable;
 }
 
 export interface BrowserApplicationOptions {
@@ -843,6 +854,20 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
       if (change.position !== null) tracker.committed([change.position]);
     });
   }
+  /**
+   * Supplies the UserInterface the progress tracker of one authenticated account. A retained shell
+   * that asks for the progress of an account that is not the authenticated one receives no
+   * tracker of another account (docs/architecture.md#runtime-boundaries).
+   */
+  function indexingProgress(id: string): SearchIndexingObservable {
+    if (progress === null || progress.status().accountId !== id) {
+      throw new ApplicationError(
+        'unauthorized',
+        'Indexing progress requires the authenticated account.',
+      );
+    }
+    return progress;
+  }
   const cardList = createCardListBrowser({
     search,
     catalog,
@@ -914,6 +939,7 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
           userCards,
           cardList,
           capture,
+          indexing: indexingProgress,
         })
       : null;
   return {
