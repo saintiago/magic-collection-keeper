@@ -5,10 +5,10 @@ The two CloudFormation templates in this directory define the isolated AWS stack
 themselves: deployment execution, existing-resource deletion and collection migration stay with the
 owner's explicit authorization.
 
-| Template          | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `foundation.json` | Isolated VPC with two public subnets (outbound-only task networking) and two isolated database subnets, Aurora PostgreSQL Serverless v2 cluster with its writer instance on the RDS Data API, database subnet group and security groups, private browser, source-snapshot and deployment-artifact buckets, immutable catalog and recognition image repositories, the reader secret and one writer secret per mutating component, alarm topic, capacity alarm and cluster log group. |
-| `service.json`    | App client on the retained Cognito user pool, JWT-authorized HTTP API with the interactive and recognition entry points, interactive Node.js Lambda, recognition container Lambda, finite Fargate catalog task definition, CloudFront delivery of the private browser bucket, log groups and alarms.                                                                                                                                                                                |
+| Template          | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `foundation.json` | Isolated VPC with two public subnets (outbound-only task networking) and two isolated database subnets, Aurora PostgreSQL Serverless v2 cluster with its writer instance on the RDS Data API, database subnet group and security groups, private browser, source-snapshot and deployment-artifact buckets, immutable catalog, recognition and indexing image repositories, the reader secret, one writer secret per mutating component and the Search indexing secret, alarm topic, capacity alarm and cluster log group. |
+| `service.json`    | App client on the retained Cognito user pool, JWT-authorized HTTP API with the interactive and recognition entry points, interactive Node.js Lambda, recognition container Lambda, the finite Fargate task definitions of catalog synchronization and background Search indexing, CloudFront delivery of the private browser bucket, log groups and alarms.                                                                                                                                                               |
 
 Both stacks take the same `Environment` value, and the service stack imports the foundation's export
 values, so it has to be deleted before the foundation stack. The split exists because repositories
@@ -24,19 +24,20 @@ credentials - is created by these stacks.
 
 `foundation.json`:
 
-| Parameter                     | Default                   | Validation                           | Meaning                                                                                |
-| ----------------------------- | ------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------- |
-| `Environment`                 | required                  | `development`, `test`, `production`  | Names the stack's exports and pairs it with the service stack of the same environment. |
-| `VpcCidr`                     | `10.42.0.0/16`            | IPv4 CIDR `/16`-`/22`                | Range the four `/24` subnets are carved from; a smaller range cannot hold them.        |
-| `DatabaseName`                | `keeper`                  | PostgreSQL identifier                | Database holding the published Catalog and UserCards schemas.                          |
-| `DatabaseEngineVersion`       | `17.10`                   | `x` or `x.y[.z]`                     | Aurora PostgreSQL version; scaling to zero ACUs needs 16.3/15.7/14.12/13.15 or later.  |
-| `DatabaseMaximumCapacity`     | `2`                       | `1`, `2`, `4`, `8`, `16`, `32`, `64` | Upper scaling bound in ACUs.                                                           |
-| `DatabaseAutoPauseSeconds`    | `600`                     | `300`-`86400`                        | Idle time before the writer pauses at zero ACUs.                                       |
-| `DatabaseBackupRetentionDays` | `7`                       | `1`-`35`                             | Automated backup window.                                                               |
-| `ReaderRoleName`              | `keeper_reader`           | lowercase PostgreSQL identifier      | Published-view reader role the schema bootstrap creates.                               |
-| `UserCardsWriterRoleName`     | `keeper_usercards_writer` | lowercase PostgreSQL identifier      | UserCards private-mutation role; only the interactive API's credential.                |
-| `CatalogWriterRoleName`       | `keeper_catalog_writer`   | lowercase PostgreSQL identifier      | Catalog private-mutation role; only the finite catalog task's credential.              |
-| `SnapshotPrefix`              | `snapshots/`              | key prefix                           | Prefix of the private bucket the catalog job streams its provider snapshot from.       |
+| Parameter                     | Default                   | Validation                           | Meaning                                                                                                 |
+| ----------------------------- | ------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `Environment`                 | required                  | `development`, `test`, `production`  | Names the stack's exports and pairs it with the service stack of the same environment.                  |
+| `VpcCidr`                     | `10.42.0.0/16`            | IPv4 CIDR `/16`-`/22`                | Range the four `/24` subnets are carved from; a smaller range cannot hold them.                         |
+| `DatabaseName`                | `keeper`                  | PostgreSQL identifier                | Database holding the published Catalog and UserCards schemas and Search's projection.                   |
+| `DatabaseEngineVersion`       | `17.10`                   | `x` or `x.y[.z]`                     | Aurora PostgreSQL version; scaling to zero ACUs needs 16.3/15.7/14.12/13.15 or later.                   |
+| `DatabaseMaximumCapacity`     | `2`                       | `1`, `2`, `4`, `8`, `16`, `32`, `64` | Upper scaling bound in ACUs.                                                                            |
+| `DatabaseAutoPauseSeconds`    | `600`                     | `300`-`86400`                        | Idle time before the writer pauses at zero ACUs.                                                        |
+| `DatabaseBackupRetentionDays` | `7`                       | `1`-`35`                             | Automated backup window.                                                                                |
+| `ReaderRoleName`              | `keeper_reader`           | lowercase PostgreSQL identifier      | Published-view reader role the schema bootstrap creates.                                                |
+| `UserCardsWriterRoleName`     | `keeper_usercards_writer` | lowercase PostgreSQL identifier      | UserCards private-mutation role; only the interactive API's credential.                                 |
+| `CatalogWriterRoleName`       | `keeper_catalog_writer`   | lowercase PostgreSQL identifier      | Catalog private-mutation role; only the finite catalog task's credential.                               |
+| `SearchIndexingRoleName`      | `keeper_search_indexing`  | lowercase PostgreSQL identifier      | Search projection-maintenance and publication-read role; only the background indexing job's credential. |
+| `SnapshotPrefix`              | `snapshots/`              | key prefix                           | Prefix of the private bucket the catalog job streams its provider snapshot from.                        |
 
 `service.json`:
 
@@ -48,6 +49,7 @@ credentials - is created by these stacks.
 | `ApiCodeVersion`      | required                | 1-1024 characters                   | Object version of that bundle, so the deployed function names the exact artifact it runs.    |
 | `RecognitionImageUri` | required                | ECR URI pinned with `@sha256:`      | Immutable recognition container image.                                                       |
 | `CatalogJobImageUri`  | required                | ECR URI pinned with `@sha256:`      | Immutable catalog job image.                                                                 |
+| `IndexingJobImageUri` | required                | ECR URI pinned with `@sha256:`      | Immutable background indexing job image.                                                     |
 | `TitleModelId`        | `amazon.nova-lite-v1:0` | that value or empty                 | Bedrock title fallback; empty runs the retained engines without it.                          |
 | `IdentityModelId`     | `amazon.nova-pro-v1:0`  | that value or empty                 | Bedrock independent-identity engine; empty leaves `/api/recognize-independent` unconfigured. |
 
@@ -63,14 +65,15 @@ that the HTTP API stage needs for its access log.
 
 ## Packaging and publication
 
-`npm run package` builds the three artifacts one deployment publishes
+`npm run package` builds the artifacts one deployment publishes
 (docs/operations.md#packaging-and-deployment) from the committed lockfile:
 
 | Artifact                 | Contents                                                                                                                     | Published to                                           |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `artifacts/backend/`     | `api.zip` with `index.mjs`, the interactive entry point and every dependency it reaches.                                     | The exported artifact bucket, then the service stack.  |
 | `artifacts/browser/`     | `index.html`, `app.js`, the preserved browser recognition modules and the runtime assets a prepared build carries.           | The exported browser bucket, then CloudFront.          |
-| `artifacts/catalog/`     | `job.mjs`, the finite job, and the Dockerfile that packages it.                                                              | The exported catalog repository, pinned by digest.     |
+| `artifacts/catalog/`     | `job.mjs`, the finite catalog job, and the Dockerfile that packages it.                                                      | The exported catalog repository, pinned by digest.     |
+| `artifacts/indexing/`    | `job.mjs`, the finite background indexing job, and the Dockerfile that packages it.                                          | The exported indexing repository, pinned by digest.    |
 | `artifacts/recognition/` | The image build context: `Dockerfile`, the retained engine, the verified model/catalog/OCR assets, notices and `source.zip`. | The exported recognition repository, pinned by digest. |
 
 `artifacts/manifest.json` records the source revision, whether that revision was the whole working
@@ -79,10 +82,10 @@ the byte size and SHA-256 of every artifact, so a released combination can be in
 exact artifact of one revision restored. Packaging is deterministic: the same revision and lockfile
 produce the same bytes, and `tests/integration/packaging.test.ts` rebuilds the artifacts and
 compares them. The backend package carries its dependencies, so the Lambda runtime supplies only
-Node.js; the catalog image starts from the Node.js base image the deployment pins by digest, because
-image tags are not reproducible. The recognition image context is a fourth artifact, packaged
-separately after its preparation and verified against the pinned manifests (see Recognition
-packaging below); it therefore lives beside them without being part of this command's output.
+Node.js; both background-job images start from the Node.js base image the deployment pins by digest,
+because image tags are not reproducible. The recognition image context is packaged separately after
+its preparation and verified against the pinned manifests (see Recognition packaging below); it
+therefore lives beside them without being part of this command's output.
 
 The browser artifact carries no environment-specific file. Its `config.json` is written when the
 deployment publishes it, from the service stack's public outputs only: `--from-outputs` projects the
@@ -113,15 +116,20 @@ aws s3api put-object --region us-east-1 \
   --bucket <artifact-bucket> --key releases/<version>/api.zip \
   --body artifacts/backend/api.zip --query VersionId --output text
 
-# 3. Build and push the finite job image, then read the digest the stack pins. The recognition
-#    image is built and pushed the same way; its context is described in Recognition packaging
-#    below.
+# 3. Build and push the two finite job images, then read the digests the stack pins. The
+#    recognition image is built and pushed the same way; its context is described in Recognition
+#    packaging below.
 docker pull node:24-slim
 docker inspect --format '{{index .RepoDigests 0}}' node:24-slim     # the base digest to pass in
 docker build --build-arg NODE_BASE_IMAGE=node@sha256:<digest> \
   -f artifacts/catalog/Dockerfile -t <catalog-repository>:<version> artifacts/catalog
 docker push <catalog-repository>:<version>
 aws ecr describe-images --region us-east-1 --repository-name keeper-<environment>-catalog \
+  --image-ids imageTag=<version> --query 'imageDetails[0].imageDigest' --output text
+docker build --build-arg NODE_BASE_IMAGE=node@sha256:<digest> \
+  -f artifacts/indexing/Dockerfile -t <indexing-repository>:<version> artifacts/indexing
+docker push <indexing-repository>:<version>
+aws ecr describe-images --region us-east-1 --repository-name keeper-<environment>-indexing \
   --image-ids imageTag=<version> --query 'imageDetails[0].imageDigest' --output text
 
 # 4. Upload the provider snapshot the finite job streams, naming its provider version.
@@ -130,15 +138,17 @@ aws s3api put-object --region us-east-1 \
   --body <default_cards.jsonl> --metadata source-version=<scryfall-updated-at>
 ```
 
-Steps 2 and 3 keep the object version and the image digest: the service stack's parameters below name
-them, and step 3's tag is the manifest's version label. The browser artifact is built and published
-in Create, once the service stack's outputs exist; `<version>` everywhere is
+Steps 2 and 3 keep the object version and the image digests: the service stack's parameters below
+name them, and step 3's tag is the manifest's version label. The browser artifact is built and
+published in Create, once the service stack's outputs exist; `<version>` everywhere is
 `artifacts/manifest.json`'s version label.
 
-The finite job reads `${SnapshotPrefix}${dataset}.jsonl` from the snapshot bucket and requires the
-`source-version` metadata, which is the provider version Catalog compares before it republishes;
-the default dataset is Scryfall's `default_cards` list. The job runs as an explicit task, never as a
-service or a schedule (see Catalog synchronization below).
+The finite catalog job reads `${SnapshotPrefix}${dataset}.jsonl` from the snapshot bucket and
+requires the `source-version` metadata, which is the provider version Catalog compares before it
+republishes; the default dataset is Scryfall's `default_cards` list. The job runs as an explicit
+task, never as a service or a schedule. The background indexing job needs no bucket: it reads the
+Catalog and UserCards publications and maintains Search's own projection through its own credential
+(see Background jobs below).
 
 Keep the previous release directory — `api.zip`'s object version, the image digests, the packaged
 `browser/` directory, `manifest.json` and the release record Create writes beside them — before
@@ -258,9 +268,10 @@ aws cloudformation describe-stacks --region us-east-1 \
 ```
 
 Package and publish the artifacts first (see Packaging and publication above): the interactive
-package goes to the exported artifact bucket, the recognition and catalog images to the exported
-repositories by digest. Then create the service stack with the recorded artifact identities, where
-`RecognitionImageUri` and `CatalogJobImageUri` must name those repositories:
+package goes to the exported artifact bucket, the recognition, catalog and indexing images to the
+exported repositories by digest. Then create the service stack with the recorded artifact
+identities, where `RecognitionImageUri`, `CatalogJobImageUri` and `IndexingJobImageUri` must name
+those repositories:
 
 ```sh
 aws cloudformation create-change-set --region us-east-1 \
@@ -273,6 +284,7 @@ aws cloudformation create-change-set --region us-east-1 \
     ParameterKey=ApiCodeVersion,ParameterValue=<object-version> \
     ParameterKey=RecognitionImageUri,ParameterValue=<repository>@sha256:<digest> \
     ParameterKey=CatalogJobImageUri,ParameterValue=<repository>@sha256:<digest> \
+    ParameterKey=IndexingJobImageUri,ParameterValue=<repository>@sha256:<digest> \
   --tags Key=Environment,Value=test
 aws cloudformation describe-change-set --region us-east-1 \
   --stack-name keeper-test-service --change-set-name service-create \
@@ -307,38 +319,43 @@ aws sns subscribe --topic-arn <alarm-topic-arn> --protocol email --notification-
 ```
 
 `artifacts/release.json` holds the service stack's parameters — `ApiCodeKey`, `ApiCodeVersion`,
-`RecognitionImageUri` and `CatalogJobImageUri` — of the release `manifest.json` beside it names. It
-is the record of what is deployed, not the manifest: the manifest identifies the built artifacts
-and their bytes.
+`RecognitionImageUri`, `CatalogJobImageUri` and `IndexingJobImageUri` — of the release
+`manifest.json` beside it names. It is the record of what is deployed, not the manifest: the
+manifest identifies the built artifacts and their bytes.
 
 The schema bootstrap step of the deployment then connects as the RDS-managed master user
-(`DatabaseMasterSecretArn`): it creates the reader role and the two writer roles with the passwords
-stored in the three database secrets, applies `catalogSchemaSql`/`usercardsSchemaSql` and the
-components' `catalogReaderGrants`/`usercardsReaderGrants`, and grants each writer role the private
-privileges of its own component only - the interactive API's role reaches `usercards_private` and
-the finite job's role reaches `catalog_private`. No runtime component uses the master credential,
-and neither writer credential can mutate the other component's schema.
+(`DatabaseMasterSecretArn`): it creates the published-view reader role, the UserCards and Catalog
+writer roles and the Search indexing role with the passwords stored in the four database secrets,
+applies `catalogSchemaSql`, `usercardsSchemaSql` and `searchSchemaSql`, applies
+`catalogReaderGrants`/`usercardsReaderGrants`/`searchReaderGrants` to the reader role, and grants
+the indexing role `searchIndexingGrants` plus the providers' `catalogPublicationGrants` and
+`usercardsPublicationGrants`. Each writer role receives the private privileges of its own component
+only - the interactive API's role reaches `usercards_private` and the finite catalog job's role
+reaches `catalog_private` - while the indexing role maintains `search_private` and reads only the
+published provider relations and their publication logs. No runtime component uses the master
+credential, and no role can mutate another component's private schema
+(docs/data-architecture.md#access-and-deployment).
 
 The service stack's outputs carry the public settings the browser bundle is built with
 (`ApiBaseUrl`, `RecognitionBaseUrl`, `UserPoolClientId`, and the environment's region for the
 `authentication` block); `BrowserUrl` is the address users open, and `DistributionId` is the
 distribution to invalidate after a bundle replacement. Create captures them into
-`infra/service-outputs.json`; the browser packaging and the catalog run below read that file, while
-the network coordinates of a catalog run stay in the foundation outputs at `infra/outputs.json`.
+`infra/service-outputs.json`; the browser packaging and the finite job runs below read that file,
+while the network coordinates of a job run stay in the foundation outputs at `infra/outputs.json`.
 
-## Catalog synchronization
+## Background jobs
 
-Synchronization is one finite task per run: there is no service, schedule or warm capacity to start
-or pause. Start a run from the captured outputs — the cluster and task definition come from
-`infra/service-outputs.json`, the subnets and security group from `infra/outputs.json` — and follow
-it to completion:
+Catalog synchronization and background indexing are one finite task per run: there is no service,
+schedule or warm capacity to start or pause. Start a run from the captured outputs — the cluster and
+task definition come from `infra/service-outputs.json`, the subnets and security group from
+`infra/outputs.json` — and follow it to completion:
 
 ```sh
 aws ecs run-task --region us-east-1 \
   --cluster <EcsClusterName> \
   --task-definition <CatalogTaskDefinitionArn> \
   --launch-type FARGATE \
-  --network-configuration 'awsvpcConfiguration={subnets=[<PublicSubnetIds>],securityGroups=[<CatalogTaskSecurityGroupId>],assignPublicIp=ENABLED}'
+  --network-configuration 'awsvpcConfiguration={subnets=[<PublicSubnetIds>],securityGroups=[<TaskSecurityGroupId>],assignPublicIp=ENABLED}'
 aws ecs describe-tasks --region us-east-1 \
   --cluster <EcsClusterName> --tasks <task-arn> --query 'tasks[0].{lastStatus:lastStatus,stopCode:stopCode,reason:stoppedReason}'
 ```
@@ -346,6 +363,29 @@ aws ecs describe-tasks --region us-east-1 \
 The container streams the provider snapshot named by the configured bucket and prefix and reports
 its outcome in the catalog log group. The task definition names one image digest, so a run is
 repeatable and a release can be re-run after a rollback.
+
+An indexing run applies one bounded pass over the provider publications in scope and reports
+whether it caught up in the indexing log group; an expired or incomplete range is resumed by
+starting another run, never by skipping it. Name the accounts a run should index besides the ones
+the projection already holds, and ask for a replacement generation, with container overrides:
+
+```sh
+aws ecs run-task --region us-east-1 \
+  --cluster <EcsClusterName> \
+  --task-definition <IndexingTaskDefinitionArn> \
+  --launch-type FARGATE \
+  --network-configuration 'awsvpcConfiguration={subnets=[<PublicSubnetIds>],securityGroups=[<TaskSecurityGroupId>],assignPublicIp=ENABLED}' \
+  --overrides '{"containerOverrides":[{"name":"indexing-job","environment":[{"name":"KEEPER_INDEXING_ACCOUNTS","value":"<account-id>[,<account-id>]"}]}]}'
+aws ecs describe-tasks --region us-east-1 \
+  --cluster <EcsClusterName> --tasks <task-arn> --query 'tasks[0].{lastStatus:lastStatus,stopCode:stopCode,reason:stoppedReason}'
+```
+
+`KEEPER_INDEXING_ACCOUNTS` is optional: the checkpoints a rebuild already carries cover their own
+accounts. Set `KEEPER_INDEXING_REBUILD` to `true` in the same override list to build a replacement
+generation from fresh snapshots. The run's outcome record names the generation, the indexed catalog
+revision, the number of accounts and whether the pass caught up; it never carries a credential,
+account identifier or private record. Reads continue over the previous complete generation while a
+replacement is incomplete (docs/data-architecture.md#bootstrap-and-rebuild).
 
 ## Update
 
@@ -359,12 +399,13 @@ that is the record a rollback restores; after the update completes, capture the 
 parameters into the new `artifacts/release.json` again.
 
 Artifact-pinned updates roll back by updating the service stack to the previous release's
-`ApiCodeKey`, `ApiCodeVersion`, `RecognitionImageUri` and `CatalogJobImageUri`, which the retained
-release record `artifacts/release.json` names; the previous package stays in the artifact bucket
-under its object version and the previous image stays in the repository, so no artifact has to be
-rebuilt. The browser artifact is restored by re-uploading the retained packaged directory (or the
-bucket's previous object versions) and invalidating the distribution again. The catalog job starts
-explicitly, so a rollback takes effect on its next run.
+`ApiCodeKey`, `ApiCodeVersion`, `RecognitionImageUri`, `CatalogJobImageUri` and
+`IndexingJobImageUri`, which the retained release record `artifacts/release.json` names; the
+previous package stays in the artifact bucket under its object version and the previous images stay
+in their repositories, so no artifact has to be rebuilt. The browser artifact is restored by
+re-uploading the retained packaged directory (or the bucket's previous object versions) and
+invalidating the distribution again. Both background jobs start explicitly, so a rollback takes
+effect on their next runs.
 
 CloudFormation refuses to change or remove an export while another stack imports it, so every
 foundation parameter that an exported value carries is blocked until the importing service stack is
@@ -394,20 +435,21 @@ Deleting an environment is a deliberate, ordered action, not part of a deploymen
 3. Disable the cluster's deletion protection explicitly
    (`aws rds modify-db-cluster --no-deletion-protection`); deleting the foundation stack then takes
    a final cluster snapshot (`DeletionPolicy: Snapshot`) and leaves the buckets, repositories and
-   reader/writer secrets in place. The cluster's RDS-managed master secret goes with the cluster.
+   reader, writer and indexing secrets in place. The cluster's RDS-managed master secret goes with
+   the cluster.
 4. Delete those retained resources by hand only when they are no longer the restore source.
 
 ## Data retention
 
-| Resource                  | Retention                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Aurora cluster            | Automated backups for `DatabaseBackupRetentionDays` plus point-in-time recovery, `DeletionProtection`, final snapshot on stack deletion, encrypted storage with the AWS-managed key.                                                                                                                                                                                         |
-| Reader and writer secrets | `ReaderSecret`, `UserCardsWriterSecret` and `CatalogWriterSecret` are retained across stack deletion. The RDS-managed master secret is not retained: Aurora deletes it with its cluster, so a restore establishes a new master credential. Rotating one of the retained credentials updates its secret value and that role's password together, without a rotation function. |
-| Browser bucket            | Versioned; replaced versions expire after 30 days; incomplete uploads abort after 7 days; objects retained on deletion.                                                                                                                                                                                                                                                      |
-| Source-snapshot bucket    | Versioned; replaced versions expire after 90 days; incomplete uploads abort after 7 days; objects retained on deletion.                                                                                                                                                                                                                                                      |
-| Artifact bucket           | Versioned; replaced deployment artifacts expire after 30 days; incomplete uploads abort after 7 days; objects retained on deletion.                                                                                                                                                                                                                                          |
-| Image repositories        | Immutable tags, newest ten images kept, retained on deletion for rollback.                                                                                                                                                                                                                                                                                                   |
-| Log groups                | 30 days retention. Log groups are deleted with the stack; they hold no private record contents.                                                                                                                                                                                                                                                                              |
+| Resource                            | Retention                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Aurora cluster                      | Automated backups for `DatabaseBackupRetentionDays` plus point-in-time recovery, `DeletionProtection`, final snapshot on stack deletion, encrypted storage with the AWS-managed key.                                                                                                                                                                                                                 |
+| Reader, writer and indexing secrets | `ReaderSecret`, `UserCardsWriterSecret`, `CatalogWriterSecret` and `SearchIndexingSecret` are retained across stack deletion. The RDS-managed master secret is not retained: Aurora deletes it with its cluster, so a restore establishes a new master credential. Rotating one of the retained credentials updates its secret value and that role's password together, without a rotation function. |
+| Browser bucket                      | Versioned; replaced versions expire after 30 days; incomplete uploads abort after 7 days; objects retained on deletion.                                                                                                                                                                                                                                                                              |
+| Source-snapshot bucket              | Versioned; replaced versions expire after 90 days; incomplete uploads abort after 7 days; objects retained on deletion.                                                                                                                                                                                                                                                                              |
+| Artifact bucket                     | Versioned; replaced deployment artifacts expire after 30 days; incomplete uploads abort after 7 days; objects retained on deletion.                                                                                                                                                                                                                                                                  |
+| Image repositories                  | Immutable tags, newest ten images kept, retained on deletion for rollback.                                                                                                                                                                                                                                                                                                                           |
+| Log groups                          | 30 days retention. Log groups are deleted with the stack; they hold no private record contents.                                                                                                                                                                                                                                                                                                      |
 
 Collection data itself stays with the migration task: this definition never rewrites or moves it.
 
@@ -426,14 +468,14 @@ not billed amounts, is what these estimates describe.
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Aurora Serverless v2       | Scales to zero ACUs when idle, so there is no idle capacity charge; awake capacity is billed per ACU-hour with a 0.5 ACU floor, and the first request after a pause waits for the resume. |
 | Aurora storage and backups | Storage per GB-month plus backup storage beyond the retention window.                                                                                                                     |
-| Task networking            | No NAT gateway and no VPC interface endpoints: the catalog task uses a public subnet with an outbound-only security group, which removes an always-on network charge.                     |
-| Catalog job                | Fargate 1 vCPU / 2 GiB for the minutes the finite task runs (about $0.05 per hour), not for idle time.                                                                                    |
+| Task networking            | No NAT gateway and no VPC interface endpoints: both finite tasks use a public subnet with an outbound-only security group, which removes an always-on network charge.                     |
+| Background jobs            | Fargate 1 vCPU / 2 GiB for the minutes a finite catalog or indexing run takes (about $0.05 per hour), not for idle time.                                                                  |
 | Interactive Lambda         | 1024 MB per invocation while handling a request; no provisioned concurrency.                                                                                                              |
 | Recognition Lambda         | 3008 MB per recognition invocation, including container start-up; the retained ONNX/OCR engines run without provider calls.                                                               |
 | Amazon Bedrock             | Billed per token only when `TitleModelId`/`IdentityModelId` are configured; leave them empty to run without provider calls.                                                               |
 | S3 and CloudFront          | Standard storage plus transferred bytes and requests; `PriceClass_100` limits edge locations to Europe and North America.                                                                 |
-| Secrets Manager            | One small monthly charge per stored secret (master, reader, UserCards writer, Catalog writer).                                                                                            |
-| CloudWatch                 | Log ingestion and storage for five 30-day log groups plus four alarms.                                                                                                                    |
+| Secrets Manager            | One small monthly charge per stored secret (master, reader, UserCards writer, Catalog writer, Search indexing).                                                                           |
+| CloudWatch                 | Log ingestion and storage for six 30-day log groups plus four alarms.                                                                                                                     |
 | Container image storage    | ECR storage for the pushed images, bounded by the ten-image lifecycle policy.                                                                                                             |
 
 ## Verification
@@ -449,7 +491,7 @@ npm run test:integration -- infrastructure-templates    # documented boundary ca
 ```
 
 Packaging is verified locally: the same revision is rebuilt and compared byte for byte, the
-interactive package is loaded the way the Lambda loads it, the finite job is executed the way the
+interactive package is loaded the way the Lambda loads it, each finite job is executed the way its
 task runs it, and only public settings are accepted beside the browser bundle. That is artifact
 evidence, not deployed evidence. The recognition packaging command is exercised against a prepared
 engine package — its pinned manifest and hash verification, the image context it assembles, the
@@ -462,7 +504,7 @@ A valid template does not prove deployed authorization. Before cutover, check th
 boundaries in an isolated environment and record the results separately from these local checks:
 
 - Change plan: `describe-change-set` shows only the expected resource actions.
-- Artifacts: the deployed function's code object version and the task definition's image digest
+- Artifacts: the deployed function's code object version and each task definition's image digest
   match the release record `artifacts/release.json` beside the release's `manifest.json`, and the
   published `config.json` carries exactly the public settings the deployment projected from the
   stack's outputs; the recognition function runs the digest `RecognitionImageUri` names and the
@@ -476,13 +518,16 @@ boundaries in an isolated environment and record the results separately from the
   cluster's security group has no inbound rule; `aws rds describe-db-clusters` shows the Data API
   enabled, `PubliclyAccessible` false and deletion protection on.
 - IAM: `aws iam simulate-principal-policy` shows the interactive role cannot read snapshots or
-  invoke Bedrock, the recognition role cannot use the Data API, and the catalog role cannot invoke
-  Bedrock; only the catalog execution role holds the repository authorization wildcard, the
-  interactive role resolves only the reader and UserCards writer secrets, and the catalog role
-  resolves only the Catalog writer secret.
+  invoke Bedrock, the recognition role cannot use the Data API, and neither background job role can
+  invoke Bedrock or read snapshots it does not own; only the two execution roles hold the
+  repository authorization wildcard, the interactive role resolves only the reader and UserCards
+  writer secrets, the catalog role resolves only the Catalog writer secret, and the indexing role
+  resolves only the Search indexing secret.
 - Data path: a schema-bootstrap connection through the Data API succeeds with the master secret,
   the reader role can select the published views and nothing else, and each writer role can write
   only its component's private schema - a statement against the other component's schema through
+  that credential fails. The indexing role maintains `search_private` and reads only the providers'
+  published relations and their publication logs; a read of a provider's private records through
   that credential fails.
 - Delivery: the CloudFront URL serves the browser bundle over HTTPS while the bucket stays private
   (a direct object URL without a signed request fails).
@@ -499,10 +544,12 @@ interface to the components.
 | Interactive API    | `KEEPER_ENVIRONMENT`, `KEEPER_USER_POOL_ID`, `KEEPER_USER_POOL_CLIENT_ID`, `KEEPER_DATABASE_CLUSTER_ARN`, `KEEPER_DATABASE_NAME`, `KEEPER_DATABASE_READER_SECRET_ARN`, `KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN`, `KEEPER_SNAPSHOT_BUCKET`, `KEEPER_SNAPSHOT_PREFIX`, `KEEPER_RECOGNITION_BASE_URL`, `KEEPER_CLOUD_RECOGNITION`, `KEEPER_SOURCE_IMPORTS`, `KEEPER_REQUEST_TIMEOUT_MS`. |
 | Recognition Lambda | `KEEPER_ENVIRONMENT`, `KEEPER_TITLE_MODEL`, `KEEPER_IDENTITY_MODEL` (the container image supplies `RECOGNITION_ARTIFACTS` and the engine settings).                                                                                                                                                                                                                                        |
 | Catalog job        | `AWS_REGION`, `KEEPER_ENVIRONMENT`, `KEEPER_DATABASE_CLUSTER_ARN`, `KEEPER_DATABASE_NAME`, `KEEPER_DATABASE_CATALOG_WRITER_SECRET_ARN`, `KEEPER_SNAPSHOT_BUCKET`, `KEEPER_SNAPSHOT_PREFIX`; the image supplies its own entry point and command.                                                                                                                                            |
+| Indexing job       | `AWS_REGION`, `KEEPER_ENVIRONMENT`, `KEEPER_DATABASE_CLUSTER_ARN`, `KEEPER_DATABASE_NAME`, `KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN`, plus the optional per-run `KEEPER_INDEXING_ACCOUNTS` and `KEEPER_INDEXING_REBUILD` overrides; the image supplies its own entry point.                                                                                                             |
 
-Each workload receives only the credential of the mutation it owns: the interactive API gets the
-reader secret and the UserCards writer secret, and the catalog job gets the Catalog writer secret.
-Neither role can resolve the other component's writer secret.
+Each workload receives only the credentials its work needs: the interactive API gets the reader
+secret and the UserCards writer secret, the catalog job gets the Catalog writer secret, and the
+indexing job gets the Search indexing secret, which maintains Search's projection and reads the
+providers' publications. No role can resolve another component's writer secret.
 
 `KEEPER_REQUEST_TIMEOUT_MS` (20 s) stays below the function timeout (25 s), which stays below the
 HTTP API's fixed 30-second integration limit: a slow operation therefore returns Application's own
@@ -521,7 +568,9 @@ before the identities of this environment can sign in.
 - No NAT gateway, VPC interface endpoints or Lambda VPC attachment: the interactive and recognition
   runtimes reach AWS endpoints without VPC networking, the database subnets have no route off the
   VPC, and database access is only through the IAM-authorized Data API.
-- No provisioned concurrency, ECS service, scheduled task or auto scaling: the catalog
-  synchronization is started explicitly per run, and nothing keeps capacity warm.
+- No provisioned concurrency, ECS service, scheduled task or auto scaling: catalog synchronization
+  and indexing passes are started explicitly per run, nothing keeps capacity warm, and the rebuild
+  adds no automatic per-write indexing trigger (the write publishes its position for the run that
+  indexes it).
 - No health or readiness endpoints, no customer-managed KMS key, no CloudFront access logging and no
   cross-region replication; each would need its own requirement and cost decision.

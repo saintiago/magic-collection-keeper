@@ -4,9 +4,9 @@
  *
  * The command that builds the deployable artifacts runs for real: the same revision is packaged
  * twice and the bytes are compared, the interactive package is loaded the way the API Lambda loads
- * it, the finite job is executed the way the task runs it and the browser artifact is held to the
- * public settings rule. Publishing, live identity and deployed authorization stay separate
- * evidence (infra/README.md#verification).
+ * it, the two finite jobs are executed the way their tasks run them and the browser artifact is
+ * held to the public settings rule. Publishing, live identity and deployed authorization stay
+ * separate evidence (infra/README.md#verification).
  */
 
 import { execFile } from 'node:child_process';
@@ -75,6 +75,8 @@ describe('packaging the deployable artifacts', () => {
     expect(manifest.artifacts.backend.file).toBe(artifactLayout.backendArchive);
     expect(manifest.artifacts.browser.directory).toBe(artifactLayout.browserDirectory);
     expect(manifest.artifacts.catalog.dockerfile).toBe(artifactLayout.catalogDockerfile);
+    expect(manifest.artifacts.indexing.file).toBe(artifactLayout.indexingEntry);
+    expect(manifest.artifacts.indexing.dockerfile).toBe(artifactLayout.indexingDockerfile);
     expect(manifest.artifacts.browser.settings?.file).toBe(artifactLayout.browserSettings);
 
     const recorded = [
@@ -84,6 +86,7 @@ describe('packaging the deployable artifacts', () => {
         ? []
         : [manifest.artifacts.browser.settings]),
       manifest.artifacts.catalog,
+      manifest.artifacts.indexing,
     ];
     expect(recorded.length).toBeGreaterThanOrEqual(5);
     for (const artifact of recorded) {
@@ -101,7 +104,11 @@ describe('packaging the deployable artifacts', () => {
     });
 
     expect(rebuilt.manifest).toEqual(manifest);
-    for (const artifact of [manifest.artifacts.backend, manifest.artifacts.catalog]) {
+    for (const artifact of [
+      manifest.artifacts.backend,
+      manifest.artifacts.catalog,
+      manifest.artifacts.indexing,
+    ]) {
       const first = await readFile(path.join(outDir, artifact.file));
       const second = await readFile(path.join(workspace, 'rebuild', artifact.file));
       expect(second.equals(first)).toBe(true);
@@ -226,6 +233,31 @@ describe('packaging the deployable artifacts', () => {
     ) as Record<string, unknown>;
     expect(record).toMatchObject({
       operation: 'catalog.synchronize',
+      outcome: 'failed',
+      failureCode: 'unavailable',
+    });
+    expect(String(record['problem'])).toContain('KEEPER_ENVIRONMENT');
+  }, 120_000);
+
+  it('packages the background indexing job with its digest-pinned image definition', async () => {
+    const dockerfile = await readFile(path.join(outDir, artifactLayout.indexingDockerfile), 'utf8');
+    expect(dockerfile).toContain('ARG NODE_BASE_IMAGE');
+    expect(dockerfile).toContain('FROM ${NODE_BASE_IMAGE}');
+    expect(dockerfile).toContain('COPY job.mjs ./job.mjs');
+    expect(dockerfile).toContain('ENTRYPOINT ["node", "/job/job.mjs"]');
+
+    // Invoked without this environment's variables, the packaged entry fails closed and reports
+    // its own operation instead of reaching an unconfigured resource.
+    const job = path.join(outDir, artifactLayout.indexingEntry);
+    const result = await execFileAsync(process.execPath, [job], {
+      env: { PATH: process.env['PATH'] ?? '' },
+    }).catch((error: unknown) => error as { readonly code?: number; readonly stdout?: string });
+    expect((result as { readonly code?: number }).code).toBe(1);
+    const record = JSON.parse(
+      ((result as { readonly stdout?: string }).stdout ?? '').trim().split('\n').at(-1) ?? '{}',
+    ) as Record<string, unknown>;
+    expect(record).toMatchObject({
+      operation: 'search.index',
       outcome: 'failed',
       failureCode: 'unavailable',
     });

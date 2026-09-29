@@ -45,6 +45,8 @@ export const artifactLayout = {
   browserSettings: 'browser/config.json',
   catalogEntry: 'catalog/job.mjs',
   catalogDockerfile: 'catalog/Dockerfile',
+  indexingEntry: 'indexing/job.mjs',
+  indexingDockerfile: 'indexing/Dockerfile',
   manifest: 'manifest.json',
 } as const;
 

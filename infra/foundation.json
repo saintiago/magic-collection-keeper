@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Magic Collection Keeper rebuild foundation (docs/operations.md#infrastructure, docs/tech-stack.md#aws-stack). Defines the isolated network, the private Aurora PostgreSQL Serverless v2 cluster reached through the RDS Data API, the private browser, source-snapshot and deployment-artifact buckets, the container-image repositories, the reader and per-component writer database secrets and the shared alarm topic. It creates no compute and no periodic work, and it retains stateful resources on deletion. Deploy the service stack afterwards with the same Environment value.",
+  "Description": "Magic Collection Keeper rebuild foundation (docs/operations.md#infrastructure, docs/tech-stack.md#aws-stack). Defines the isolated network, the private Aurora PostgreSQL Serverless v2 cluster reached through the RDS Data API, the private browser, source-snapshot and deployment-artifact buckets, the container-image repositories, the published-view reader secret, one writer secret per mutating component, the Search indexing secret and the shared alarm topic. It creates no compute and no periodic work, and it retains stateful resources on deletion. Deploy the service stack afterwards with the same Environment value.",
   "Parameters": {
     "Environment": {
       "Type": "String",
@@ -19,7 +19,7 @@
       "MinLength": 1,
       "MaxLength": 63,
       "AllowedPattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
-      "Description": "Database inside the Aurora cluster that holds the published Catalog and UserCards schemas."
+      "Description": "Database inside the Aurora cluster that holds the published Catalog and UserCards schemas and Search's projection."
     },
     "DatabaseEngineVersion": {
       "Type": "String",
@@ -65,6 +65,12 @@
       "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
       "Description": "PostgreSQL role that owns Catalog private mutations. The schema bootstrap creates it with the generated password of the Catalog writer secret and grants it only the Catalog private schema; only the finite catalog task receives that credential."
     },
+    "SearchIndexingRoleName": {
+      "Type": "String",
+      "Default": "keeper_search_indexing",
+      "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
+      "Description": "PostgreSQL role that maintains Search's private projection and reads the Catalog and UserCards publications. The schema bootstrap creates it with the generated password of the Search indexing secret, grants it Search's indexing privileges plus both provider publication grants, and grants it no provider writer or private-record access; only the background indexing job receives that credential."
+    },
     "SnapshotPrefix": {
       "Type": "String",
       "Default": "snapshots/",
@@ -103,6 +109,40 @@
             ]
           },
           "AssertDescription": "The UserCards writer role and the Catalog writer role must be different PostgreSQL roles, so one component's credential cannot mutate the other's private schema."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              { "Fn::Equals": [{ "Ref": "ReaderRoleName" }, { "Ref": "SearchIndexingRoleName" }] }
+            ]
+          },
+          "AssertDescription": "The published-view reader role and the Search indexing role must be different PostgreSQL roles."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "UserCardsWriterRoleName" },
+                  { "Ref": "SearchIndexingRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The UserCards writer role and the Search indexing role must be different PostgreSQL roles."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  { "Ref": "CatalogWriterRoleName" },
+                  { "Ref": "SearchIndexingRoleName" }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The Catalog writer role and the Search indexing role must be different PostgreSQL roles, so the indexing credential cannot mutate a provider's private schema."
         }
       ]
     }
@@ -279,10 +319,10 @@
         ]
       }
     },
-    "CatalogTaskSecurityGroup": {
+    "TaskSecurityGroup": {
       "Type": "AWS::EC2::SecurityGroup",
       "Properties": {
-        "GroupDescription": "Finite catalog job: outbound HTTPS only, no inbound rule",
+        "GroupDescription": "Finite background jobs (catalog synchronization and Search indexing): outbound HTTPS only, no inbound rule",
         "VpcId": { "Ref": "Vpc" },
         "SecurityGroupEgress": [
           {
@@ -294,7 +334,7 @@
           }
         ],
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-catalog-job" } },
+          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-finite-task" } },
           { "Key": "Environment", "Value": { "Ref": "Environment" } },
           { "Key": "Application", "Value": "magic-collection-keeper" }
         ]
@@ -384,6 +424,22 @@
         },
         "GenerateSecretString": {
           "SecretStringTemplate": { "Fn::Sub": "{\"username\":\"${CatalogWriterRoleName}\"}" },
+          "GenerateStringKey": "password",
+          "PasswordLength": 32,
+          "ExcludeCharacters": "\"@/\\"
+        }
+      }
+    },
+    "SearchIndexingSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Description": {
+          "Fn::Sub": "Search indexing credential of the keeper-${Environment} Aurora cluster; maintains Search's projection and reads the Catalog and UserCards publications, and only the background indexing job consumes it through the RDS Data API"
+        },
+        "GenerateSecretString": {
+          "SecretStringTemplate": { "Fn::Sub": "{\"username\":\"${SearchIndexingRoleName}\"}" },
           "GenerateStringKey": "password",
           "PasswordLength": 32,
           "ExcludeCharacters": "\"@/\\"
@@ -561,6 +617,24 @@
         ]
       }
     },
+    "IndexingRepository": {
+      "Type": "AWS::ECR::Repository",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "ImageTagMutability": "IMMUTABLE",
+        "ImageScanningConfiguration": { "ScanOnPush": true },
+        "EncryptionConfiguration": { "EncryptionType": "AES256" },
+        "LifecyclePolicy": {
+          "LifecyclePolicyText": "{\"rules\":[{\"rulePriority\":1,\"description\":\"Keep the ten most recent indexing job images\",\"selection\":{\"tagStatus\":\"any\",\"countType\":\"imageCountMoreThan\",\"countNumber\":10},\"action\":{\"type\":\"expire\"}}]}"
+        },
+        "Tags": [
+          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-indexing" } },
+          { "Key": "Environment", "Value": { "Ref": "Environment" } },
+          { "Key": "Application", "Value": "magic-collection-keeper" }
+        ]
+      }
+    },
     "AlarmTopic": {
       "Type": "AWS::SNS::Topic",
       "Properties": {
@@ -613,10 +687,10 @@
       "Value": { "Fn::Join": [",", [{ "Ref": "PublicSubnetA" }, { "Ref": "PublicSubnetB" }]] },
       "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-public-subnet-ids" } }
     },
-    "CatalogTaskSecurityGroupId": {
-      "Description": "Security group of the finite catalog job: outbound HTTPS only.",
-      "Value": { "Ref": "CatalogTaskSecurityGroup" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-catalog-task-security-group-id" } }
+    "TaskSecurityGroupId": {
+      "Description": "Security group of the finite background jobs (catalog synchronization and Search indexing): outbound HTTPS only.",
+      "Value": { "Ref": "TaskSecurityGroup" },
+      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-task-security-group-id" } }
     },
     "DatabaseClusterArn": {
       "Description": "Aurora cluster for the RDS Data API resourceArn setting.",
@@ -642,6 +716,11 @@
       "Description": "Secrets Manager reference of the Catalog private-mutation credential.",
       "Value": { "Ref": "CatalogWriterSecret" },
       "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-catalog-writer-secret-arn" } }
+    },
+    "DatabaseSearchIndexingSecretArn": {
+      "Description": "Secrets Manager reference of the Search indexing credential.",
+      "Value": { "Ref": "SearchIndexingSecret" },
+      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-search-indexing-secret-arn" } }
     },
     "DatabaseMasterSecretArn": {
       "Description": "RDS-managed master credential. Only the schema bootstrap step of a deployment reads it; no runtime component uses it.",
@@ -675,6 +754,15 @@
     "CatalogRepositoryUri": {
       "Description": "Push and image-URI prefix of the catalog job repository.",
       "Value": { "Fn::GetAtt": ["CatalogRepository", "RepositoryUri"] }
+    },
+    "IndexingRepositoryArn": {
+      "Description": "Container repository of the background indexing job.",
+      "Value": { "Fn::GetAtt": ["IndexingRepository", "Arn"] },
+      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-indexing-repository-arn" } }
+    },
+    "IndexingRepositoryUri": {
+      "Description": "Push and image-URI prefix of the background indexing job repository.",
+      "Value": { "Fn::GetAtt": ["IndexingRepository", "RepositoryUri"] }
     },
     "RecognitionRepositoryUri": {
       "Description": "Push and image-URI prefix of the recognition repository.",

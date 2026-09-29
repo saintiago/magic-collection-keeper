@@ -76,6 +76,7 @@ capabilities in bounded, resumable batches; its writer role is separate from the
 | Authentication             | Amazon Cognito; existing user pool with a separate app client for the rebuild.        |
 | Application compute        | AWS Lambda with Node.js; container Lambda for Python recognition.                     |
 | Catalog synchronization    | Amazon ECS standalone tasks on AWS Fargate.                                           |
+| Search indexing            | Amazon ECS standalone tasks on AWS Fargate; resumable batches over the publications.  |
 | Relational storage         | Amazon Aurora PostgreSQL Serverless v2, accessed by the API through the RDS Data API. |
 | Source snapshots           | Private Amazon S3 data bucket.                                                        |
 | Container images           | Amazon ECR.                                                                           |

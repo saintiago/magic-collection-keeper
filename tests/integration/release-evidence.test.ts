@@ -70,6 +70,8 @@ async function createRelease(options: ReleaseFixtureOptions = {}): Promise<strin
   const browserPage = await describeFile(root, 'browser/index.html', '<!doctype html>');
   const catalog = await describeFile(root, 'catalog/job.mjs', 'catalog job');
   await write(root, 'catalog/Dockerfile', 'FROM scratch');
+  const indexing = await describeFile(root, 'indexing/job.mjs', 'indexing job');
+  await write(root, 'indexing/Dockerfile', 'FROM scratch');
   const browserFiles: ArtifactFile[] = [browserEntry, browserPage];
   const recognition =
     options.recognition === true
@@ -90,6 +92,7 @@ async function createRelease(options: ReleaseFixtureOptions = {}): Promise<strin
           backend: { ...backend, entry: 'index.mjs' },
           browser: { directory: 'browser', files: browserFiles, settings: null },
           catalog: { ...catalog, dockerfile: 'catalog/Dockerfile' },
+          indexing: { ...indexing, dockerfile: 'indexing/Dockerfile' },
         },
       },
       null,
@@ -191,30 +194,36 @@ async function createRecognitionFixture(
 /** The captured service-stack parameters a deployment writes beside the release. */
 async function writeReleaseRecord(
   root: string,
-  options: { readonly version?: string; readonly environment?: string },
+  options: {
+    readonly version?: string;
+    readonly environment?: string;
+    /** Whether the captured parameters name the indexing image, as a deployment of this release does. */
+    readonly indexingImage?: boolean;
+  },
 ): Promise<void> {
   const label = options.version ?? version;
-  await write(
-    root,
-    'release.json',
-    `${JSON.stringify(
-      [
-        { ParameterKey: 'Environment', ParameterValue: options.environment ?? 'test' },
-        { ParameterKey: 'ApiCodeKey', ParameterValue: `releases/${label}/api.zip` },
-        { ParameterKey: 'ApiCodeVersion', ParameterValue: 'object-version-3' },
-        {
-          ParameterKey: 'RecognitionImageUri',
-          ParameterValue: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-recognition@sha256:${'a'.repeat(64)}`,
-        },
-        {
-          ParameterKey: 'CatalogJobImageUri',
-          ParameterValue: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-catalog@sha256:${'b'.repeat(64)}`,
-        },
-      ],
-      null,
-      2,
-    )}\n`,
-  );
+  const parameters = [
+    { ParameterKey: 'Environment', ParameterValue: options.environment ?? 'test' },
+    { ParameterKey: 'ApiCodeKey', ParameterValue: `releases/${label}/api.zip` },
+    { ParameterKey: 'ApiCodeVersion', ParameterValue: 'object-version-3' },
+    {
+      ParameterKey: 'RecognitionImageUri',
+      ParameterValue: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-recognition@sha256:${'a'.repeat(64)}`,
+    },
+    {
+      ParameterKey: 'CatalogJobImageUri',
+      ParameterValue: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-catalog@sha256:${'b'.repeat(64)}`,
+    },
+    ...(options.indexingImage === false
+      ? []
+      : [
+          {
+            ParameterKey: 'IndexingJobImageUri',
+            ParameterValue: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-indexing@sha256:${'c'.repeat(64)}`,
+          },
+        ]),
+  ];
+  await write(root, 'release.json', `${JSON.stringify(parameters, null, 2)}\n`);
 }
 
 function markdownLinks(markdown: string): readonly string[] {
@@ -243,7 +252,7 @@ describe('release acceptance evidence', () => {
     expect(evidence.version).toBe(version);
     expect(evidence.workingTree).toBe('clean');
     expect(evidence.stages.sourceCompletion.status).toBe('recorded');
-    expect(evidence.stages.sourceCompletion.verifiedFiles).toBe(4);
+    expect(evidence.stages.sourceCompletion.verifiedFiles).toBe(5);
     expect(evidence.stages.sourceCompletion.recognition).toBeNull();
     expect(evidence.stages.deployment.status).toBe('not-recorded');
     expect(evidence.stages.deployment.reason).toMatch(/authorization/);
@@ -264,6 +273,12 @@ describe('release acceptance evidence', () => {
 
     await expect(prepareReleaseEvidence({ outDir, repoRoot })).rejects.toThrow(
       /catalog\/job\.mjs does not match/,
+    );
+
+    const indexing = await createRelease();
+    await write(indexing, 'indexing/job.mjs', 'tampered');
+    await expect(prepareReleaseEvidence({ outDir: indexing, repoRoot })).rejects.toThrow(
+      /indexing\/job\.mjs does not match/,
     );
   });
 
@@ -293,11 +308,19 @@ describe('release acceptance evidence', () => {
     expect(deployment.apiCodeVersion).toBe('object-version-3');
     expect(deployment.recognitionImageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
     expect(deployment.catalogJobImageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
+    expect(deployment.indexingJobImageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
 
     const foreign = await createRelease();
     await writeReleaseRecord(foreign, { version: '0.1.0-ffffffffffff' });
     await expect(prepareReleaseEvidence({ outDir: foreign, repoRoot })).rejects.toThrow(
       /does not name this release/,
+    );
+
+    // A deployment record that names no indexing image is not the release's deployed combination.
+    const incomplete = await createRelease();
+    await writeReleaseRecord(incomplete, { indexingImage: false });
+    await expect(prepareReleaseEvidence({ outDir: incomplete, repoRoot })).rejects.toThrow(
+      /names no IndexingJobImageUri/,
     );
   });
 

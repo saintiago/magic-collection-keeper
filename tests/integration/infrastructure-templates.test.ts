@@ -251,7 +251,7 @@ describe('rebuild infrastructure templates', () => {
     expect(resourcesOfType(foundation, 'AWS::EC2::VPC')).toHaveLength(1);
     expect(resourcesOfType(foundation, 'AWS::EC2::Subnet')).toHaveLength(4);
     expect(resourcesOfType(foundation, 'AWS::S3::Bucket')).toHaveLength(3);
-    expect(resourcesOfType(foundation, 'AWS::ECR::Repository')).toHaveLength(2);
+    expect(resourcesOfType(foundation, 'AWS::ECR::Repository')).toHaveLength(3);
   });
 
   it('keeps the existing user pool and adds one separate app client', () => {
@@ -335,6 +335,11 @@ describe('rebuild infrastructure templates', () => {
     expect(secretsOf(service.Resources.CatalogTaskRole)).toEqual([
       'keeper-${Environment}-catalog-writer-secret-arn',
     ]);
+    // The indexing role reaches the two provider publications and Search's own projection with one
+    // credential: a provider's writer secret stays out of it (docs/data-architecture.md#access-and-deployment).
+    expect(secretsOf(service.Resources.IndexingTaskRole)).toEqual([
+      'keeper-${Environment}-search-indexing-secret-arn',
+    ]);
 
     const api = lambdaEnvironment(service, 'ApiFunction');
     expect(api.KEEPER_DATABASE_READER_SECRET_ARN).toEqual(
@@ -349,10 +354,18 @@ describe('rebuild infrastructure templates', () => {
       importValue('keeper-${Environment}-catalog-writer-secret-arn'),
     );
     expect(catalog.KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN).toBeUndefined();
+    const indexing = containerEnvironment(service.Resources.IndexingTaskDefinition);
+    expect(indexing.KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN).toEqual(
+      importValue('keeper-${Environment}-search-indexing-secret-arn'),
+    );
+    expect(indexing.KEEPER_DATABASE_CATALOG_WRITER_SECRET_ARN).toBeUndefined();
+    expect(indexing.KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN).toBeUndefined();
+    expect(indexing.KEEPER_DATABASE_READER_SECRET_ARN).toBeUndefined();
 
     const exports = exportNames(foundation);
     expect(exports).toContain('keeper-${Environment}-usercards-writer-secret-arn');
     expect(exports).toContain('keeper-${Environment}-catalog-writer-secret-arn');
+    expect(exports).toContain('keeper-${Environment}-search-indexing-secret-arn');
     expect(exports).not.toContain('keeper-${Environment}-database-writer-secret-arn');
     const usernameTemplate = (logicalName: string): string => {
       const generate = foundation.Resources[logicalName]?.Properties?.GenerateSecretString as
@@ -363,6 +376,7 @@ describe('rebuild infrastructure templates', () => {
     expect(usernameTemplate('ReaderSecret')).toContain('ReaderRoleName');
     expect(usernameTemplate('UserCardsWriterSecret')).toContain('UserCardsWriterRoleName');
     expect(usernameTemplate('CatalogWriterSecret')).toContain('CatalogWriterRoleName');
+    expect(usernameTemplate('SearchIndexingSecret')).toContain('SearchIndexingRoleName');
   });
 
   it('accepts only VPC ranges that hold the four defined subnets', () => {
@@ -509,6 +523,18 @@ describe('rebuild infrastructure templates', () => {
         prefixes: ['ecr:', 'logs:'],
         actions: ['ecr:BatchGetImage', 'logs:PutLogEvents'],
       },
+      IndexingTaskRole: {
+        prefixes: ['logs:', 'rds-data:', 'secretsmanager:'],
+        actions: [
+          'rds-data:ExecuteStatement',
+          'secretsmanager:GetSecretValue',
+          'logs:PutLogEvents',
+        ],
+      },
+      IndexingTaskExecutionRole: {
+        prefixes: ['ecr:', 'logs:'],
+        actions: ['ecr:BatchGetImage', 'logs:PutLogEvents'],
+      },
     };
     for (const [templateName, template] of Object.entries(templates)) {
       for (const [roleName, role] of resourcesOfType(template, 'AWS::IAM::Role')) {
@@ -562,7 +588,11 @@ describe('rebuild infrastructure templates', () => {
     }
     expect(singleResource(foundation, 'AWS::RDS::DBCluster')[1].DeletionPolicy).toBe('Snapshot');
 
-    for (const parameterName of ['RecognitionImageUri', 'CatalogJobImageUri'] as const) {
+    for (const parameterName of [
+      'RecognitionImageUri',
+      'CatalogJobImageUri',
+      'IndexingJobImageUri',
+    ] as const) {
       expect(service.Parameters?.[parameterName]?.AllowedPattern ?? '', parameterName).toContain(
         '@sha256:',
       );
@@ -573,7 +603,7 @@ describe('rebuild infrastructure templates', () => {
     expect(code.S3ObjectVersion).toEqual({ Ref: 'ApiCodeVersion' });
   });
 
-  it('starts the catalog synchronization as a finite task without schedules or warm compute', () => {
+  it('starts catalog synchronization and background indexing as finite tasks without schedules or warm compute', () => {
     const forbidden = [
       'AWS::ECS::Service',
       'AWS::Events::Rule',
@@ -589,12 +619,22 @@ describe('rebuild infrastructure templates', () => {
     }
     expect(stringsForProperty(service, 'ProvisionedConcurrencyConfig')).toEqual([]);
 
-    const [, task] = singleResource(service, 'AWS::ECS::TaskDefinition');
-    expect(task.Properties?.RequiresCompatibilities).toEqual(['FARGATE']);
-    expect(task.Properties?.NetworkMode).toBe('awsvpc');
-    const containers = task.Properties?.ContainerDefinitions as readonly Json[];
-    expect(containers).toHaveLength(1);
-    expect(containers[0]?.Image).toEqual({ Ref: 'CatalogJobImageUri' });
+    // Both jobs are explicit, finite and pinned to one image digest: a release takes effect on
+    // that job's next run, and nothing keeps capacity warm between runs.
+    const images = new Map<string, unknown>();
+    const tasks = resourcesOfType(service, 'AWS::ECS::TaskDefinition');
+    expect(tasks).toHaveLength(2);
+    for (const [name, task] of tasks) {
+      expect(task.Properties?.RequiresCompatibilities, name).toEqual(['FARGATE']);
+      expect(task.Properties?.NetworkMode, name).toBe('awsvpc');
+      const containers = task.Properties?.ContainerDefinitions as readonly Json[];
+      expect(containers, name).toHaveLength(1);
+      const containerName = containers[0]?.Name;
+      expect(typeof containerName, name).toBe('string');
+      images.set(String(containerName), containers[0]?.Image);
+    }
+    expect(images.get('catalog-job')).toEqual({ Ref: 'CatalogJobImageUri' });
+    expect(images.get('indexing-job')).toEqual({ Ref: 'IndexingJobImageUri' });
   });
 
   it('delivers the browser through CloudFront and its private bucket policy', () => {

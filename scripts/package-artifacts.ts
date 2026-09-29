@@ -1,13 +1,14 @@
 /**
  * Packaging of the deployable artifacts (docs/operations.md#packaging-and-deployment).
  *
- * One command builds the three artifacts an explicit deployment needs from the committed sources
- * and the locked dependencies: the interactive backend package (one zip the API Lambda runs), the
- * browser bundle (the static files CloudFront delivers) and the finite catalog job (one module and
- * the Dockerfile that packages it). Nothing environment-specific is baked into a build: the
- * public browser settings of one environment are written as `browser/config.json` when the
- * deployment supplies the stack's captured outputs, and no secret, resource ARN or credential
- * reference ever reaches the browser artifact.
+ * One command builds the artifacts an explicit deployment needs from the committed sources and the
+ * locked dependencies: the interactive backend package (one zip the API Lambda runs), the
+ * browser bundle (the static files CloudFront delivers) and the two finite background jobs — the
+ * catalog job and the Search indexing job — as one module and the Dockerfile that packages each.
+ * Nothing environment-specific is baked into a build: the public browser settings of one
+ * environment are written as `browser/config.json` when the deployment supplies the stack's
+ * captured outputs, and no secret, resource ARN or credential reference ever reaches the browser
+ * artifact.
  *
  * Every artifact is content-addressed in `manifest.json` beside the source revision, the locked
  * dependency state and the Node.js version it was built with, so a released combination can be
@@ -64,6 +65,7 @@ export interface ArtifactManifest {
       readonly settings: ArtifactFile | null;
     };
     readonly catalog: ArtifactFile & { readonly dockerfile: string };
+    readonly indexing: ArtifactFile & { readonly dockerfile: string };
   };
 }
 
@@ -106,6 +108,7 @@ export async function packageArtifacts(
         artifactLayout.backendArchive,
         artifactLayout.browserDirectory,
         artifactLayout.catalogEntry,
+        artifactLayout.indexingEntry,
         artifactLayout.manifest,
       ].map((file) => file.split('/')[0] ?? file),
     ),
@@ -118,13 +121,14 @@ export async function packageArtifacts(
   await buildBackend(root, outDir);
   await buildBrowser(root, outDir, publicSettings);
   await buildCatalog(root, outDir);
+  await buildIndexing(root, outDir);
 
   const manifest: ArtifactManifest = {
     schema: 1,
     revision,
     workingTree: readWorkingTree(root),
     // A Docker tag accepts word characters, periods and hyphens, so the release label joins the
-    // package version and the short revision with a hyphen and names the catalog image directly.
+    // package version and the short revision with a hyphen and names both background-job images.
     version: `${readPackageVersion(root)}-${revision.slice(0, 12)}`,
     node: process.version,
     platform: `${process.platform}-${process.arch}`,
@@ -144,6 +148,10 @@ export async function packageArtifacts(
       catalog: {
         ...(await describeFile(outDir, artifactLayout.catalogEntry)),
         dockerfile: artifactLayout.catalogDockerfile,
+      },
+      indexing: {
+        ...(await describeFile(outDir, artifactLayout.indexingEntry)),
+        dockerfile: artifactLayout.indexingDockerfile,
       },
     },
   };
@@ -213,6 +221,24 @@ async function buildCatalog(root: string, outDir: string): Promise<void> {
     'node',
   );
   await writeFile(path.join(outDir, artifactLayout.catalogDockerfile), catalogDockerfile(), 'utf8');
+}
+
+/**
+ * The background indexing job: one bundled module composing Search's indexer over the Search
+ * indexing credential, packaged exactly like the catalog job.
+ */
+async function buildIndexing(root: string, outDir: string): Promise<void> {
+  await bundle(
+    root,
+    path.join(root, 'src', 'application', 'indexing-job.ts'),
+    path.join(outDir, artifactLayout.indexingEntry),
+    'node',
+  );
+  await writeFile(
+    path.join(outDir, artifactLayout.indexingDockerfile),
+    indexingDockerfile(),
+    'utf8',
+  );
 }
 
 /**
@@ -309,6 +335,24 @@ function catalogDockerfile(): string {
     '# Finite catalog job image (docs/operations.md#packaging-and-deployment).',
     '# The deployment passes the digest-pinned base image it verified, for example:',
     '#   docker build --build-arg NODE_BASE_IMAGE=node@sha256:<digest> -t <catalog-repo>:<version> .',
+    'ARG NODE_BASE_IMAGE',
+    'FROM ${NODE_BASE_IMAGE}',
+    'WORKDIR /job',
+    'COPY job.mjs ./job.mjs',
+    'ENTRYPOINT ["node", "/job/job.mjs"]',
+    '',
+  ].join('\n');
+}
+
+/**
+ * The indexing image packages the built module only; like the catalog job, the deployment pins the
+ * Node.js base image by digest so the built image is as reproducible as the module it carries.
+ */
+function indexingDockerfile(): string {
+  return [
+    '# Background indexing job image (docs/operations.md#packaging-and-deployment).',
+    '# The deployment passes the digest-pinned base image it verified, for example:',
+    '#   docker build --build-arg NODE_BASE_IMAGE=node@sha256:<digest> -t <indexing-repo>:<version> .',
     'ARG NODE_BASE_IMAGE',
     'FROM ${NODE_BASE_IMAGE}',
     'WORKDIR /job',
@@ -477,7 +521,8 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
   console.log(
     `Packaged ${packaged.manifest.artifacts.backend.file}, ` +
       `${packaged.manifest.artifacts.browser.directory}/ and ` +
-      `${packaged.manifest.artifacts.catalog.file} for revision ` +
+      `${packaged.manifest.artifacts.catalog.file} and ` +
+      `${packaged.manifest.artifacts.indexing.file} for revision ` +
       `${packaged.manifest.revision.slice(0, 12)} into ${destination}.`,
   );
 }

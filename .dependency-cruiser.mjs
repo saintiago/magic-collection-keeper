@@ -3,12 +3,14 @@
  * tests/integration/boundaries.test.ts. Each component owns its provider-owned public entry points
  * under src/<component> (docs/architecture.md); other components import those modules rather than
  * the component's internals. Application serves a browser and a backend runtime, so its browser-safe
- * contract is src/application/index.ts and its backend compositions are src/application/backend.ts
- * and the packaged deployment composition src/application/deployment.ts. UserInterface's browser
- * entry points are src/ui/index.ts and the deployment composition src/ui/deployment.ts. Search's
- * browser-safe contract is src/search/browser.ts; its query, count and indexing capabilities stay
- * in src/search/index.ts. UserCards publishes its browser operation facade and constraints
- * through src/usercards/browser.ts, while its backend contracts stay in src/usercards/index.ts.
+ * contract is src/application/index.ts and its backend compositions are src/application/backend.ts,
+ * the packaged deployment composition src/application/deployment.ts and the packaged finite job
+ * entry points src/application/catalog-job.ts and src/application/indexing-job.ts. UserInterface's
+ * browser entry points are src/ui/index.ts and the deployment composition src/ui/deployment.ts.
+ * Search's browser-safe contract is src/search/browser.ts; its query, count and indexing
+ * capabilities stay in src/search/index.ts. UserCards publishes its browser operation facade and
+ * constraints through src/usercards/browser.ts, while its backend contracts stay in
+ * src/usercards/index.ts.
  * CardList publishes its headless list contract, its source bindings and its account-local recent
  * activity through src/card-list/index.ts, and Capture publishes its headless session contract,
  * its device capability and its browser composition through src/capture/index.ts; the
@@ -98,7 +100,7 @@ const config = {
       name: 'no-backend-in-ui',
       severity: 'error',
       from: { path: '^src/ui/' },
-      to: { path: '^src/application/(backend|deployment)\\.ts$' },
+      to: { path: '^src/application/(backend|deployment|catalog-job|indexing-job)\\.ts$' },
     },
   ],
   options: {

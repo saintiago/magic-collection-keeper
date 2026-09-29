@@ -71,6 +71,7 @@ export interface DeploymentStage {
   readonly apiCodeVersion: string | null;
   readonly recognitionImageUri: string | null;
   readonly catalogJobImageUri: string | null;
+  readonly indexingJobImageUri: string | null;
 }
 
 export interface ProductionAcceptanceStage {
@@ -199,6 +200,7 @@ async function verifyManifestArtifacts(
     ...manifest.artifacts.browser.files,
     ...(manifest.artifacts.browser.settings === null ? [] : [manifest.artifacts.browser.settings]),
     manifest.artifacts.catalog,
+    manifest.artifacts.indexing,
   ];
   for (const file of recorded) {
     await verifyRecordedFile(outDir, file);
@@ -321,6 +323,7 @@ async function readDeploymentEvidence(
       apiCodeVersion: null,
       recognitionImageUri: null,
       catalogJobImageUri: null,
+      indexingJobImageUri: null,
     };
   }
   const file = await readRecordedFile(outDir, releaseEvidenceLayout.releaseRecord);
@@ -333,6 +336,7 @@ async function readDeploymentEvidence(
     'ApiCodeVersion',
     'RecognitionImageUri',
     'CatalogJobImageUri',
+    'IndexingJobImageUri',
   ] as const;
   for (const name of required) {
     if ((parameters[name] ?? '').length === 0) {
@@ -351,7 +355,11 @@ async function readDeploymentEvidence(
         '(infra/README.md#packaging-and-publication).',
     );
   }
-  for (const name of ['RecognitionImageUri', 'CatalogJobImageUri'] as const) {
+  for (const name of [
+    'RecognitionImageUri',
+    'CatalogJobImageUri',
+    'IndexingJobImageUri',
+  ] as const) {
     const uri = parameters[name] as string;
     if (!/@sha256:[0-9a-f]{64}$/.test(uri)) {
       throw new Error(
@@ -369,6 +377,7 @@ async function readDeploymentEvidence(
     apiCodeVersion: parameters['ApiCodeVersion'] as string,
     recognitionImageUri: parameters['RecognitionImageUri'] as string,
     catalogJobImageUri: parameters['CatalogJobImageUri'] as string,
+    indexingJobImageUri: parameters['IndexingJobImageUri'] as string,
   };
 }
 
@@ -460,6 +469,7 @@ function readArtifactManifest(value: unknown): ArtifactManifest {
     ...browserFiles,
     ...(settings === null || settings === undefined ? [] : [settings]),
     artifacts?.['catalog'],
+    artifacts?.['indexing'],
   ];
   for (const file of recorded) {
     readArtifactFile(file);

@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Magic Collection Keeper rebuild service (docs/operations.md#infrastructure, docs/tech-stack.md#aws-stack). Adds the environment's app client to the retained Cognito user pool, the JWT-authorized HTTP API, the interactive Node.js Lambda, the recognition container Lambda, the finite Fargate catalog task definition and the CloudFront delivery of the private browser bucket. Imports the foundation stack of the same Environment; it creates no provisioned concurrency, no ECS service and no schedule.",
+  "Description": "Magic Collection Keeper rebuild service (docs/operations.md#infrastructure, docs/tech-stack.md#aws-stack). Adds the environment's app client to the retained Cognito user pool, the JWT-authorized HTTP API, the interactive Node.js Lambda, the recognition container Lambda, the finite Fargate task definitions of catalog synchronization and background Search indexing, and the CloudFront delivery of the private browser bucket. Imports the foundation stack of the same Environment; it creates no provisioned concurrency, no ECS service and no schedule.",
   "Parameters": {
     "Environment": {
       "Type": "String",
@@ -33,6 +33,11 @@
       "Type": "String",
       "AllowedPattern": "^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/.+@sha256:[0-9a-f]{64}$",
       "Description": "Immutable image URI of the finite catalog job in the foundation's catalog repository, pinned by digest."
+    },
+    "IndexingJobImageUri": {
+      "Type": "String",
+      "AllowedPattern": "^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/.+@sha256:[0-9a-f]{64}$",
+      "Description": "Immutable image URI of the background indexing job in the foundation's indexing repository, pinned by digest."
     },
     "TitleModelId": {
       "Type": "String",
@@ -231,6 +236,17 @@
       "Type": "AWS::Logs::LogGroup",
       "Properties": {
         "LogGroupName": { "Fn::Sub": "/aws/ecs/keeper-${Environment}-catalog" },
+        "RetentionInDays": 30,
+        "Tags": [
+          { "Key": "Environment", "Value": { "Ref": "Environment" } },
+          { "Key": "Application", "Value": "magic-collection-keeper" }
+        ]
+      }
+    },
+    "IndexingLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": { "Fn::Sub": "/aws/ecs/keeper-${Environment}-indexing" },
         "RetentionInDays": 30,
         "Tags": [
           { "Key": "Environment", "Value": { "Ref": "Environment" } },
@@ -751,6 +767,178 @@
         ]
       }
     },
+    "IndexingTaskDefinition": {
+      "Type": "AWS::ECS::TaskDefinition",
+      "Properties": {
+        "Family": { "Fn::Sub": "keeper-${Environment}-indexing" },
+        "Cpu": "1024",
+        "Memory": "2048",
+        "NetworkMode": "awsvpc",
+        "RequiresCompatibilities": ["FARGATE"],
+        "RuntimePlatform": { "CpuArchitecture": "X86_64", "OperatingSystemFamily": "LINUX" },
+        "ExecutionRoleArn": { "Fn::GetAtt": ["IndexingTaskExecutionRole", "Arn"] },
+        "TaskRoleArn": { "Fn::GetAtt": ["IndexingTaskRole", "Arn"] },
+        "ContainerDefinitions": [
+          {
+            "Name": "indexing-job",
+            "Image": { "Ref": "IndexingJobImageUri" },
+            "Essential": true,
+            "LogConfiguration": {
+              "LogDriver": "awslogs",
+              "Options": {
+                "awslogs-group": { "Ref": "IndexingLogGroup" },
+                "awslogs-region": { "Ref": "AWS::Region" },
+                "awslogs-stream-prefix": "indexing"
+              }
+            },
+            "Environment": [
+              { "Name": "AWS_REGION", "Value": { "Ref": "AWS::Region" } },
+              { "Name": "KEEPER_ENVIRONMENT", "Value": { "Ref": "Environment" } },
+              {
+                "Name": "KEEPER_DATABASE_CLUSTER_ARN",
+                "Value": {
+                  "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-database-cluster-arn" }
+                }
+              },
+              {
+                "Name": "KEEPER_DATABASE_NAME",
+                "Value": {
+                  "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-database-name" }
+                }
+              },
+              {
+                "Name": "KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN",
+                "Value": {
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "keeper-${Environment}-search-indexing-secret-arn"
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "Tags": [
+          { "Key": "Environment", "Value": { "Ref": "Environment" } },
+          { "Key": "Application", "Value": "magic-collection-keeper" }
+        ]
+      }
+    },
+    "IndexingTaskRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "Description": "Background indexing job: maintain Search's projection through the RDS Data API with the Search indexing secret and log to its own group",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Service": "ecs-tasks.amazonaws.com" },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "IndexingJobAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "DataApi",
+                  "Effect": "Allow",
+                  "Action": [
+                    "rds-data:BatchExecuteStatement",
+                    "rds-data:BeginTransaction",
+                    "rds-data:CommitTransaction",
+                    "rds-data:ExecuteStatement",
+                    "rds-data:RollbackTransaction"
+                  ],
+                  "Resource": {
+                    "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-database-cluster-arn" }
+                  }
+                },
+                {
+                  "Sid": "SearchIndexingSecret",
+                  "Effect": "Allow",
+                  "Action": "secretsmanager:GetSecretValue",
+                  "Resource": {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "keeper-${Environment}-search-indexing-secret-arn"
+                    }
+                  }
+                },
+                {
+                  "Sid": "Logs",
+                  "Effect": "Allow",
+                  "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+                  "Resource": { "Fn::Sub": "${IndexingLogGroup.Arn}:*" }
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          { "Key": "Environment", "Value": { "Ref": "Environment" } },
+          { "Key": "Application", "Value": "magic-collection-keeper" }
+        ]
+      }
+    },
+    "IndexingTaskExecutionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "Description": "Background indexing job start-up: pull its immutable image from the indexing repository and write its log stream",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Service": "ecs-tasks.amazonaws.com" },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "IndexingJobStartup",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "RegistryAuthorization",
+                  "Effect": "Allow",
+                  "Action": "ecr:GetAuthorizationToken",
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "IndexingImage",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer"
+                  ],
+                  "Resource": {
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "keeper-${Environment}-indexing-repository-arn"
+                    }
+                  }
+                },
+                {
+                  "Sid": "Logs",
+                  "Effect": "Allow",
+                  "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+                  "Resource": { "Fn::Sub": "${IndexingLogGroup.Arn}:*" }
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          { "Key": "Environment", "Value": { "Ref": "Environment" } },
+          { "Key": "Application", "Value": "magic-collection-keeper" }
+        ]
+      }
+    },
     "OriginAccessControl": {
       "Type": "AWS::CloudFront::OriginAccessControl",
       "Properties": {
@@ -964,6 +1152,10 @@
     "CatalogTaskDefinitionArn": {
       "Description": "Task definition to start an explicit catalog synchronization with.",
       "Value": { "Ref": "CatalogTaskDefinition" }
+    },
+    "IndexingTaskDefinitionArn": {
+      "Description": "Task definition to start an explicit background indexing run with.",
+      "Value": { "Ref": "IndexingTaskDefinition" }
     }
   }
 }

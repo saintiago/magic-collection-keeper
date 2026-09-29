@@ -23,7 +23,9 @@ import {
   createS3SnapshotClient,
   readCatalogJobEnvironment,
   readInteractiveEnvironment,
+  readIndexingJobEnvironment,
   runCatalogJob,
+  runIndexingJob,
   type DataApiCommand,
 } from '../../../src/application/deployment.js';
 import { ConfigurationError } from '../../../src/application/index.js';
@@ -57,6 +59,16 @@ const catalogJobEnvironment: Record<string, string> = {
     'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-catalog-writer',
   KEEPER_SNAPSHOT_BUCKET: 'keeper-test-snapshots',
   KEEPER_SNAPSHOT_PREFIX: 'snapshots/',
+};
+
+/** The variables the background indexing job receives; it holds only the Search indexing secret. */
+const indexingJobEnvironment: Record<string, string> = {
+  KEEPER_ENVIRONMENT: 'test',
+  AWS_REGION: 'us-east-1',
+  KEEPER_DATABASE_CLUSTER_ARN: 'arn:aws:rds:us-east-1:123456789012:cluster:keeper-test',
+  KEEPER_DATABASE_NAME: 'keeper',
+  KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN:
+    'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-search-indexing',
 };
 
 /** A Data API port that records the calls the transactor issues. */
@@ -143,6 +155,46 @@ describe('deployment configuration', () => {
     expect(() => readCatalogJobEnvironment(environment)).toThrow(
       /KEEPER_DATABASE_CATALOG_WRITER_SECRET_ARN/,
     );
+  });
+
+  it('reads the indexing job without any identity, browser or provider credential', () => {
+    const configuration = readIndexingJobEnvironment(indexingJobEnvironment);
+
+    expect(configuration).toEqual({
+      environment: 'test',
+      region: 'us-east-1',
+      database: {
+        clusterArn: 'arn:aws:rds:us-east-1:123456789012:cluster:keeper-test',
+        secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-search-indexing',
+        database: 'keeper',
+      },
+      accounts: [],
+      rebuild: false,
+    });
+    expect(configuration.database.secretArn).not.toContain('writer');
+    expect(configuration.database.secretArn).not.toContain('reader');
+  });
+
+  it('reads the accounts and rebuild mode one explicit indexing run names', () => {
+    const configuration = readIndexingJobEnvironment({
+      ...indexingJobEnvironment,
+      KEEPER_INDEXING_ACCOUNTS: 'cognito-alice, cognito-bob',
+      KEEPER_INDEXING_REBUILD: 'true',
+    });
+
+    expect(configuration.accounts).toEqual(['cognito-alice', 'cognito-bob']);
+    expect(configuration.rebuild).toBe(true);
+  });
+
+  it('requires the Search indexing credential and rejects an unreadable rebuild mode', () => {
+    const missing = { ...indexingJobEnvironment };
+    delete missing['KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN'];
+    expect(() => readIndexingJobEnvironment(missing)).toThrow(
+      /KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN/,
+    );
+    expect(() =>
+      readIndexingJobEnvironment({ ...indexingJobEnvironment, KEEPER_INDEXING_REBUILD: 'yes' }),
+    ).toThrow(/KEEPER_INDEXING_REBUILD/);
   });
 });
 
@@ -667,6 +719,31 @@ describe('catalog job snapshot lifecycle', () => {
     // The busy run reports its outcome without opening the transfer it never consumes.
     expect(outcome).toEqual({ ok: false, failureCode: 'busy', revision: null });
     expect(reads).toBe(0);
+  });
+});
+
+describe('background indexing job outcome', () => {
+  it('reports a missing configuration variable as a failed pass without leaking a value', async () => {
+    const environment = { ...indexingJobEnvironment };
+    delete environment['KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN'];
+    const records: Record<string, unknown>[] = [];
+
+    const outcome = await runIndexingJob({
+      environment,
+      dataApi: recordingClient(),
+      log: (record) => records.push({ ...record }),
+    });
+
+    expect(outcome).toEqual({ ok: false, failureCode: 'unavailable', result: null });
+    expect(records.at(-1)).toMatchObject({
+      operation: 'search.index',
+      outcome: 'failed',
+      failureCode: 'unavailable',
+    });
+    expect(String(records.at(-1)?.['problem'])).toContain(
+      'KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN',
+    );
+    expect(JSON.stringify(records)).not.toContain('keeper-test');
   });
 });
 
