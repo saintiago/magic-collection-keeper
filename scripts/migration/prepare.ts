@@ -64,6 +64,7 @@ const knownSpaces = new Set([
   'import-stages',
   'import-receipts',
   'tag-actions',
+  'draft-tag-actions',
   'scan-batch-index',
   'scan-capture-index',
 ]);
@@ -250,6 +251,15 @@ export function prepareMigration(raw: unknown): MigrationPlan {
             }
           }
           for (const id of group.tagIds) addMembership(prepared, tags.get(id)!.tagId, copyId);
+        }
+      }
+      for (const association of deckAssociations.values()) {
+        if (association.quantity! > USERCARDS_LIMITS.maxAssociationQuantity) {
+          issue(
+            association.associationId,
+            'deck-quantity-compatibility',
+            'Preserved deck quantity exceeds the current target public contract. Update target support before loading; do not truncate or split the deck requirement.',
+          );
         }
       }
       prepared.associations.push(
@@ -474,17 +484,30 @@ function validateScanIndexes(source: LegacyAccount): void {
   );
   const batches = new Map(records(source, 'scan-drafts').map((d) => [d.id, d.value]));
   const indexes = new Map(records(source, 'scan-batch-index').map((d) => [d.id, d.value]));
+  const captures = new Map(records(source, 'scan-capture-index').map((d) => [d.id, d.value]));
   for (const doc of headers) {
     const header = z
       .object({
         id: z.string(),
         state: z.enum(['pending', 'empty']),
         batches: z.number().int().nonnegative(),
+        accepted: z.number().int().nonnegative(),
         pending_batches: z.number().int().nonnegative(),
         pending_copies: z.number().int().nonnegative(),
       })
       .parse(doc.value);
     if (doc.id !== `scan:${header.id}`) throw new Error('Scan header identity mismatch.');
+    if (
+      [...captures.values()].filter((c) => c.session_id === header.id).length !== header.accepted
+    ) {
+      throw new Error('Scan capture index count disagrees with accepted entries.');
+    }
+    if (
+      records(source, 'scan-batch-index').filter((d) => d.id.startsWith(`${header.id}:`)).length !==
+      header.batches
+    ) {
+      throw new Error('Scan batch index count disagrees with its session header.');
+    }
     let pendingBatches = 0,
       pendingCopies = 0;
     for (let index = 1; index <= header.batches; index++) {
@@ -505,7 +528,16 @@ function validateScanIndexes(source: LegacyAccount): void {
       }
       if (batch.state === 'pending') {
         pendingBatches++;
-        pendingCopies += pendingDraft.parse(batch).rows.reduce((n, r) => n + r.quantity, 0);
+        const draft = pendingDraft.parse(batch);
+        if (draft.id !== indexed!.batch_id)
+          throw new Error('Scan batch identity differs from its index.');
+        pendingCopies += draft.rows.reduce((n, r) => n + r.quantity, 0);
+        for (const row of draft.rows) {
+          const capture = captures.get(row.id);
+          if (capture?.session_id !== header.id || capture.batch_id !== draft.id) {
+            throw new Error('Pending scan row has no matching capture index.');
+          }
+        }
       } else if (batch.state !== 'empty') throw new Error('Unknown scan batch lifecycle state.');
     }
     if (
@@ -523,6 +555,34 @@ function validateScanIndexes(source: LegacyAccount): void {
     const indexed = indexes.get(`${context.id}:${String(context.index).padStart(12, '0')}`);
     if (!header || context.index > Number(header.value.batches) || indexed?.batch_id !== doc.id) {
       throw new Error('Scan batch has no matching session index.');
+    }
+  }
+  for (const doc of records(source, 'scan-batch-index')) {
+    const indexed = z.object({ batch_id: z.string().min(1) }).parse(doc.value);
+    const batch = batches.get(indexed.batch_id);
+    const context = z
+      .object({ id: z.string().min(1), index: z.number().int().positive() })
+      .parse(batch?.scan_session);
+    if (
+      doc.id !== `${context.id}:${String(context.index).padStart(12, '0')}` ||
+      !headers.some((h) => h.value.id === context.id && context.index <= Number(h.value.batches))
+    ) {
+      throw new Error('Orphaned or contradictory scan batch index.');
+    }
+  }
+  for (const doc of records(source, 'scan-capture-index')) {
+    const capture = z
+      .object({ session_id: z.string().min(1), batch_id: z.string().min(1) })
+      .parse(doc.value);
+    const batch = batches.get(capture.batch_id);
+    const context = z
+      .object({ id: z.string().min(1), index: z.number().int().positive() })
+      .parse(batch?.scan_session);
+    if (
+      context.id !== capture.session_id ||
+      !headers.some((h) => h.value.id === capture.session_id)
+    ) {
+      throw new Error('Orphaned or contradictory scan capture index.');
     }
   }
 }

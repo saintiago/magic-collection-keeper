@@ -90,6 +90,8 @@ bulk publication, removals and gap-free snapshot/change handoff.
   Competing claims of one tag target report a conflict, not an outage. Planned deck changes must not
   move or reserve physical copies.
   One copy may participate in several decks. Intended deck quantities can exceed ownership.
+  Cover quantities larger than a request batch, including an imported deck requirement above 1000;
+  provider batching must preserve the complete intended quantity.
 - **Pending imports:** verify save/reload, corrections versus late candidates, account changes and
   the A,A / A,B,A accepted-identity sequence. Unresolved candidates never advance that sequence.
 - **Confirmation and provenance:** test competing confirmation, lost response plus identical retry,

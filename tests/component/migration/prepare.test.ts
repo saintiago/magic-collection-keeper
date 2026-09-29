@@ -254,13 +254,24 @@ describe('offline migration preparation', () => {
         id: 'session',
         state: 'pending',
         batches: 2,
+        accepted: 2,
         pending_batches: 2,
         pending_copies: 4,
       }),
       doc('scan-batch-index', 'session:000000000001', { batch_id: 'a' }),
       doc('scan-batch-index', 'session:000000000002', { batch_id: 'b' }),
-      doc('scan-drafts', 'b', { ...draft('b'), scan_session: { id: 'session', index: 2 } }),
-      doc('scan-drafts', 'a', { ...draft('a'), scan_session: { id: 'session', index: 1 } }),
+      doc('scan-capture-index', 'row-a', { session_id: 'session', batch_id: 'a' }),
+      doc('scan-capture-index', 'row-b', { session_id: 'session', batch_id: 'b' }),
+      doc('scan-drafts', 'b', {
+        ...draft('b'),
+        rows: draft('b').rows.map((r) => ({ ...r, id: 'row-b' })),
+        scan_session: { id: 'session', index: 2 },
+      }),
+      doc('scan-drafts', 'a', {
+        ...draft('a'),
+        rows: draft('a').rows.map((r) => ({ ...r, id: 'row-a' })),
+        scan_session: { id: 'session', index: 1 },
+      }),
       doc('import-drafts', 'active', { state: 'empty' }),
       doc('import-receipts', 'closed', { added_at: '2026-01-01' }),
     );
@@ -272,8 +283,95 @@ describe('offline migration preparation', () => {
       ['scan-drafts/a', 1],
       ['scan-drafts/b', 2],
     ]);
+    const missingCapture = structuredClone(raw);
+    missingCapture.accounts[0]!.documents = missingCapture.accounts[0]!.documents.filter(
+      (d) => d.id !== 'row-a',
+    );
+    expect(prepareMigration(missingCapture).state).toBe('blocked');
     raw.accounts[0]!.documents = raw.accounts[0]!.documents.filter((d) => d.id !== 'b');
     expect(prepareMigration(raw).state).toBe('blocked');
+  });
+
+  it('checks replay indexes even after a scan batch is closed and keeps draft-edit receipts', () => {
+    const raw = fixture();
+    raw.accounts[0]!.documents.push(
+      doc('import-drafts', 'scan:session', {
+        provider: 'scan-session',
+        id: 'session',
+        state: 'empty',
+        batches: 1,
+        accepted: 1,
+        pending_batches: 0,
+        pending_copies: 0,
+      }),
+      doc('scan-drafts', 'batch', { state: 'empty', scan_session: { id: 'session', index: 1 } }),
+      doc('scan-batch-index', 'session:000000000001', { batch_id: 'batch' }),
+      doc('scan-capture-index', 'capture', { session_id: 'session', batch_id: 'batch' }),
+      doc('draft-tag-actions', 'edit', {
+        input: { operation_id: 'edit', draft_id: 'closed' },
+        created_at: '2026-01-01T00:00:00Z',
+      }),
+    );
+    const plan = prepareMigration(raw);
+    expect(plan.state).toBe('prepared');
+    expect(plan.accounts[0]!.pending).toHaveLength(0);
+    expect(plan.archive).toEqual(raw);
+    const invalidVariants = [
+      [
+        ...raw.accounts[0]!.documents,
+        doc('scan-batch-index', 'session:000000000002', { batch_id: 'batch' }),
+      ],
+      [
+        ...raw.accounts[0]!.documents,
+        doc('scan-batch-index', 'other:000000000001', { batch_id: 'batch' }),
+      ],
+      raw.accounts[0]!.documents.map((d) =>
+        d.space === 'scan-capture-index'
+          ? { ...d, value: { session_id: 'session', batch_id: 'absent' } }
+          : d,
+      ),
+      raw.accounts[0]!.documents.map((d) =>
+        d.space === 'scan-capture-index'
+          ? { ...d, value: { session_id: 'other', batch_id: 'batch' } }
+          : d,
+      ),
+    ];
+    for (const documents of invalidVariants) {
+      expect(
+        prepareMigration({ ...raw, accounts: [{ ...raw.accounts[0]!, documents }] }).state,
+      ).toBe('blocked');
+    }
+  });
+
+  it('preserves an aggregated deck quantity the current target cannot yet accept', () => {
+    const raw = fixture();
+    raw.catalog[0]!.finishes.push('foil');
+    raw.accounts[0]!.inventory.push({
+      id: 'foil',
+      printing_id: 'bolt',
+      language: 'en',
+      finish: 'foil',
+      condition: 'NM',
+      quantity: 1,
+    });
+    raw.accounts[0]!.documents.push(
+      doc('tags', 'deck', { id: 'deck', type: 'location', kind: 'deck', label: 'Deck' }),
+      ...['native', 'foil'].map((id) =>
+        doc('assignments', id, {
+          locations_override: true,
+          locations: [{ tag_id: 'deck', quantity: 600 }],
+        }),
+      ),
+    );
+    const plan = prepareMigration(raw);
+    expect(plan.state).toBe('blocked');
+    expect(plan.issues.map((i) => i.code)).toEqual(['deck-quantity-compatibility']);
+    expect(plan.accounts[0]!.associations[0]).toMatchObject({
+      targetLevel: 'printing',
+      quantity: 1200,
+    });
+    expect(plan.accounts[0]!.copies).toHaveLength(4);
+    expect(plan.archive).toEqual(raw);
   });
 
   it('blocks pending assignments that the new model cannot represent', () => {

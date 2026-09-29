@@ -55,6 +55,11 @@ Already recorded legacy ownership (`owned_quantity`, native inventory and total 
 separately. This migration obligation does not make new deck imports ownership acquisitions. A
 source URL or deck label alone is never evidence for adding owned copies.
 
+`tag-actions` and `draft-tag-actions` are completed edit receipts. Retain them exactly in the archive,
+including receipts for closed drafts, without executing their actions again. Batch and capture scan
+indexes must point to retained session/batch evidence, including closed tombstones. Pending captured
+rows must retain their matching capture indexes; surplus or contradictory indexes block preparation.
+
 Legacy aggregates do not identify individual physical cards. New copy IDs use the source owner,
 legacy group ID and ordinal. Physical binder/box allocations select these new ordinals deterministically.
 This preserves counts and attributes without claiming historical physical identity. Provenance
@@ -67,6 +72,9 @@ Preparation fails closed for malformed/duplicate identities, unknown document sp
 source printings, orphan overrides, negative totals, incompatible target printings and inconsistent
 scan indexes. It reports physical binder/box location totals exceeding ownership and missing tag
 references. Deck requirements exceeding ownership are valid and do not block preparation.
+An aggregated deck quantity rejected by the current target public contract is a compatibility
+blocker until the target implements the intended-quantity contract. Preserve the complete quantity;
+do not reinterpret it as ownership, truncate it or split one association silently.
 
 Pending tag/location intentions currently have no corresponding target entry field. Such entries
 are preserved but block the plan. Entries exceeding current confirmation limits and candidates

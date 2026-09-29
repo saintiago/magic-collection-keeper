@@ -153,6 +153,8 @@ and printing constraints; no stored copy-to-requirement allocation is required.
 A deck is a deck tag, not a location. It may contain only card-level associations, printing-specific
 associations or selected copy memberships. One copy can be associated with several decks. Deck
 quantities can exceed ownership; deck changes do not create, reserve or relocate copies.
+Intended quantities are positive integers, independent of request batch bounds. A transport or
+storage batch size must not impose a product ceiling on a deck's required quantity.
 
 A copy's current physical location, such as a binder or box, is a separate fact. Moving it changes
 that location association without removing deck memberships or changing ownership. Deck membership
