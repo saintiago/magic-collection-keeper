@@ -316,9 +316,9 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
     { once: true },
   );
   /**
-   * Sequence of the newest copy-state work of this form: feedback of a request a later operation
-   * superseded is not presented, so an obsolete reload never overwrites the outcome of a save
-   * that followed it.
+   * Fences read feedback when a newer read starts, a correction starts or a correction establishes
+   * state. Corrections are submitted one at a time and report their own outcomes independently:
+   * starting a reload cannot supersede an unresolved write.
    */
   let work = 0;
   /**
@@ -584,12 +584,15 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
   }
 
   async function saveCopy(): Promise<void> {
+    if (disposed || save.disabled) {
+      return;
+    }
     const input = correction();
     if (input === null) {
       copyStatus.textContent = 'Choose a printing, a finish and a condition before saving.';
       return;
     }
-    const current = ++work;
+    ++work;
     save.disabled = true;
     copyStatus.textContent = 'Saving…';
     const outcome = await correctCopy(access, input, options.signal);
@@ -600,28 +603,27 @@ export function createCopyEditor(options: UiCopyEditorOptions): UiCopyEditor {
     if (outcome.copy !== null) {
       presentCopy(outcome.copy);
     }
-    if (current === work) {
-      copyStatus.textContent = outcome.message ?? 'Saved.';
-      if (outcome.established) {
-        // The outcome established the copy's current state — the record a committed change
-        // reported, or the record or absence a recovery read established — so it reconciles the
-        // copy's read failure, while a recovery read that failed leaves it reported
-        // (docs/ui/navigation.md#error-notices).
-        notices?.dismiss(copyReadNotice);
-      }
-      // The correction keeps its own notice identity: reading the copy establishes its stored
-      // attributes, never that an unresolved change committed
-      // (docs/ui/navigation.md#error-notices).
-      if (outcome.status === 'committed') {
-        notices?.dismiss(copyChangeNotice);
-      } else {
-        reportUiFailure(notices, copyChangeNotice, outcome.message ?? 'The change was not saved.', {
-          label: 'Reload the copy',
-          run: () => {
-            void reloadCopy();
-          },
-        });
-      }
+    copyStatus.textContent = outcome.message ?? 'Saved.';
+    if (outcome.established) {
+      // A committed record or a successful recovery read (including absence) reconciles the read
+      // failure. Pending reload feedback is now obsolete; it must not recreate that failure after
+      // the correction established state (docs/ui/navigation.md#error-notices).
+      ++work;
+      notices?.dismiss(copyReadNotice);
+    }
+    // The correction keeps its own notice identity: reading the copy establishes its stored
+    // attributes, never that an unresolved change committed. Even an overlapping reload cannot
+    // suppress this operation's outcome
+    // (docs/ui/navigation.md#error-notices).
+    if (outcome.status === 'committed') {
+      notices?.dismiss(copyChangeNotice);
+    } else {
+      reportUiFailure(notices, copyChangeNotice, outcome.message ?? 'The change was not saved.', {
+        label: 'Reload the copy',
+        run: () => {
+          void reloadCopy();
+        },
+      });
     }
     if (outcome.status === 'conflict') {
       // The copy changed meanwhile: its current state is offered for review while the draft

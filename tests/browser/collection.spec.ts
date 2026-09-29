@@ -1480,6 +1480,113 @@ test('the copy-read notice presents its failure, dismissal and account lifetime'
   expect(errors).toEqual([]);
 });
 
+for (const reloadTiming of ['before', 'after'] as const) {
+  test(`a reload failure ${reloadTiming} correction completion cannot leave a stale read notice`, async ({
+    page,
+  }) => {
+    const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+    await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+    await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+    await settleCard(page, 'card-1', { cards: [cardRecord()] });
+
+    await page.locator('#copy-condition-choice').selectOption('LP');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    const saved = await correction(page);
+    await page.locator('#copy-reload').click();
+    const reload = await copyRead(page, 1);
+    const readNotice = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1:read"]');
+    const failReload = () =>
+      failCopyRead(page, reload.id, {
+        code: 'unavailable',
+        message: 'The service could not be reached.',
+      });
+    if (reloadTiming === 'before') {
+      await failReload();
+      await expect(readNotice).toContainText('The service could not be reached.');
+    }
+    // Later typing stays a draft, independent of the submitted change and overlapping read.
+    await page.locator('#copy-condition-choice').selectOption('DMG');
+    await settleCorrection(page, saved.id, [storedCopy({ condition: 'LP', revision: 5 })]);
+    await expect(page.locator('#copy-saved')).toContainText('lightly played');
+    if (reloadTiming === 'after') {
+      await failReload();
+    }
+    await expect(readNotice).toHaveCount(0);
+    await expect(page.locator('#copy-status')).toHaveText('Saved.');
+    await expect(page.locator('#copy-condition-choice')).toHaveValue('DMG');
+    expect(errors).toEqual([]);
+  });
+
+  test(`a successful reload ${reloadTiming} correction recovery cannot hide an unknown write`, async ({
+    page,
+  }) => {
+    const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+    await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+    await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+    await settleCard(page, 'card-1', { cards: [cardRecord()] });
+
+    await page.locator('#copy-finish-choice').selectOption('foil');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    const saved = await correction(page);
+    await page.locator('#copy-reload').click();
+    const reload = await copyRead(page, 1);
+    if (reloadTiming === 'before') {
+      await settleCopyRead(page, reload.id, [storedCopy()]);
+      await expect(page.locator('#copy-status')).toHaveText('Reloaded the copy.');
+    }
+    await failCorrection(page, saved.id, {
+      code: 'unavailable',
+      message: 'The service could not be reached.',
+    });
+    await settleCopyRead(page, (await copyRead(page, 2)).id, [
+      storedCopy({ finish: 'foil', revision: 5 }),
+    ]);
+    await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · foil · near mint');
+    if (reloadTiming === 'after') {
+      await settleCopyRead(page, reload.id, [storedCopy()]);
+    }
+    const changeNotice = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1"]');
+    await expect(changeNotice).toContainText('The outcome is unknown.');
+    await expect(page.locator('#copy-status')).toHaveText(
+      'The outcome is unknown. Reload the copy before retrying.',
+    );
+    await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · foil · near mint');
+    await expect(page.locator('#copy-finish-choice')).toHaveValue('foil');
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const failure of [
+  { code: 'conflict', message: 'The copy changed since you read it.' },
+  { code: 'invalid-request', message: 'This correction is not valid.' },
+] as const) {
+  test(`an overlapping reload does not hide the ${failure.code} correction outcome`, async ({
+    page,
+  }) => {
+    const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+    await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+    await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+    await settleCard(page, 'card-1', { cards: [cardRecord()] });
+
+    await page.locator('#copy-condition-choice').selectOption('DMG');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    const saved = await correction(page);
+    await page.locator('#copy-reload').click();
+    await settleCopyRead(page, (await copyRead(page, 1)).id, [storedCopy({ revision: 5 })]);
+    await expect(page.locator('#copy-status')).toHaveText('Reloaded the copy.');
+    await failCorrection(page, saved.id, failure);
+    if (failure.code === 'conflict') {
+      await settleCopyRead(page, (await copyRead(page, 2)).id, [storedCopy({ revision: 6 })]);
+    }
+    await expect(
+      page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1"]'),
+    ).toContainText(failure.message);
+    await expect(page.locator('#copy-status')).toContainText(failure.message);
+    await expect(page.locator('#copy-condition-choice')).toHaveValue('DMG');
+    expect(errors).toEqual([]);
+  });
+}
+
 test('an older reload never replaces the state a save committed', async ({ page }) => {
   const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
   await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
