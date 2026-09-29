@@ -280,6 +280,7 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
         return;
       case 'repeat':
         presentCue(event.cue);
+        options.notices?.dismiss(captureNotice);
         say(
           'The same card is already in review. Show a different card or set its quantity in review.',
           null,
@@ -287,6 +288,8 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
         return;
       case 'unresolved':
         presentCue(event.cue);
+        // An established decision with no admission also ends an unknown staging outcome.
+        options.notices?.dismiss(captureNotice);
         say(
           event.reason === 'geometry'
             ? 'The frame was not admitted as one card. Hold one card still to retry; no card was counted.'
@@ -318,7 +321,7 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
             unavailableMessage(event.reason, event.failure, event.recoverable),
             event.recoverable
               ? { label: 'Recover the capture', run: () => void session.retry() }
-              : { label: 'Start the camera again', run: () => void session.start() },
+              : undefined,
           );
         }
         return;
@@ -328,10 +331,16 @@ export function createCaptureControls(options: UiCaptureOptions): UiCaptureContr
           // Later alternatives that could not be stored leave the accepted capture in review: the
           // notice keeps the failure visible with the recovery the view offers
           // (docs/ui/navigation.md#error-notices).
-          reportUiFailure(options.notices, captureNotice, comparisonMessage(event), {
-            label: 'Recover the capture',
-            run: () => void session.retry(),
-          });
+          reportUiFailure(
+            options.notices,
+            captureNotice,
+            comparisonMessage(event),
+            event.outcome === 'unverified'
+              ? { label: 'Recover the capture', run: () => void session.retry() }
+              : undefined,
+          );
+        } else if (event.outcome === 'attached') {
+          options.notices?.dismiss(captureNotice);
         }
         return;
     }
