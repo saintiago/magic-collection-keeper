@@ -70,6 +70,8 @@ export interface UiShellControl {
   indexingListeners(accountId: string): number;
   /** Resolves the deferred page factory of the late-factory journeys. */
   resolveDeferredPage(): void;
+  /** Defers the next Tags mount, preserving its resource-owning factory. */
+  deferNextPage(): void;
   /** Rejects the deferred page factory of the late-factory journeys. */
   rejectDeferredPage(): void;
   /** Notes the harness recorded, oldest first. */
@@ -179,7 +181,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     observe: () => Promise.reject(new Error('The shell journey observes no progress.')),
   };
   const indexing = createControlledIndexing();
-  const deferred = start.deferredPages === true ? createDeferredPage(document, log) : null;
+  let deferred = start.deferredPages === true ? createDeferredPage(document, log) : null;
   const pageDefinitions = fixturePages(
     document,
     log,
@@ -230,14 +232,14 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       },
     },
     pages:
-      deferred === null
-        ? pageDefinitions
-        : {
+      start.deferredPages === true || start.retainedResources === true
+        ? {
             load: (page) =>
-              page === 'tags'
+              page === 'tags' && deferred !== null
                 ? deferred.load()
                 : (pageDefinitions.find((definition) => definition.page === page) ?? null),
-          },
+          }
+        : pageDefinitions,
   });
 
   function report(next: UiAccount | null): void {
@@ -299,6 +301,13 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       indexing.publish(accountId, state, outstanding),
     indexingChecks: (accountId) => indexing.checks(accountId),
     indexingListeners: (accountId) => indexing.listeners(accountId),
+    deferNextPage: () => {
+      deferred = createDeferredPage(
+        document,
+        log,
+        pageDefinitions.find((definition) => definition.page === 'tags'),
+      );
+    },
     resolveDeferredPage: () => deferred?.resolve(),
     rejectDeferredPage: () => deferred?.reject(),
     log: () => [...log],
@@ -937,21 +946,27 @@ interface DeferredPage {
   reject(): void;
 }
 
-function createDeferredPage(document: Document, log: string[]): DeferredPage {
+function createDeferredPage(
+  document: Document,
+  log: string[],
+  definition?: UiPageDefinition,
+): DeferredPage {
   const pending = Promise.withResolvers<UiPageDefinition>();
   return {
     load: () => pending.promise,
     resolve: () => {
-      pending.resolve({
-        page: 'tags',
-        mount(container) {
-          const marker = document.createElement('p');
-          marker.id = 'deferred-marker';
-          marker.textContent = 'Deferred page';
-          container.append(marker);
-          log.push('deferred-mounted');
+      pending.resolve(
+        definition ?? {
+          page: 'tags',
+          mount(container) {
+            const marker = document.createElement('p');
+            marker.id = 'deferred-marker';
+            marker.textContent = 'Deferred page';
+            container.append(marker);
+            log.push('deferred-mounted');
+          },
         },
-      });
+      );
     },
     reject: () => pending.reject(new Error('The tags page could not be loaded.')),
   };

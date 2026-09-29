@@ -176,6 +176,8 @@ export function createNoticeHost(parent: Element): UiNoticeHost {
    * operation neither duplicates the notice nor drops the focus a keyboard user gave its controls.
    */
   function createPresented(notice: UiNotice): PresentedNotice {
+    // Listeners keep only the identity, never the initial report's view-owned callback.
+    const id = notice.id;
     const element = document.createElement('div');
     element.className = 'ui-notice';
     element.dataset.uiNotice = notice.id;
@@ -197,7 +199,7 @@ export function createNoticeHost(parent: Element): UiNoticeHost {
     action.dataset.uiNoticeAction = '';
     action.addEventListener('click', () => {
       // The action of the notice reported now, never of a superseded update.
-      presented.get(notice.id)?.notice.action?.run();
+      presented.get(id)?.notice.action?.run();
     });
     const dismissButton = document.createElement('button');
     dismissButton.type = 'button';
@@ -205,7 +207,7 @@ export function createNoticeHost(parent: Element): UiNoticeHost {
     dismissButton.dataset.uiNoticeDismiss = '';
     dismissButton.textContent = 'Dismiss';
     dismissButton.addEventListener('click', () => {
-      dismiss(notice.id);
+      dismiss(id);
     });
     element.append(spinner, mark, message, action, dismissButton);
     return { notice, element, spinner, mark, message, action, dismiss: dismissButton };

@@ -29,7 +29,9 @@ contents or implement polling. Disposing the account scope removes its subscript
 Expose a notice capability to Pages for showing, updating and dismissing an identified notice with
 severity, user-facing text and an optional action. The reporting view supplies the message and action
 from its provider's outcome; Navigation owns presentation only. Update an existing notice for the
-same operation rather than creating duplicates.
+same operation rather than creating duplicates. Recovery callbacks belong to the reporting page's
+mounted lifetime. On departure, keep the notice text and dismiss control but remove those callbacks;
+a newly mounted page can supply recovery again when it reports the operation.
 
 ## Internal design
 

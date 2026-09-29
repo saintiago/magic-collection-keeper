@@ -57,7 +57,8 @@ export interface UiViewStateStore {
   /**
    * Keeps one view's state under the token of the history entry the user is leaving, beside the
    * release callback of the factory that owns the retained handle. The entry that kept another
-   * handle is released first, so a replacement never accumulates resources of its own.
+   * handle is released first, so a replacement never accumulates resources of its own. Saving the
+   * same handle preserves its original owner, including while its factory is still loading.
    */
   save(
     accountId: string,
@@ -150,9 +151,10 @@ export function createViewStateStore(limit: number = UI_LIMITS.viewStates): UiVi
       }
       const view = readSnapshot(snapshot);
       const replaced = snapshots.get(token);
+      const sameHandle = replaced?.accountId === accountId && replaced.view.state === view.state;
       if (replaced !== undefined) {
         snapshots.delete(token);
-        if (replaced.view.state !== view.state) {
+        if (!sameHandle) {
           releaseKept(replaced);
         }
       }
@@ -167,7 +169,7 @@ export function createViewStateStore(limit: number = UI_LIMITS.viewStates): UiVi
           releaseKept(evicted);
         }
       }
-      snapshots.set(token, { accountId, view, release });
+      snapshots.set(token, { accountId, view, release: sameHandle ? replaced.release : release });
     },
     read(accountId, token) {
       const kept = snapshots.get(token);

@@ -304,13 +304,15 @@ describe('opaque, account-isolated restoration state', () => {
     const first = { resource: 'handle-1' };
     const latest = { resource: 'handle-2' };
     store.save('account-a', token, snapshot(first), (retained) => released.push(retained));
-    // The page hands back the very same handle: it still owns it, so nothing is released.
-    store.save('account-a', token, snapshot(first), (retained) => released.push(retained));
+    // An unfinished restore hands back the same handle without a mounted factory to release it.
+    store.save('account-a', token, snapshot(first), releaseNothing);
     expect(released).toEqual([]);
 
     store.save('account-a', token, snapshot(latest), (retained) => released.push(retained));
     expect(released).toEqual([first]);
     expect(store.read('account-a', token)?.state).toBe(latest);
+    store.clear();
+    expect(released).toEqual([first, latest]);
   });
 
   it('releases the retained handles of the evicted entries when the bound drops one', () => {

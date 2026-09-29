@@ -150,7 +150,6 @@ export interface UiImportEditorContext {
 
 /** Notice identities of the Import editors, one per operation a view presents. */
 const manualStagingNotice = 'import-manual';
-const manualRecoveryNotice = 'import-manual-recovery';
 const sourceImportNotice = 'import-source';
 const reviewReadNotice = 'import-review';
 const reviewConfirmNotice = 'import-confirm';
@@ -606,12 +605,12 @@ export function createManualImportEditor(
     if (failure !== null) {
       reportUiOperation(
         options.notices,
-        manualRecoveryNotice,
+        manualStagingNotice,
         failure,
         failure.status === 'unknown' ? pendingStagingRetry() : undefined,
       );
     } else {
-      options.notices?.dismiss(manualRecoveryNotice);
+      options.notices?.dismiss(manualStagingNotice);
     }
     // The committed lines were reacquired by their change notifications; only an unresolved
     // outcome needs the review's own read of the entries.
