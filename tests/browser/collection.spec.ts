@@ -706,10 +706,50 @@ test('a detail read that fails is reported with a retry', async ({ page }) => {
     ).keeperCollectionControl.failCatalog(id, 'The catalog is unavailable.');
   }, request[0]!.id);
   await expect(page.locator('#card-details-failure')).toHaveText('The catalog is unavailable.');
+  // The page keeps the retry beside the failed level; the floating notice keeps the service
+  // failure visible after the view is left (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:card-details"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice).toContainText('The catalog is unavailable.');
+  await expect(notice.locator('.ui-notice-mark')).toHaveText('Error:');
+  await expect(notice.locator('.ui-notice-spinner')).toBeHidden();
 
   await page.getByRole('button', { name: 'Retry' }).click();
   await settleCard(page, 'card-1', { cards: [cardRecord()] });
   await expect(page.locator('#card-name')).toHaveText('Lightning Bolt');
+  await expect(notice).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('a failed detail read clears when reopening presents the card', async ({ page }) => {
+  const errors = await openCollection(page, '#/cards/card-1');
+  const request = await page.evaluate(() =>
+    (
+      globalThis as unknown as { keeperCollectionControl: UiCollectionControl }
+    ).keeperCollectionControl.catalogRequests(),
+  );
+  await page.evaluate((id) => {
+    (
+      globalThis as unknown as { keeperCollectionControl: UiCollectionControl }
+    ).keeperCollectionControl.failCatalog(id, 'The catalog is unavailable.');
+  }, request[0]!.id);
+  await expect(page.locator('#card-details-failure')).toHaveText('The catalog is unavailable.');
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:card-details"]');
+  await expect(notice).toContainText('The catalog is unavailable.');
+
+  // Leaving the details keeps the failure visible; its recovery belonged to the view that is gone.
+  await page.getByRole('link', { name: 'Collection', exact: true }).click();
+  await settleSearch(page, (await searchRequest(page)).id, searchPage([]));
+  await expect(page).toHaveURL(/#\/collection$/);
+  await expect(notice).toContainText('The catalog is unavailable.');
+
+  // Back opens the details again: the read that presents the card reconciles the failure of the
+  // read the replaced view presented (docs/ui/navigation.md#error-notices).
+  await page.goBack();
+  await settleCard(page, 'card-1', { cards: [cardRecord()] });
+  await expect(page.locator('#card-name')).toHaveText('Lightning Bolt');
+  await expect(notice).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -803,13 +843,31 @@ test('a lost response stays unknown while current attributes and a guarded retry
   await expect(page.locator('#copy-status')).toHaveText(
     'The outcome is unknown. Reload the copy before retrying.',
   );
+  // The form keeps the draft and the message; the floating notice keeps the uncertain correction
+  // visible with the recovery read the form offers (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice).toContainText('The outcome is unknown. Reload the copy before retrying.');
+  await expect(notice.getByRole('button', { name: 'Reload the copy' })).toBeVisible();
   await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · foil · near mint');
   await expect(page.locator('#copy-finish-choice')).toHaveValue('foil');
   await expect(page.getByRole('button', { name: 'Save changes' })).toBeEnabled();
 
   await page.getByRole('button', { name: 'Reload copy' }).click();
-  await settleCopyRead(page, (await copyRead(page, 2)).id, [storedCopy({ revision: 6 })]);
+  await failCopyRead(page, (await copyRead(page, 2)).id, {
+    code: 'unavailable',
+    message: 'The reload could not reach the service.',
+  });
+  const readNotice = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1:read"]');
+  await expect(readNotice).toContainText('The reload could not reach the service.');
+  await expect(notice).toContainText('The outcome is unknown.');
+  await readNotice.getByRole('button', { name: 'Reload the copy' }).click();
+  await settleCopyRead(page, (await copyRead(page, 3)).id, [storedCopy({ revision: 6 })]);
   await expect(page.locator('#copy-status')).toHaveText('Reloaded the copy.');
+  await expect(readNotice).toHaveCount(0);
+  // Reading current attributes never establishes whether the earlier correction committed.
+  await expect(notice).toContainText('The outcome is unknown.');
   await expect(page.locator('#copy-finish-choice')).toHaveValue('foil');
   await page.getByRole('button', { name: 'Save changes' }).click();
   const retry = await correction(page, 1);
@@ -817,6 +875,7 @@ test('a lost response stays unknown while current attributes and a guarded retry
   expect(retry.input.finish).toBe('foil');
   await settleCorrection(page, retry.id, [storedCopy({ finish: 'foil', revision: 7 })]);
   await expect(page.locator('#copy-status')).toHaveText('Saved.');
+  await expect(notice).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -924,7 +983,72 @@ for (const failure of ['conflict', 'unavailable'] as const) {
         '1 of 2 copies changed since they were read. Reload and review the change.',
       );
     }
+    // A bulk change that did not commit stays visible as the floating error notice, with the
+    // selection the list still holds for the retry (docs/ui/navigation.md#error-notices).
+    const outcomeText = (await outcome.textContent()) ?? '';
+    const notice = page.locator('[data-ui-notice="navigation:page:alice:copy-bulk"]');
+    await expect(notice).toBeVisible();
+    await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+    await expect(notice).toContainText(outcomeText);
     await expect(page.locator('[data-ui-group-select]')).toBeChecked();
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const attribute of ['finish', 'condition'] as const) {
+  test(`bulk ${attribute} prerequisite reads preserve unknown corrections and reconcile independently`, async ({
+    page,
+  }) => {
+    const errors = await openCollection(page, '#/collection?level=copy');
+    await settleSearch(
+      page,
+      (await searchRequest(page)).id,
+      searchPage([copyEntry('copy-1', 'printing-1')]),
+    );
+    await page.locator('[data-ui-select]').check();
+    await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+    await page
+      .locator(`#collection-${attribute}`)
+      .selectOption(attribute === 'finish' ? 'foil' : 'DMG');
+    const apply = page.getByRole('button', { name: `Apply ${attribute}` });
+    await apply.click();
+    await settleCopyRead(page, (await copyRead(page, 1)).id, [storedCopy()]);
+    await failCorrection(page, (await correction(page)).id, {
+      code: 'unavailable',
+      message: 'Lost response',
+    });
+    await settleCopyRead(page, (await copyRead(page, 2)).id, [storedCopy()]);
+    const write = page.locator('[data-ui-notice="navigation:page:alice:copy-bulk"]');
+    const read = page.locator('[data-ui-notice="navigation:page:alice:copy-bulk:read"]');
+    await expect(write).toContainText('unknown outcome');
+
+    await apply.click();
+    await failCopyRead(page, (await copyRead(page, 3)).id, {
+      code: 'unavailable',
+      message: 'Offline',
+    });
+    await expect(page.locator('#collection-changes-status')).toContainText('could not be read');
+    await expect(write).toContainText('unknown outcome');
+    await expect(read).toContainText('could not be read');
+    expect(await corrections(page)).toHaveLength(1);
+
+    // An answering read with a missing copy also dispatches no correction.
+    await apply.click();
+    await settleCopyRead(page, (await copyRead(page, 4)).id, []);
+    await expect(read).toContainText('no longer in the collection');
+    await expect(write).toContainText('unknown outcome');
+    expect(await corrections(page)).toHaveLength(1);
+
+    // A later attempt reads the selection successfully, but still cannot confirm its write.
+    await apply.click();
+    await settleCopyRead(page, (await copyRead(page, 5)).id, [storedCopy()]);
+    await failCorrection(page, (await correction(page, 1)).id, {
+      code: 'unavailable',
+      message: 'Lost again',
+    });
+    await settleCopyRead(page, (await copyRead(page, 6)).id, [storedCopy()]);
+    await expect(read).toHaveCount(0);
+    await expect(write).toContainText('unknown outcome');
     expect(errors).toEqual([]);
   });
 }
@@ -1200,24 +1324,49 @@ test('presents details, lists and printing choices through the supplied CardView
   expect(errors).toEqual([]);
 });
 
-test('a failed reload is reported as a failure, not as a missing copy', async ({ page }) => {
-  const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
-  await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
-  await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
-  await settleCard(page, 'card-1', { cards: [cardRecord()] });
-  await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], null);
+for (const recovery of ['reload', 'conflict read'] as const) {
+  test(`a failed copy read clears after a successful ${recovery}`, async ({ page }) => {
+    const errors = await openCollection(page, '#/cards/card-1/printing-1/copy-1');
+    await settleCopyRead(page, (await copyRead(page)).id, [storedCopy()]);
+    await settlePrinting(page, 'printing-1', { printings: [printingRecord()] });
+    await settleCard(page, 'card-1', { cards: [cardRecord()] });
+    await settlePrintings(page, (await printingsRequest(page))!.id, [printingRecord()], null);
 
-  await page.locator('#copy-reload').click();
-  await failCopyRead(page, (await copyRead(page, 1)).id, {
-    code: 'unavailable',
-    message: 'The service could not be reached.',
+    await page.locator('#copy-reload').click();
+    await failCopyRead(page, (await copyRead(page, 1)).id, {
+      code: 'unavailable',
+      message: 'The service could not be reached.',
+    });
+
+    // An unavailable read does not establish that the account lost the copy.
+    await expect(page.locator('#copy-status')).toHaveText('The service could not be reached.');
+    await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · nonfoil · near mint');
+    const notice = page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1:read"]');
+    await expect(notice).toContainText('The service could not be reached.');
+    if (recovery === 'reload') {
+      await notice.getByRole('button', { name: 'Reload the copy' }).click();
+    } else {
+      await page.locator('#copy-condition-choice').selectOption('LP');
+      await page.getByRole('button', { name: 'Save changes' }).click();
+      await failCorrection(page, (await correction(page)).id, {
+        code: 'conflict',
+        message: 'The copy changed.',
+      });
+    }
+    await settleCopyRead(page, (await copyRead(page, 2)).id, [storedCopy()]);
+    if (recovery === 'reload') {
+      await expect(page.locator('#copy-status')).toHaveText('Reloaded the copy.');
+    } else {
+      await expect(
+        page.locator('[data-ui-notice="navigation:page:alice:copy:copy-1"]'),
+      ).toContainText('The copy changed since you read it.');
+      await expect(page.locator('#copy-condition-choice')).toHaveValue('LP');
+    }
+    await expect(notice).toHaveCount(0);
+    expect(await corrections(page)).toHaveLength(recovery === 'reload' ? 0 : 1);
+    expect(errors).toEqual([]);
   });
-
-  // An unavailable read does not establish that the account lost the copy.
-  await expect(page.locator('#copy-status')).toHaveText('The service could not be reached.');
-  await expect(page.locator('#copy-saved')).toHaveText('M11 149 · en · nonfoil · near mint');
-  expect(errors).toEqual([]);
-});
+}
 
 test('a failed copy read clears when leaving and reopening presents the copy again', async ({
   page,

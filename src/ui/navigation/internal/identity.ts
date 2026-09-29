@@ -1,6 +1,6 @@
 /**
- * Identity boundary of the UserInterface (docs/user-interface.md#interface,
- * docs/user-interface.md#capture-and-review).
+ * Identity boundary of the UserInterface (docs/ui/architecture.md#interface,
+ * docs/ui/capture-controls.md).
  *
  * Application supplies the authenticated transport and the public configuration; the deployment's
  * authentication supplies this capability, which reports the verified account and its transitions.
@@ -9,7 +9,7 @@
  * what identity reports and isolates private presentation state by the reported account.
  */
 
-import type { BrowserAccount, BrowserIdentity } from '../../application/index.js';
+import type { BrowserAccount, BrowserIdentity } from '../../../application/index.js';
 
 /** One verified account the presentation keeps private state apart for (Application's account). */
 export type UiAccount = BrowserAccount;

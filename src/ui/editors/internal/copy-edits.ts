@@ -224,17 +224,26 @@ async function applyCopyChange(
   guidance: string,
 ): Promise<UiOperationOutcome> {
   if (change === null) {
-    return { status: 'failed', message: guidance };
+    // Nothing was dispatched: the message stays beside the control that still needs a value.
+    return { status: 'failed', message: guidance, validation: true };
   }
   const copyIds: string[] = [];
   for (const target of request.selection.targets) {
     if (target.kind !== 'copy') {
-      return { status: 'failed', message: 'Select physical copies to change them.' };
+      return {
+        status: 'failed',
+        message: 'Select physical copies to change them.',
+        validation: true,
+      };
     }
     copyIds.push(target.copyId);
   }
   if (copyIds.length === 0) {
-    return { status: 'failed', message: 'Select the physical copies to change.' };
+    return {
+      status: 'failed',
+      message: 'Select the physical copies to change.',
+      validation: true,
+    };
   }
   let copies: readonly PhysicalCopy[];
   try {
@@ -243,6 +252,7 @@ async function applyCopyChange(
     return {
       status: 'failed',
       message: `The selected copies could not be read: ${readUiFailureMessage(cause, 'unknown failure')}`,
+      prerequisiteFailure: true,
     };
   }
   const byId = new Map(copies.map((copy) => [copy.copyId, copy] as const));
@@ -251,6 +261,7 @@ async function applyCopyChange(
     return {
       status: 'failed',
       message: 'Some selected copies are no longer in the collection. Reload and select again.',
+      prerequisiteFailure: true,
     };
   }
   const counts = { committed: 0, conflict: 0, failed: 0, unknown: 0 };

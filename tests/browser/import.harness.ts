@@ -377,6 +377,7 @@ export function installImportHarness(
     userCards,
     cardList,
     capture: unusedCapture(userCards),
+    indexing: idleProgress,
   };
   const shell: UserInterface = createUserInterface({
     root,

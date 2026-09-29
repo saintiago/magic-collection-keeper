@@ -1,6 +1,6 @@
 /**
- * Collection pages of the UserInterface (docs/user-interface.md#pages-and-navigation,
- * docs/user-interface.md#browsing-and-organization).
+ * Collection pages of the UserInterface (docs/ui/navigation.md,
+ * docs/ui/pages.md#page-map).
  *
  * The collection view presents the account's owned records through the list boundary: the text
  * expression and the level control of the presented view build one Search query restricted to
@@ -15,17 +15,16 @@
  * The page keeps its form input and query bookkeeping in the shell's bounded state and hands the
  * state of its list back through CardList's own capture and restoration contract, so the list
  * decides how to re-acquire the window it held
- * (docs/user-interface.md#state-ownership-and-restoration). Every provider value renders as text.
+ * (docs/ui/architecture.md#state-ownership-and-restoration). Every provider value renders as text.
  */
 
-import { type CardListCollectionQuery } from '../../card-list/index.js';
+import { type CardListCollectionQuery } from '../../../card-list/index.js';
 
-import { createCopyAccess } from '../editors/index.js';
+import { createCopyAccess } from '../../editors/index.js';
+import { UI_LIMITS } from '../../shared/limits.js';
+import { uiHref, type UiPageDefinition, type UiView } from '../../navigation/index.js';
 import { createCardDetailsPage } from './card-details.js';
-import { UI_LIMITS } from '../shared/limits.js';
 import { cardViewOf, pageHandle, readListState, readPageState } from './page-support.js';
-import type { UiPageDefinition } from './pages.js';
-import { uiHref, type UiView } from './routes.js';
 
 /** The two collection views: the account's collection and one card's details. */
 export function createCollectionPages(): readonly UiPageDefinition[] {
@@ -53,6 +52,7 @@ function collectionPage(): UiPageDefinition {
       const changes = context.modules.editors.copyBulk({
         document,
         access: copies,
+        notices: context.notices,
         signal: context.signal,
         restored,
       });

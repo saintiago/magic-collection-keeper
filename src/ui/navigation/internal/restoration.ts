@@ -1,6 +1,6 @@
 /**
  * Account-isolated state the UserInterface keeps for a bounded number of history entries
- * (docs/user-interface.md#state-ownership-and-restoration).
+ * (docs/ui/architecture.md#state-ownership-and-restoration).
  *
  * A history entry carries an opaque token instead of view content: the shell opens the token when
  * it presents the entry and saves the page's own retained state beside the scroll offset, the
@@ -16,9 +16,14 @@
  * Each snapshot belongs to one account: a snapshot is never restored for another account, and the
  * store is cleared when the presented account changes. A token names the lifetime of the store
  * that opened it, so a history entry that survives a reload never reads another store's snapshot.
+ *
+ * A snapshot keeps the release callback of the factory that owns the retained handle beside it, so
+ * replacing, evicting or discarding an entry releases what its owner retained instead of only
+ * dropping Navigation's reference (docs/ui/navigation.md#interface). The store never reads the
+ * handle itself; it delegates release to the owning factory.
  */
 
-import { UI_LIMITS } from '../shared/limits.js';
+import { UI_LIMITS } from '../../shared/limits.js';
 
 /** What the shell restores when history returns to a view. */
 export interface UiViewSnapshot {
@@ -37,20 +42,48 @@ export interface UiViewSnapshot {
   readonly anchorTop?: number;
 }
 
+/**
+ * Releases one retained handle Navigation no longer keeps. The owning factory interprets the
+ * handle it captured; Navigation passes the reference back untouched.
+ */
+export type UiRetainedRelease = (retained: unknown) => void;
+
 /** The opaque state the shell keeps for the history entries of one account. */
 export interface UiViewStateStore {
   /** Opens the token one presented history entry carries; the entry keeps no state until saved. */
   open(): string;
   /** Whether a token belongs to this store's lifetime; another lifetime's tokens never restore. */
   owns(token: string): boolean;
-  /** Keeps one view's state under the token of the history entry the user is leaving. */
-  save(accountId: string, token: string, snapshot: UiViewSnapshot): void;
+  /**
+   * Keeps one view's state under the token of the history entry the user is leaving, beside the
+   * release callback of the factory that owns the retained handle. The entry that kept another
+   * handle is released first, so a replacement never accumulates resources of its own. Saving the
+   * same handle preserves its original owner, including while its factory is still loading.
+   */
+  save(
+    accountId: string,
+    token: string,
+    snapshot: UiViewSnapshot,
+    release: UiRetainedRelease,
+  ): void;
   /** State one history entry keeps for the account, or null when it kept none. */
   read(accountId: string, token: string): UiViewSnapshot | null;
+  /**
+   * Discards the state of one entry that cannot be returned to, releasing the handle its owner
+   * retained; a token this store does not keep is ignored.
+   */
+  discard(token: string): void;
   /** Removes every snapshot; the presented account changed or the session ended. */
   clear(): void;
   /** Snapshots currently kept; eviction beyond the bound releases the oldest one. */
   readonly size: number;
+}
+
+/** One snapshot of one account together with the factory-owned release of its retained handle. */
+interface KeptSnapshot {
+  readonly accountId: string;
+  readonly view: UiViewSnapshot;
+  readonly release: UiRetainedRelease;
 }
 
 /** Prefix of the opaque per-entry tokens the shell puts in a history entry. */
@@ -73,20 +106,31 @@ function storeLifetime(): string {
 /**
  * One store per UserInterface. It keeps at most `limit` snapshots, oldest first, and drops the
  * oldest beyond that bound; a token that is no longer kept simply restores nothing. Dropping the
- * entry releases the state the owner retained for it.
+ * entry releases the handle its owner retained for it.
  */
 export function createViewStateStore(limit: number = UI_LIMITS.viewStates): UiViewStateStore {
   if (!Number.isSafeInteger(limit) || limit < 1) {
     throw new TypeError('The view state store requires a positive, finite entry limit.');
   }
   const prefix = `${UI_VIEW_TOKEN_PREFIX}${storeLifetime()}-`;
-  const snapshots = new Map<
-    string,
-    { readonly accountId: string; readonly view: UiViewSnapshot }
-  >();
+  const snapshots = new Map<string, KeptSnapshot>();
   let sequence = 0;
   const owns = (token: string): boolean =>
     typeof token === 'string' && token.startsWith(prefix) && token.length > prefix.length;
+
+  /**
+   * Releases one dropped entry through its owning factory. A factory that fails to release one
+   * handle must not break the navigation, the eviction of the entries after it or the disposal of
+   * the shell that keeps their state.
+   */
+  function releaseKept(kept: KeptSnapshot): void {
+    try {
+      kept.release(kept.view.state);
+    } catch {
+      // Releasing a retained handle is best effort; Navigation owns only the entry's lifetime.
+    }
+  }
+
   return {
     open() {
       sequence += 1;
@@ -94,7 +138,7 @@ export function createViewStateStore(limit: number = UI_LIMITS.viewStates): UiVi
       return `${prefix}${sequence}`;
     },
     owns,
-    save(accountId, token, snapshot) {
+    save(accountId, token, snapshot, release) {
       if (typeof accountId !== 'string' || accountId.length === 0) {
         throw new TypeError('A view snapshot belongs to one verified account.');
       }
@@ -102,23 +146,50 @@ export function createViewStateStore(limit: number = UI_LIMITS.viewStates): UiVi
       if (!owns(token)) {
         return;
       }
+      if (typeof release !== 'function') {
+        throw new TypeError('A retained handle is released through the factory that owns it.');
+      }
       const view = readSnapshot(snapshot);
-      snapshots.delete(token);
+      const replaced = snapshots.get(token);
+      const sameHandle = replaced?.accountId === accountId && replaced.view.state === view.state;
+      if (replaced !== undefined) {
+        snapshots.delete(token);
+        if (!sameHandle) {
+          releaseKept(replaced);
+        }
+      }
       while (snapshots.size >= limit) {
         const oldest = snapshots.keys().next().value;
         if (oldest === undefined) {
           break;
         }
+        const evicted = snapshots.get(oldest);
         snapshots.delete(oldest);
+        if (evicted !== undefined) {
+          releaseKept(evicted);
+        }
       }
-      snapshots.set(token, { accountId, view });
+      snapshots.set(token, { accountId, view, release: sameHandle ? replaced.release : release });
     },
     read(accountId, token) {
       const kept = snapshots.get(token);
       return kept !== undefined && kept.accountId === accountId ? kept.view : null;
     },
+    discard(token) {
+      const kept = snapshots.get(token);
+      snapshots.delete(token);
+      if (kept !== undefined) {
+        releaseKept(kept);
+      }
+    },
     clear() {
-      snapshots.clear();
+      for (const token of [...snapshots.keys()]) {
+        const kept = snapshots.get(token);
+        snapshots.delete(token);
+        if (kept !== undefined) {
+          releaseKept(kept);
+        }
+      }
     },
     get size() {
       return snapshots.size;

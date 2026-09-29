@@ -274,6 +274,71 @@ const wishlistCounts: readonly (readonly [string, SearchCount])[] = [
   ['printing:printing-1', { owned: 1, locations: 1, intended: 2 }],
 ];
 
+test('a tag-read notice retires its recovery action on departure and reattaches on return', async ({
+  page,
+}) => {
+  const errors = await openTags(page, '#/tags');
+  const listing = await requested<UiTagsListRequest>(page, 'listTags');
+  await control(page, 'fail', listing.id, { code: 'unavailable', message: 'Tags are offline.' });
+  const notice = page.locator('[data-ui-notice]').filter({ hasText: 'Tags are offline.' });
+  await notice.getByRole('button', { name: 'Load the tags again' }).click();
+  const retry = await requested<UiTagsListRequest>(page, 'listTags', 1);
+  await control(page, 'fail', retry.id, { code: 'unavailable', message: 'Tags are offline.' });
+  await expect(notice.getByRole('button', { name: 'Load the tags again' })).toBeVisible();
+
+  type TrackedView = { departedTags: WeakRef<Element> };
+  await page.locator('#tags-list').evaluate((element) => {
+    (globalThis as unknown as TrackedView).departedTags = new WeakRef(element);
+  });
+  await page.getByRole('link', { name: 'Home', exact: true }).click();
+  await expect(notice).toContainText('Tags are offline.');
+  await expect(notice.getByRole('button', { name: 'Load the tags again' })).toHaveCount(0);
+  await expect(notice.getByRole('button', { name: 'Dismiss' })).toBeVisible();
+  await page.requestGC();
+  expect(
+    await page.evaluate(
+      () => (globalThis as unknown as TrackedView).departedTags.deref() === undefined,
+    ),
+  ).toBe(true);
+
+  await page.goBack();
+  const restored = await requested<UiTagsListRequest>(page, 'listTags', 2);
+  await control(page, 'fail', restored.id, { code: 'unavailable', message: 'Tags are offline.' });
+  await expect(notice).toHaveCount(1);
+  await notice.getByRole('button', { name: 'Load the tags again' }).click();
+  const recovery = await requested<UiTagsListRequest>(page, 'listTags', 3);
+  await settle(page, 'settleListTags', recovery.id, { tags: [tag()], continuation: null });
+  await expect(notice).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+for (const result of ['present', 'absent', 'system'] as const) {
+  test(`successful tag-detail reopening clears its read failure when ${result}`, async ({
+    page,
+  }) => {
+    const errors = await openTags(page, '#/tags/tag-burn');
+    const read = await requested(page, 'readTags');
+    await control(page, 'fail', read.id, { code: 'unavailable', message: 'Tag service offline.' });
+    const notice = page.locator('[data-ui-notice="navigation:page:alice:tag:read"]');
+    await expect(notice).toContainText('Tag service offline.');
+    await page.getByRole('link', { name: 'Home', exact: true }).click();
+    await expect(notice).toBeVisible();
+    await page.goBack();
+    const reopened = await requested(page, 'readTags', 1);
+    await settle(
+      page,
+      'settleReadTags',
+      reopened.id,
+      result === 'absent' ? [] : [tag({ system: result === 'system' })],
+    );
+    if (result === 'present') {
+      await expect(page.locator('#tag-heading')).toHaveText('Burn');
+    }
+    await expect(notice).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+}
+
 test('lists the account’s tags and keeps an unsaved rename after a conflict', async ({ page }) => {
   const errors = await openTags(page, '#/tags');
   const listing = await requested<UiTagsListRequest>(page, 'listTags');
@@ -361,9 +426,26 @@ test('creates a tag and keeps the unsaved label when the create fails', async ({
   await expect(page.locator('#tag-create-status')).toHaveText(
     'The outcome is unknown. Check whether the tag appears in the list before retrying.',
   );
+  // The field keeps the unsaved label; the shell's floating error notice keeps the unresolved
+  // operation visible with the recovery read that checks what the account holds
+  // (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:tags:create"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice.locator('.ui-notice-mark')).toHaveText('Error:');
+  await expect(notice.locator('.ui-notice-spinner')).toBeHidden();
+  await expect(notice).toContainText(
+    'The outcome is unknown. Check whether the tag appears in the list before retrying.',
+  );
   // The lost response is recovered by reading the list again, not by guessing the outcome.
   const recovery = await requested<UiTagsListRequest>(page, 'listTags', 1);
   await settle(page, 'settleListTags', recovery.id, { tags: [], continuation: null });
+
+  // The notice's own recovery action repeats that read without repeating the write.
+  await notice.getByRole('button', { name: 'Check the tags' }).click();
+  const check = await requested<UiTagsListRequest>(page, 'listTags', 2);
+  await settle(page, 'settleListTags', check.id, { tags: [], continuation: null });
+  expect(await control<readonly unknown[]>(page, 'createTag')).toHaveLength(1);
 
   await page.click('#tag-create-submit');
   const retry = await requested<{ readonly label: string }>(page, 'createTag', 1);
@@ -376,6 +458,8 @@ test('creates a tag and keeps the unsaved label when the create fails', async ({
   await expect(page.locator('#tag-create-status')).toHaveText('Created “To buy”.');
   await expect(page.locator('#tag-create-label')).toHaveValue('');
   await expect(page.locator('#tags-list [data-ui-tag="tag-wish"] a')).toHaveText('To buy');
+  // A committed create clears the failure notice of its operation.
+  await expect(notice).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -463,6 +547,12 @@ test('keeps the unsaved rename label when a lost response stays unknown', async 
   await expect(page.locator('#tag-row-status-tag-burn')).toHaveText(
     'The outcome is unknown. Review the record before retrying.',
   );
+  // The row keeps the unsaved label; the floating notice keeps the row's unresolved operation
+  // visible after the view is left (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:tags:rename:tag-burn"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice).toContainText('The outcome is unknown. Review the record before retrying.');
 
   await page.click('#tag-rename-tag-burn');
   const retry = await requested<{ readonly expectedRevision: number; readonly label: string }>(
@@ -475,6 +565,9 @@ test('keeps the unsaved rename label when a lost response stays unknown', async 
     expectedRevision: 2,
     label: 'My draft',
   });
+  await settle(page, 'settleRenameTag', retry.id, tag({ label: 'My draft', revision: 3 }));
+  await expect(page.locator('#tag-row-status-tag-burn')).toHaveText('Renamed the tag.');
+  await expect(notice).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -1176,6 +1269,122 @@ test('moves a copy out of a location and shows the remaining associations', asyn
   await expect(page.locator('#tag-associations [data-ui-status]')).toHaveText('No entries');
   expect(errors).toEqual([]);
 });
+
+for (const method of ['move', 'add'] as const) {
+  test(`location ${method} prerequisite reads preserve an unknown write`, async ({ page }) => {
+    const errors = await openTags(page, '#/tags/tag-binder');
+    await scriptCounts(page, [['copy:copy-1', { owned: 1, locations: 1, intended: null }]]);
+    await resolveLocationVisit(page, 0);
+    await settle(page, 'settleListTags', (await requested(page, 'listTags')).id, {
+      tags: [tag({ tagId: 'tag-binder', kind: 'location', label: 'Binder' })],
+      continuation: null,
+    });
+    const stored: PhysicalCopy = {
+      copyId: 'copy-1',
+      printingId: 'printing-1',
+      finish: 'nonfoil',
+      condition: 'NM',
+      revision: 5,
+    };
+    if (method === 'add') {
+      await page.fill('#tag-add-query', 'bolt');
+      await page.selectOption('#tag-add-level', 'copy');
+      await page.click('#tag-add-submit');
+      await settle(page, 'settleSearch', (await requested(page, 'searches')).id, {
+        entries: [
+          {
+            entryKey: 'copy:copy-1',
+            target: { kind: 'copy', copyId: 'copy-1' },
+            card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
+            printing: {
+              printingId: 'printing-1',
+              edition: 'M11',
+              collectorNumber: '149',
+              language: 'en',
+              finishes: ['nonfoil'],
+            },
+            quantity: null,
+          },
+        ],
+        status: 'ready',
+        totalCount: 1,
+        continuation: null,
+        revisions: {
+          generation: 'tags-generation',
+          catalogRevision: 'tags-revision',
+          catalogPosition: '1',
+          privateRevision: 'private-1',
+        },
+      });
+      await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', 1)).id, [stored]);
+      await page.locator('#tag-add-results [data-ui-select]').check();
+    } else {
+      await page.selectOption('#tag-move-association-1', '');
+    }
+    const apply = page.locator(
+      method === 'move'
+        ? '#tag-move-save-association-1'
+        : '#tag-add-results [data-ui-tool="add-to-tag"]',
+    );
+    let index = (await control<unknown[]>(page, 'readCopies')).length;
+    await apply.click();
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index++)).id, [
+      stored,
+    ]);
+    await settle(page, 'fail', (await requested(page, 'setCopyLocation')).id, {
+      code: 'unavailable',
+      message: 'Lost response',
+    });
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index++)).id, [
+      stored,
+    ]);
+    const identity = method === 'move' ? 'tag:association:association-1' : 'tag:add';
+    const write = page.locator(`[data-ui-notice="navigation:page:alice:${identity}"]`);
+    const read = page.locator(`[data-ui-notice="navigation:page:alice:${identity}:read"]`);
+    await expect(write).toContainText('unknown');
+    // The unknown write refreshes the association list; current state is not proof of commitment.
+    await settle(
+      page,
+      'settleListAssociations',
+      (await requested(page, 'listAssociations', 1)).id,
+      {
+        associations: [association({ targetLevel: 'copy', targetId: 'copy-1', quantity: null })],
+      },
+    );
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index++)).id, [
+      stored,
+    ]);
+    await settleCatalog(page, 2, { printings: [boltPrinting] });
+    await settleCatalog(page, 3, { cards: [boltCard] });
+    await apply.click();
+    await settle(page, 'fail', (await requested(page, 'readCopies', index++)).id, {
+      code: 'unavailable',
+      message: 'Offline',
+    });
+    await expect(write).toContainText('unknown');
+    await expect(read).toContainText('could not be read');
+    expect(await control<unknown[]>(page, 'setCopyLocation')).toHaveLength(1);
+    await apply.click();
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index++)).id, []);
+    await expect(read).toContainText('no longer in the collection');
+    await expect(write).toContainText('unknown');
+    expect(await control<unknown[]>(page, 'setCopyLocation')).toHaveLength(1);
+    await apply.click();
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index++)).id, [
+      stored,
+    ]);
+    await settle(page, 'fail', (await requested(page, 'setCopyLocation', 1)).id, {
+      code: 'unavailable',
+      message: 'Lost again',
+    });
+    await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index)).id, [
+      stored,
+    ]);
+    await expect(read).toHaveCount(0);
+    await expect(write).toContainText('unknown');
+    expect(errors).toEqual([]);
+  });
+}
 
 test('searches the catalog and adds a card to the wishlist with its intended quantity', async ({
   page,

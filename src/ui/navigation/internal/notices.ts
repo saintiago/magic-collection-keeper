@@ -1,21 +1,28 @@
 /**
- * Floating notices of the UserInterface shell
- * (docs/ui/navigation.md#interface, docs/ui/navigation.md#error-notices).
+ * Floating notices of the Navigation module (docs/ui/navigation.md#indexing-notice,
+ * docs/ui/navigation.md#error-notices).
  *
- * Navigation owns the one floating presentation region of the shell: the operation and service
- * failures the pages report through the capability they receive. A notice is identified by the
- * operation it reports, so reporting the same identity again updates the presented notice instead
- * of duplicating it, and the presentation itself serves every severity: an error notice is red and
- * names its failure in text, so color alone never carries the meaning.
+ * Navigation owns the one floating presentation region of the shell: the indexing notice of the
+ * presented account and the operation and service failures the pages report through the capability
+ * they receive. A notice is identified by the operation it reports, so showing the same identity
+ * again updates the presented notice instead of duplicating it, and the same presentation serves
+ * progress and errors: an error notice is red and names its failure in text, so color alone never
+ * carries the meaning.
  *
  * Notices never block the page behind them and never take focus: they render in a fixed corner of
- * the shell, announce their text politely, keep an explicit dismiss control and offer the recovery
- * action their reporter supplied.
+ * the shell, announce their text politely, keep their explicit dismiss control, and offer the
+ * recovery action their reporter supplied. A notice that no longer reports ongoing work stops its
+ * spinner.
  */
 
-import type { UiNotice, UiNotices } from '../shared/notices.js';
+import type { UiNotice, UiNotices } from '../../shared/notices.js';
 
-export type { UiNotice, UiNoticeAction, UiNotices, UiNoticeSeverity } from '../shared/notices.js';
+export type {
+  UiNotice,
+  UiNoticeAction,
+  UiNotices,
+  UiNoticeSeverity,
+} from '../../shared/notices.js';
 
 /** The notice presentation of one shell. */
 export interface UiNoticeHost extends UiNotices {
@@ -103,6 +110,7 @@ interface PresentedNotice {
   readonly mark: HTMLElement;
   readonly message: HTMLSpanElement;
   readonly action: HTMLButtonElement;
+  readonly dismiss: HTMLButtonElement;
 }
 
 /** Creates the floating notice region of one shell, rendering it into `parent`. */
@@ -202,7 +210,7 @@ export function createNoticeHost(parent: Element): UiNoticeHost {
       dismiss(id);
     });
     element.append(spinner, mark, message, action, dismissButton);
-    return { notice, element, spinner, mark, message, action };
+    return { notice, element, spinner, mark, message, action, dismiss: dismissButton };
   }
 
   /** Presents the notice one element currently reports. */

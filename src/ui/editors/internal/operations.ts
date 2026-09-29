@@ -11,6 +11,8 @@
 
 import type { CardListToolSelection } from '../../../card-list/index.js';
 
+import type { UiNoticeAction, UiNotices } from '../../shared/notices.js';
+
 /** One user action over the explicit targets a list reported. */
 export interface UiActionRequest {
   /** Explicit selected targets the list observed; visible rows are not a substitute. */
@@ -28,6 +30,17 @@ export interface UiOperationOutcome {
   readonly status: 'committed' | 'conflict' | 'failed' | 'unknown';
   /** User-facing explanation, or null when no further explanation helps. */
   readonly message: string | null;
+  /**
+   * Whether the editor established this outcome as presentation validation before any provider
+   * operation ran: the message stays beside the field or row that owns it and never becomes a
+   * floating error notice (docs/ui/navigation.md#error-notices).
+   */
+  readonly validation?: true;
+  /**
+   * A required read failed or found missing state before any write was dispatched. Its feedback
+   * cannot replace an earlier unresolved write (docs/ui/navigation.md#error-notices).
+   */
+  readonly prerequisiteFailure?: true;
 }
 
 /** One editor-owned action a presented list names. */
@@ -66,6 +79,48 @@ export async function applyAction<Outcome extends UiOperationOutcome>(
   } catch {
     return unknownOutcome();
   }
+}
+
+/**
+ * Reports one editor operation to the shell's notice capability
+ * (docs/ui/navigation.md#error-notices). The editor keeps presenting the same outcome beside its
+ * own controls, where the returned message and the affected field or row stay together; the notice
+ * is what keeps a failed, conflicted or unresolved operation visible after the view is left. A
+ * committed operation clears the notice of an earlier failure of the same operation. A failure
+ * before dispatch has its own read notice, reconciled when a later attempt reaches the write;
+ * it never replaces an unresolved write. Validation stays local.
+ */
+export function reportUiOperation(
+  notices: UiNotices | undefined,
+  id: string,
+  outcome: UiOperationOutcome,
+  action?: UiNoticeAction,
+): void {
+  if (notices === undefined || outcome.validation === true) {
+    return;
+  }
+  const readId = `${id}:read`;
+  if (outcome.prerequisiteFailure === true) {
+    notices.show({
+      id: readId,
+      severity: 'error',
+      message: outcome.message ?? outcomeText(outcome.status),
+      action: action ?? null,
+    });
+    return;
+  }
+  // Reaching the write establishes its prerequisites, even if that write remains unknown.
+  notices.dismiss(readId);
+  if (outcome.status === 'committed') {
+    notices.dismiss(id);
+    return;
+  }
+  notices.show({
+    id,
+    severity: 'error',
+    message: outcome.message ?? outcomeText(outcome.status),
+    action: action ?? null,
+  });
 }
 
 /** One outcome that establishes nothing. */

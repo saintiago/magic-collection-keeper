@@ -10,10 +10,9 @@
  * (docs/ui/architecture.md#modules-and-composition). Every provider value renders as text.
  */
 
-import { createTagAccess } from '../editors/index.js';
-import type { UiPageDefinition } from './pages.js';
+import { createTagAccess } from '../../editors/index.js';
+import { uiHref, type UiPageDefinition } from '../../navigation/index.js';
 import { readPageState } from './page-support.js';
-import { uiHref } from './routes.js';
 
 /** The organization views: the account's tags and one tag's deck, wishlist, location or grouping. */
 export function createOrganizationPages(): readonly UiPageDefinition[] {
@@ -32,6 +31,7 @@ function tagsPage(): UiPageDefinition {
         cardViews: context.modules.cardViews,
         accountId: context.account.accountId,
         dialogs: context.dialogs,
+        notices: context.notices,
         signal: context.signal,
         restored: readPageState(context.restored?.state),
         tagHref: (tag) => uiHref({ page: 'tag', tagId: tag.tagId }),
@@ -61,6 +61,7 @@ function tagViewPage(): UiPageDefinition {
         cardViews: context.modules.cardViews,
         accountId: context.account.accountId,
         dialogs: context.dialogs,
+        notices: context.notices,
         signal: context.signal,
         tagId: view.tagId,
         restored: readPageState(context.restored?.state),

@@ -19,10 +19,14 @@ import {
   readUiView,
   uiHref,
   UI_LIMITS,
+  type UiRetainedRelease,
   type UserInterfaceOptions,
   type UiView,
   type UiViewSnapshot,
 } from '../../../src/ui/index.js';
+
+/** Release callback of a page that retains plain values: releasing them frees nothing. */
+const releaseNothing: UiRetainedRelease = () => {};
 
 const views: readonly UiView[] = [
   { page: 'home' },
@@ -162,6 +166,7 @@ describe('opaque, account-isolated restoration state', () => {
           focusId: 'search-input',
         },
       ),
+      releaseNothing,
     );
 
     expect(store.read('account-a', token)).toEqual({
@@ -175,7 +180,7 @@ describe('opaque, account-isolated restoration state', () => {
   it('never restores a snapshot for another account', () => {
     const store = createViewStateStore();
     const token = store.open();
-    store.save('account-a', token, snapshot({ query: 'bolt' }));
+    store.save('account-a', token, snapshot({ query: 'bolt' }), releaseNothing);
 
     expect(store.read('account-b', token)).toBeNull();
     expect(store.read('account-a', 'unknown-token')).toBeNull();
@@ -184,8 +189,8 @@ describe('opaque, account-isolated restoration state', () => {
   it('replaces the state of one entry when the entry is left again', () => {
     const store = createViewStateStore();
     const token = store.open();
-    store.save('account-a', token, snapshot({ query: 'initial' }));
-    store.save('account-a', token, snapshot({ query: 'latest', bolt: true }));
+    store.save('account-a', token, snapshot({ query: 'initial' }), releaseNothing);
+    store.save('account-a', token, snapshot({ query: 'latest', bolt: true }), releaseNothing);
 
     expect(store.size).toBe(1);
     expect(store.read('account-a', token)?.state).toEqual({ query: 'latest', bolt: true });
@@ -199,7 +204,7 @@ describe('opaque, account-isolated restoration state', () => {
     expect(reloaded.open()).not.toBe(survivingToken);
     expect(surviving.owns(survivingToken)).toBe(true);
     expect(reloaded.owns(survivingToken)).toBe(false);
-    reloaded.save('account-a', survivingToken, snapshot({ query: 'after reload' }));
+    reloaded.save('account-a', survivingToken, snapshot({ query: 'after reload' }), releaseNothing);
 
     expect(reloaded.read('account-a', survivingToken)).toBeNull();
   });
@@ -215,7 +220,7 @@ describe('opaque, account-isolated restoration state', () => {
       position: { continuation: 'cursor-1', offset: 12 },
       nested: { lists: [{ window: 500 }] },
     };
-    store.save('account-a', token, snapshot(state));
+    store.save('account-a', token, snapshot(state), releaseNothing);
 
     expect(store.read('account-a', token)?.state).toBe(state);
   });
@@ -223,7 +228,7 @@ describe('opaque, account-isolated restoration state', () => {
   it.each([null, undefined])('preserves opaque nullish page state: %s', (state) => {
     const store = createViewStateStore();
     const token = store.open();
-    store.save('account-a', token, snapshot(state));
+    store.save('account-a', token, snapshot(state), releaseNothing);
 
     expect(store.read('account-a', token)).not.toBeNull();
     expect(store.read('account-a', token)?.state).toBe(state);
@@ -232,13 +237,18 @@ describe('opaque, account-isolated restoration state', () => {
   it('sanitizes only the presentation state the shell owns', () => {
     const store = createViewStateStore();
     const token = store.open();
-    store.save('account-a', token, {
-      state: { anything: true },
-      scrollY: Number.POSITIVE_INFINITY,
-      focusId: 42 as never,
-      anchorId: 'result-1',
-      anchorTop: Number.NaN,
-    });
+    store.save(
+      'account-a',
+      token,
+      {
+        state: { anything: true },
+        scrollY: Number.POSITIVE_INFINITY,
+        focusId: 42 as never,
+        anchorId: 'result-1',
+        anchorTop: Number.NaN,
+      },
+      releaseNothing,
+    );
 
     expect(store.read('account-a', token)).toEqual({
       state: { anything: true },
@@ -253,7 +263,12 @@ describe('opaque, account-isolated restoration state', () => {
     const store = createViewStateStore(3);
     const tokens = ['first', 'second', 'third', 'fourth'].map((value) => {
       const token = store.open();
-      store.save('account-a', token, snapshot({ query: value, selection: ['copy:1'] }));
+      store.save(
+        'account-a',
+        token,
+        snapshot({ query: value, selection: ['copy:1'] }),
+        releaseNothing,
+      );
       return token;
     });
 
@@ -274,12 +289,89 @@ describe('opaque, account-isolated restoration state', () => {
   it('clears every snapshot when the session ends', () => {
     const store = createViewStateStore();
     const token = store.open();
-    store.save('account-a', token, snapshot({ query: 'bolt' }));
+    store.save('account-a', token, snapshot({ query: 'bolt' }), releaseNothing);
 
     store.clear();
 
     expect(store.size).toBe(0);
     expect(store.read('account-a', token)).toBeNull();
+  });
+
+  it('releases a retained handle through its owning factory when the entry is replaced', () => {
+    const store = createViewStateStore();
+    const token = store.open();
+    const released: unknown[] = [];
+    const first = { resource: 'handle-1' };
+    const latest = { resource: 'handle-2' };
+    store.save('account-a', token, snapshot(first), (retained) => released.push(retained));
+    // An unfinished restore hands back the same handle without a mounted factory to release it.
+    store.save('account-a', token, snapshot(first), releaseNothing);
+    expect(released).toEqual([]);
+
+    store.save('account-a', token, snapshot(latest), (retained) => released.push(retained));
+    expect(released).toEqual([first]);
+    expect(store.read('account-a', token)?.state).toBe(latest);
+    store.clear();
+    expect(released).toEqual([first, latest]);
+  });
+
+  it('releases the retained handles of the evicted entries when the bound drops one', () => {
+    const store = createViewStateStore(2);
+    const released: unknown[] = [];
+    for (const value of ['first', 'second', 'third']) {
+      const token = store.open();
+      store.save('account-a', token, snapshot(value), (retained) => released.push(retained));
+    }
+
+    expect(store.size).toBe(2);
+    expect(released).toEqual(['first']);
+  });
+
+  it('releases every retained handle when the presented account ends', () => {
+    const store = createViewStateStore();
+    const released: unknown[] = [];
+    const tokens = ['one', 'two'].map((value) => {
+      const token = store.open();
+      store.save('account-a', token, snapshot(value), (retained) => released.push(retained));
+      return token;
+    });
+
+    store.clear();
+
+    expect(released).toEqual(['one', 'two']);
+    expect(store.size).toBe(0);
+    expect(store.read('account-a', tokens[0] ?? '')).toBeNull();
+  });
+
+  it('releases the handle of an entry the user cannot return to', () => {
+    const store = createViewStateStore();
+    const token = store.open();
+    const released: unknown[] = [];
+    store.save('account-a', token, snapshot('replaced'), (retained) => released.push(retained));
+
+    store.discard(token);
+
+    expect(released).toEqual(['replaced']);
+    expect(store.read('account-a', token)).toBeNull();
+    // Discarding a token this store never kept releases nothing.
+    store.discard(store.open());
+    expect(released).toEqual(['replaced']);
+  });
+
+  it('keeps navigating when a factory fails to release one handle', () => {
+    const store = createViewStateStore(1);
+    const released: unknown[] = [];
+    const first = store.open();
+    store.save('account-a', first, snapshot('first'), () => {
+      throw new Error('The resource was already gone.');
+    });
+    const second = store.open();
+    store.save('account-a', second, snapshot('second'), (retained) => released.push(retained));
+
+    expect(store.size).toBe(1);
+    expect(store.read('account-a', second)?.state).toBe('second');
+    store.clear();
+    expect(released).toEqual(['second']);
   });
 });
 

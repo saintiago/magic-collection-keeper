@@ -61,8 +61,8 @@ import {
   type UiIdentity,
   type UiView,
   type UserInterface,
+  type UiPresentationModules,
 } from '../../src/ui/index.js';
-import type { UiPresentationModules } from '../../src/ui/internal/composition.js';
 
 import { browserAttemptStorage, unusedUserCardsClient } from './unused-usercards.js';
 import { unusedCapture } from './unused-capture.js';
@@ -405,6 +405,7 @@ export function installTagsHarness(
     userCards,
     cardList: createCardListBrowser({ progress: idleProgress, search, catalog, userCards }),
     capture: unusedCapture(userCards),
+    indexing: idleProgress,
   };
   const shell: UserInterface = createUserInterface({
     root,

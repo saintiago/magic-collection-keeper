@@ -442,6 +442,7 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
       createRecognition: createRecognitionContract,
       engines: recognitionEngineNames(false),
     }),
+    indexing: idleProgress,
   };
 
   const shell: UserInterface = createUserInterface({

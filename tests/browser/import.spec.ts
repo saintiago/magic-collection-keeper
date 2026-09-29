@@ -669,6 +669,13 @@ test('rereads an already open import after an unknown staging outcome', async ({
   await page.click('#import-results [data-ui-tool="add-to-review"]');
   const staged = await requested<Record<string, unknown>>(page, 'stage');
   await control(page, 'fail', staged.id, { code: 'busy', message: 'Response lost after commit.' });
+  // The staging outcome is not established: the editor keeps the retained attempt and the shell's
+  // notice keeps the failure visible with that same explicit retry
+  // (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:import-manual"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice.getByRole('button', { name: 'Retry the pending staging' })).toBeVisible();
   const sessions = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
   await settle(page, 'settleSessions', sessions.id, [session()]);
   const reread = await requested<UiImportEntriesRequest>(page, 'entries', 1);
@@ -717,9 +724,21 @@ test('keeps one line identity when a staging response is lost and retries it exp
   );
   expect(await control<unknown[]>(page, 'stage')).toHaveLength(1);
 
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:import-manual"]');
+  await expect(notice).toContainText('The staging outcome is unknown');
+  await notice.getByRole('button', { name: 'Retry the pending staging' }).click();
+  const unresolved = await requested<Record<string, unknown>>(page, 'stage', 1);
+  expect(unresolved.arguments).toEqual(first.arguments);
+  await control(page, 'fail', unresolved.id, { code: 'unavailable', message: 'Still offline.' });
+  await expect(page.locator('#import-manual-recover')).toBeEnabled();
+  await expect(page.locator('[data-ui-notice]')).toHaveCount(1);
+  await expect(notice).toContainText('The staging outcome is unknown');
+  const retryRefresh = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
+  await settle(page, 'settleSessions', retryRefresh.id, []);
+
   // Retrying the retained attempt replays the line identity it was begun with.
   await page.click('#import-manual-recover');
-  const second = await requested<Record<string, unknown>>(page, 'stage', 1);
+  const second = await requested<Record<string, unknown>>(page, 'stage', 2);
   const secondLine = (second.arguments.entries as readonly Record<string, unknown>[])[0];
   expect(secondLine?.entryId).toBe(firstLine?.entryId);
   await settle(page, 'settleStage', second.id, {
@@ -732,7 +751,8 @@ test('keeps one line identity when a staging response is lost and retries it exp
     'Those lines were already in review; no new entries were added.',
   );
   await expect(page.locator('#import-manual-recovery')).toBeHidden();
-  const reconciled = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
+  await expect(page.locator('[data-ui-notice]')).toHaveCount(0);
+  const reconciled = await requested<UiImportSessionsRequest>(page, 'sessions', 3);
   await settle(page, 'settleSessions', reconciled.id, [session()]);
   const entriesRead = await requested<UiImportEntriesRequest>(page, 'entries', 0);
   await settle(page, 'settleEntries', entriesRead.id, { session: session(), entries: [entry()] });
@@ -1168,6 +1188,48 @@ test('confirms a selection larger than one provider request', async ({ page }) =
   expect(errors).toEqual([]);
 });
 
+for (const duringRecovery of [false, true]) {
+  test(`a rejected confirmation removes unavailable recovery actions (recovery: ${duringRecovery})`, async ({
+    page,
+  }) => {
+    const errors = await openPendingReview(page, [entry()]);
+    await page.locator('#import-pending [data-ui-select]').check();
+    await page.click('#import-pending [data-ui-tool="confirm-import"]');
+    const confirmation = await requested(page, 'confirm');
+    const notice = page.locator('[data-ui-notice="navigation:page:alice:import-confirm"]');
+    if (duringRecovery) {
+      await control(page, 'fail', confirmation.id, {
+        code: 'unavailable',
+        message: 'Lost response',
+      });
+      await control(page, 'fail', (await requested(page, 'recover')).id, {
+        code: 'unavailable',
+        message: 'Offline',
+      });
+      await expect(page.locator('#import-recover')).toBeEnabled();
+      await notice.getByRole('button', { name: 'Check the confirmation outcome' }).click();
+      await settle(page, 'settleRecover', (await requested(page, 'recover', 1)).id, {
+        outcome: 'absent',
+      });
+      await expect(notice).toContainText('not recorded');
+    } else {
+      await control(page, 'fail', confirmation.id, {
+        code: 'conflict',
+        message: 'Review changed.',
+      });
+      await expect(notice).toContainText('Review changed.');
+      expect(await control<unknown[]>(page, 'recover')).toHaveLength(0);
+    }
+    await expect(page.locator('#import-recover')).toBeHidden();
+    await expect(
+      notice.getByRole('button', { name: 'Check the confirmation outcome' }),
+    ).toHaveCount(0);
+    await expect(notice.getByRole('button', { name: 'Dismiss' })).toBeVisible();
+    expect(await control<unknown[]>(page, 'confirm')).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+}
+
 test('recovers a lost confirmation whose pending entries are gone', async ({ page }) => {
   const errors = await openPendingReview(page, [entry()]);
   const row = page.locator('#import-pending [data-ui-entry="pending:entry-1"]');
@@ -1180,6 +1242,17 @@ test('recovers a lost confirmation whose pending entries are gone', async ({ pag
   expect(lost.arguments).toBe(confirmation.arguments.operationId);
   await control(page, 'fail', lost.id, { code: 'unavailable', message: 'Offline.' });
   await expect(page.locator('#import-recover')).toBeVisible();
+  // The unresolved confirmation is an operation failure of the presented view: the floating
+  // notice keeps it visible after the view is left, with the recorded outcome that establishes
+  // what the confirmation created (docs/ui/navigation.md#error-notices).
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:import-confirm"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice.locator('.ui-notice-mark')).toHaveText('Error:');
+  await expect(notice.locator('.ui-notice-spinner')).toBeHidden();
+  await expect(
+    notice.getByRole('button', { name: 'Check the confirmation outcome' }),
+  ).toBeVisible();
 
   // Reading the pending import finds the confirmed session without any pending entry left.
   const listing = await requested<UiImportSessionsRequest>(page, 'sessions', 1);
@@ -1208,6 +1281,8 @@ test('recovers a lost confirmation whose pending entries are gone', async ({ pag
     'Confirmed: 1 physical copy created. This confirmation had already been recorded; the copies ' +
       'it created are listed.',
   );
+  // The established outcome ends the notice of the confirmation it resolved.
+  await expect(notice).toHaveCount(0);
   const afterRecovery = await requested<UiImportSessionsRequest>(page, 'sessions', 2);
   await settle(page, 'settleSessions', afterRecovery.id, []);
   expect(errors).toEqual([]);
@@ -1791,6 +1866,150 @@ for (const context of ['Back', 'another search', 'missing lookup', 'failed looku
     expect(errors).toEqual([]);
   });
 }
+
+test('a failed printing read clears when reopening the review presents the printing', async ({
+  page,
+}) => {
+  const errors = await openPendingReview(page, [entry()]);
+  const foil: PrintingRecord = { ...m10, finishes: ['nonfoil', 'foil'] };
+  // The search offers a printing the catalog does not publish: choosing it keeps the choice's
+  // identity while the lookup that would resolve its record stays unanswered.
+  await page.fill('#import-printing-query-entry-1', 'set:m10');
+  await page.click('#import-printing-find-entry-1');
+  await settle(page, 'settleSearch', (await requested(page, 'searches')).id, searchPage([foil]));
+  const reads = (await control<unknown[]>(page, 'catalogRequests')).length;
+  await control(page, 'scriptCatalog', null);
+  await chooseImportPrinting(page, 'entry-1', foil.printingId);
+  await settle(page, 'settleCatalog', (await requested(page, 'catalogRequests', reads)).id, {});
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText(
+    `Printing ${foil.printingId}`,
+  );
+
+  // Saving re-reads the printing it must quote; the lookup fails, so the row keeps the failure
+  // beside the printing it names and the shell keeps it visible under the identity of this
+  // entry's catalog read (docs/ui/navigation.md#error-notices).
+  await page.click('#import-review-save-entry-1');
+  await control(page, 'fail', (await requested(page, 'catalogRequests', reads + 1)).id, {
+    code: 'unavailable',
+    message: 'Offline',
+  });
+  await expect(page.locator('#import-entry-status-entry-1')).toContainText('could not be read');
+  const notice = page.locator(
+    '[data-ui-notice="navigation:page:alice:import-entry:entry-1:printing"]',
+  );
+  await expect(notice).toContainText('The selected printing could not be read');
+  expect(await control<unknown[]>(page, 'review')).toHaveLength(0);
+
+  // Leaving the review keeps the service failure visible.
+  await control(page, 'navigate', { page: 'home' });
+  await expect(notice).toContainText('The selected printing could not be read');
+
+  // Returning reads the entries again — the stored printing stays unanswered for this fixture —
+  // and the review reads the printing its draft names once more. That lookup answers, so it
+  // reconciles the failure the replaced editor presented
+  // (docs/ui/navigation.md#error-notices).
+  await control(page, 'back');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await settle(page, 'settleCatalog', (await requested(page, 'catalogRequests', reads + 2)).id, {});
+  await settle(page, 'settleCatalog', (await requested(page, 'catalogRequests', reads + 3)).id, {
+    printings: [foil],
+  });
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M10 146 · en');
+  await expect(notice).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('reopening reconciles a failed printing read supplied by CardList enrichment', async ({
+  page,
+}) => {
+  const errors = await openImport(page, '#/import');
+  await scriptCatalog(page, {});
+  await settle(page, 'settleSessions', (await requested(page, 'sessions')).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries')).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText(
+    `Printing ${m11.printingId}`,
+  );
+  // Neither the list enrichment nor the editor's fallback resolved the unchanged printing.
+  await expect.poll(async () => (await control<unknown[]>(page, 'catalogRequests')).length).toBe(2);
+  await control(page, 'scriptCatalog', null);
+  await page.click('#import-review-save-entry-1');
+  await control(page, 'fail', (await requested(page, 'catalogRequests', 2)).id, {
+    code: 'unavailable',
+    message: 'Offline',
+  });
+  const notice = page.locator(
+    '[data-ui-notice="navigation:page:alice:import-entry:entry-1:printing"]',
+  );
+  await expect(notice).toContainText('The selected printing could not be read');
+  await control(page, 'navigate', { page: 'home' });
+  await expect(notice).toBeVisible();
+  await scriptCatalog(page, { cards: [boltCard], printings: [m11] });
+  await control(page, 'back');
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+  await expect(page.locator('#import-review-printing-entry-1')).toHaveText('M11 149 · en');
+  await expect(notice).toHaveCount(0);
+  expect(await control<unknown[]>(page, 'review')).toHaveLength(0);
+  expect(errors).toEqual([]);
+});
+
+test('keeps an unestablished review outcome when a later printing read fails', async ({ page }) => {
+  const errors = await openPendingReview(page, [entry()]);
+  // The entry names a printing the review already read, so the save is attempted without a lookup
+  // and its lost response stays unestablished.
+  await page.click('#import-review-save-entry-1');
+  const review = await requested<Record<string, unknown>>(page, 'review');
+  await control(page, 'fail', review.id, { code: 'unavailable', message: 'Lost response' });
+  const write = page.locator('[data-ui-notice="navigation:page:alice:import-entry:entry-1"]');
+  await expect(write).toContainText('The review outcome is unknown');
+  await expect(page.locator('#import-entry-status-entry-1')).toHaveText(
+    'The review outcome is unknown. Reload the pending import before retrying.',
+  );
+  await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, [session()]);
+  await settle(page, 'settleEntries', (await requested(page, 'entries', 1)).id, {
+    session: session(),
+    entries: [entry()],
+  });
+
+  // A later review of another printing fails its lookup before any write: the read reports its own
+  // failure without displacing the warning for the write that stays unresolved
+  // (docs/ui/navigation.md#error-notices).
+  await page.fill('#import-printing-query-entry-1', 'set:m10');
+  await page.click('#import-printing-find-entry-1');
+  await settle(
+    page,
+    'settleSearch',
+    (await requested(page, 'searches')).id,
+    searchPage([{ ...m10, finishes: ['nonfoil', 'foil'] }]),
+  );
+  const reads = (await control<unknown[]>(page, 'catalogRequests')).length;
+  await control(page, 'scriptCatalog', null);
+  await chooseImportPrinting(page, 'entry-1', m10.printingId);
+  await settle(page, 'settleCatalog', (await requested(page, 'catalogRequests', reads)).id, {});
+  await page.click('#import-review-save-entry-1');
+  await control(page, 'fail', (await requested(page, 'catalogRequests', reads + 1)).id, {
+    code: 'unavailable',
+    message: 'Offline',
+  });
+  await expect(page.locator('#import-entry-status-entry-1')).toContainText('could not be read');
+  const read = page.locator(
+    '[data-ui-notice="navigation:page:alice:import-entry:entry-1:printing"]',
+  );
+  await expect(read).toContainText('The selected printing could not be read');
+  await expect(write).toContainText('The review outcome is unknown');
+  expect(await control<unknown[]>(page, 'review')).toHaveLength(1);
+  expect(errors).toEqual([]);
+});
 
 test('serializes confirmation across sessions and releases it after explicit absence', async ({
   page,
@@ -2502,6 +2721,77 @@ const sourceMethods = [
     provenance: 'Wizards preconstructed deck · Official Wizards decklist ↗',
   },
 ] as const;
+
+for (const scenario of ['single', 'older retained', 'reopening'] as const) {
+  const olderAttempt = scenario === 'older retained';
+  test(`source recovery follows its reported attempt through discard (${scenario})`, async ({
+    page,
+  }) => {
+    const errors = await openImport(page, '#/import');
+    await settle(page, 'settleSessions', (await requested(page, 'sessions')).id, []);
+    if (olderAttempt) {
+      await page.fill('#import-source-text', '1 Counterspell');
+      await page.click('#import-source-submit');
+      const older = await requested<StageSourceImportInput>(page, 'source');
+      await control(page, 'fail', older.id, {
+        code: 'unavailable',
+        message: 'Older response lost.',
+      });
+      await expect(page.locator('#import-source-status')).toHaveText(sourceOutcomeUnknown);
+      await settle(page, 'settleSessions', (await requested(page, 'sessions', 1)).id, []);
+    }
+    const index = olderAttempt ? 1 : 0;
+    await page.fill('#import-source-text', '4 Lightning Bolt');
+    await page.click('#import-source-submit');
+    const started = await requested<StageSourceImportInput>(page, 'source', index);
+    await control(page, 'fail', started.id, { code: 'unavailable', message: 'Response lost.' });
+    const notice = page.locator('[data-ui-notice="navigation:page:alice:import-source"]');
+    await expect(notice).toContainText(sourceOutcomeUnknown);
+    const recorded = session({ sessionId: started.arguments.sessionId, sourceKind: 'pasted-list' });
+    await settle(page, 'settleSessions', (await requested(page, 'sessions', index + 1)).id, [
+      recorded,
+    ]);
+    await settle(page, 'settleEntries', (await requested(page, 'entries')).id, {
+      session: recorded,
+      entries: [entry({ sessionId: recorded.sessionId, printingId: null, finish: null })],
+    });
+    await notice.getByRole('button', { name: 'Reopen the retained import' }).click();
+    const reopened = await requested<StageSourceImportInput>(page, 'source', index + 1);
+    expect(reopened.arguments).toEqual(started.arguments);
+    if (scenario !== 'reopening') {
+      await control(page, 'fail', reopened.id, { code: 'unavailable', message: 'Still unknown.' });
+      await expect(page.locator('#import-source-submit')).toBeEnabled();
+    }
+    await page.click('#import-discard-session');
+    await page
+      .locator('dialog', { hasText: 'Discard this import?' })
+      .getByRole('button', { name: 'Discard import' })
+      .click();
+    const discarded = await requested(page, 'discardSession');
+    await settle(page, 'settleDiscardSession', discarded.id, {
+      ...recorded,
+      state: 'discarded',
+      pendingEntries: 0,
+      discardedEntries: 1,
+      revision: 3,
+    });
+    await expect(notice).toHaveCount(0);
+    await expect(page.locator(`[data-ui-source-waiting="${recorded.sessionId}"]`)).toHaveCount(0);
+    await expect(page.locator('#import-source-status')).toBeEmpty();
+    if (scenario === 'reopening') {
+      await control(page, 'fail', reopened.id, { code: 'unavailable', message: 'Late response.' });
+      await expect(page.locator('#import-source-submit')).toBeEnabled();
+      await expect(notice).toHaveCount(0);
+    }
+    if (olderAttempt) {
+      const older = await requested<StageSourceImportInput>(page, 'source');
+      await reopenWaitingImport(page, older.arguments.sessionId);
+      const retry = await requested<StageSourceImportInput>(page, 'source', index + 2);
+      expect(retry.arguments).toEqual(older.arguments);
+    }
+    expect(errors).toEqual([]);
+  });
+}
 
 for (const method of sourceMethods) {
   for (const secondOutcome of ['rejected', 'committed', 'unknown'] as const) {

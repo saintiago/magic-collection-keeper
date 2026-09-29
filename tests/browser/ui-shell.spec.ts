@@ -19,6 +19,7 @@ import { build } from 'esbuild';
 
 import type { UiShellControl, UiShellStart } from './ui-shell.harness.js';
 import { UI_LIMITS } from '../../src/ui/index.js';
+import type { SearchIndexingStatus } from '../../src/search/browser.js';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const harnessPath = path.join(repoRoot, 'tests', 'browser', 'ui-shell.harness.ts');
@@ -41,6 +42,10 @@ function shellBundle(): Promise<string> {
           '  presentedRedirect: globalThis.keeperUiPresentedRedirect,',
           '  rejectRedirect: globalThis.keeperUiRejectRedirect,',
           '  listResults: globalThis.keeperUiListResults,',
+          '  pageNotices: globalThis.keeperUiPageNotices === true,',
+          '  deferredPages: globalThis.keeperUiDeferredPages === true,',
+          '  deferredSignIn: globalThis.keeperUiDeferredSignIn === true,',
+          '  retainedResources: globalThis.keeperUiRetainedResources === true,',
           '});',
         ].join('\n'),
         resolveDir: repoRoot,
@@ -80,6 +85,10 @@ async function openShell(page: Page, hash: string, start: UiShellStart = {}): Pr
     globals.keeperUiPresentedRedirect = flags.presentedRedirect;
     globals.keeperUiRejectRedirect = flags.rejectRedirect;
     globals.keeperUiListResults = flags.listResults;
+    globals.keeperUiPageNotices = flags.pageNotices === true;
+    globals.keeperUiDeferredPages = flags.deferredPages === true;
+    globals.keeperUiDeferredSignIn = flags.deferredSignIn === true;
+    globals.keeperUiRetainedResources = flags.retainedResources === true;
   }, start);
   await loadShell(page);
   return errors;
@@ -93,6 +102,13 @@ async function loadShell(page: Page): Promise<void> {
 async function notes(page: Page): Promise<string[]> {
   return page.evaluate(() =>
     (globalThis as unknown as { keeperUiControl: { log(): string[] } }).keeperUiControl.log(),
+  );
+}
+
+/** Handles the retention fixture named under one prefix, without reading their contents. */
+function handlesNamed(notes: readonly string[], prefix: 'retained:' | 'released:'): Set<string> {
+  return new Set(
+    notes.filter((note) => note.startsWith(prefix)).map((note) => note.slice(prefix.length)),
   );
 }
 
@@ -171,6 +187,86 @@ async function disposeShell(page: Page): Promise<void> {
   await page.evaluate(() => {
     const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
     control.dispose();
+  });
+}
+
+/** Completes the sign-in the shell awaits, as the deployment's authentication would. */
+async function completeSignIn(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.completeSignIn();
+  });
+}
+
+/** Rejects the sign-in the shell awaits, as an authentication outage would. */
+async function failSignIn(page: Page, message: string): Promise<void> {
+  await page.evaluate((text) => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.failSignIn(text);
+  }, message);
+}
+
+/** Resources the retention fixture's factory still owns through retained handles. */
+async function retainedResources(page: Page): Promise<number> {
+  return page.evaluate(() =>
+    (
+      globalThis as unknown as { keeperUiControl: UiShellControl }
+    ).keeperUiControl.retainedResources(),
+  );
+}
+
+/** Publishes one indexing status of an account, as Search's progress tracker would. */
+async function publishIndexing(
+  page: Page,
+  accountId: string,
+  state: SearchIndexingStatus['state'],
+  outstanding: readonly string[] = [],
+): Promise<void> {
+  await page.evaluate(
+    (input) => {
+      const control = (globalThis as unknown as { keeperUiControl: UiShellControl })
+        .keeperUiControl;
+      control.publishIndexing(input.accountId, input.state, input.outstanding);
+    },
+    { accountId, state, outstanding },
+  );
+}
+
+/** Status checks the indexing notice's retry action requested. */
+async function indexingChecks(page: Page, accountId: string): Promise<number> {
+  return page.evaluate(
+    (id) =>
+      (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl.indexingChecks(
+        id,
+      ),
+    accountId,
+  );
+}
+
+/** Listeners one account's progress tracker still holds. */
+async function indexingListeners(page: Page, accountId: string): Promise<number> {
+  return page.evaluate(
+    (id) =>
+      (
+        globalThis as unknown as { keeperUiControl: UiShellControl }
+      ).keeperUiControl.indexingListeners(id),
+    accountId,
+  );
+}
+
+/** Resolves the deferred page factory of the late-factory journeys. */
+async function resolveDeferredPage(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.resolveDeferredPage();
+  });
+}
+
+/** Rejects the deferred page factory of the late-factory journeys. */
+async function rejectDeferredPage(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.rejectDeferredPage();
   });
 }
 
@@ -332,6 +428,97 @@ test('history eviction releases the state of the oldest entries', async ({ page 
   await page.goBack();
   await expect(page.getByLabel('State draft')).toHaveValue('fresh');
 });
+
+test('retained handles are released through their owning factory on eviction and account change', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/tags', { retainedResources: true });
+
+  // The entry the user returns to hands its handle back, and replacing that entry discards the
+  // state it kept: the factory that owns the handle reclaims its resource at once.
+  await page.locator('#resource-open').click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+  await page.goBack();
+  await expect(page.locator('#resource-status')).toBeVisible();
+  await page.locator('#resource-replace').click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+  expect((await notes(page)).filter((note) => note.startsWith('released:'))).toEqual([
+    'released:resource-1',
+  ]);
+
+  const visits = UI_LIMITS.viewStates + 3;
+  await page.getByRole('link', { name: 'Tags', exact: true }).click();
+  for (let index = 1; index <= visits; index += 1) {
+    await page.locator('#resource-open').click();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+    await page.getByRole('link', { name: 'Tags', exact: true }).click();
+    await expect(page.locator('#resource-status')).toBeVisible();
+  }
+
+  // The history bound dropped the oldest entries and their owner reclaimed each handle's
+  // resource; every retained resource the fixture's factory still holds belongs to a kept entry.
+  const before = await notes(page);
+  const acquired = handlesNamed(before, 'retained:');
+  const retained = await retainedResources(page);
+  const released = handlesNamed(before, 'released:');
+  // The mounted visit holds one resource of its own; the rest belong to the entries history keeps.
+  expect(retained).toBeGreaterThan(1);
+  expect(retained).toBeLessThan(acquired.size);
+  expect(released.size).toBe(acquired.size - retained);
+
+  // Leaving the account releases the handles its entries still retained, and the replacement
+  // account retains resources of its own instead of a departed entry's.
+  await signInAs(page, 'bob');
+  await expect(page.locator('#resource-status')).toBeVisible();
+  const after = await notes(page);
+  const nowReleased = handlesNamed(after, 'released:');
+  for (const handle of acquired) {
+    expect(nowReleased).toContain(handle);
+  }
+  const own = handlesNamed(after, 'retained:');
+  for (const handle of acquired) {
+    own.delete(handle);
+  }
+  expect([...own]).toHaveLength(1);
+  expect(await retainedResources(page)).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+for (const loading of ['deferred', 'failed'] as const) {
+  test(`interrupted ${loading} restoration preserves the retained resource owner`, async ({
+    page,
+  }) => {
+    const errors = await openShell(page, '#/tags', { retainedResources: true });
+    await page.locator('#resource-open').click();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+    await page.evaluate(() => {
+      (
+        globalThis as unknown as { keeperUiControl: UiShellControl }
+      ).keeperUiControl.deferNextPage();
+    });
+    await page.goBack();
+    await expect(page.locator('[data-ui-page-loading]')).toBeVisible();
+    if (loading === 'failed') {
+      await rejectDeferredPage(page);
+      await expect(page.locator('[data-ui-page-unavailable]')).toBeVisible();
+    }
+    await page.goForward();
+    await expect(page.locator('#collection-marker')).toBeVisible();
+    expect(await retainedResources(page)).toBe(1);
+    await page.evaluate(() => {
+      (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl.dispose();
+    });
+    expect(await retainedResources(page)).toBe(0);
+    expect((await notes(page)).filter((note) => note.startsWith('released:'))).toEqual([
+      'released:resource-1',
+    ]);
+    if (loading === 'deferred') {
+      await resolveDeferredPage(page);
+      expect(await retainedResources(page)).toBe(0);
+    }
+    expect(errors).toEqual([]);
+  });
+}
 
 test('sign-out removes private presentation state and ends the session', async ({ page }) => {
   await openShell(page, '#/');
@@ -672,6 +859,63 @@ test('a rejected sign-out returns a live page with working controls', async ({ p
   await expect(page.locator('#collection-marker')).toBeVisible();
 });
 
+test('an account change fences a departed account’s sign-out failure', async ({ page }) => {
+  const errors = await openShell(page, '#/', { deferredSignOut: true });
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('#ui-root main')).toBeHidden();
+
+  // Identity reports another account while the departed account's sign-out is outstanding: the
+  // replacement session presents its own controls, not the pending state of the old one.
+  await signInAs(page, 'bob');
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+  const signOut = page.getByRole('button', { name: 'Sign out' });
+  await expect(signOut).toBeEnabled();
+
+  // The departed account's rejection arrives after its session ended: it reaches neither the
+  // notices nor the controls of the account that replaced it.
+  await failSignOut(page, 'Alice identity operation failed');
+  await expect(page.locator('[data-ui-notice]')).toHaveCount(0);
+  await expect(signOut).toBeEnabled();
+
+  // The control belongs to the presented account: signing out again starts its own operation.
+  await signOut.click();
+  await expect(page.locator('#ui-root main')).toBeHidden();
+  await completeSignOut(page);
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('a departed account’s failed sign-in never reaches the replacement account', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/', { signedOut: true, deferredSignIn: true });
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  // Authentication reports a verified account while the abandoned attempt is still outstanding.
+  await signInAs(page, 'bob');
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+
+  await failSignIn(page, 'Sign-in failed. Please retry.');
+  await expect(page.locator('[data-ui-notice]')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+  expect(errors).toEqual([]);
+
+  // A sign-in attempt the presented session starts is presented again when it fails, with the
+  // retry that starts a fresh attempt.
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await failSignIn(page, 'Sign-in failed. Please retry.');
+  const notice = page.locator('[data-ui-notice="navigation:sign-in"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice).toContainText('Sign-in failed. Please retry.');
+  await notice.getByRole('button', { name: 'Sign in again' }).click();
+  await completeSignIn(page);
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test('a page without a state handle keeps focus and scroll for the way back', async ({ page }) => {
   await openShell(page, '#/collection');
   await expect(page.locator('#collection-marker')).toBeVisible();
@@ -893,6 +1137,178 @@ for (const transition of ['account', 'sign-out', 'dispose'] as const) {
     });
   }
 }
+
+test('one indexing notice persists across pages until the changes are incorporated', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/');
+  const notice = page.locator('[data-ui-notice="navigation:indexing"]');
+  await expect(notice).toHaveCount(0);
+
+  await publishIndexing(page, 'alice', 'indexing', ['5']);
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'progress');
+  await expect(notice).toHaveAttribute('role', 'status');
+  await expect(notice.locator('.ui-notice-spinner')).toBeVisible();
+  await expect(notice).toContainText('Indexing your cards…');
+
+  // The notice stays across page changes, and concurrent changes combine into the same one.
+  await page.getByRole('link', { name: 'Collection' }).click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+  await expect(notice).toBeVisible();
+  await publishIndexing(page, 'alice', 'indexing', ['5', '6']);
+  await expect(notice).toHaveCount(1);
+  await expect(notice).toContainText('Indexing your cards…');
+
+  await publishIndexing(page, 'alice', 'incorporated');
+  await expect(notice).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('the indexing notice reports delayed and failed progress with a status-only retry', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/');
+  await publishIndexing(page, 'alice', 'indexing', ['5']);
+  await publishIndexing(page, 'alice', 'delayed', ['5']);
+
+  const notice = page.locator('[data-ui-notice="navigation:indexing"]');
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'status');
+  await expect(notice).toContainText('Indexing is delayed');
+  await expect(notice.locator('.ui-notice-spinner')).toBeHidden();
+
+  // The retry checks progress and repeats no write, and a keyboard user reaches it.
+  const requests = (await notes(page)).filter((note) => note.startsWith('request:'));
+  const retry = notice.getByRole('button', { name: 'Check indexing status' });
+  await retry.focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => indexingChecks(page, 'alice')).toBe(1);
+  expect(await indexingChecks(page, 'alice')).toBe(1);
+  expect((await notes(page)).filter((note) => note.startsWith('request:'))).toEqual(requests);
+
+  await publishIndexing(page, 'alice', 'failed', ['5']);
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice.locator('.ui-notice-mark')).toHaveText('Error:');
+  await expect(notice).toContainText('Indexing failed');
+  await expect(notice.locator('.ui-notice-spinner')).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
+test('an account change clears the indexing notice and fences the departed progress', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/');
+  await publishIndexing(page, 'alice', 'indexing', ['5']);
+  const notice = page.locator('[data-ui-notice="navigation:indexing"]');
+  await expect(notice).toBeVisible();
+
+  await signInAs(page, 'bob');
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+  await expect(notice).toHaveCount(0);
+  expect(await indexingListeners(page, 'alice')).toBe(0);
+
+  // A status the account the shell left publishes later reaches no notice of the new account.
+  await publishIndexing(page, 'alice', 'indexing', ['6']);
+  await expect(notice).toHaveCount(0);
+
+  // The presented account's own progress is presented again.
+  await publishIndexing(page, 'bob', 'indexing', ['7']);
+  await expect(notice).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('a page reports an operation failure as a floating error notice it updates and dismisses', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/collection', { pageNotices: true });
+  await expect(page.locator('#notices-page')).toBeVisible();
+  await expect(page.locator('[data-ui-notice]')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Report failure' }).click();
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:operation-1"]');
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
+  await expect(notice).toContainText('Saving could not be confirmed.');
+  await expect(notice.locator('.ui-notice-mark')).toHaveText('Error:');
+  await expect(notice.locator('.ui-notice-spinner')).toBeHidden();
+  // Red styling with a textual indicator; color alone never carries the meaning.
+  expect(await notice.evaluate((element) => getComputedStyle(element).color)).toBe(
+    'rgb(185, 28, 28)',
+  );
+
+  // The recovery action belongs to the view that reported the operation.
+  await notice.getByRole('button', { name: 'Check the saved state' }).click();
+  expect(await notes(page)).toContain('notice-action');
+
+  // A repeated report of the same operation replaces the notice instead of duplicating it.
+  await page.getByRole('button', { name: 'Report progress' }).click();
+  await expect(notice).toHaveCount(1);
+  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'progress');
+  await expect(notice.locator('.ui-notice-spinner')).toBeVisible();
+  await expect(notice).toContainText('Saving…');
+
+  // The explicit dismiss control removes it.
+  await notice.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(notice).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('a reported failure survives navigation and a closed page reports no notice', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/collection', { pageNotices: true });
+  await page.getByRole('button', { name: 'Report failure' }).click();
+  const notice = page.locator('[data-ui-notice="navigation:page:alice:operation-1"]');
+  await expect(notice).toBeVisible();
+
+  // Leaving the reporting page keeps the failure visible with its dismiss control.
+  await page.getByRole('link', { name: 'Open tags' }).click();
+  await expect(page.getByRole('heading', { name: 'Tags' })).toBeVisible();
+  await expect(notice).toBeVisible();
+  await expect(notice.getByRole('button', { name: 'Check the saved state' })).toHaveCount(0);
+  await notice.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(notice).toHaveCount(0);
+
+  // A page the shell left reports late: its notice reaches neither this view nor the next.
+  await expect.poll(() => notes(page)).toContain('late-notice-reported');
+  await expect(page.locator('[data-ui-notice="navigation:page:alice:late-1"]')).toHaveCount(0);
+  await expect(page.locator('[data-ui-notice]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('a page factory that resolves after the shell left its view mounts nothing', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/tags', { deferredPages: true });
+  await expect(page.getByRole('heading', { name: 'Tags' })).toBeVisible();
+  await expect(page.locator('[data-ui-page-loading]')).toBeVisible();
+
+  await page.getByRole('link', { name: 'Collection' }).click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+  await resolveDeferredPage(page);
+  await expect(page.locator('#deferred-marker')).toHaveCount(0);
+
+  // The resolved factory still presents its page on the next visit.
+  await page.getByRole('link', { name: 'Tags', exact: true }).click();
+  await expect(page.locator('#deferred-marker')).toBeVisible();
+  expect(await notes(page)).toContain('deferred-mounted');
+  expect(errors).toEqual([]);
+});
+
+test('a page factory that cannot load presents recoverable feedback and keeps the shell usable', async ({
+  page,
+}) => {
+  const errors = await openShell(page, '#/tags', { deferredPages: true });
+  await expect(page.locator('[data-ui-page-loading]')).toBeVisible();
+  await rejectDeferredPage(page);
+
+  await expect(page.locator('[data-ui-page-unavailable]')).toHaveText(
+    'The tags page could not be loaded.',
+  );
+  await page.getByRole('link', { name: 'Collection' }).click();
+  await expect(page.locator('#collection-marker')).toBeVisible();
+  expect(errors).toEqual([]);
+});
 
 async function settleDeviceRelease(page: Page, message?: string): Promise<void> {
   await page.evaluate((failure) => {

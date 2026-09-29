@@ -27,6 +27,7 @@ import {
 } from '../../src/ui/index.js';
 import type { SearchClient, UserInterfaceCapabilities } from '../../src/application/index.js';
 import type { Catalog } from '../../src/catalog/index.js';
+import type { SearchIndexingStatus } from '../../src/search/browser.js';
 
 import { unusedUserCards } from './unused-usercards.js';
 import { unusedCapture } from './unused-capture.js';
@@ -43,6 +44,10 @@ export interface UiShellControl {
   completeSignOut(): void;
   /** Rejects the sign-out the shell awaits, as an authentication outage would. */
   failSignOut(message: string): void;
+  /** Completes the sign-in the shell awaits, reporting the verified account as the deployment would. */
+  completeSignIn(): void;
+  /** Rejects the sign-in the shell awaits, as an authentication outage would. */
+  failSignIn(message: string): void;
   /** Settles the controlled device release, rejecting when a message is supplied. */
   completeDeviceRelease(message?: string): void;
   /** Answers the asynchronous page's held result requests, as the source's response arriving would. */
@@ -53,8 +58,29 @@ export interface UiShellControl {
   shiftAsyncLayout(): void;
   /** Result requests the asynchronous page holds, waiting for the journey to answer them. */
   asyncPending(): number;
+  /** Publishes one indexing status of an account, as Search's progress tracker would. */
+  publishIndexing(
+    accountId: string,
+    state: SearchIndexingStatus['state'],
+    outstanding?: readonly string[],
+  ): void;
+  /** Status checks the notice's retry action requested; a status check repeats no write. */
+  indexingChecks(accountId: string): number;
+  /** Listeners one account's progress tracker still holds. */
+  indexingListeners(accountId: string): number;
+  /** Resolves the deferred page factory of the late-factory journeys. */
+  resolveDeferredPage(): void;
+  /** Defers the next Tags mount, preserving its resource-owning factory. */
+  deferNextPage(): void;
+  /** Rejects the deferred page factory of the late-factory journeys. */
+  rejectDeferredPage(): void;
   /** Notes the harness recorded, oldest first. */
   log(): string[];
+  /**
+   * Resources the retention fixture's factory still owns through the retained handles of the
+   * history entries Navigation keeps.
+   */
+  retainedResources(): number;
   /** Releases the shell and its listeners. */
   dispose(): void;
 }
@@ -64,6 +90,10 @@ export interface UiShellStart {
   readonly signedOut?: boolean;
   /** Holds each sign-out until the journey completes or rejects it through the control. */
   readonly deferredSignOut?: boolean;
+  /** Holds each sign-in until the journey completes or rejects it through the control. */
+  readonly deferredSignIn?: boolean;
+  /** Presents the resource-owning retention fixture as the Tags page. */
+  readonly retainedResources?: boolean;
   readonly deviceRelease?: 'deferred' | 'throw';
   /** Presents the asynchronous Home page instead of the immediate one. */
   readonly asyncResults?: boolean;
@@ -75,6 +105,10 @@ export interface UiShellStart {
    * page that redirects while presenting the entry does; `replace` keeps no way back to the entry.
    */
   readonly presentedRedirect?: 'navigate' | 'replace';
+  /** Presents the notices fixture on Collection instead of the plain fixture. */
+  readonly pageNotices?: boolean;
+  /** Registers the Tags page behind a factory the journey resolves or rejects on demand. */
+  readonly deferredPages?: boolean;
 }
 
 /** Installs the shell into `root`; its identity starts signed in unless `signedOut` is set. */
@@ -88,6 +122,12 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     start.signedOut === true ? null : { accountId: 'alice', displayName: 'Alice' };
   const listeners = new Set<(account: UiAccount | null) => void>();
   let pendingSignOut: { resolve(): void; reject(cause: Error): void } | null = null;
+  let pendingSignIn: { resolve(): void; reject(cause: Error): void } | null = null;
+  /**
+   * Resources the retention fixture's factory owns through the handles its page retained: the
+   * fixture acquires one per retained handle and releases it through the page contract.
+   */
+  const resources = new Set<string>();
 
   let pendingDeviceRelease: { resolve(): void; reject(cause: Error): void } | null = null;
   const asyncResults = createAsyncResults();
@@ -95,6 +135,11 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
   const identity: UiIdentity = {
     current: () => account,
     signIn: () => {
+      if (start.deferredSignIn === true) {
+        return new Promise<void>((resolve, reject) => {
+          pendingSignIn = { resolve, reject };
+        });
+      }
       report({ accountId: 'bob', displayName: 'Bob' });
     },
     signOut: () => {
@@ -135,6 +180,18 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     counts: () => Promise.reject(new Error('The shell journey reads no private counts.')),
     observe: () => Promise.reject(new Error('The shell journey observes no progress.')),
   };
+  const indexing = createControlledIndexing();
+  let deferred = start.deferredPages === true ? createDeferredPage(document, log) : null;
+  const pageDefinitions = fixturePages(
+    document,
+    log,
+    start.asyncResults === true ? asyncResults : null,
+    start.presentedRedirect ?? null,
+    start.rejectRedirect === true,
+    start.listResults,
+    start.pageNotices === true,
+    start.retainedResources === true ? resources : null,
+  );
   const capabilities: UserInterfaceCapabilities = {
     settings: {
       environment: 'test',
@@ -155,6 +212,7 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       userCards: unusedUserCards,
     }),
     capture: unusedCapture(unusedUserCards),
+    indexing: (accountId) => indexing.tracker(accountId),
   };
   const shell: UserInterface = createUserInterface({
     root,
@@ -173,14 +231,15 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
         }
       },
     },
-    pages: fixturePages(
-      document,
-      log,
-      start.asyncResults === true ? asyncResults : null,
-      start.presentedRedirect ?? null,
-      start.rejectRedirect === true,
-      start.listResults,
-    ),
+    pages:
+      start.deferredPages === true || start.retainedResources === true
+        ? {
+            load: (page) =>
+              page === 'tags' && deferred !== null
+                ? deferred.load()
+                : (pageDefinitions.find((definition) => definition.page === page) ?? null),
+          }
+        : pageDefinitions,
   });
 
   function report(next: UiAccount | null): void {
@@ -210,6 +269,17 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       pendingSignOut = null;
       pending?.reject(new Error(message));
     },
+    completeSignIn: () => {
+      const pending = pendingSignIn;
+      pendingSignIn = null;
+      report({ accountId: 'bob', displayName: 'Bob' });
+      pending?.resolve();
+    },
+    failSignIn: (message) => {
+      const pending = pendingSignIn;
+      pendingSignIn = null;
+      pending?.reject(new Error(message));
+    },
     completeDeviceRelease: (message) => {
       const pending = pendingDeviceRelease;
       pendingDeviceRelease = null;
@@ -227,7 +297,21 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       asyncResults.grow();
     },
     asyncPending: () => asyncResults.pending(),
+    publishIndexing: (accountId, state, outstanding) =>
+      indexing.publish(accountId, state, outstanding),
+    indexingChecks: (accountId) => indexing.checks(accountId),
+    indexingListeners: (accountId) => indexing.listeners(accountId),
+    deferNextPage: () => {
+      deferred = createDeferredPage(
+        document,
+        log,
+        pageDefinitions.find((definition) => definition.page === 'tags'),
+      );
+    },
+    resolveDeferredPage: () => deferred?.resolve(),
+    rejectDeferredPage: () => deferred?.reject(),
     log: () => [...log],
+    retainedResources: () => resources.size,
     dispose: () => {
       shell.dispose();
     },
@@ -242,6 +326,8 @@ function fixturePages(
   presentedRedirect: 'navigate' | 'replace' | null,
   rejectRedirect: boolean,
   listResults: UiShellStart['listResults'],
+  pageNotices: boolean,
+  retainedResources: Set<string> | null,
 ): readonly UiPageDefinition[] {
   return [
     listResults !== undefined
@@ -251,8 +337,10 @@ function fixturePages(
         : asyncHomePage(document, log, asyncResults, presentedRedirect, rejectRedirect),
     catalogPage(document),
     cardPage(document, log),
-    collectionPage(document),
-    statePage(document),
+    pageNotices ? noticesPage(document, log) : collectionPage(document),
+    retainedResources === null
+      ? statePage(document)
+      : resourcePage(document, log, retainedResources),
     redirectPage(document, log),
     devicePage(document, log),
   ];
@@ -580,6 +668,70 @@ function statePage(document: Document): UiPageDefinition {
   };
 }
 
+/**
+ * Resource-owning retention fixture: every history entry retains an opaque handle that its factory
+ * vouches for by acquiring a resource beside it, and the page contract's release frees exactly
+ * that resource. Navigation keeps the handle's meaning to itself, so a journey observes the
+ * resources the owning factory holds and whether it reclaimed them
+ * (docs/ui/navigation.md#interface, docs/ui/navigation.md#replacement-evidence).
+ */
+function resourcePage(document: Document, log: string[], resources: Set<string>): UiPageDefinition {
+  let serial = 0;
+
+  /** Reclaims one resource the factory owns through an opaque handle. */
+  function releaseHandle(handle: string): void {
+    resources.delete(handle);
+    log.push(`released:${handle}`);
+  }
+
+  return {
+    page: 'tags',
+    mount(container, context) {
+      const restored = context.restored?.state;
+      // Leaving and returning to an entry retains the handle that entry already owns; a new visit
+      // acquires one of its own, so the bound and the account decide when a resource is reclaimed.
+      const kept = typeof restored === 'string' ? restored : null;
+      const handle = kept ?? `resource-${++serial}`;
+      let handedOver = false;
+      resources.add(handle);
+      log.push(`retained:${handle}`);
+      const status = document.createElement('p');
+      status.id = 'resource-status';
+      status.textContent = `Holding ${resources.size} retained resources`;
+      const open = document.createElement('a');
+      open.id = 'resource-open';
+      open.href = uiHref({ page: 'collection', query: '', level: 'card' });
+      open.textContent = 'Open collection';
+      const replace = document.createElement('a');
+      replace.id = 'resource-replace';
+      replace.href = uiHref({ page: 'collection', query: '', level: 'card' });
+      replace.textContent = 'Replace with collection';
+      replace.addEventListener('click', (event) => {
+        event.preventDefault();
+        context.replace({ page: 'collection', query: '', level: 'card' });
+      });
+      container.append(status, open, replace);
+      return {
+        capture: () => {
+          handedOver = true;
+          return handle;
+        },
+        // A visit that ends before Navigation kept its handle releases the resource it still owns
+        // itself; a handle the entry already owns is released through the page contract instead.
+        dispose: () => {
+          if (kept === null && !handedOver) {
+            releaseHandle(handle);
+          }
+        },
+      };
+    },
+    release(retained) {
+      // The factory owns the handle's meaning: it frees the resource the handle was acquired for.
+      releaseHandle(String(retained));
+    },
+  };
+}
+
 /** Catalog presents the query the URL identified, so a deep link can be observed. */
 function catalogPage(document: Document): UiPageDefinition {
   return {
@@ -657,6 +809,166 @@ function collectionPage(document: Document): UiPageDefinition {
       tail.style.height = '3000px';
       container.append(marker, lead, open, tail);
     },
+  };
+}
+
+/**
+ * Notices fixture: the page reports the operation failures it presents through the notice
+ * capability Navigation supplies it, so a journey can prove identity updates, the recovery action,
+ * the dismiss control and the fencing of a page the shell left
+ * (docs/ui/navigation.md#error-notices).
+ */
+function noticesPage(document: Document, log: string[]): UiPageDefinition {
+  return {
+    page: 'collection',
+    mount(container, context) {
+      const marker = document.createElement('p');
+      marker.id = 'notices-page';
+      marker.textContent = 'Notices page';
+      const report = noticeButton(document, 'notice-report', 'Report failure', () => {
+        context.notices.show({
+          id: 'operation-1',
+          severity: 'error',
+          message: 'Saving could not be confirmed.',
+          action: { label: 'Check the saved state', run: () => log.push('notice-action') },
+        });
+      });
+      const progress = noticeButton(document, 'notice-progress', 'Report progress', () => {
+        context.notices.show({ id: 'operation-1', severity: 'progress', message: 'Saving…' });
+      });
+      const dismiss = noticeButton(document, 'notice-dismiss', 'Dismiss failure', () => {
+        context.notices.dismiss('operation-1');
+      });
+      const open = document.createElement('a');
+      open.id = 'notice-open';
+      open.href = uiHref({ page: 'tags' });
+      open.textContent = 'Open tags';
+      container.append(marker, report, progress, dismiss, open);
+      context.signal.addEventListener('abort', () => {
+        // A closed page still holds work: its late report must reach no notice of the new view.
+        document.defaultView?.setTimeout(() => {
+          context.notices.show({ id: 'late-1', severity: 'error', message: 'Late failure' });
+          log.push('late-notice-reported');
+        }, 50);
+      });
+    },
+  };
+}
+
+/** One control of a fixture that reports the journey's choice. */
+function noticeButton(
+  document: Document,
+  id: string,
+  label: string,
+  run: () => void,
+): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.id = id;
+  button.textContent = label;
+  button.addEventListener('click', run);
+  return button;
+}
+
+/** Controlled indexing progress of the shell journeys: one tracker state per account. */
+interface ControlledIndexing {
+  tracker(accountId: string): {
+    status(): SearchIndexingStatus;
+    subscribe(listener: (status: SearchIndexingStatus) => void): () => void;
+    recheck(): void;
+  };
+  publish(
+    accountId: string,
+    state: SearchIndexingStatus['state'],
+    outstanding?: readonly string[],
+  ): void;
+  checks(accountId: string): number;
+  listeners(accountId: string): number;
+}
+
+function createControlledIndexing(): ControlledIndexing {
+  const accounts = new Map<
+    string,
+    {
+      status: SearchIndexingStatus;
+      readonly listeners: Set<(status: SearchIndexingStatus) => void>;
+      checks: number;
+    }
+  >();
+  const stateOf = (accountId: string) => {
+    const current = accounts.get(accountId);
+    if (current !== undefined) {
+      return current;
+    }
+    const created = {
+      status: { accountId, state: 'idle' as const, outstanding: [], revisions: null },
+      listeners: new Set<(status: SearchIndexingStatus) => void>(),
+      checks: 0,
+    };
+    accounts.set(accountId, created);
+    return created;
+  };
+  return {
+    tracker(accountId) {
+      const state = stateOf(accountId);
+      return {
+        status: () => state.status,
+        subscribe: (listener) => {
+          state.listeners.add(listener);
+          return () => {
+            state.listeners.delete(listener);
+          };
+        },
+        recheck: () => {
+          state.checks += 1;
+        },
+      };
+    },
+    publish(accountId, state, outstanding = []) {
+      const current = stateOf(accountId);
+      current.status = { ...current.status, state, outstanding: [...outstanding] };
+      for (const listener of [...current.listeners]) {
+        listener(current.status);
+      }
+    },
+    checks: (accountId) => stateOf(accountId).checks,
+    listeners: (accountId) => stateOf(accountId).listeners.size,
+  };
+}
+
+/**
+ * Deferred Tags factory of the late-factory journeys: Navigation resolves the route while this
+ * factory is still loading, and the journey decides whether it resolves or rejects afterwards.
+ */
+interface DeferredPage {
+  load(): Promise<UiPageDefinition>;
+  resolve(): void;
+  reject(): void;
+}
+
+function createDeferredPage(
+  document: Document,
+  log: string[],
+  definition?: UiPageDefinition,
+): DeferredPage {
+  const pending = Promise.withResolvers<UiPageDefinition>();
+  return {
+    load: () => pending.promise,
+    resolve: () => {
+      pending.resolve(
+        definition ?? {
+          page: 'tags',
+          mount(container) {
+            const marker = document.createElement('p');
+            marker.id = 'deferred-marker';
+            marker.textContent = 'Deferred page';
+            container.append(marker);
+            log.push('deferred-mounted');
+          },
+        },
+      );
+    },
+    reject: () => pending.reject(new Error('The tags page could not be loaded.')),
   };
 }
 

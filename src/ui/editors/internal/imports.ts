@@ -32,7 +32,7 @@ import type {
 import type { UiActionIntent } from '../../shared/actions.js';
 import type { CardViews } from '../../card-views/index.js';
 import type { UiActionRequest, UiOperationAction, UiOperationOutcome } from './operations.js';
-import { applyAction, outcomeText } from './operations.js';
+import { applyAction, outcomeText, reportUiOperation } from './operations.js';
 import { printingChoiceGuidance, singlePrintingChoice } from './printing-choice.js';
 import {
   button,
@@ -50,6 +50,7 @@ import {
 } from '../../shared/controls.js';
 import type { UiDialogs } from '../../shared/dialogs.js';
 import { UI_LIMITS } from '../../shared/limits.js';
+import { reportUiFailure, type UiNotices } from '../../shared/notices.js';
 import { readRetainedList, readState } from '../../shared/state.js';
 import {
   cardListEntryKey,
@@ -139,6 +140,45 @@ export interface UiImportEditorContext {
   readonly catalog: Catalog;
   /** Aborted when the view closes; late results must not change a replacement view. */
   readonly signal: AbortSignal;
+  /**
+   * Floating notices of the shell: the editors report the operation and service failures they
+   * present, so a failure stays visible after the view is left
+   * (docs/ui/navigation.md#error-notices).
+   */
+  readonly notices?: UiNotices;
+}
+
+/** Notice identities of the Import editors, one per operation a view presents. */
+const manualStagingNotice = 'import-manual';
+const sourceImportNotice = 'import-source';
+const reviewReadNotice = 'import-review';
+const reviewConfirmNotice = 'import-confirm';
+const reviewDiscardNotice = 'import-discard';
+
+/**
+ * Notice identity of one pending entry's own state changes: the review and the discard of the
+ * entry. Reporting it again updates the feedback of that write, and a catalog read never resolves
+ * it (docs/ui/navigation.md#error-notices).
+ */
+function reviewEntryNotice(entryId: string): string {
+  return `import-entry:${entryId}`;
+}
+
+/**
+ * Notice identity of one pending entry's catalog read: the lookup that resolves the printing the
+ * review names. The read has a lifecycle of its own, so a lookup that establishes the printing —
+ * including one a reopened review issues — reconciles the failure of an earlier lookup, and it
+ * never replaces the feedback of a write whose outcome the provider has not established
+ * (docs/ui/navigation.md#error-notices, docs/ui/architecture.md#state-ownership-and-restoration).
+ */
+function reviewEntryPrintingNotice(entryId: string): string {
+  return `import-entry:${entryId}:printing`;
+}
+
+/** Ends every notice of one pending entry whose review no longer exists. */
+function dismissReviewEntryNotices(notices: UiNotices | undefined, entryId: string): void {
+  notices?.dismiss(reviewEntryNotice(entryId));
+  notices?.dismiss(reviewEntryPrintingNotice(entryId));
 }
 
 /** One outstanding confirmation the review presents until UserCards establishes its outcome. */
@@ -395,6 +435,15 @@ export function createManualImportEditor(
     addingToReview = false;
     resultsStatus.dataset.uiOutcomeStatus = outcome.status;
     resultsStatus.textContent = outcome.message ?? outcomeText(outcome.status);
+    // Field validation stays with the form; a staging that failed or whose outcome is not
+    // established stays visible as the shell's notice while the retained attempt keeps its own
+    // retry (docs/ui/navigation.md#error-notices).
+    reportUiOperation(
+      options.notices,
+      manualStagingNotice,
+      outcome,
+      outcome.status === 'unknown' ? pendingStagingRetry() : undefined,
+    );
   }
 
   /** Searches the catalog for the printings the manual entry form names. */
@@ -434,6 +483,7 @@ export function createManualImportEditor(
         status: 'unknown',
         message:
           'The pending manual staging is still unresolved. Retry it before adding more lines.',
+        validation: true,
       };
     }
     const wantedQuantity = readQuantity(quantity, constraints.quantity.copy);
@@ -441,6 +491,7 @@ export function createManualImportEditor(
       return {
         status: 'failed',
         message: `Choose a quantity from 1 to ${constraints.quantity.copy}.`,
+        validation: true,
       };
     }
     const wantedFinish = readFinishValue(finish.value);
@@ -459,7 +510,11 @@ export function createManualImportEditor(
       });
     }
     if (lines.length === 0) {
-      return { status: 'failed', message: 'Select the printings to add to review.' };
+      return {
+        status: 'failed',
+        message: 'Select the printings to add to review.',
+        validation: true,
+      };
     }
     // One request stages at most the number of lines the provider bound accepts, so a selection
     // larger than one request is staged through further bounded requests, each line carrying the
@@ -534,7 +589,7 @@ export function createManualImportEditor(
     recoveringStaging = true;
     paintManualRecovery();
     let inReview = 0;
-    let message: string | null = null;
+    let failure: UiOperationOutcome | null = null;
     try {
       for (const attempt of retainedStagingAttempts()) {
         const outcome = await retryRetainedAttempt(
@@ -557,17 +612,40 @@ export function createManualImportEditor(
           inReview += outcome.record.staged;
           continue;
         }
-        message = outcome.message;
+        failure = { status: outcome.status, message: outcome.message };
         break;
       }
     } finally {
       recoveringStaging = false;
       paintManualRecovery();
     }
-    status.textContent = message ?? (inReview === 0 ? stagedMessage(0) : stagedMessage(inReview));
+    status.textContent =
+      failure?.message ?? (inReview === 0 ? stagedMessage(0) : stagedMessage(inReview));
+    // A retry that did not establish the outcome leaves the attempt retained: the notice keeps
+    // the result visible with the explicit retry that replays that same attempt.
+    if (failure !== null) {
+      reportUiOperation(
+        options.notices,
+        manualStagingNotice,
+        failure,
+        failure.status === 'unknown' ? pendingStagingRetry() : undefined,
+      );
+    } else {
+      options.notices?.dismiss(manualStagingNotice);
+    }
     // The committed lines were reacquired by their change notifications; only an unresolved
     // outcome needs the review's own read of the entries.
-    options.onChanged(message !== null);
+    options.onChanged(failure !== null);
+  }
+
+  /** The recovery action of a manual staging: replay the attempt the account still retains. */
+  function pendingStagingRetry(): { readonly label: string; run(): void } {
+    return {
+      label: 'Retry the pending staging',
+      run: () => {
+        void recoverManualStaging();
+      },
+    };
   }
 
   /** Whether each printed search result can enter the manual import. */
@@ -851,10 +929,20 @@ export function createImportReviewEditor(
       if (disposed || read !== sessionsRead) {
         return;
       }
-      reviewStatus.textContent = `The pending imports could not be read: ${readMessage(
+      const problem = `The pending imports could not be read: ${readMessage(
         cause,
         'unknown failure',
       )}`;
+      reviewStatus.textContent = problem;
+      // Reading the pending imports is a service read of this view: the notice keeps its failure
+      // visible with the refresh that repeats the read
+      // (docs/ui/navigation.md#error-notices).
+      reportUiFailure(options.notices, reviewReadNotice, problem, {
+        label: 'Refresh the imports',
+        run: () => {
+          void reconcile();
+        },
+      });
       return;
     }
     if (disposed || read !== sessionsRead) {
@@ -864,6 +952,7 @@ export function createImportReviewEditor(
     sessions = append ? [...sessions, ...page.sessions] : [...page.sessions];
     sessionsContinuation = page.continuation;
     paintSessions();
+    options.notices?.dismiss(reviewReadNotice);
   }
 
   /** Draws the session control and the control that reads further session pages. */
@@ -1094,7 +1183,11 @@ export function createImportReviewEditor(
     const found = printings.get(entry.entryId) ?? [];
     const chosenPrintingId = draft?.printingId ?? entry.printingId ?? '';
     const chosenPrinting = knownPrinting(record, found, chosenPrintingId);
-    if (chosenPrinting === null && chosenPrintingId.length > 0) {
+    if (chosenPrinting !== null) {
+      // CardList enrichment can establish the printing without the editor's fallback lookup.
+      // Reconcile only its read notice; current data cannot establish an earlier write outcome.
+      options.notices?.dismiss(reviewEntryPrintingNotice(entry.entryId));
+    } else if (chosenPrintingId.length > 0) {
       // The draft names a printing the row has not read: its record is read again, so the
       // reviewed values and the finish control keep following the choice
       // (docs/ui/editors.md#drafts-and-asynchronous-outcomes).
@@ -1370,7 +1463,14 @@ export function createImportReviewEditor(
     try {
       const resolved = await resolvePrintings(options.catalog, [printingId]);
       const record = resolved.get(printingId) ?? null;
-      if (disposed || pendingEntries !== binding || record === null) {
+      if (disposed || pendingEntries !== binding) {
+        return;
+      }
+      // The lookup answered — with the printing or with the catalog's silence — so the read it
+      // repeats is established and the failure of an earlier lookup of this entry no longer
+      // describes the service (docs/ui/navigation.md#error-notices).
+      options.notices?.dismiss(reviewEntryPrintingNotice(entryId));
+      if (record === null) {
         return;
       }
       const current = printings.get(entryId) ?? [];
@@ -1433,18 +1533,36 @@ export function createImportReviewEditor(
       printingId,
     );
     if (chosenPrinting === null) {
+      let resolution: ReadonlyMap<string, PrintingRecord>;
       try {
-        chosenPrinting =
-          (await resolvePrintings(options.catalog, [printingId])).get(printingId) ?? null;
+        resolution = await resolvePrintings(options.catalog, [printingId]);
       } catch (cause) {
         if (!disposed && sessionId === record.entry.sessionId) {
-          report(
-            editor,
-            `The selected printing could not be read: ${readMessage(cause, 'unknown failure')}`,
+          const problem = `The selected printing could not be read: ${readMessage(
+            cause,
+            'unknown failure',
+          )}`;
+          report(editor, problem);
+          // The row keeps the message beside the printing it names; the notice keeps the service
+          // failure visible after the view is left, under the identity of this entry's catalog
+          // read, so it never displaces the feedback of a write that stays unestablished
+          // (docs/ui/navigation.md#error-notices).
+          reportUiFailure(
+            options.notices,
+            reviewEntryPrintingNotice(record.entry.entryId),
+            problem,
           );
         }
         return;
       }
+      if (disposed) {
+        return;
+      }
+      chosenPrinting = resolution.get(printingId) ?? null;
+      // The lookup answered — with the printing or with the catalog's silence — so the failure of
+      // an earlier lookup of this entry is reconciled
+      // (docs/ui/navigation.md#error-notices).
+      options.notices?.dismiss(reviewEntryPrintingNotice(record.entry.entryId));
     }
     if (disposed) {
       return;
@@ -1469,6 +1587,9 @@ export function createImportReviewEditor(
     if (disposed) {
       return;
     }
+    // The row keeps its unsaved review input and its own message; the notice keeps a review that
+    // was not saved visible when the view is left (docs/ui/navigation.md#error-notices).
+    reportUiOperation(options.notices, reviewEntryNotice(record.entry.entryId), outcome);
     if (outcome.status === 'committed' && outcome.record !== null) {
       // Only the input this review committed leaves; a draft the owner changed while the request
       // was in flight stays for the next review.
@@ -1521,8 +1642,13 @@ export function createImportReviewEditor(
       printings.delete(record.entry.entryId);
       releasePrintingPicker(editor.entry.key);
       messages.delete(editor.entry.key);
+      dismissReviewEntryNotices(options.notices, record.entry.entryId);
     } else {
-      report(editor, outcome.message ?? 'The entry was not discarded.');
+      const problem = outcome.message ?? 'The entry was not discarded.';
+      report(editor, problem);
+      // The row keeps the failure beside the entry it names; the notice keeps it visible after
+      // the view is left (docs/ui/navigation.md#error-notices).
+      reportUiFailure(options.notices, reviewEntryNotice(record.entry.entryId), problem);
     }
     await reconcile(outcome.status !== 'committed');
   }
@@ -1556,6 +1682,13 @@ export function createImportReviewEditor(
       outcome.status === 'committed'
         ? 'The import was discarded; no copies were created.'
         : (outcome.message ?? 'The import was not discarded.');
+    if (outcome.status === 'committed') {
+      options.notices?.dismiss(reviewDiscardNotice);
+    } else {
+      // Discarding the import is an operation like any other: its failure stays visible after the
+      // view is left (docs/ui/navigation.md#error-notices).
+      reportUiOperation(options.notices, reviewDiscardNotice, outcome);
+    }
     if (outcome.status === 'committed' && presentedSession === sessionId) {
       // Only the discarded import's own review input ends; the unsaved work of another import the
       // view still presents stays (docs/ui/architecture.md#state-ownership-and-restoration).
@@ -1576,6 +1709,10 @@ export function createImportReviewEditor(
       printings.delete(record.entry.entryId);
       releasePrintingPicker(key);
       messages.delete(key);
+      // The entry left the review: the notices of its own review — including the reading of the
+      // printing it named — describe a pending entry that no longer exists
+      // (docs/ui/navigation.md#error-notices).
+      dismissReviewEntryNotices(options.notices, record.entry.entryId);
     }
     selectedRevisions.clear();
   }
@@ -1586,11 +1723,16 @@ export function createImportReviewEditor(
       return {
         status: 'failed',
         message: 'Check the outstanding confirmation outcome before confirming more entries.',
+        validation: true,
       };
     }
     const presentedSession = sessionId;
     if (presentedSession === null) {
-      return { status: 'failed', message: 'Read the pending import before confirming it.' };
+      return {
+        status: 'failed',
+        message: 'Read the pending import before confirming it.',
+        validation: true,
+      };
     }
     const chosen: ConfirmImportEntryInput[] = [];
     for (const target of request.selection.targets) {
@@ -1605,12 +1747,13 @@ export function createImportReviewEditor(
         return {
           status: 'failed',
           message: 'Reload the pending import before confirming these entries.',
+          validation: true,
         };
       }
       chosen.push({ entryId: target.entryId, expectedRevision: revision });
     }
     if (chosen.length === 0) {
-      return { status: 'failed', message: 'Select the entries to confirm.' };
+      return { status: 'failed', message: 'Select the entries to confirm.', validation: true };
     }
     // One request confirms at most the number of entries the provider bound accepts, so a larger
     // explicit selection is confirmed through further bounded requests whose operation identities
@@ -1682,6 +1825,9 @@ export function createImportReviewEditor(
       drafts.delete(entry.entryId);
       printings.delete(entry.entryId);
       releasePrintingPicker(key);
+      // The confirmed entry no longer awaits review, so the notices of its own review end with it
+      // (docs/ui/navigation.md#error-notices).
+      dismissReviewEntryNotices(options.notices, entry.entryId);
     }
   }
 
@@ -1777,6 +1923,7 @@ export function createImportReviewEditor(
       paintConfirmation();
     }
     if (outcome.status === 'committed' && outcome.record !== null) {
+      options.notices?.dismiss(reviewConfirmNotice);
       forgetConfirmed(outstanding);
       const message = confirmationMessage(outcome.record.copies.length, outcome.message);
       reviewStatus.textContent = message;
@@ -1784,6 +1931,28 @@ export function createImportReviewEditor(
       return;
     }
     reviewStatus.textContent = outcome.message ?? 'The confirmation outcome could not be read.';
+    // A confirmation whose outcome is still not established stays visible as the shell's notice
+    // with the same explicit recovery of its recorded outcome
+    // (docs/ui/navigation.md#error-notices).
+    reportUiOperation(
+      options.notices,
+      reviewConfirmNotice,
+      { status: outcome.status, message: reviewStatus.textContent },
+      confirmationCheck(),
+    );
+  }
+
+  /** The recovery action of a confirmation: read the outcome its retained operation recorded. */
+  function confirmationCheck(): { readonly label: string; run(): void } | undefined {
+    if (confirmation === null) {
+      return undefined;
+    }
+    return {
+      label: 'Check the confirmation outcome',
+      run: () => {
+        void recoverPendingConfirmation();
+      },
+    };
   }
 
   /** Keeps one message with its entry, so a redraw of the row presents it again. */
@@ -1869,6 +2038,10 @@ export function createImportReviewEditor(
     }
     pendingStatus.dataset.uiOutcomeStatus = outcome.status;
     pendingStatus.textContent = outcome.message ?? outcomeText(outcome.status);
+    // The list keeps the confirmation beside the explicit selection; the notice keeps an
+    // unresolved confirmation visible after the view is left, with the recorded outcome that
+    // establishes what the confirmation created (docs/ui/navigation.md#error-notices).
+    reportUiOperation(options.notices, reviewConfirmNotice, outcome, confirmationCheck());
   }
 
   /**
@@ -1991,13 +2164,15 @@ export function createSourceImportEditor(
   options.signal.addEventListener(
     'abort',
     () => {
-      disposed = true;
+      dispose();
     },
     { once: true },
   );
   /** Whether a source is being parsed or a waiting import reopened; one import in flight. */
   let sourcing = false;
   let reopening = false;
+  /** Identity of the unresolved source operation currently reported by this editor. */
+  let recoveryOperationId: string | null = null;
 
   const heading = text(document, 'h3', 'import-source-heading', 'Import a source');
   const form = document.createElement('form');
@@ -2068,6 +2243,15 @@ export function createSourceImportEditor(
   });
   paintForm();
   paintWaiting();
+  const unsubscribe = access.subscribe(() => {
+    if (!disposed) {
+      paintWaiting();
+      reconcileSourceRecovery();
+    }
+  });
+  if (disposed) {
+    unsubscribe();
+  }
 
   return {
     nodes: sourceEnabled ? [heading, form, status, waiting, rows, sourceNote] : [],
@@ -2083,10 +2267,49 @@ export function createSourceImportEditor(
             lines: sourceLines.value,
           }
         : null,
-    dispose: () => {
-      disposed = true;
-    },
+    dispose,
   };
+
+  function dispose(): void {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    unsubscribe();
+  }
+
+  /** A retired attempt no longer has an unresolved outcome for this view to recover. */
+  function reconcileSourceRecovery(): void {
+    if (recoveryOperationId !== null && access.resume(recoveryOperationId) === null) {
+      recoveryOperationId = null;
+      options.notices?.dismiss(sourceImportNotice);
+      status.textContent = '';
+    }
+  }
+
+  function reportSourceOutcome(
+    operationId: string,
+    outcome: UiChangeCommit<SourceImportResult>,
+    problem: string,
+  ): void {
+    recoveryOperationId =
+      outcome.status === 'unknown' && access.resume(operationId) !== null ? operationId : null;
+    // Discard can retire the attempt while reopening is still pending. Its late observation
+    // must not restore feedback that directs the user to an import the provider abandoned.
+    if (outcome.status === 'unknown' && recoveryOperationId === null) {
+      options.notices?.dismiss(sourceImportNotice);
+      status.textContent = '';
+      return;
+    }
+    reportUiOperation(
+      options.notices,
+      sourceImportNotice,
+      { status: outcome.status, message: problem },
+      recoveryOperationId === null
+        ? undefined
+        : { label: 'Reopen the retained import', run: reopenRetainedSource },
+    );
+  }
 
   /**
    * Draws the fields of the selected source method. Only the fields the method needs are
@@ -2236,7 +2459,7 @@ export function createSourceImportEditor(
     const request = sourceRequest(input);
     sourcing = true;
     paintForm();
-    let outcome: UiChangeCommit<SourceImportResult>;
+    let outcome: Awaited<ReturnType<typeof beginSourceImport>>;
     try {
       // The account retains the new import before its request is dispatched, so the waiting list
       // presents it while its outcome is still open (docs/user-cards.md#browser-operation-lifecycle).
@@ -2254,17 +2477,33 @@ export function createSourceImportEditor(
     }
     const result = outcome.record;
     if (result === null) {
-      report(outcome.message ?? 'The source lines were not added to review.');
+      const problem = outcome.message ?? 'The source lines were not added to review.';
+      report(problem);
       if (outcome.status === 'unknown') {
         // The rows may have committed: the review reads what the account holds instead of
         // inferring whether this source staged anything.
         options.onChanged();
       }
+      // The source form keeps its input; a source whose outcome is not established stays visible
+      // as the shell's notice with the retained import's own reopen
+      // (docs/ui/navigation.md#error-notices, docs/ui/editors.md#internal-design).
+      reportSourceOutcome(outcome.operationId, outcome, problem);
       return;
     }
+    recoveryOperationId = null;
     status.textContent = sourceImportMessage(result);
+    options.notices?.dismiss(sourceImportNotice);
     rows.replaceChildren(...result.rows.map((row) => sourceRow(document, row)));
     options.onStaged(result.session.sessionId);
+  }
+
+  /** Reopens the reported operation, never another import that happens to remain retained. */
+  function reopenRetainedSource(): void {
+    reconcileSourceRecovery();
+    const attempt = recoveryOperationId === null ? null : access.resume(recoveryOperationId);
+    if (attempt?.kind === 'stageSourceImport') {
+      void reopenSource(attempt.operationId, attempt.request);
+    }
   }
 
   /**
@@ -2294,10 +2533,16 @@ export function createSourceImportEditor(
     }
     const result = outcome.record;
     if (result === null) {
-      status.textContent = outcome.message ?? 'The source lines were not read back into review.';
+      const problem = outcome.message ?? 'The source lines were not read back into review.';
+      status.textContent = problem;
+      // Reopening a retained import is an operation of this view: its failure stays visible as the
+      // shell's notice with the same explicit reopen (docs/ui/navigation.md#error-notices).
+      reportSourceOutcome(operationId, outcome, problem);
       return;
     }
+    recoveryOperationId = null;
     status.textContent = sourceImportMessage(result);
+    options.notices?.dismiss(sourceImportNotice);
     rows.replaceChildren(...result.rows.map((row) => sourceRow(document, row)));
     options.onStaged(result.session.sessionId);
   }

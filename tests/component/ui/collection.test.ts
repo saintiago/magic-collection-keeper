@@ -594,6 +594,8 @@ describe('bulk copy changes', () => {
     expect(outcome).toEqual({
       status: 'failed',
       message: 'Choose the finish to apply to the selected copies.',
+      // Presentation validation never reaches the shell's floating failure notices.
+      validation: true,
     });
   });
 });
