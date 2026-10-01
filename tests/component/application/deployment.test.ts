@@ -513,6 +513,21 @@ async function collect(text: AsyncIterable<string>): Promise<string> {
 }
 
 describe('interactive HTTP API entry point', () => {
+  it('answers an unauthenticated CORS preflight without dispatching an operation', async () => {
+    const handler = createApiGatewayHandler({
+      async handle() {
+        throw new Error('A preflight never reaches the authenticated request boundary.');
+      },
+    });
+
+    const response = await handler({
+      rawPath: '/api/search',
+      requestContext: { http: { method: 'OPTIONS', path: '/api/search' } },
+    });
+
+    expect(response).toEqual({ statusCode: 204, headers: {}, body: '' });
+  });
+
   it('maps one invocation to the transport request the boundary validates', async () => {
     const requests: TransportRequest[] = [];
     const handler = createApiGatewayHandler({
