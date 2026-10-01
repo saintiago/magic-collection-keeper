@@ -264,7 +264,7 @@ describe('rebuild infrastructure templates', () => {
     expect(service.Parameters?.ExistingUserPoolId?.AllowedPattern ?? '').not.toBe('');
   });
 
-  it('verifies the environment identity on every route except the CORS preflight route', () => {
+  it('verifies the environment identity on every route except the API CORS preflight route', () => {
     const [, authorizer] = singleResource(service, 'AWS::ApiGatewayV2::Authorizer');
     expect(authorizer.Properties?.AuthorizerType).toBe('JWT');
     expect(authorizer.Properties?.IdentitySource).toEqual(['$request.header.Authorization']);
@@ -278,7 +278,7 @@ describe('rebuild infrastructure templates', () => {
     const routes = resourcesOfType(service, 'AWS::ApiGatewayV2::Route');
     expect(routes.length).toBeGreaterThan(0);
     for (const [name, route] of routes) {
-      if (route.Properties?.RouteKey === 'OPTIONS /{proxy+}') {
+      if (route.Properties?.RouteKey === 'OPTIONS /api/{proxy+}') {
         expect(route.Properties?.AuthorizationType, name).toBe('NONE');
         continue;
       }
@@ -289,7 +289,7 @@ describe('rebuild infrastructure templates', () => {
       routesForIntegration(service, 'InteractiveIntegration').map(
         ([, route]) => route.Properties?.RouteKey,
       ),
-    ).toEqual(['ANY /api/{proxy+}', 'OPTIONS /{proxy+}']);
+    ).toEqual(['ANY /api/{proxy+}', 'OPTIONS /api/{proxy+}']);
     expect(
       routesForIntegration(service, 'RecognitionIntegration').map(
         ([, route]) => route.Properties?.RouteKey,

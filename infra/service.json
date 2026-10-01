@@ -151,7 +151,7 @@
       "Type": "AWS::ApiGatewayV2::Route",
       "Properties": {
         "ApiId": { "Ref": "HttpApi" },
-        "RouteKey": "OPTIONS /{proxy+}",
+        "RouteKey": "OPTIONS /api/{proxy+}",
         "AuthorizationType": "NONE",
         "Target": { "Fn::Sub": "integrations/${InteractiveIntegration}" }
       }
