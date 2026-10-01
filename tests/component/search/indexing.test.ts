@@ -94,6 +94,20 @@ const staPrinting: CatalogPublishedRecord = {
   },
 };
 
+const finishlessDigitalPrinting: CatalogPublishedRecord = {
+  kind: 'printing',
+  printing: {
+    printingId: '4c2abf39-90f5-46c2-b52c-49f2f43fce22',
+    cardId: 'oracle-bolt',
+    edition: 'ARENA',
+    collectorNumber: '1',
+    language: 'en',
+    finishes: [],
+    physical: false,
+    images: { small: null, normal: null, large: null, artCrop: null },
+  },
+};
+
 const counterspellCard: CatalogPublishedRecord = {
   kind: 'card',
   card: {
@@ -335,6 +349,44 @@ describe('search indexing', () => {
     expect(
       await database.query('select copy_id from search_private.copy order by copy_id'),
     ).toEqual([{ copy_id: 'copy-alice-1' }, { copy_id: 'copy-alice-2' }]);
+  });
+
+  it('projects a nonphysical Catalog printing with no physical finishes', async () => {
+    await indexer.index({ accounts: [accountId] });
+    await database.exec(
+      `alter table search_private.printing drop constraint printing_finishes_check;
+       alter table search_private.printing add constraint printing_finishes_check
+         check (finishes <@ array['nonfoil', 'foil', 'etched']::text[]
+                and cardinality(finishes) >= 1);`,
+    );
+
+    await database.exec(searchSchemaSql);
+    expect(await generationState()).toEqual([{ generation_id: '1', state: 'published' }]);
+    catalog.publish(
+      catalogCardChange('11', 'revision-2', finishlessDigitalPrinting),
+      catalogRevisionChange('12', 'revision-2'),
+    );
+
+    await indexer.index({ accounts: [accountId] });
+
+    expect(
+      await database.query(
+        `select printing_id, finishes, physical
+           from search.printings
+          order by printing_id`,
+      ),
+    ).toEqual([
+      {
+        printing_id: finishlessDigitalPrinting.printing.printingId,
+        finishes: [],
+        physical: false,
+      },
+      {
+        printing_id: m11Printing.printing.printingId,
+        finishes: ['nonfoil', 'foil'],
+        physical: true,
+      },
+    ]);
   });
 
   it('leaves the projection and its checkpoints unchanged when a batch fails before it commits', async () => {

@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { catalogReaderGrants, createCatalog } from '../../src/catalog/index.js';
+import { catalogReaderGrants, catalogSchemaSql, createCatalog } from '../../src/catalog/index.js';
 import {
   CATALOG_QUERY_SURFACE,
   type CatalogColumnType,
@@ -190,6 +190,47 @@ describe('catalog query surface', () => {
               (select count(*)::int from catalog.printings) as printings`,
     );
     expect(counts[0]).toEqual({ cards: 1, names: 3, named_cards: 1, printings: 2 });
+  });
+
+  it('upgrades the finish constraint without replacing records or publication history', async () => {
+    await publishCatalog(database, {
+      revisionId: 'revision-1',
+      cards: [lightningBolt],
+      printings: [m11Printing],
+    });
+    await database.exec(
+      `alter table catalog_private.printing drop constraint printing_finishes_check;
+       alter table catalog_private.printing add constraint printing_finishes_check
+         check (finishes <@ array['nonfoil', 'foil', 'etched']::text[]
+                and cardinality(finishes) >= 1);`,
+    );
+
+    await database.exec(catalogSchemaSql);
+
+    expect(await database.query('select printing_id from catalog.printings')).toEqual([
+      { printing_id: m11Printing.printingId },
+    ]);
+    expect(
+      await database.query(
+        `select revision_id, kind
+           from catalog_private.publication
+          order by position`,
+      ),
+    ).toEqual([{ revision_id: 'revision-1', kind: 'revision' }]);
+    await database.query(
+      `insert into catalog_private.printing
+         (printing_id, card_id, edition, collector_number, language, finishes, physical)
+       values ('printing-digital', $1, 'ARENA', '1', 'en', '{}', false)`,
+      [lightningBolt.cardId],
+    );
+    await expect(
+      database.query(
+        `insert into catalog_private.printing
+           (printing_id, card_id, edition, collector_number, language, finishes, physical)
+         values ('printing-physical', $1, 'TST', '2', 'en', '{}', true)`,
+        [lightningBolt.cardId],
+      ),
+    ).rejects.toThrow(/printing_finishes_check/);
   });
 
   it('exposes one mutually consistent revision and keeps the previous one after a failed publish', async () => {

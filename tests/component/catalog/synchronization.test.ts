@@ -115,6 +115,13 @@ const digitalOnlyCard = {
   cmc: 0,
 };
 
+const finishlessDigitalCard = {
+  ...digitalOnlyCard,
+  id: '4c2abf39-90f5-46c2-b52c-49f2f43fce22',
+  finishes: [],
+  nonfoil: true,
+};
+
 const ghaltaRulesText =
   'This spell costs {X} less to cast, where X is the total power of creatures you control.\n' +
   'Trample (This creature can deal excess combat damage to the player or planeswalker it is attacking.)';
@@ -350,6 +357,26 @@ describe('catalog synchronization', () => {
     });
   });
 
+  it('preserves a nonphysical printing that publishes no physical finishes', async () => {
+    const revision = await synchronizer(
+      createSnapshotSource({
+        cards: { sourceVersion: 'snapshot-1', records: [finishlessDigitalCard] },
+      }),
+    ).synchronize({ dataset: 'cards' });
+
+    const printing = (
+      await catalog().resolve([{ kind: 'printing', printingId: finishlessDigitalCard.id }])
+    ).printings.get(finishlessDigitalCard.id);
+    expect(printing).toMatchObject({
+      printingId: finishlessDigitalCard.id,
+      finishes: [],
+      physical: false,
+    });
+    const listed = await catalog().listCardPrintings(finishlessDigitalCard.oracle_id);
+    expect(listed.revision).toEqual(revision);
+    expect(listed.printings).toEqual([printing]);
+  });
+
   it('republishes changed records and keeps identities the provider stopped publishing', async () => {
     await synchronizer(
       createSnapshotSource({
@@ -521,8 +548,15 @@ describe('catalog synchronization', () => {
         records: [lightningBolt, { object: 'card', id: 'printing-broken' }],
       },
       {
-        name: 'printing without a supported finish',
-        records: [{ ...digitalOnlyCard, finishes: ['surge'], nonfoil: false }],
+        name: 'physical printing without a supported finish',
+        records: [
+          {
+            ...finishlessDigitalCard,
+            id: 'printing-physical-empty',
+            nonfoil: false,
+            digital: false,
+          },
+        ],
       },
       {
         name: 'record beyond the declared write bound',

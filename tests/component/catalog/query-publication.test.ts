@@ -97,6 +97,20 @@ const darkRitual = providerCard({
   oracleText: 'Add {B}{B}{B}.',
 });
 
+const finishlessDigital = {
+  ...providerCard({
+    printingId: '4c2abf39-90f5-46c2-b52c-49f2f43fce22',
+    cardId: 'oracle-digital-only',
+    name: 'Digital Only',
+    collectorNumber: '6',
+  }),
+  id: '4c2abf39-90f5-46c2-b52c-49f2f43fce22',
+  oracle_id: 'oracle-digital-only',
+  finishes: [],
+  nonfoil: true,
+  digital: true,
+};
+
 /** A provider source whose next snapshot one test names, so revisions follow each other. */
 function providerSource(): {
   readonly source: CatalogSnapshotSource;
@@ -252,6 +266,40 @@ describe('catalog query publication', () => {
         images: { small: null, normal: null, large: null, artCrop: null },
       },
     });
+  });
+
+  it('publishes a nonphysical printing with no physical finishes in snapshots and changes', async () => {
+    await publish('snapshot-1', [bolt]);
+    const before = await readWholeSnapshot(publication(), 100);
+
+    const revision = await publish('snapshot-2', [bolt, finishlessDigital]);
+    const snapshot = await readWholeSnapshot(publication(), 1);
+    const printing = snapshot.records.find(
+      (record) => record.kind === 'printing' && record.printing.printingId === finishlessDigital.id,
+    );
+    expect(printing).toEqual({
+      kind: 'printing',
+      printing: {
+        printingId: finishlessDigital.id,
+        cardId: finishlessDigital.oracle_id,
+        edition: 'tst',
+        collectorNumber: '6',
+        language: 'en',
+        finishes: [],
+        physical: false,
+        images: { small: null, normal: null, large: null, artCrop: null },
+      },
+    });
+
+    const changes = await publication().readChanges({ position: before.position, pageSize: 100 });
+    expect(
+      changes.changes.find(
+        (change) =>
+          change.kind === 'printing' &&
+          change.reference.kind === 'printing' &&
+          change.reference.printingId === finishlessDigital.id,
+      ),
+    ).toMatchObject({ revisionId: revision.revisionId, record: printing });
   });
 
   it('publishes retained revision incorporation evidence with every snapshot page', async () => {

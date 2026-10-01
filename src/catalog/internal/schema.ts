@@ -152,7 +152,7 @@ export const CATALOG_QUERY_SURFACE: CatalogQuerySurface = {
           name: 'finishes',
           type: 'text-array',
           nullable: false,
-          meaning: 'Available finishes: nonfoil, foil or etched; never empty.',
+          meaning: 'Available physical finishes; may be empty for a nonphysical printing.',
         },
         {
           name: 'physical',
@@ -269,8 +269,21 @@ create table if not exists ${catalogPrivateSchema}.printing (
   image_normal text,
   image_large text,
   image_art_crop text,
-  check (finishes <@ array['nonfoil', 'foil', 'etched']::text[] and cardinality(finishes) >= 1)
+  constraint printing_finishes_check check (
+    finishes <@ array['nonfoil', 'foil', 'etched']::text[]
+    and (not physical or cardinality(finishes) >= 1)
+  )
 );
+
+-- Upgrade storage created by the previous schema, whose finish constraint rejected every empty
+-- list. Existing records and publication history stay in place while the constraint is replaced.
+alter table ${catalogPrivateSchema}.printing
+  drop constraint if exists printing_finishes_check;
+alter table ${catalogPrivateSchema}.printing
+  add constraint printing_finishes_check check (
+    finishes <@ array['nonfoil', 'foil', 'etched']::text[]
+    and (not physical or cardinality(finishes) >= 1)
+  );
 
 create index if not exists printing_card_order_index
   on ${catalogPrivateSchema}.printing (card_id, edition, collector_number, language, printing_id);

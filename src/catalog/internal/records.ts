@@ -48,19 +48,24 @@ export const cardNameJsonSchema = z.object({
   name: z.string().min(1).max(300),
 });
 
-export const printingJsonSchema = z.object({
-  printing_id: z.string().min(1).max(identifierLength),
-  card_id: z.string().min(1).max(identifierLength),
-  edition: z.string().min(1).max(32),
-  collector_number: z.string().min(1).max(32),
-  language: z.string().min(1).max(20),
-  finishes: z.array(z.enum(finishes)).min(1),
-  physical: z.boolean(),
-  image_small: z.string().nullable(),
-  image_normal: z.string().nullable(),
-  image_large: z.string().nullable(),
-  image_art_crop: z.string().nullable(),
-});
+export const printingJsonSchema = z
+  .object({
+    printing_id: z.string().min(1).max(identifierLength),
+    card_id: z.string().min(1).max(identifierLength),
+    edition: z.string().min(1).max(32),
+    collector_number: z.string().min(1).max(32),
+    language: z.string().min(1).max(20),
+    finishes: z.array(z.enum(finishes)),
+    physical: z.boolean(),
+    image_small: z.string().nullable(),
+    image_normal: z.string().nullable(),
+    image_large: z.string().nullable(),
+    image_art_crop: z.string().nullable(),
+  })
+  .refine((printing) => !printing.physical || printing.finishes.length > 0, {
+    message: 'A physical printing must publish at least one supported finish.',
+    path: ['finishes'],
+  });
 
 export type RevisionJson = z.infer<typeof revisionJsonSchema>;
 export type CardJson = z.infer<typeof cardJsonSchema>;
