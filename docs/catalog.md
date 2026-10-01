@@ -79,7 +79,13 @@ language or card. Missing and unavailable information are explicit outcomes.
 
 Basic records contain the attributes needed to identify, render and filter cards without a live
 provider request. Image references are separate from image loading. Physical eligibility and finish
-options are printing facts; ownership is not catalog data.
+options are printing facts; ownership is not catalog data. A nonphysical printing may have no
+physical finishes: preserve an empty finish list without inventing `nonfoil` or rejecting the bulk
+revision. A physical printing must have at least one supported finish.
+
+Verify this case through lookup and publication contracts and a cooperating search projection.
+Reject a physical printing with no supported finish without changing the published revision.
+Compatible storage updates preserve existing records and publication history.
 
 ## Synchronization
 
