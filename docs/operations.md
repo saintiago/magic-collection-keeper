@@ -40,6 +40,13 @@ authenticated account context through database operations and expose finite cata
 and Search indexing as separate jobs. Verify packages locally, then validate changed live boundaries
 in an isolated environment. Do not add health/readiness endpoints without a concrete requirement.
 
+## Browser and API connectivity
+
+The deployed browser must reach the API from its own origin. CORS preflight requests return a
+successful response without authentication; actual operations retain their documented authentication.
+Verify this boundary through a browser workflow that loads and changes synthetic collection data,
+including the resulting indexed list. Direct API calls alone do not establish browser connectivity.
+
 ## Recognition packaging
 
 Package the retained Python engine for container Lambda and browser inference as compatible
