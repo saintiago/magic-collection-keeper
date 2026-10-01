@@ -206,7 +206,7 @@ export const SEARCH_PROJECTION_SURFACE: SearchProjectionSurface = {
           name: 'finishes',
           type: 'text-array',
           nullable: false,
-          meaning: 'Available finishes: nonfoil, foil or etched; never empty.',
+          meaning: 'Available physical finishes; may be empty for a nonphysical printing.',
         },
         {
           name: 'physical',
@@ -472,9 +472,21 @@ create table if not exists ${searchPrivateSchema}.printing (
   language text not null check (length(language) between 1 and 20),
   finishes text[] not null,
   physical boolean not null,
-  check (finishes <@ array[${finishValues}]::text[] and cardinality(finishes) >= 1),
+  constraint printing_finishes_check check (
+    finishes <@ array[${finishValues}]::text[]
+    and (not physical or cardinality(finishes) >= 1)
+  ),
   primary key (generation_id, printing_id)
 );
+
+-- Upgrade an existing projection without rebuilding or discarding its published generation.
+alter table ${searchPrivateSchema}.printing
+  drop constraint if exists printing_finishes_check;
+alter table ${searchPrivateSchema}.printing
+  add constraint printing_finishes_check check (
+    finishes <@ array[${finishValues}]::text[]
+    and (not physical or cardinality(finishes) >= 1)
+  );
 
 create index if not exists printing_card_order_index
   on ${searchPrivateSchema}.printing (generation_id, card_id, edition, collector_number, language);

@@ -111,6 +111,7 @@ export interface PrintingRecord {
   readonly edition: string;
   readonly collectorNumber: string;
   readonly language: LanguageCode;
+  /** Physical finish options; empty only when this printing is not physical. */
   readonly finishes: readonly Finish[];
   /** Whether the printing is available as a physical card. */
   readonly physical: boolean;

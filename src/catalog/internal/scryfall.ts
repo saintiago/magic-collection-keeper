@@ -204,13 +204,17 @@ function orderedColors(values: readonly CardColor[]): CardColor[] {
 
 /**
  * Scryfall publishes finish flags and a newer `finishes` list. Unknown finishes are not catalog
- * data, so only the declared values count; a printing without any of them cannot be published.
+ * data, so only the declared values count. A nonphysical printing may publish none; a physical
+ * printing without any supported finish cannot be published.
  */
 function availableFinishes(record: ScryfallCard, context: ProviderRecordContext): Finish[] {
   const declared = new Set((record.finishes ?? []).filter((finish) => isFinish(finish)));
   const available: Finish[] = finishes.filter((finish) => declared.has(finish));
   if (available.length > 0) {
     return available;
+  }
+  if (record.digital && record.finishes !== undefined) {
+    return [];
   }
   const flags: readonly (readonly [Finish, boolean | undefined])[] = [
     ['nonfoil', record.nonfoil],
@@ -219,6 +223,9 @@ function availableFinishes(record: ScryfallCard, context: ProviderRecordContext)
   ];
   const derived = finishes.filter((finish) => flags.some(([name, set]) => name === finish && set));
   if (derived.length === 0) {
+    if (record.digital) {
+      return [];
+    }
     throw new CatalogError(
       'unavailable',
       `Record ${context.position} of the ${context.sourceName} snapshot publishes no supported finish.`,
