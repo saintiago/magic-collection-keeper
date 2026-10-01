@@ -861,10 +861,11 @@ export interface LambdaHttpResponse {
 }
 
 /**
- * The interactive entry point: one HTTP API invocation becomes one transport request that carries
- * the claims the API's JWT authorizer verified, the request identity and the decoded body. The
- * request boundary re-checks the claims against this environment's pool and app client before any
- * private operation runs, so a development or test token authorizes nothing here.
+ * The interactive entry point: a CORS preflight succeeds at the unauthenticated deployment
+ * boundary, while every actual operation becomes one transport request that carries the claims the
+ * API's JWT authorizer verified, the request identity and the decoded body. The request boundary
+ * re-checks the claims against this environment's pool and app client before any private operation
+ * runs, so a development or test token authorizes nothing here.
  */
 export function createApiGatewayHandler(
   target: Pick<Application, 'handle'>,
@@ -873,9 +874,21 @@ export function createApiGatewayHandler(
     throw new TypeError('createApiGatewayHandler requires the application request boundary.');
   }
   return async function handler(event: unknown): Promise<LambdaHttpResponse> {
+    if (isPreflight(event)) {
+      // The HTTP API adds its configured CORS headers to this integration response.
+      return { statusCode: 204, headers: {}, body: '' };
+    }
     const response = await dispatch(target, event);
     return { statusCode: response.status, headers: response.headers, body: response.body };
   };
+}
+
+/** Whether the dedicated unauthenticated API route delivered one browser preflight. */
+function isPreflight(event: unknown): boolean {
+  const record = readRecordValue(event);
+  const requestContext = readRecordValue(record?.requestContext);
+  const http = readRecordValue(requestContext?.http);
+  return readStringValue(http?.method)?.toUpperCase() === 'OPTIONS';
 }
 
 async function dispatch(
