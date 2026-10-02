@@ -161,12 +161,28 @@ export interface CardListFragmentReaders {
   readonly tools?: CardListFragmentReader<readonly string[]>;
 }
 
-/** State one entry's fragment presents: loading, a resolved answer or a reported failure. */
+/** A settled fragment answer that stays usable while the list refreshes it. */
+export type CardListSettledFragmentState<Value = unknown> =
+  { readonly status: 'ready'; readonly values: Value } | { readonly status: 'absent' };
+
+/**
+ * State one entry's fragment presents. Refresh work is distinct from first-load work and retains
+ * the last settled answer; a failed refresh reports its failure without turning that answer into
+ * an empty result (docs/card-list.md#loading-and-recovery).
+ */
 export type CardListFragmentState<Value = unknown> =
   | { readonly status: 'loading' }
-  | { readonly status: 'ready'; readonly values: Value }
-  | { readonly status: 'absent' }
-  | { readonly status: 'failed'; readonly message: string };
+  | CardListSettledFragmentState<Value>
+  | { readonly status: 'failed'; readonly message: string }
+  | {
+      readonly status: 'refreshing';
+      readonly previous: CardListSettledFragmentState<Value>;
+    }
+  | {
+      readonly status: 'refresh-failed';
+      readonly previous: CardListSettledFragmentState<Value>;
+      readonly message: string;
+    };
 
 /** Selection context one tool invocation acts on; it is explicit, never inferred from a view. */
 export interface CardListToolSelection {

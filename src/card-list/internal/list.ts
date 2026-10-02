@@ -45,6 +45,7 @@ import {
   type CardListFragmentKind,
   type CardListFragmentReader,
   type CardListFragmentState,
+  type CardListSettledFragmentState,
   type CardListGroup,
   type CardListOptions,
   type CardListPage,
@@ -844,9 +845,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     queue.active = null;
     for (const key of fragmentRequestKeys(kind)) {
       endFragmentRead(kind, key);
-      if (fragmentState(key, kind) === null) {
-        setFragmentState(key, kind, { status: 'loading' });
-      }
+      setFragmentRefreshPending(key, kind, fragmentState(key, kind));
       queue.pending.add(key);
     }
   }
@@ -1053,7 +1052,7 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       return true;
     }
     return keys.every((key) => {
-      const state = fragmentState(key, 'tools');
+      const state = settledFragmentState(fragmentState(key, 'tools'));
       return (
         state?.status === 'ready' &&
         Array.isArray(state.values) &&
@@ -1106,8 +1105,9 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     }
     // The outstanding read of this entry is retired so the fresh one is not blocked behind it and
     // its answer never replaces the fresh one.
+    const state = fragmentState(key, kind);
     invalidateFragment(key, kind);
-    setFragmentState(key, kind, { status: 'loading' });
+    setFragmentRefreshPending(key, kind, state);
     fragmentQueue(kind).pending.add(key);
     retireObsoleteFragments();
     pumpFragments(kind);
@@ -1193,10 +1193,15 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
       if (!fragmentResponseApplies(request, key)) {
         continue;
       }
-      const state: CardListFragmentState = read.get(key) ?? {
+      const answer: CardListFragmentState = read.get(key) ?? {
         status: 'failed',
         message: 'The fragment response did not cover every requested entry.',
       };
+      const previous = settledFragmentState(fragmentState(key, kind));
+      const state: CardListFragmentState =
+        answer.status === 'failed' && previous !== null
+          ? { status: 'refresh-failed', previous, message: answer.message }
+          : answer;
       setFragmentState(key, kind, state);
       // Fresh provider availability validates a target outside the replacement window. It never
       // substitutes a target whose identity changed under its selected key.
@@ -1223,7 +1228,14 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
     for (const key of request.keys) {
       // A failure of a superseded read never reports for the entry its replacement now serves.
       if (fragmentResponseApplies(request, key)) {
-        setFragmentState(key, kind, { status: 'failed', message });
+        const previous = settledFragmentState(fragmentState(key, kind));
+        setFragmentState(
+          key,
+          kind,
+          previous === null
+            ? { status: 'failed', message }
+            : { status: 'refresh-failed', previous, message },
+        );
       }
     }
   }
@@ -1243,6 +1255,31 @@ export function createCardList<Context>(options: CardListOptions<Context>): Card
 
   function fragmentState(key: string, kind: CardListFragmentKind): CardListFragmentState | null {
     return fragmentStates.get(key)?.get(kind) ?? null;
+  }
+
+  /** The usable answer carried by a settled, refreshing or failed-refresh presentation. */
+  function settledFragmentState(
+    state: CardListFragmentState | null,
+  ): CardListSettledFragmentState | null {
+    if (state?.status === 'ready' || state?.status === 'absent') return state;
+    if (state?.status === 'refreshing' || state?.status === 'refresh-failed') {
+      return state.previous;
+    }
+    return null;
+  }
+
+  /** Starts a refresh without hiding a settled answer; an unsettled fragment loads normally. */
+  function setFragmentRefreshPending(
+    key: string,
+    kind: CardListFragmentKind,
+    state: CardListFragmentState | null,
+  ): void {
+    const previous = settledFragmentState(state);
+    setFragmentState(
+      key,
+      kind,
+      previous === null ? { status: 'loading' } : { status: 'refreshing', previous },
+    );
   }
 
   function setFragmentState(

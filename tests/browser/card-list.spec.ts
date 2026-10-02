@@ -574,7 +574,15 @@ test('loads images, ownership, tags and tools independently and retries one fail
   ]);
   await expect(
     page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="tags"]'),
-  ).toHaveAttribute('data-ui-state', 'failed');
+  ).toHaveAttribute('data-ui-state', 'refresh-failed');
+  await expect(
+    page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="tags"]'),
+  ).toContainText('Deck');
+  await expect(
+    page.locator(
+      '#list-a [data-ui-entry="copy:1"] [data-ui-fragment="tags"] [data-ui-fragment-message]',
+    ),
+  ).toContainText('tags refresh unavailable');
 });
 
 test('drops an obsolete page instead of replacing the active result', async ({ page }) => {
@@ -684,7 +692,12 @@ test('keeps the selection through enrichment and refinement and acts through a t
   // The entry kept its enriched fragment; the entry that arrived with the new result reads it.
   await expect(
     page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="images"]'),
-  ).toHaveText('No images');
+  ).toContainText('No images');
+  await expect(
+    page.locator(
+      '#list-a [data-ui-entry="copy:1"] [data-ui-fragment="images"] [data-ui-fragment-refreshing]',
+    ),
+  ).toHaveText('Refreshing images…');
   await expect(
     page.locator('#list-a [data-ui-entry="copy:5"] [data-ui-fragment="images"]'),
   ).toHaveText('Loading images…');
@@ -1116,6 +1129,46 @@ test('reloads one fragment without waiting for the read it supersedes', async ({
     },
   ]);
   await expect(slot.locator('img')).toHaveAttribute('src', 'https://keeper.test/bolt.png');
+});
+
+test('renders retained fragment values as refreshing and reports a failed refresh', async ({
+  page,
+}) => {
+  await openLists(page);
+  await install(page, 'a', { fragments: ['ownership'] });
+  await settlePage(page, (await onlyRequest(page, 'a')).id, [card('1')]);
+  await settleFragment(page, (await fragmentRequests(page)).at(-1)!.id, [
+    {
+      key: 'card:1',
+      status: 'ready',
+      values: { owned: 2, locations: 1, intended: null },
+    },
+  ]);
+
+  const slot = page.locator('#list-a [data-ui-entry="card:1"] [data-ui-fragment="ownership"]');
+  await reloadFragment(page, 'a', 'card:1', 'ownership');
+  await expect(slot).toHaveAttribute('data-ui-state', 'refreshing');
+  await expect(slot).toContainText('Owned: 2 · Locations: 1');
+  await expect(slot.locator('[data-ui-fragment-refreshing]')).toHaveText('Refreshing ownership…');
+
+  await failFragment(page, (await fragmentRequests(page)).at(-1)!.id, 'Counts unavailable');
+  await expect(slot).toHaveAttribute('data-ui-state', 'refresh-failed');
+  await expect(slot).toContainText('Owned: 2 · Locations: 1');
+  await expect(slot.locator('[data-ui-fragment-message]')).toHaveText(
+    'ownership refresh unavailable: Counts unavailable',
+  );
+
+  await reloadFragment(page, 'a', 'card:1', 'ownership');
+  await expect(slot).toHaveAttribute('data-ui-state', 'refreshing');
+  await settleFragment(page, (await fragmentRequests(page)).at(-1)!.id, [
+    {
+      key: 'card:1',
+      status: 'ready',
+      values: { owned: 3, locations: 1, intended: null },
+    },
+  ]);
+  await expect(slot).toHaveAttribute('data-ui-state', 'ready');
+  await expect(slot).toHaveText('Owned: 3 · Locations: 1');
 });
 
 test('keeps keyboard focus on a retained entry through window updates', async ({ page }) => {

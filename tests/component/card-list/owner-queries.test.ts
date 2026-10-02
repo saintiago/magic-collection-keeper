@@ -37,7 +37,7 @@ describe('direct owner query composition', () => {
   it('preserves public membership while refreshing private fragments, including failures', async () => {
     const publicOwner = catalog();
     let owned = 2;
-    const readFragments = vi.fn(async () => ({
+    const response = (count: number) => ({
       privateRevision: '1',
       missing: [],
       fragments: new Map([
@@ -45,14 +45,24 @@ describe('direct owner query composition', () => {
           'card:bolt',
           {
             reference: entry.target,
-            ownedCopyCount: owned,
+            ownedCopyCount: count,
             physicalLocationCount: 0,
             intendedQuantity: null,
             tagIds: [],
           },
         ],
       ]),
-    }));
+    });
+    const pending: {
+      readonly signal: AbortSignal;
+      readonly read: PromiseWithResolvers<ReturnType<typeof response>>;
+    }[] = [];
+    const readFragments = vi.fn((_input, signal: AbortSignal) => {
+      if (readFragments.mock.calls.length === 1) return Promise.resolve(response(owned));
+      const read = Promise.withResolvers<ReturnType<typeof response>>();
+      pending.push({ signal, read });
+      return read.promise;
+    });
     const privateOwner = { query: vi.fn(), readCopies: vi.fn(), readFragments };
     const list = createCardList({
       accountId: 'alice',
@@ -65,14 +75,46 @@ describe('direct owner query composition', () => {
     expect(list.snapshot().entries).toHaveLength(1);
     owned = 3;
     list.changed({ scope: 'copies', records: [], imports: [] });
+    expect(list.snapshot().entries[0]?.fragments.get('ownership')).toEqual({
+      status: 'refreshing',
+      previous: {
+        status: 'ready',
+        values: { owned: 2, locations: 0, intended: null },
+      },
+    });
+    pending[0]!.read.resolve(response(owned));
     await settled();
     expect(publicOwner.query).toHaveBeenCalledTimes(1);
     expect(readFragments).toHaveBeenCalledTimes(2);
     expect(list.snapshot().entries[0]?.entry.quantity).toBeNull();
-    readFragments.mockRejectedValueOnce(new Error('Read unavailable'));
+
     list.changed({ scope: 'copies', records: [], imports: [] });
+    pending[1]!.read.reject(new Error('Read unavailable'));
     await settled();
-    expect(list.snapshot().entries).toHaveLength(1);
+    expect(list.snapshot().entries[0]?.fragments.get('ownership')).toEqual({
+      status: 'refresh-failed',
+      previous: {
+        status: 'ready',
+        values: { owned: 3, locations: 0, intended: null },
+      },
+      message: 'Read unavailable',
+    });
+
+    list.changed({ scope: 'copies', records: [], imports: [] });
+    expect(list.snapshot().entries[0]?.fragments.get('ownership')).toMatchObject({
+      status: 'refreshing',
+      previous: { status: 'ready', values: { owned: 3 } },
+    });
+    list.changed({ scope: 'copies', records: [], imports: [] });
+    expect(pending[2]!.signal.aborted).toBe(true);
+    pending[3]!.read.resolve(response(5));
+    await settled();
+    pending[2]!.read.resolve(response(4));
+    await settled();
+    expect(list.snapshot().entries[0]?.fragments.get('ownership')).toEqual({
+      status: 'ready',
+      values: { owned: 5, locations: 0, intended: null },
+    });
     expect(publicOwner.query).toHaveBeenCalledTimes(1);
     list.dispose();
   });

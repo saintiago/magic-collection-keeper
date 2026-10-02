@@ -14,6 +14,7 @@
 import type {
   CardListEntry,
   CardListEntryAbsence,
+  CardListFragmentState,
   CardListSnapshot,
   CardListToolSelection,
   CardListFragmentReaders,
@@ -379,19 +380,44 @@ function imageNodes(
   if (state?.status === 'loading') {
     return [line(document, 'printing-image-status', 'Loading printing image…')];
   }
-  if (state?.status !== 'ready') {
-    return [];
-  }
-  const images = state.values as readonly { readonly src: string; readonly alt: string }[];
+  const settled = settledFragmentState(state);
+  const images =
+    settled?.status === 'ready'
+      ? (settled.values as readonly { readonly src: string; readonly alt: string }[])
+      : [];
   const visible = images[0];
-  if (visible === undefined) {
-    return [];
+  const nodes: Node[] = [];
+  if (visible !== undefined) {
+    const image = document.createElement('img');
+    image.id = 'printing-image';
+    image.src = visible.src;
+    image.alt = visible.alt;
+    nodes.push(image);
   }
-  const image = document.createElement('img');
-  image.id = 'printing-image';
-  image.src = visible.src;
-  image.alt = visible.alt;
-  return [image];
+  if (state?.status === 'refreshing') {
+    nodes.push(line(document, 'printing-image-status', 'Refreshing printing image…'));
+  } else if (entry !== undefined && state?.status === 'refresh-failed') {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = 'Retry printing image';
+    retry.addEventListener('click', () => retryImage(entry.entry.key));
+    nodes.push(
+      line(document, 'printing-image-status', `Image refresh unavailable: ${state.message}`),
+      retry,
+    );
+  }
+  return nodes;
+}
+
+/** The usable answer a settled or refresh fragment state carries. */
+function settledFragmentState(
+  state: CardListFragmentState | undefined,
+): Extract<CardListFragmentState, { status: 'ready' | 'absent' }> | null {
+  if (state?.status === 'ready' || state?.status === 'absent') return state;
+  if (state?.status === 'refreshing' || state?.status === 'refresh-failed') {
+    return state.previous;
+  }
+  return null;
 }
 
 /** The presentation one explicit absence shows. */

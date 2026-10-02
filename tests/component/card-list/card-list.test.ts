@@ -1058,7 +1058,10 @@ describe('review regressions', () => {
       list.refresh();
       controlled.settle(2, { entries: [card('1')], continuation: 'next' });
       await settle();
-      expect(list.snapshot().entries[0]?.fragments.get(kind)).toMatchObject({ values: values(1) });
+      expect(list.snapshot().entries[0]?.fragments.get(kind)).toMatchObject({
+        status: 'refreshing',
+        previous: { status: 'ready', values: values(1) },
+      });
       list.demand({ entries: 2 });
       controlled.settle(3, { entries: [card('2')] });
       await settle();

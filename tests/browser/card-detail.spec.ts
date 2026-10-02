@@ -61,17 +61,22 @@ for (const recoverFailure of [false, true]) {
     if (recoverFailure) {
       await page.evaluate(() => keeperDetail.reload());
       await expect.poll(() => page.evaluate(() => keeperDetail.state().reads)).toBe(2);
+      await expect(page.locator('#printing-image')).toBeAttached();
+      await expect(page.getByText('Refreshing printing image…')).toBeVisible();
       await page.evaluate(() => keeperDetail.finish(true));
-      await expect(page.getByText('Image unavailable', { exact: true })).toBeVisible();
-      await expect(page.locator('#printing-image')).toHaveCount(0);
+      await expect(
+        page.getByText('Image refresh unavailable: Image unavailable', { exact: true }),
+      ).toBeVisible();
+      await expect(page.locator('#printing-image')).toBeAttached();
       await page.getByRole('button', { name: 'Retry printing image' }).click();
       await expect.poll(() => page.evaluate(() => keeperDetail.state().reads)).toBe(3);
-      await expect(page.getByText('Loading printing image…')).toBeVisible();
+      await expect(page.getByText('Refreshing printing image…')).toBeVisible();
+      await expect(page.locator('#printing-image')).toBeAttached();
       await expect(page.getByRole('heading', { name: 'Lightning Bolt' })).toBeVisible();
       await draft.focus();
       await page.evaluate(() => keeperDetail.finish(false));
       await expect(page.locator('#printing-image')).toBeAttached();
-      await expect(page.getByText('Image unavailable', { exact: true })).toHaveCount(0);
+      await expect(page.getByText('Image refresh unavailable', { exact: false })).toHaveCount(0);
     }
     await expect(draft).toHaveValue('Keep my draft');
     await expect(draft).toBeFocused();

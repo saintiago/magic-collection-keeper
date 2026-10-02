@@ -85,6 +85,7 @@ export {
   type CardListFragmentRequest,
   type CardListFragmentResult,
   type CardListFragmentState,
+  type CardListSettledFragmentState,
   type CardListGroup,
   type CardListOptions,
   type CardListPage,
