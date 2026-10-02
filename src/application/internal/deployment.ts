@@ -54,7 +54,7 @@ import {
   resolveApplicationConfiguration,
   type ApplicationConfiguration,
 } from './configuration.js';
-import type { Diagnostics } from './diagnostics.js';
+import { backgroundFailureDiagnostic, type Diagnostics } from './diagnostics.js';
 import { createClaimsIdentityVerifier } from './identity.js';
 import { createPostgresApplication } from './postgres-composition.js';
 import {
@@ -1050,6 +1050,7 @@ export async function runCatalogJob(options: CatalogJobOptions): Promise<Catalog
       operation: 'catalog.synchronize',
       outcome: 'failed',
       failureCode: 'unavailable',
+      stage: 'configuration',
       problem: readConfigurationProblem(cause, 'The catalog job configuration is invalid.'),
       durationMs: Date.now() - startedAt,
     });
@@ -1098,6 +1099,7 @@ export async function runCatalogJob(options: CatalogJobOptions): Promise<Catalog
       environment: configuration.environment,
       outcome: 'failed',
       failureCode: failure.code,
+      ...backgroundFailureDiagnostic('catalog-synchronization', cause),
       durationMs: Date.now() - startedAt,
     });
     return { ok: false, failureCode: failure.code, revision: null };
@@ -1136,6 +1138,7 @@ export async function runIndexingJob(options: IndexingJobOptions): Promise<Index
       operation: 'search.index',
       outcome: 'failed',
       failureCode: 'unavailable',
+      stage: 'configuration',
       problem: readConfigurationProblem(cause, 'The indexing job configuration is invalid.'),
       durationMs: Date.now() - startedAt,
     });
@@ -1198,6 +1201,7 @@ export async function runIndexingJob(options: IndexingJobOptions): Promise<Index
       environment: configuration.environment,
       outcome: 'failed',
       failureCode: failure.code,
+      ...backgroundFailureDiagnostic('search-indexing', cause),
       durationMs: Date.now() - startedAt,
     });
     return { ok: false, failureCode: failure.code, result: null };

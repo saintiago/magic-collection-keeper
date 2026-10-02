@@ -65,6 +65,21 @@ function boltCard(name: string): CatalogPublishedRecord {
   };
 }
 
+function fillerCard(index: number): CatalogPublishedRecord {
+  return {
+    kind: 'card',
+    card: {
+      cardId: `oracle-filler-${index}`,
+      name: `Filler ${index}`,
+      rulesText: null,
+      typeLine: null,
+      colors: [],
+      colorIdentity: [],
+      manaValue: null,
+    },
+  };
+}
+
 const boltName: CatalogPublishedRecord = {
   kind: 'card-name',
   name: { cardId: 'oracle-bolt', language: 'en', name: 'Lightning Bolt' },
@@ -186,6 +201,23 @@ function pausingCatalog(
       }
       return page;
     },
+  };
+}
+
+/** A catalog publication that pauses after returning its first snapshot page. */
+function pausingCatalogSnapshot(catalog: CatalogPublication, pause: Pause): CatalogPublication {
+  let held = false;
+  return {
+    async readSnapshot(request) {
+      const page = await catalog.readSnapshot(request);
+      if (!held) {
+        held = true;
+        pause.markReached();
+        await pause.wait();
+      }
+      return page;
+    },
+    readChanges: (request) => catalog.readChanges(request),
   };
 }
 
@@ -323,6 +355,214 @@ describe('search indexing over overlapping runs', () => {
       );
     });
   }
+
+  it('rejects a first snapshot batch after another run completed that source', async (context) => {
+    if (unavailable !== '') {
+      context.skip(`A real PostgreSQL server is unavailable: ${unavailable}`);
+      return;
+    }
+    if (first === undefined || second === undefined) {
+      throw new Error('The two-connection harness was not opened.');
+    }
+    catalog.replaceSnapshot({
+      revision: revision('revision-large'),
+      position: '20',
+      records: Array.from({ length: 205 }, (_, index) => fillerCard(index)),
+    });
+    // This unresolved copy keeps the completed replacement non-queryable while the delayed
+    // catalog batch resumes, exposing the source-level fence rather than generation retirement.
+    alice.replaceSnapshot({ position: '4', records: [boltCopy(null)] });
+    const pause = createPause();
+    const delayed = indexerOn(second, {
+      catalog: pausingCatalogSnapshot(catalog.publication, pause),
+    }).index({ accounts: [accountId] });
+    await pause.reached;
+
+    const completed = await indexerOn(first).index({ accounts: [accountId], maxBatches: 3 });
+    expect(completed.catalog.position).toBe('20');
+    expect(await first.query('select count(*)::int as count from search_private.card')).toEqual([
+      { count: 205 },
+    ]);
+
+    pause.resume();
+    const resumed = await delayed;
+
+    expect(resumed.catalog).toEqual({
+      position: '20',
+      revisionId: 'revision-large',
+      caughtUp: true,
+    });
+    expect(await second.query('select count(*)::int as count from search_private.card')).toEqual([
+      { count: 205 },
+    ]);
+    expect(
+      await second.query(
+        `select count(*)::int as count from search_private.snapshot_progress
+          where source = 'catalog'`,
+      ),
+    ).toEqual([{ count: 0 }]);
+  });
+
+  it('revalidates source completion after a concurrent stale-source reset', async (context) => {
+    if (unavailable !== '') {
+      context.skip(`A real PostgreSQL server is unavailable: ${unavailable}`);
+      return;
+    }
+    if (first === undefined || second === undefined) {
+      throw new Error('The two-connection harness was not opened.');
+    }
+    await indexerOn(first).index({ accounts: [accountId] });
+    const pause = createPause();
+    const rebuilding = indexerOn(second, {
+      holdStatement: ')::int as unresolved',
+      pause,
+    }).index({ accounts: [accountId], rebuild: true });
+    await pause.reached;
+
+    catalog.dropHistoryBefore('20');
+    catalog.replaceSnapshot({
+      revision: revision('revision-large'),
+      position: '20',
+      records: Array.from({ length: 500 }, (_, index) => fillerCard(index)),
+    });
+    const reset = await indexerOn(first).index({ accounts: [accountId], maxBatches: 1 });
+    expect(reset).toMatchObject({ published: false, caughtUp: false });
+    expect(
+      await first.query(
+        `select count(*)::int as count from search_private.catalog_checkpoint
+          where generation_id = $1::bigint`,
+        [reset.generation],
+      ),
+    ).toEqual([{ count: 0 }]);
+
+    pause.resume();
+    const fenced = await rebuilding;
+
+    expect(fenced).toMatchObject({ published: false, caughtUp: false });
+    // The incomplete replacement remains private; the previously served projection is unchanged.
+    expect(await second.query('select card_id from search.cards')).toEqual([
+      { card_id: 'oracle-bolt' },
+    ]);
+    expect(
+      await second.query(
+        `select record_offset from search_private.snapshot_progress
+          where generation_id = $1::bigint and source = 'catalog'`,
+        [fenced.generation],
+      ),
+    ).toEqual([{ record_offset: 400 }]);
+  });
+
+  it.for(['catalog', 'account'] as const)(
+    'rejects an incremental %s batch assembled before a concurrent source reset',
+    async (source, context) => {
+      if (unavailable !== '') {
+        context.skip(`A real PostgreSQL server is unavailable: ${unavailable}`);
+        return;
+      }
+      if (first === undefined || second === undefined) {
+        throw new Error('The two-connection harness was not opened.');
+      }
+      alice.replaceSnapshot({ position: '4', records: [binderTag] });
+      await indexerOn(first).index({ accounts: [accountId] });
+      // Finish both snapshots but leave the replacement waiting for its catch-up pass.
+      const building = await indexerOn(first).index({ rebuild: true, maxBatches: 1 });
+      expect(building).toMatchObject({ published: false, caughtUp: false });
+      const addedTag: UserCardsPublishedRecord = {
+        kind: 'tag',
+        tag: { tagId: 'tag-new', kind: 'location', label: 'New', system: false },
+      };
+      if (source === 'catalog') {
+        catalog.publish(
+          {
+            kind: 'card',
+            position: '11',
+            revisionId: 'revision-2',
+            reference: { kind: 'card', cardId: 'oracle-filler-0' },
+            removed: false,
+            record: fillerCard(0),
+          },
+          catalogRevisionChange('12', 'revision-2'),
+        );
+      } else {
+        alice.publish(
+          {
+            kind: 'tag',
+            position: '5',
+            accountId,
+            revision: '2',
+            reference: { kind: 'tag', tagId: 'tag-new' },
+            removed: false,
+            record: addedTag,
+          },
+          accountRevisionChange('6', '2'),
+        );
+      }
+      // Hold the end-of-stream read after assembling the complete incremental publication,
+      // before its write transaction takes the generation lock.
+      const pause = createPause();
+      const delayed = indexerOn(second, {
+        ...(source === 'catalog'
+          ? { catalog: pausingCatalog(catalog.publication, '12', pause) }
+          : { userCards: pausingUserCards(alice.publication, '6', pause) }),
+      }).index();
+      await pause.reached;
+      try {
+        if (source === 'catalog') {
+          catalog.replaceSnapshot({
+            revision: revision('revision-2'),
+            position: '12',
+            records: [boltCard('Lightning Bolt'), boltName, m11Printing, fillerCard(0)],
+          });
+          catalog.dropHistoryBefore('12');
+        } else {
+          alice.replaceSnapshot({ position: '6', records: [binderTag, addedTag] });
+          alice.dropHistoryBefore('6');
+        }
+        // Spend the reset run's budget deleting the old projection and checkpoint, leaving
+        // no snapshot progress row that could independently fence the delayed batch.
+        const reset = await indexerOn(first).index({ maxBatches: 1 });
+        expect(reset).toMatchObject({
+          generation: building.generation,
+          published: false,
+          caughtUp: false,
+        });
+        expect(
+          await first.query(
+            `select position from search_private.${source}_checkpoint
+              where generation_id = $1::bigint`,
+            [building.generation],
+          ),
+        ).toEqual([]);
+        expect(await first.query('select card_id from search.cards')).toEqual([
+          { card_id: 'oracle-bolt' },
+        ]);
+      } finally {
+        pause.resume();
+      }
+      const resumed = await delayed;
+      expect(resumed).toMatchObject({
+        generation: building.generation,
+        published: true,
+        caughtUp: true,
+        catalog: { position: source === 'catalog' ? '12' : '10' },
+        accounts: [{ accountId, position: source === 'account' ? '6' : '4' }],
+      });
+      expect(await second.query('select card_id from search.cards order by card_id')).toEqual(
+        source === 'catalog'
+          ? [{ card_id: 'oracle-bolt' }, { card_id: 'oracle-filler-0' }]
+          : [{ card_id: 'oracle-bolt' }],
+      );
+      const tags = await second.transactor().transaction(async (statements) => {
+        await statements.query(SEARCH_ACCOUNT_SCOPE_SQL, { account_id: accountId });
+        return await statements.query('select tag_id from search.tags order by tag_id');
+      });
+      expect(tags).toEqual(
+        source === 'account'
+          ? [{ tag_id: 'tag-binder' }, { tag_id: 'tag-new' }]
+          : [{ tag_id: 'tag-binder' }],
+      );
+    },
+  );
 
   it('rejects the delayed older catalog run instead of overwriting newer changes', async (context) => {
     if (unavailable !== '') {
@@ -493,7 +733,9 @@ describe('search indexing over overlapping runs', () => {
       .finally(() => pause.resume());
     const replacement = await rebuildRun;
     expect(pending).toMatchObject({ published: false, caughtUp: false });
-    expect(pending.accounts).toEqual([{ accountId, position: '6', caughtUp: false }]);
+    // The one-batch pass preserves its earlier committed snapshot position; the next pass resumes
+    // the private publications without exposing a partial account update.
+    expect(pending.accounts).toEqual([{ accountId, position: '4', caughtUp: false }]);
     expect(replacement).toMatchObject({ published: true, caughtUp: true });
     expect(replacement.accounts).toEqual([{ accountId, position: '8', caughtUp: true }]);
     expect(await scopedCopies(second)).toEqual([

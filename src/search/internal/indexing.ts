@@ -31,22 +31,22 @@
 import {
   CatalogError,
   type CatalogChange,
+  type CatalogRecordChange,
   type CatalogPublication,
-  type CatalogSnapshotPage,
 } from '../../catalog/index.js';
 import {
   UserCardsError,
   type UserCardsChange,
+  type UserCardsRecordChange,
   type UserCardsPublication,
-  type UserCardsSnapshotPage,
 } from '../../usercards/index.js';
 import { z } from 'zod';
 
 import {
-  applyCatalogRecordChange,
-  applyUserCardsRecordChange,
-  writeCatalogRecord,
-  writeUserCardsRecord,
+  applyCatalogRecordChanges,
+  applyUserCardsRecordChanges,
+  writeCatalogRecords,
+  writeUserCardsRecords,
 } from './bindings.js';
 import { SearchError } from './errors.js';
 import type {
@@ -83,6 +83,10 @@ export const SEARCH_INDEXING_LIMITS = {
   maxIdentifierLength: 200,
   maxPositionLength: 20,
   maxRevisionLength: 200,
+  /** Projection rows one transaction may carry, independently of provider page size. */
+  maxBatchRecords: 100,
+  /** UTF-8 bytes of encoded provider records one transaction may carry. */
+  maxBatchPayloadBytes: 64 * 1024,
 } as const;
 
 /** One indexing request as Application receives it. */
@@ -208,7 +212,7 @@ type PendingChange =
   | {
       readonly kind: 'record';
       readonly position: string;
-      readonly write: (sql: SearchSqlExecutor) => Promise<void>;
+      readonly payload: unknown;
     };
 
 interface ChangeCheckpoint {
@@ -219,19 +223,42 @@ interface ChangeCheckpoint {
 interface ChangeSource {
   /** The checkpoint this generation holds for the source, or null when it is not bootstrapped. */
   readCheckpoint(sql: SearchSqlExecutor): Promise<ChangeCheckpoint | null>;
-  /**
-   * Replaces the source's projection from the provider's consistent snapshot and writes its
-   * checkpoint, inside one open transaction.
-   */
-  writeSnapshot(statements: SearchSqlExecutor): Promise<ChangeCheckpoint>;
+  /** Resumes bounded snapshot batches and writes the checkpoint only at the complete boundary. */
+  writeSnapshot(
+    sql: SearchSqlTransactor,
+    budget: RunBudget,
+  ): Promise<(ChangeCheckpoint & { readonly complete: boolean }) | null>;
+  /** Clears only the source state this run observed; a concurrent boundary wins. */
+  discardSnapshot(
+    sql: SearchSqlTransactor,
+    budget: RunBudget,
+    expectedCheckpoint: ChangeCheckpoint | null,
+    expectedProgress: SnapshotProgress | null,
+  ): Promise<void>;
   /** Reads the changes the provider published after a position. */
   read(position: string): Promise<readonly PendingChange[]>;
+  writeRecords(
+    sql: SearchSqlExecutor,
+    changes: readonly Extract<PendingChange, { readonly kind: 'record' }>[],
+  ): Promise<void>;
   /** Advances the checkpoint a completed publication ends at, guarded by the position it held. */
   advance(
     statements: SearchSqlExecutor,
     applied: ChangeCheckpoint,
     start: ChangeCheckpoint | null,
   ): Promise<void>;
+}
+
+interface RunBudget {
+  remaining: number;
+}
+
+interface SnapshotProgress {
+  readonly continuation: string | null;
+  readonly recordOffset: number;
+  readonly pageSize: number | null;
+  readonly position: string;
+  readonly revisionId: string | null;
 }
 
 interface GenerationState {
@@ -272,6 +299,24 @@ class AbandonedWrite extends Error {
     super(message);
     this.name = 'AbandonedWrite';
     this.reason = reason;
+  }
+}
+
+class StagingRequired extends Error {
+  constructor() {
+    super('The publication exceeds one bounded indexing transaction.');
+    this.name = 'StagingRequired';
+  }
+}
+
+/** The exact staged snapshot boundary that became stale while it was being read. */
+class StaleSnapshot extends Error {
+  readonly progress: SnapshotProgress | null;
+
+  constructor(progress: SnapshotProgress | null, options?: ErrorOptions) {
+    super('The staged provider snapshot became stale.', options);
+    this.name = 'StaleSnapshot';
+    this.progress = progress;
   }
 }
 
@@ -355,21 +400,51 @@ export function createSearchIndexer(dependencies: SearchIndexerDependencies): Se
       options,
     );
 
-    const catalogProgress = await alignCatalog(projection, catalogPublication, target, options);
+    const catalogProgress = await alignCatalog(projection, catalogPublication, target, options, {
+      remaining: options.maxBatches,
+    });
     const accountProgress: SearchAccountProgress[] = [];
     for (const accountId of accounts) {
       accountProgress.push(
-        await alignAccount(projection, userCardsPublication, target, accountId, options),
+        await alignAccount(projection, userCardsPublication, target, accountId, options, {
+          remaining: options.maxBatches,
+        }),
       );
     }
     const unresolvedReferences = await countUnresolvedReferences(projection, generation);
+    if (!target.queryable) {
+      const refreshedAccounts = await indexingScope(
+        projection,
+        userCardsPublication,
+        target,
+        state.published,
+        options,
+      );
+      if (
+        refreshedAccounts.length !== accounts.length ||
+        refreshedAccounts.some((account, index) => account !== accounts[index])
+      ) {
+        throw new AbandonedWrite(
+          'obsolete-generation',
+          'The replacement account scope changed while it was being built.',
+        );
+      }
+    }
     const caughtUp =
       catalogProgress.caughtUp && accountProgress.every((progress) => progress.caughtUp);
     const publish = !target.queryable && caughtUp && unresolvedReferences === 0;
     return {
       generation,
       published:
-        target.queryable || (publish && (await publishGeneration(projection, target, accounts))),
+        target.queryable ||
+        (publish &&
+          (await publishGeneration(
+            projection,
+            target,
+            accounts,
+            catalogProgress,
+            accountProgress,
+          ))),
       rebuilt: started !== null,
       caughtUp,
       unresolvedReferences,
@@ -386,6 +461,10 @@ export function createSearchIndexer(dependencies: SearchIndexerDependencies): Se
         try {
           return await indexGeneration(options, rebuild);
         } catch (cause) {
+          if (cause instanceof StagingRequired && attempt < SEARCH_INDEXING_LIMITS.maxAttempts) {
+            rebuild = true;
+            continue;
+          }
           if (!isRestartable(cause) || attempt >= SEARCH_INDEXING_LIMITS.maxAttempts) {
             throw translateIndexingFailure(cause);
           }
@@ -491,15 +570,25 @@ async function alignCatalog(
   catalog: CatalogPublication,
   target: GenerationTarget,
   options: IndexingOptions,
+  budget: RunBudget,
 ): Promise<SearchCatalogProgress> {
   const source: ChangeSource = {
     readCheckpoint: (statements) => readCatalogCheckpoint(statements, target.generation),
-    writeSnapshot: (statements) => writeCatalogSnapshot(catalog, statements, target, options),
+    writeSnapshot: (projection, runBudget) =>
+      writeCatalogSnapshot(catalog, projection, target, options, runBudget),
+    discardSnapshot: (projection, runBudget, expectedCheckpoint, expectedProgress) =>
+      discardCatalogSnapshot(projection, target, runBudget, expectedCheckpoint, expectedProgress),
     read: (position) => readCatalogChanges(catalog, target.generation, position, options),
+    writeRecords: (statements, changes) =>
+      applyCatalogRecordChanges(
+        statements,
+        target.generation,
+        changes.map((change) => change.payload as CatalogChange) as CatalogRecordChange[],
+      ),
     advance: (statements, applied, start) =>
       advanceCatalogCheckpoint(statements, target.generation, applied, start),
   };
-  const aligned = await alignSource(sql, target, source, options);
+  const aligned = await alignSource(sql, target, source, budget);
   if (aligned.revisionId === null) {
     throw unreadableProjection();
   }
@@ -516,17 +605,34 @@ async function alignAccount(
   target: GenerationTarget,
   accountId: string,
   options: IndexingOptions,
+  budget: RunBudget,
 ): Promise<SearchAccountProgress> {
   const source: ChangeSource = {
     readCheckpoint: (statements) => readAccountCheckpoint(statements, target.generation, accountId),
-    writeSnapshot: (statements) =>
-      writeAccountSnapshot(userCards, statements, target, accountId, options),
+    writeSnapshot: (projection, runBudget) =>
+      writeAccountSnapshot(userCards, projection, target, accountId, options, runBudget),
+    discardSnapshot: (projection, runBudget, expectedCheckpoint, expectedProgress) =>
+      discardAccountSnapshot(
+        projection,
+        target,
+        accountId,
+        runBudget,
+        expectedCheckpoint,
+        expectedProgress,
+      ),
     read: (position) =>
       readAccountChanges(userCards, target.generation, accountId, position, options),
+    writeRecords: (statements, changes) =>
+      applyUserCardsRecordChanges(
+        statements,
+        target.generation,
+        accountId,
+        changes.map((change) => change.payload as UserCardsChange) as UserCardsRecordChange[],
+      ),
     advance: (statements, applied, start) =>
       advanceAccountCheckpoint(statements, target.generation, accountId, applied, start),
   };
-  const aligned = await alignSource(sql, target, source, options);
+  const aligned = await alignSource(sql, target, source, budget);
   return {
     accountId,
     position: aligned.position,
@@ -550,14 +656,33 @@ async function alignSource(
   sql: SearchSqlTransactor,
   target: GenerationTarget,
   source: ChangeSource,
-  options: IndexingOptions,
+  budget: RunBudget,
 ): Promise<ChangeCheckpoint & { readonly caughtUp: boolean }> {
   for (let attempt = 1; ; attempt += 1) {
+    let observedCheckpoint: ChangeCheckpoint | null = null;
     try {
-      const checkpoint =
-        (await source.readCheckpoint(sql)) ?? (await bootstrapSource(sql, target, source));
-      return await drainSource(sql, target, source, checkpoint, options);
+      const existing = await source.readCheckpoint(sql);
+      observedCheckpoint = existing;
+      const bootstrap = existing === null ? await bootstrapSource(sql, source, budget) : null;
+      const checkpoint = existing ?? bootstrap;
+      if (checkpoint === null) {
+        throw unreadableProjection();
+      }
+      if ('complete' in checkpoint && !checkpoint.complete) {
+        return { ...checkpoint, caughtUp: false };
+      }
+      observedCheckpoint = checkpoint;
+      return await drainSource(sql, target, source, checkpoint, budget);
     } catch (cause) {
+      if (cause instanceof StagingRequired && !target.queryable) {
+        try {
+          await source.discardSnapshot(sql, budget, observedCheckpoint, null);
+        } catch (discardCause) {
+          if (isAbandoned(discardCause, 'stale-checkpoint')) continue;
+          throw discardCause;
+        }
+        continue;
+      }
       if (isAbandoned(cause, 'unresolved-references')) {
         // The change stream published something this generation cannot resolve yet. Nothing was
         // applied: the usable previous state and its position stand until the reference resolves
@@ -573,7 +698,13 @@ async function alignSource(
         throw cause;
       }
       if (isStaleContinuation(cause) && !target.queryable) {
-        await bootstrapSource(sql, target, source);
+        try {
+          await source.discardSnapshot(sql, budget, observedCheckpoint, null);
+        } catch (discardCause) {
+          if (isAbandoned(discardCause, 'stale-checkpoint')) continue;
+          throw discardCause;
+        }
+        await bootstrapSource(sql, source, budget);
         continue;
       }
       if (isAbandoned(cause, 'stale-checkpoint')) {
@@ -587,94 +718,417 @@ async function alignSource(
 }
 
 /**
- * Bootstraps one source from its consistent snapshot inside one transaction: the snapshot's
- * records replace whatever this generation held for the source, and the checkpoint commits with
- * them, so an interrupted bootstrap leaves neither. A snapshot page the provider published a new
- * revision over is obsolete, so the snapshot restarts from its first page instead of mixing
- * revisions.
+ * Bootstraps one source from its consistent snapshot in durable bounded batches. A snapshot page
+ * the provider published a new revision over is obsolete, so its incomplete projection and resume
+ * state are discarded before starting from the first page again.
  */
 async function bootstrapSource(
   sql: SearchSqlTransactor,
-  target: GenerationTarget,
   source: ChangeSource,
-): Promise<ChangeCheckpoint> {
+  budget: RunBudget,
+): Promise<(ChangeCheckpoint & { readonly complete: boolean }) | null> {
   for (let attempt = 1; ; attempt += 1) {
     try {
-      return await writeTransaction(sql, target, (statements) => source.writeSnapshot(statements));
+      return await source.writeSnapshot(sql, budget);
     } catch (cause) {
-      if (!isStaleContinuation(cause) || attempt >= SEARCH_INDEXING_LIMITS.maxAttempts) {
+      if (!(cause instanceof StaleSnapshot) || attempt >= SEARCH_INDEXING_LIMITS.maxAttempts) {
         throw cause;
       }
+      await source.discardSnapshot(sql, budget, null, cause.progress);
     }
   }
 }
 
 async function writeCatalogSnapshot(
   catalog: CatalogPublication,
-  statements: SearchSqlExecutor,
+  sql: SearchSqlTransactor,
   target: GenerationTarget,
   options: IndexingOptions,
-): Promise<ChangeCheckpoint> {
+  budget: RunBudget,
+): Promise<ChangeCheckpoint & { readonly complete: boolean }> {
   const generation = target.generation;
-  const start = await readCatalogCheckpoint(statements, generation);
-  let page = await catalog.readSnapshot({ pageSize: options.pageSize });
-  const revisionId = page.revision.revisionId;
-  const checkpoint: ChangeCheckpoint = {
-    position: page.position,
-    revisionId,
-  };
-  await clearCatalogProjection(statements, generation);
   for (;;) {
-    await writeCatalogPage(statements, generation, page);
-    if (page.continuation === null) {
-      break;
+    const progress = await readSnapshotProgress(sql, generation, 'catalog', '');
+    if (budget.remaining === 0 && progress !== null) {
+      return { position: progress.position, revisionId: progress.revisionId, complete: false };
     }
-    page = await catalog.readSnapshot({
-      pageSize: options.pageSize,
-      continuation: page.continuation,
+    if (progress !== null && progress.recordOffset > 0 && progress.pageSize === null) {
+      throw new StaleSnapshot(progress);
+    }
+    const pageSize =
+      progress !== null && progress.recordOffset > 0
+        ? (progress.pageSize ?? options.pageSize)
+        : options.pageSize;
+    const page = await catalog
+      .readSnapshot({
+        pageSize,
+        ...(progress?.continuation === null || progress === null
+          ? {}
+          : { continuation: progress.continuation }),
+      })
+      .catch((cause: unknown) => {
+        if (isStaleContinuation(cause)) throw new StaleSnapshot(progress, { cause });
+        throw cause;
+      });
+    const checkpoint = { position: page.position, revisionId: page.revision.revisionId };
+    assertSnapshotBoundary(progress, checkpoint);
+    if (budget.remaining === 0) return { ...checkpoint, complete: false };
+    const slice = boundedRecords(page.records, progress?.recordOffset ?? 0);
+    if (target.queryable && (!slice.pageComplete || page.continuation !== null)) {
+      throw new StagingRequired();
+    }
+    await writeTransaction(sql, target, async (statements) => {
+      await assertSnapshotProgress(statements, generation, 'catalog', '', progress);
+      await assertCheckpoint(await readCatalogCheckpoint(statements, generation), null);
+      if (progress === null) await clearCatalogProjection(statements, generation);
+      await writeCatalogRecords(statements, generation, slice.records);
+      if (!slice.pageComplete) {
+        await saveSnapshotProgress(statements, generation, 'catalog', '', {
+          continuation: progress?.continuation ?? null,
+          recordOffset: slice.nextOffset,
+          pageSize,
+          position: checkpoint.position,
+          revisionId: checkpoint.revisionId,
+        });
+        return;
+      }
+      if (page.continuation !== null) {
+        await saveSnapshotProgress(statements, generation, 'catalog', '', {
+          continuation: page.continuation,
+          recordOffset: 0,
+          pageSize: null,
+          position: checkpoint.position,
+          revisionId: checkpoint.revisionId,
+        });
+        return;
+      }
+      for (const revision of new Set([checkpoint.revisionId, ...page.incorporatedRevisions])) {
+        await recordCatalogProgress(statements, generation, revision);
+      }
+      if (target.queryable) await assertResolved(statements, generation);
+      await advanceCatalogCheckpoint(statements, generation, checkpoint, null);
+      await deleteSnapshotProgress(statements, generation, 'catalog', '');
     });
+    budget.remaining -= 1;
+    if (slice.pageComplete && page.continuation === null) {
+      return { ...checkpoint, complete: true };
+    }
   }
-  for (const revision of new Set([revisionId, ...page.incorporatedRevisions])) {
-    await recordCatalogProgress(statements, generation, revision);
-  }
-  await advanceCatalogCheckpoint(statements, generation, checkpoint, start);
-  if (target.queryable) {
-    await assertResolved(statements, generation);
-  }
-  return checkpoint;
 }
 
 async function writeAccountSnapshot(
   userCards: UserCardsPublication,
-  statements: SearchSqlExecutor,
+  sql: SearchSqlTransactor,
   target: GenerationTarget,
   accountId: string,
   options: IndexingOptions,
-): Promise<ChangeCheckpoint> {
+  budget: RunBudget,
+): Promise<ChangeCheckpoint & { readonly complete: boolean }> {
   const generation = target.generation;
-  const start = await readAccountCheckpoint(statements, generation, accountId);
-  let page = await userCards.readSnapshot({ accountId, pageSize: options.pageSize });
-  const checkpoint: ChangeCheckpoint = { position: page.position, revisionId: null };
-  await clearAccountProjection(statements, generation, accountId);
   for (;;) {
-    await writeAccountPage(statements, generation, accountId, page);
-    if (page.continuation === null) {
+    const progress = await readSnapshotProgress(sql, generation, 'account', accountId);
+    if (budget.remaining === 0 && progress !== null) {
+      return { position: progress.position, revisionId: null, complete: false };
+    }
+    if (progress !== null && progress.recordOffset > 0 && progress.pageSize === null) {
+      throw new StaleSnapshot(progress);
+    }
+    const pageSize =
+      progress !== null && progress.recordOffset > 0
+        ? (progress.pageSize ?? options.pageSize)
+        : options.pageSize;
+    const page = await userCards
+      .readSnapshot({
+        accountId,
+        pageSize,
+        ...(progress?.continuation === null || progress === null
+          ? {}
+          : { continuation: progress.continuation }),
+      })
+      .catch((cause: unknown) => {
+        if (isStaleContinuation(cause)) throw new StaleSnapshot(progress, { cause });
+        throw cause;
+      });
+    const checkpoint = { position: page.position, revisionId: null };
+    assertSnapshotBoundary(progress, checkpoint);
+    if (budget.remaining === 0) return { ...checkpoint, complete: false };
+    const slice = boundedRecords(page.records, progress?.recordOffset ?? 0);
+    if (target.queryable && (!slice.pageComplete || page.continuation !== null)) {
+      throw new StagingRequired();
+    }
+    await writeTransaction(sql, target, async (statements) => {
+      await assertSnapshotProgress(statements, generation, 'account', accountId, progress);
+      await assertCheckpoint(await readAccountCheckpoint(statements, generation, accountId), null);
+      if (progress === null) await clearAccountProjection(statements, generation, accountId);
+      await writeUserCardsRecords(statements, generation, accountId, slice.records);
+      if (!slice.pageComplete) {
+        await saveSnapshotProgress(statements, generation, 'account', accountId, {
+          continuation: progress?.continuation ?? null,
+          recordOffset: slice.nextOffset,
+          pageSize,
+          position: checkpoint.position,
+          revisionId: null,
+        });
+        return;
+      }
+      if (page.continuation !== null) {
+        await saveSnapshotProgress(statements, generation, 'account', accountId, {
+          continuation: page.continuation,
+          recordOffset: 0,
+          pageSize: null,
+          position: checkpoint.position,
+          revisionId: null,
+        });
+        return;
+      }
+      for (const position of new Set([checkpoint.position, ...page.incorporatedPositions])) {
+        await recordAccountProgress(statements, generation, accountId, position);
+      }
+      if (target.queryable) await assertResolved(statements, generation);
+      await advanceAccountCheckpoint(statements, generation, accountId, checkpoint, null);
+      await deleteSnapshotProgress(statements, generation, 'account', accountId);
+    });
+    budget.remaining -= 1;
+    if (slice.pageComplete && page.continuation === null) {
+      return { ...checkpoint, complete: true };
+    }
+  }
+}
+
+function boundedRecords<T>(
+  records: readonly T[],
+  offset: number,
+): { readonly records: readonly T[]; readonly nextOffset: number; readonly pageComplete: boolean } {
+  if (offset > records.length) throw unreadableProjection();
+  const selected: T[] = [];
+  let bytes = 2;
+  for (let index = offset; index < records.length; index += 1) {
+    const record = records[index] as T;
+    const recordBytes = new TextEncoder().encode(JSON.stringify(record)).byteLength + 1;
+    if (recordBytes > SEARCH_INDEXING_LIMITS.maxBatchPayloadBytes) {
+      throw new SearchError(
+        'unavailable',
+        'A published record exceeds the Search indexing payload bound.',
+      );
+    }
+    if (
+      selected.length >= SEARCH_INDEXING_LIMITS.maxBatchRecords ||
+      bytes + recordBytes > SEARCH_INDEXING_LIMITS.maxBatchPayloadBytes
+    ) {
       break;
     }
-    page = await userCards.readSnapshot({
+    selected.push(record);
+    bytes += recordBytes;
+  }
+  const nextOffset = offset + selected.length;
+  return { records: selected, nextOffset, pageComplete: nextOffset === records.length };
+}
+
+function assertSnapshotBoundary(
+  progress: SnapshotProgress | null,
+  checkpoint: ChangeCheckpoint,
+): void {
+  if (
+    progress !== null &&
+    (progress.position !== checkpoint.position || progress.revisionId !== checkpoint.revisionId)
+  ) {
+    throw new StaleSnapshot(progress);
+  }
+}
+
+async function readSnapshotProgress(
+  sql: SearchSqlExecutor,
+  generation: string,
+  source: 'catalog' | 'account',
+  accountId: string,
+): Promise<SnapshotProgress | null> {
+  const rows = await readRows(
+    sql,
+    `select continuation, record_offset, page_size, source_position, revision_id
+       from ${searchPrivateSchema}.snapshot_progress
+      where generation_id = cast(:generation_id as bigint)
+        and source = :source and account_id = :account_id`,
+    { generation_id: generation, source, account_id: accountId },
+  );
+  if (rows.length === 0) return null;
+  const parsed = z
+    .object({
+      continuation: z.string().nullable(),
+      record_offset: z.number().int().min(0),
+      page_size: z
+        .number()
+        .int()
+        .min(SEARCH_INDEXING_LIMITS.minPageSize)
+        .max(SEARCH_INDEXING_LIMITS.maxPageSize)
+        .nullable(),
+      source_position: positionSchema,
+      revision_id: revisionSchema.nullable(),
+    })
+    .safeParse(rows[0]);
+  if (!parsed.success) throw unreadableProjection();
+  return {
+    continuation: parsed.data.continuation,
+    recordOffset: parsed.data.record_offset,
+    pageSize: parsed.data.page_size,
+    position: parsed.data.source_position,
+    revisionId: parsed.data.revision_id,
+  };
+}
+
+function assertCheckpoint(
+  actual: ChangeCheckpoint | null,
+  expected: ChangeCheckpoint | null,
+): void {
+  if (!sameCheckpoint(actual, expected)) {
+    throw new AbandonedWrite(
+      'stale-checkpoint',
+      'Another run advanced this source boundary; this write is obsolete.',
+    );
+  }
+}
+
+function sameCheckpoint(
+  actual: ChangeCheckpoint | null,
+  expected: ChangeCheckpoint | null,
+): boolean {
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+async function assertSnapshotProgress(
+  sql: SearchSqlExecutor,
+  generation: string,
+  source: 'catalog' | 'account',
+  accountId: string,
+  expected: SnapshotProgress | null,
+): Promise<void> {
+  const actual = await readSnapshotProgress(sql, generation, source, accountId);
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new AbandonedWrite(
+      'stale-checkpoint',
+      'Another run advanced this snapshot staging progress.',
+    );
+  }
+}
+
+async function saveSnapshotProgress(
+  sql: SearchSqlExecutor,
+  generation: string,
+  source: 'catalog' | 'account',
+  accountId: string,
+  progress: SnapshotProgress,
+): Promise<void> {
+  await statementsQuery(
+    sql,
+    `insert into ${searchPrivateSchema}.snapshot_progress (
+       generation_id, source, account_id, continuation, record_offset, page_size,
+       source_position, revision_id
+     ) values (
+       cast(:generation_id as bigint), :source, :account_id, :continuation,
+       :record_offset, :page_size, :source_position, :revision_id
+     )
+     on conflict (generation_id, source, account_id) do update set
+       continuation = excluded.continuation, record_offset = excluded.record_offset,
+       page_size = excluded.page_size,
+       source_position = excluded.source_position, revision_id = excluded.revision_id`,
+    {
+      generation_id: generation,
+      source,
+      account_id: accountId,
+      continuation: progress.continuation,
+      record_offset: progress.recordOffset,
+      page_size: progress.pageSize,
+      source_position: progress.position,
+      revision_id: progress.revisionId,
+    },
+  );
+}
+
+async function deleteSnapshotProgress(
+  sql: SearchSqlExecutor,
+  generation: string,
+  source: 'catalog' | 'account',
+  accountId: string,
+): Promise<void> {
+  await statementsQuery(
+    sql,
+    `delete from ${searchPrivateSchema}.snapshot_progress
+      where generation_id = cast(:generation_id as bigint)
+        and source = :source and account_id = :account_id`,
+    { generation_id: generation, source, account_id: accountId },
+  );
+}
+
+async function discardCatalogSnapshot(
+  sql: SearchSqlTransactor,
+  target: GenerationTarget,
+  budget: RunBudget,
+  expectedCheckpoint: ChangeCheckpoint | null,
+  expectedProgress: SnapshotProgress | null,
+): Promise<void> {
+  if (budget.remaining === 0)
+    throw new SearchError('unavailable', 'The indexing run budget ended.');
+  await writeTransaction(sql, target, async (statements) => {
+    await assertCheckpoint(
+      await readCatalogCheckpoint(statements, target.generation),
+      expectedCheckpoint,
+    );
+    await assertSnapshotProgress(statements, target.generation, 'catalog', '', expectedProgress);
+    await clearCatalogProjection(statements, target.generation);
+    await deleteSnapshotProgress(statements, target.generation, 'catalog', '');
+    await statementsQuery(
+      statements,
+      `delete from ${searchPrivateSchema}.catalog_checkpoint
+        where generation_id = cast(:generation_id as bigint)`,
+      { generation_id: target.generation },
+    );
+    await statementsQuery(
+      statements,
+      `delete from ${searchPrivateSchema}.catalog_progress
+        where generation_id = cast(:generation_id as bigint)`,
+      { generation_id: target.generation },
+    );
+  });
+  budget.remaining -= 1;
+}
+
+async function discardAccountSnapshot(
+  sql: SearchSqlTransactor,
+  target: GenerationTarget,
+  accountId: string,
+  budget: RunBudget,
+  expectedCheckpoint: ChangeCheckpoint | null,
+  expectedProgress: SnapshotProgress | null,
+): Promise<void> {
+  if (budget.remaining === 0)
+    throw new SearchError('unavailable', 'The indexing run budget ended.');
+  await writeTransaction(sql, target, async (statements) => {
+    await assertCheckpoint(
+      await readAccountCheckpoint(statements, target.generation, accountId),
+      expectedCheckpoint,
+    );
+    await assertSnapshotProgress(
+      statements,
+      target.generation,
+      'account',
       accountId,
-      pageSize: options.pageSize,
-      continuation: page.continuation,
-    });
-  }
-  for (const position of new Set([checkpoint.position, ...page.incorporatedPositions])) {
-    await recordAccountProgress(statements, generation, accountId, position);
-  }
-  await advanceAccountCheckpoint(statements, generation, accountId, checkpoint, start);
-  if (target.queryable) {
-    await assertResolved(statements, generation);
-  }
-  return checkpoint;
+      expectedProgress,
+    );
+    await clearAccountProjection(statements, target.generation, accountId);
+    await deleteSnapshotProgress(statements, target.generation, 'account', accountId);
+    await statementsQuery(
+      statements,
+      `delete from ${searchPrivateSchema}.account_checkpoint
+        where generation_id = cast(:generation_id as bigint) and account_id = :account_id`,
+      { generation_id: target.generation, account_id: accountId },
+    );
+    await statementsQuery(
+      statements,
+      `delete from ${searchPrivateSchema}.account_progress
+        where generation_id = cast(:generation_id as bigint) and account_id = :account_id`,
+      { generation_id: target.generation, account_id: accountId },
+    );
+  });
+  budget.remaining -= 1;
 }
 
 /**
@@ -687,20 +1141,18 @@ async function drainSource(
   target: GenerationTarget,
   source: ChangeSource,
   start: ChangeCheckpoint,
-  options: IndexingOptions,
+  budget: RunBudget,
 ): Promise<ChangeCheckpoint & { readonly caughtUp: boolean }> {
   let checkpoint = start;
-  for (let batch = 0; batch < options.maxBatches; batch += 1) {
+  while (budget.remaining > 0) {
     const applied = await applyChangeBatch(sql, target, source, checkpoint);
+    if (!applied.exhausted) budget.remaining -= 1;
     checkpoint = { position: applied.position, revisionId: applied.revisionId };
     if (applied.exhausted) {
       return { ...checkpoint, caughtUp: true };
     }
   }
-  // The budget may have run out exactly at the end of the stream; one more read decides without
-  // applying anything, and the changes it returns are the next run's first batch.
-  const remaining = await source.read(checkpoint.position);
-  return { ...checkpoint, caughtUp: remaining.length === 0 };
+  return { ...checkpoint, caughtUp: false };
 }
 
 async function applyChangeBatch(
@@ -709,60 +1161,107 @@ async function applyChangeBatch(
   source: ChangeSource,
   start: ChangeCheckpoint,
 ): Promise<ChangeCheckpoint & { readonly exhausted: boolean }> {
-  // Fetch the first bounded page before taking the writer lock. The checkpoint compare-and-set
-  // rejects it if another run advances this source while the read is in flight.
-  const firstPage = await source.read(start.position);
-  return await writeTransaction(sql, target, async (statements) => {
-    let checkpoint = start;
-    let changes = firstPage;
-    let lastKind: PendingChange['kind'] | null = null;
-    let stalled = 0;
-    for (;;) {
-      if (changes.length === 0) {
-        if (lastKind === 'marker') {
-          // Complete publications were read, but even their combined result cannot resolve yet.
-          await assertResolved(statements, target.generation);
-        }
-        if (lastKind !== null) {
+  // Assemble only one complete publication before taking the writer lock. If it cannot fit one
+  // bounded transaction, the caller switches to a replacement snapshot instead of holding an
+  // unbounded transaction or exposing a partial atomic publication.
+  let position = start.position;
+  let stalled = 0;
+  type RecordChange = Extract<PendingChange, { readonly kind: 'record' }>;
+  type MarkerChange = Extract<PendingChange, { readonly kind: 'marker' }>;
+  const publications: {
+    readonly records: readonly RecordChange[];
+    readonly marker: MarkerChange;
+  }[] = [];
+  let records: RecordChange[] = [];
+  let recordCount = 0;
+  let bytes = 2;
+  let truncated = false;
+  const seenChanges = new Map<string, string>();
+  publicationRead: for (;;) {
+    const changes = await source.read(position);
+    if (changes.length === 0) {
+      if (records.length === 0 && publications.length === 0) return { ...start, exhausted: true };
+      if (publications.length > 0) break;
+      throw new SearchError(
+        'unavailable',
+        'A publication ended without its completion marker; the projection was not advanced.',
+      );
+    }
+    const resumedAt = position;
+    for (const change of changes) {
+      position = change.position;
+      const fingerprint =
+        change.kind === 'marker'
+          ? `marker:${change.revisionId ?? ''}`
+          : `record:${JSON.stringify(change.payload)}`;
+      const seen = seenChanges.get(change.position);
+      if (seen !== undefined) {
+        if (seen !== fingerprint) {
           throw new SearchError(
             'unavailable',
-            'A publication ended without its completion marker; the projection was not advanced.',
+            'The provider changed the meaning of a repeated publication identity.',
           );
         }
-        return { ...checkpoint, exhausted: true };
+        continue;
       }
-      const resumedAt = checkpoint.position;
-      for (const change of changes) {
-        lastKind = change.kind;
-        checkpoint = { ...checkpoint, position: change.position };
-        await change.write(statements);
-        if (change.kind === 'record') {
-          continue;
-        }
-        if (change.revisionId !== null) {
-          checkpoint = { ...checkpoint, revisionId: change.revisionId };
-        }
-        // Commit the earliest complete prefix that resolves. A later pending publication must
-        // not roll back facts another source needs to catch up. If this prefix is unresolved,
-        // keep reading: a later publication of this same source may resolve it, even on another
-        // page. None of that pending work is visible until the whole prefix can commit.
-        if (
-          !target.queryable ||
-          (await countUnresolvedReferences(statements, target.generation)) === 0
-        ) {
-          await source.advance(statements, checkpoint, start);
-          return { ...checkpoint, exhausted: false };
-        }
+      seenChanges.set(change.position, fingerprint);
+      if (change.kind === 'marker') {
+        publications.push({ records, marker: change });
+        records = [];
+        continue;
       }
-      stalled = checkpoint.position === resumedAt ? stalled + 1 : 0;
-      if (stalled > SEARCH_INDEXING_LIMITS.maxStalledPagesPerBatch) {
-        throw new SearchError(
-          'unavailable',
-          'The provider repeated a change page without publishing the completion of its change.',
-        );
+      const changeBytes = new TextEncoder().encode(JSON.stringify(change.payload)).byteLength + 1;
+      if (
+        changeBytes > SEARCH_INDEXING_LIMITS.maxBatchPayloadBytes ||
+        recordCount >= SEARCH_INDEXING_LIMITS.maxBatchRecords ||
+        bytes + changeBytes > SEARCH_INDEXING_LIMITS.maxBatchPayloadBytes
+      ) {
+        if (publications.length > 0) {
+          truncated = true;
+          break publicationRead;
+        }
+        throw new StagingRequired();
       }
-      changes = await source.read(checkpoint.position);
+      records.push(change);
+      recordCount += 1;
+      bytes += changeBytes;
     }
+    stalled = position === resumedAt ? stalled + 1 : 0;
+    if (stalled > SEARCH_INDEXING_LIMITS.maxStalledPagesPerBatch) {
+      throw new SearchError(
+        'unavailable',
+        'The provider repeated a change page without publishing the completion of its change.',
+      );
+    }
+  }
+
+  return await writeTransaction(sql, target, async (statements) => {
+    // A reset can remove this checkpoint while the batch is being assembled. Require the
+    // complete starting boundary under the generation lock before writing any records/evidence.
+    assertCheckpoint(await source.readCheckpoint(statements), {
+      position: start.position,
+      revisionId: start.revisionId,
+    });
+    for (const publication of publications) {
+      await source.writeRecords(statements, publication.records);
+      await publication.marker.write(statements);
+      const checkpoint = {
+        position: publication.marker.position,
+        revisionId: publication.marker.revisionId ?? start.revisionId,
+      };
+      if (
+        !target.queryable ||
+        (await countUnresolvedReferences(statements, target.generation)) === 0
+      ) {
+        await source.advance(statements, checkpoint, start);
+        return { ...checkpoint, exhausted: false };
+      }
+    }
+    if (truncated) throw new StagingRequired();
+    throw new AbandonedWrite(
+      'unresolved-references',
+      'A publication references a catalog fact the projection does not hold yet.',
+    );
   });
 }
 
@@ -788,7 +1287,7 @@ function catalogChange(generation: string, change: CatalogChange): PendingChange
   return {
     kind: 'record',
     position: change.position,
-    write: (sql) => applyCatalogRecordChange(sql, generation, change),
+    payload: change,
   };
 }
 
@@ -819,29 +1318,8 @@ function userCardsChange(generation: string, change: UserCardsChange): PendingCh
   return {
     kind: 'record',
     position: change.position,
-    write: (sql) => applyUserCardsRecordChange(sql, generation, change),
+    payload: change,
   };
-}
-
-async function writeCatalogPage(
-  statements: SearchSqlExecutor,
-  generation: string,
-  page: CatalogSnapshotPage,
-): Promise<void> {
-  for (const record of page.records) {
-    await writeCatalogRecord(statements, generation, record);
-  }
-}
-
-async function writeAccountPage(
-  statements: SearchSqlExecutor,
-  generation: string,
-  accountId: string,
-  page: UserCardsSnapshotPage,
-): Promise<void> {
-  for (const record of page.records) {
-    await writeUserCardsRecord(statements, generation, accountId, record);
-  }
 }
 
 async function readGenerationState(sql: SearchSqlTransactor): Promise<GenerationState> {
@@ -931,6 +1409,8 @@ async function publishGeneration(
   sql: SearchSqlTransactor,
   target: GenerationTarget,
   accounts: readonly string[],
+  catalogProgress: SearchCatalogProgress,
+  accountProgress: readonly SearchAccountProgress[],
 ): Promise<boolean> {
   return await sql.transaction(async (statements) => {
     await lockGeneration(statements, target);
@@ -968,6 +1448,17 @@ async function publishGeneration(
         'The served projection advanced while its replacement was catching up.',
       );
     }
+    if (
+      !sameCheckpoint(await readCatalogCheckpoint(statements, target.generation), {
+        position: catalogProgress.position,
+        revisionId: catalogProgress.revisionId,
+      })
+    ) {
+      throw new AbandonedWrite(
+        'obsolete-generation',
+        'The replacement catalog boundary changed before publication.',
+      );
+    }
     const indexedAccounts = await readCheckpointAccounts(statements, target.generation);
     const scopedAccounts = new Set(accounts);
     if (
@@ -977,6 +1468,33 @@ async function publishGeneration(
       throw new AbandonedWrite(
         'obsolete-generation',
         'The replacement gained an account outside this run’s catch-up scope.',
+      );
+    }
+    for (const progress of accountProgress) {
+      if (
+        !sameCheckpoint(
+          await readAccountCheckpoint(statements, target.generation, progress.accountId),
+          { position: progress.position, revisionId: null },
+        )
+      ) {
+        throw new AbandonedWrite(
+          'obsolete-generation',
+          'A replacement account boundary changed before publication.',
+        );
+      }
+    }
+    const staging = await readRows(
+      statements,
+      `select source, account_id
+         from ${searchPrivateSchema}.snapshot_progress
+        where generation_id = cast(:generation_id as bigint)
+        limit 1`,
+      { generation_id: target.generation },
+    );
+    if (staging.length !== 0) {
+      throw new AbandonedWrite(
+        'obsolete-generation',
+        'The replacement still has incomplete snapshot staging.',
       );
     }
     if ((await countUnresolvedReferences(statements, target.generation)) !== 0) {
@@ -1110,18 +1628,23 @@ async function advanceCatalogCheckpoint(
   }
   await advanceCheckpoint(
     sql,
-    `insert into ${searchPrivateSchema}.catalog_checkpoint (generation_id, position, revision_id)
-     values (cast(:generation_id as bigint), :position, :revision_id)
-     on conflict (generation_id) do update set
-       position = excluded.position,
-       revision_id = excluded.revision_id
-      where catalog_checkpoint.position = :start_position
-     returning generation_id::text as generation_id`,
+    start === null
+      ? `insert into ${searchPrivateSchema}.catalog_checkpoint (generation_id, position, revision_id)
+         values (cast(:generation_id as bigint), :position, :revision_id)
+         on conflict (generation_id) do nothing
+         returning generation_id::text as generation_id`
+      : `update ${searchPrivateSchema}.catalog_checkpoint
+            set position = :position, revision_id = :revision_id
+          where generation_id = cast(:generation_id as bigint)
+            and position = :start_position and revision_id = :start_revision_id
+         returning generation_id::text as generation_id`,
     {
       generation_id: generation,
       position: applied.position,
       revision_id: revisionId,
-      start_position: start?.position ?? null,
+      ...(start === null
+        ? {}
+        : { start_position: start.position, start_revision_id: start.revisionId }),
     },
   );
 }
@@ -1157,16 +1680,20 @@ async function advanceAccountCheckpoint(
 ): Promise<void> {
   await advanceCheckpoint(
     sql,
-    `insert into ${searchPrivateSchema}.account_checkpoint (generation_id, account_id, position)
-     values (cast(:generation_id as bigint), :account_id, :position)
-     on conflict (generation_id, account_id) do update set position = excluded.position
-      where account_checkpoint.position = :start_position
-     returning generation_id::text as generation_id`,
+    start === null
+      ? `insert into ${searchPrivateSchema}.account_checkpoint (generation_id, account_id, position)
+         values (cast(:generation_id as bigint), :account_id, :position)
+         on conflict (generation_id, account_id) do nothing
+         returning generation_id::text as generation_id`
+      : `update ${searchPrivateSchema}.account_checkpoint set position = :position
+          where generation_id = cast(:generation_id as bigint) and account_id = :account_id
+            and position = :start_position
+         returning generation_id::text as generation_id`,
     {
       generation_id: generation,
       account_id: accountId,
       position: applied.position,
-      start_position: start?.position ?? null,
+      ...(start === null ? {} : { start_position: start.position }),
     },
   );
 }
@@ -1349,7 +1876,9 @@ function unreadableProjection(): SearchError {
 /** Whether a provider refused a position that its retained history no longer carries. */
 function isStaleContinuation(cause: unknown): boolean {
   return (
-    (cause instanceof CatalogError || cause instanceof UserCardsError) &&
+    (cause instanceof CatalogError ||
+      cause instanceof UserCardsError ||
+      cause instanceof SearchError) &&
     cause.code === 'stale-continuation'
   );
 }

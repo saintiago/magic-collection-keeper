@@ -423,6 +423,29 @@ create table if not exists ${searchPrivateSchema}.account_checkpoint (
   primary key (generation_id, account_id)
 );
 
+-- Durable, non-queryable snapshot progress. The continuation is provider-owned and opaque; the
+-- offset resumes a payload-sized slice of the same provider page without advancing prematurely.
+create table if not exists ${searchPrivateSchema}.snapshot_progress (
+  generation_id bigint not null
+    references ${searchPrivateSchema}.generation (generation_id) on delete cascade,
+  source text not null check (source in ('catalog', 'account')),
+  account_id text not null default '',
+  phase text not null default 'snapshot' check (phase = 'snapshot'),
+  continuation text,
+  record_offset integer not null default 0 check (record_offset >= 0),
+  page_size integer check (page_size between 1 and 1000),
+  source_position text not null check (length(source_position) between 1 and 20),
+  revision_id text,
+  primary key (generation_id, source, account_id),
+  check ((source = 'catalog' and account_id = '' and revision_id is not null)
+      or (source = 'account' and account_id <> '' and revision_id is null))
+);
+
+-- Existing resumable builds predate the page-size field. A null value on a partially consumed page
+-- makes the indexer restart that source safely instead of applying its offset to a different page.
+alter table ${searchPrivateSchema}.snapshot_progress
+  add column if not exists page_size integer check (page_size between 1 and 1000);
+
 create table if not exists ${searchPrivateSchema}.catalog_progress (
   generation_id bigint not null references ${searchPrivateSchema}.generation on delete cascade,
   revision_id text not null,
@@ -603,6 +626,7 @@ const privateTables = [
   `${searchPrivateSchema}.generation`,
   `${searchPrivateSchema}.catalog_checkpoint`,
   `${searchPrivateSchema}.account_checkpoint`,
+  `${searchPrivateSchema}.snapshot_progress`,
   `${searchPrivateSchema}.card`,
   `${searchPrivateSchema}.card_name`,
   `${searchPrivateSchema}.printing`,
