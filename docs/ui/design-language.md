@@ -7,8 +7,9 @@ The local design workspace explores a visual language inspired by the official
 [Shattered Mirror treatments](https://magic.wizards.com/en/news/feature/collecting-reality-fracture)
 and [fractured alternate worlds](https://magic.wizards.com/en/news/magic-story/planeswalkers-guide-to-reality-fracture).
 Our interpretation uses midnight blue, icy cyan magic, violet reflected light, pale stone and
-angular mirror facets. Create an original collection interface, without reproducing set artwork,
-characters, logos or card frames.
+angular mirror facets. The target experience is a living arcane collection: glow, particles, depth
+and parallax belong to one coherent interaction language. Create an original collection interface,
+without reproducing set artwork, characters, logos or card frames.
 
 This first iteration applies to the design-language page and the local mocked app. It changes
 presentation, not application workflows or provider contracts. Enable its styles through the local
@@ -67,25 +68,13 @@ comfortable touch targets around 44px. Reflow on narrow screens without horizont
 ## Interaction and motion
 
 Every enabled user action gives immediate feedback. Interactive elements visibly respond to hover,
-keyboard focus and press. Use restrained color/border changes, a lift of at most 2px or slight press
-compression. Selection remains visibly marked after the short animation ends. Typing and changing a
-field show normal focus and value feedback; do not attach distracting effects to each character.
+keyboard focus and press. Selection remains visibly marked after its transition ends. Typing and
+changing a field show normal focus and value feedback.
 
-Use short transitions around 120–180ms for controls and 220–280ms for entry or state changes. Loading
-can use a spinner or a subtle pending emphasis; completion and failure use readable status plus a
-brief transition. Motion should help explain the state change. Avoid constant ambient animation,
-parallax, flashing, full-page effects and unnecessary layout movement.
-
-Demonstrate asynchronous actions through the workspace's existing
-[manual progression](storybook.md#manual-state-progression): an action starts loading immediately
-and remains there until Space. Each press exposes one next stage, including partial content and
-transient success or failure when applicable. Animation duration never completes the mocked action
-or expires an inspectable state. With no pending stage, Space keeps its existing behavior.
-
-Respect [reduced motion](https://www.w3.org/WAI/WCAG21/Understanding/animation-from-interactions):
-remove transforms and nonessential animation, retain clear static hover, focus, pressed and state
-feedback, and retain the same manual progression. Scope gallery listeners to its mounted lifetime;
-switching workspace tabs cannot leave hidden demo actions consuming Space.
+[Motion Design](motion-design.md) owns movement, timing, depth, particles, parallax and the
+presentation of transitions. It is part of UI design and follows the same semantic colors,
+typography, controls and accessibility rules. Demonstrate the shared motion rules in the
+design-language page and then in the mocked app.
 
 [Testing](../testing.md#local-design-storybook) owns verification. [Storybook](storybook.md) owns
-mock isolation and progression; this document owns visual and interaction presentation.
+mock isolation and manual state progression; these design documents own presentation.

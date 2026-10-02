@@ -18,7 +18,7 @@ second implementation of the screens or add mock behavior to production componen
   and mocks. Changes affect only local mock state, so the existing workflows can be inspected.
 - **Design language:** one page showing the common presentation elements used by those screens,
   following the [design language](design-language.md), including typography, colors, spacing, controls,
-  card views, dialogs and notices. Show their
+  card views, dialogs, notices and [Motion Design](motion-design.md) examples. Show their
   applicable loading, disabled, empty, validation, success and error presentations using the same
   presentation code as the app.
 

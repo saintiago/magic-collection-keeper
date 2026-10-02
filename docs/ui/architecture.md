@@ -119,4 +119,6 @@ The [local design storybook](storybook.md) reuses these presentation modules in 
 composition with mocked providers. It owns the design-language page and manually held presentation
 states; its tools and keyboard controls are not application runtime behavior.
 
-The [design language](design-language.md) owns the local visual foundations and interaction feedback.
+The [UI design language](design-language.md) owns visual foundations and interaction feedback.
+[Motion Design](motion-design.md) owns the presentation of movement and transitions within those
+modules. Both are explored in the local workspace before frontend deployment.
