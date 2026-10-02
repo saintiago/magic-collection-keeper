@@ -1,5 +1,5 @@
 /**
- * Decoding of the published record shapes (docs/catalog.md#query-surface).
+ * Decoding of Catalog's stored public record shapes (docs/catalog.md#interface).
  *
  * One published revision, one card, one published name and one printing are each read as a JSON
  * text payload and validated before a consumer sees them. The read service and the query

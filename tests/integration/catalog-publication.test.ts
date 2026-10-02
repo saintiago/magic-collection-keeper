@@ -193,23 +193,13 @@ describe('catalog publication stream', () => {
     await synchronizer([bolt, boltSpanish], 'snapshot-1').synchronize({ dataset: 'cards' });
     const before = await publication().readSnapshot({ pageSize: 10 });
 
-    // Catalog synchronization retains the records a provider stops publishing, so it publishes no
-    // removals; the stream still carries removal meaning for a replacement or a maintenance path
-    // that retires a record, and this is how it reaches a consumer.
-    await database.query(
-      `insert into catalog_private.publication
-         (revision_id, source_name, source_version, published_at, kind, record_identity,
-          removed, record)
-       values ($1, 'scryfall', 'snapshot-2', now(), 'printing', $2, true, null)`,
-      ['revision-retired', 'printing-bolt-es'],
-    );
+    const revision = await synchronizer([bolt], 'snapshot-2').synchronize({ dataset: 'cards' });
 
     const page = await publication().readChanges({ position: before.position, pageSize: 10 });
-    expect(page.changes).toHaveLength(1);
-    const removal = page.changes[0];
+    const removal = page.changes.find((change) => change.kind === 'printing' && change.removed);
     expect(removal).toMatchObject({
       kind: 'printing',
-      revisionId: 'revision-retired',
+      revisionId: revision.revisionId,
       reference: { kind: 'printing', printingId: 'printing-bolt-es' },
       removed: true,
       record: null,

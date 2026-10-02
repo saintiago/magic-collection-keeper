@@ -13,6 +13,8 @@ import {
   type PrintingRecord,
 } from './model.js';
 import { createPostgresReadStore } from './postgres.js';
+import { executeCatalogQuery, type CatalogQueryPage } from './query.js';
+import type { CatalogQueryInput } from './query-model.js';
 
 export interface CatalogResolution {
   /** Revision all returned records were read from. */
@@ -49,10 +51,17 @@ export interface Catalog extends CatalogResolver {
   listCardPrintings(cardId: CardId, options?: ListCardPrintingsOptions): Promise<CardPrintingsPage>;
 }
 
+/** Public query capability kept separate from the narrower resolver contract. */
+export interface CatalogQueries {
+  query(request: CatalogQueryInput): Promise<CatalogQueryPage>;
+}
+
+export interface CatalogService extends Catalog, CatalogQueries {}
+
 export interface CatalogDependencies {
   /**
    * Read-only SQL executor supplied by Application. Statements use `:name` placeholders and
-   * observe the published views; Catalog never reads private tables.
+   * observe provider-owned read views; Catalog never reads private tables.
    */
   readonly sql: CatalogSqlExecutor;
 }
@@ -85,7 +94,7 @@ const maxContinuationLength = 4 * Math.ceil((2 * maxContinuationIdentifierBytes 
  * The Catalog read contract. Lookups are always local: no operation waits for, or falls back to, a
  * live provider request, and a catalog read failure is distinct from a missing record.
  */
-export function createCatalog(dependencies: CatalogDependencies): Catalog {
+export function createCatalog(dependencies: CatalogDependencies): CatalogService {
   const sql: CatalogSqlExecutor | undefined = dependencies?.sql;
   if (typeof sql?.query !== 'function') {
     throw new TypeError('createCatalog requires a SQL executor with a query method.');
@@ -93,6 +102,10 @@ export function createCatalog(dependencies: CatalogDependencies): Catalog {
   const store = createPostgresReadStore(sql);
 
   return {
+    async query(request: CatalogQueryInput): Promise<CatalogQueryPage> {
+      return executeCatalogQuery(sql, request);
+    },
+
     async resolve(references: readonly CatalogReference[]): Promise<CatalogResolution> {
       const request = resolveRequestSchema.safeParse(references);
       if (!request.success) {

@@ -526,11 +526,11 @@ describe('catalog query publication', () => {
     expect(future.code).toBe('stale-continuation');
   });
 
-  it('retains every published lookup while the change stream follows the revision', async () => {
+  it('retains every published lookup while changes follow current membership', async () => {
     await publish('snapshot-1', [bolt, solRing]);
     const before = await readWholeSnapshot(publication(), 100);
 
-    // A provider snapshot that no longer carries Sol Ring keeps its published record resolvable.
+    // Provider-dropped records leave current membership but stay exactly resolvable.
     const published = await publish('snapshot-2', [boltSpanish]);
 
     const catalog: Catalog = createCatalog({ sql: database.sql });
@@ -544,12 +544,17 @@ describe('catalog query publication', () => {
     const page = await publication().readChanges({ position: before.position, pageSize: 100 });
     expect(page.changes.map(summarizeChange).sort()).toEqual(
       [
+        'card-name:removed:oracle-bolt/en/Lightning Bolt',
+        'card-name:removed:oracle-sol-ring/en/Sol Ring',
         'card-name:upsert:oracle-bolt/es/Relámpago',
+        'card:removed:oracle-sol-ring',
+        'printing:removed:printing-bolt-en',
+        'printing:removed:printing-ring-en',
         'printing:upsert:printing-bolt-es',
         `revision:${published.revisionId}:snapshot-2`,
       ].sort(),
     );
-    expect(page.changes.some((change) => change.kind !== 'revision' && change.removed)).toBe(false);
+    expect(page.changes.some((change) => change.kind !== 'revision' && change.removed)).toBe(true);
   });
 });
 

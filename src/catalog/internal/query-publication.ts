@@ -1,5 +1,5 @@
 /**
- * Catalog query publication (docs/catalog.md#query-surface).
+ * Transitional Catalog query publication retained for consumers awaiting replacement.
  *
  * Search consumes this provider-owned contract instead of reading SQL: a consistent, paginated
  * snapshot of the published revision with the change position it was read at, and the durable
@@ -138,7 +138,7 @@ export interface CatalogChangesPage {
   readonly position: CatalogChangePosition;
 }
 
-/** The snapshot and change contract Search reads (docs/catalog.md#query-surface). */
+/** The transitional snapshot and change contract consumed by Search. */
 export interface CatalogPublication {
   readSnapshot(request?: CatalogSnapshotRequest): Promise<CatalogSnapshotPage>;
   readChanges(request: CatalogChangesRequest): Promise<CatalogChangesPage>;
