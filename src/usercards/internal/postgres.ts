@@ -124,9 +124,6 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
         sql,
         async (statements) => {
           const update = correctionStatement(accountId, correction);
-          await storePrintingReferences(statements, [
-            { printingId: correction.printingId, cardId: correction.cardId },
-          ]);
           const rows = await readRows(
             statements,
             update.statement,
@@ -135,6 +132,9 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
           );
           const row = rows[0];
           if (row !== undefined) {
+            await storePrintingReferences(statements, [
+              { printingId: correction.printingId, cardId: correction.cardId },
+            ]);
             const publication = await publishMutation(statements, accountId, {
               copies: [correction.copyId],
             });

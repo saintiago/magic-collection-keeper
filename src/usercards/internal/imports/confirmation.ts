@@ -1201,7 +1201,6 @@ async function confirmOwnershipDestination(
   plan: ConfirmationPlan,
   pending: readonly ConfirmedImportEntry[],
 ): Promise<ConfirmationOutcome> {
-  await storeReviewedPrintingReferences(statements, pending);
   const keys = await readEntryKeys(statements, accountId, plan.sessionId, pending);
   const recorded = await readRecordedAcquisitions(statements, accountId, plan.sessionId, keys);
   const bindings = new Map<string, string>();
@@ -1278,6 +1277,9 @@ async function confirmOwnershipDestination(
     }
   }
 
+  // Match ordinary copy creation: acquire the owned tag before any new reference locks.
+  // Keep the complete reference batch together so its insertion order is stable.
+  await storeReviewedPrintingReferences(statements, pending);
   for (const [entryId, acquisitionId] of bindings) {
     const binding = bindEntryStatement(accountId, entryId, acquisitionId);
     await readRows(

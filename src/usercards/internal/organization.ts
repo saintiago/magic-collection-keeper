@@ -491,11 +491,6 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
       return inTransaction(
         sql,
         async (statements) => {
-          if (association.cardId !== null) {
-            await storePrintingReferences(statements, [
-              { printingId: association.targetId, cardId: association.cardId },
-            ]);
-          }
           const lock = lockTagStatement(accountId, association.tagId);
           await readRows(
             statements,
@@ -503,6 +498,11 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
             lock.parameters,
             'The tag could not be locked before storing the association.',
           );
+          if (association.cardId !== null) {
+            await storePrintingReferences(statements, [
+              { printingId: association.targetId, cardId: association.cardId },
+            ]);
+          }
           const insert = insertAssociationStatement(accountId, association);
           const rows = await readRows(
             statements,
@@ -532,11 +532,6 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
       return inTransaction(
         sql,
         async (statements) => {
-          if (correction.cardId !== null) {
-            await storePrintingReferences(statements, [
-              { printingId: correction.targetId, cardId: correction.cardId },
-            ]);
-          }
           const lock = lockAssociationTagStatement(accountId, correction.associationId);
           await readRows(
             statements,
@@ -544,6 +539,11 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
             lock.parameters,
             'The tag could not be locked before changing the association.',
           );
+          if (correction.cardId !== null) {
+            await storePrintingReferences(statements, [
+              { printingId: correction.targetId, cardId: correction.cardId },
+            ]);
+          }
           const update = correctAssociationStatement(accountId, correction);
           const rows = await readRows(
             statements,

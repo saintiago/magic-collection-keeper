@@ -187,111 +187,17 @@ function copyMatches(level: UserCardsResultLevel, target = 'entry.target_id'): s
   return `copy_reference.card_id = ${target}`;
 }
 
-function associationMatches(
-  level: UserCardsResultLevel,
-  target = 'entry.target_id',
-  association = 'candidate',
-): string {
-  if (level === 'copy') {
-    return `${association}.target_level = 'copy' and ${association}.target_id = ${target}`;
-  }
-  if (level === 'printing') {
-    return `((${association}.target_level = 'printing' and ${association}.target_id = ${target})
-      or (${association}.target_level = 'copy' and exists (
-        select 1 from usercards_current_query.copy as associated_copy
-         where associated_copy.account_id = ${association}.account_id
-           and associated_copy.copy_id = ${association}.target_id
-           and associated_copy.printing_id = ${target})))`;
-  }
-  return `((${association}.target_level = 'card' and ${association}.target_id = ${target})
-    or (${association}.target_level = 'printing' and exists (
-      select 1 from usercards_current_query.printing_reference as associated_reference
-       where associated_reference.printing_id = ${association}.target_id
-         and associated_reference.card_id = ${target}))
-    or (${association}.target_level = 'copy' and exists (
-      select 1
-        from usercards_current_query.copy as associated_copy
-        join usercards_current_query.printing_reference as associated_reference
-          on associated_reference.printing_id = associated_copy.printing_id
-       where associated_copy.account_id = ${association}.account_id
-         and associated_copy.copy_id = ${association}.target_id
-         and associated_reference.card_id = ${target})))`;
-}
-
-function identityCriterionSql(
-  level: UserCardsResultLevel,
-  references: readonly UserCardsReference[],
-  sql: SqlBuilder,
-): string {
-  const conditions = references.map((reference) => {
-    if (level === 'card') {
-      if (reference.kind === 'card') {
-        return `entry.target_id = ${sql.bind(reference.cardId)}`;
-      }
-      if (reference.kind === 'printing') {
-        return `exists (select 1 from usercards_current_query.printing_reference as selected_reference
-          where selected_reference.printing_id = ${sql.bind(reference.printingId)}
-            and selected_reference.card_id = entry.target_id)`;
-      }
-      return `exists (select 1 from usercards_current_query.copy as selected_copy
-        join usercards_current_query.printing_reference as selected_reference
-          on selected_reference.printing_id = selected_copy.printing_id
-       where selected_copy.account_id = :account_id
-         and selected_copy.copy_id = ${sql.bind(reference.copyId)}
-         and selected_reference.card_id = entry.target_id)`;
-    }
-    if (level === 'printing') {
-      if (reference.kind === 'printing') {
-        return `entry.target_id = ${sql.bind(reference.printingId)}`;
-      }
-      if (reference.kind === 'card') {
-        return `exists (select 1 from usercards_current_query.printing_reference as selected_reference
-          where selected_reference.printing_id = entry.target_id
-            and selected_reference.card_id = ${sql.bind(reference.cardId)})`;
-      }
-      return `exists (select 1 from usercards_current_query.copy as selected_copy
-        where selected_copy.account_id = :account_id
-          and selected_copy.copy_id = ${sql.bind(reference.copyId)}
-          and selected_copy.printing_id = entry.target_id)`;
-    }
-    if (reference.kind === 'copy') {
-      return `entry.target_id = ${sql.bind(reference.copyId)}`;
-    }
-    if (reference.kind === 'printing') {
-      return `exists (select 1 from usercards_current_query.copy as selected_copy
-        where selected_copy.account_id = :account_id
-          and selected_copy.copy_id = entry.target_id
-          and selected_copy.printing_id = ${sql.bind(reference.printingId)})`;
-    }
-    return `exists (select 1 from usercards_current_query.copy as selected_copy
-      join usercards_current_query.printing_reference as selected_reference
-        on selected_reference.printing_id = selected_copy.printing_id
-     where selected_copy.account_id = :account_id
-       and selected_copy.copy_id = entry.target_id
-       and selected_reference.card_id = ${sql.bind(reference.cardId)})`;
-  });
-  return `(${conditions.join(' or ')})`;
-}
-
-function copyMatchesAssociation(association: string): string {
-  return `((${association}.target_level = 'card'
-      and ${association}.target_id = copy_reference.card_id)
-    or (${association}.target_level = 'printing'
-      and ${association}.target_id = copy.printing_id)
-    or (${association}.target_level = 'copy'
-      and ${association}.target_id = copy.copy_id))`;
-}
-
-function copyIdentityCriterionSql(
+/** All predicates bind to one scoped card/printing/copy before presentation grouping. */
+function memberIdentityCriterionSql(
   references: readonly UserCardsReference[],
   sql: SqlBuilder,
 ): string {
   const conditions = references.map((reference) => {
     if (reference.kind === 'card') {
-      return `copy_reference.card_id = ${sql.bind(reference.cardId)}`;
+      return `member.card_id = ${sql.bind(reference.cardId)}`;
     }
     if (reference.kind === 'printing') {
-      return `copy.printing_id = ${sql.bind(reference.printingId)}`;
+      return `matched_reference.printing_id = ${sql.bind(reference.printingId)}`;
     }
     return `copy.copy_id = ${sql.bind(reference.copyId)}`;
   });
@@ -352,34 +258,24 @@ function queryStatement(
         : 'member.copy_id';
 
   const conditions: string[] = [];
-  const copyCriteria: string[] = [];
-  const hasPhysicalCriteria = query.criteria.some(
-    (criterion) =>
-      criterion.kind === 'location' ||
-      criterion.kind === 'finish' ||
-      criterion.kind === 'condition',
-  );
+  const memberCriteria: string[] = [];
   for (const criterion of query.criteria) {
     switch (criterion.kind) {
       case 'owned':
         conditions.push(`entry.owned_copy_count ${criterion.value ? '>' : '='} 0`);
         break;
       case 'tag':
-        if (hasPhysicalCriteria) {
-          copyCriteria.push(`exists (select 1
-            from usercards_current_query.association as candidate
-           where candidate.account_id = copy.account_id
-             and candidate.tag_id = ${sql.bind(criterion.tagId)}
-             and ${copyMatchesAssociation('candidate')})`);
-        } else {
-          conditions.push(`exists (select 1 from usercards_current_query.association as candidate
-            where candidate.account_id = :account_id
-              and candidate.tag_id = ${sql.bind(criterion.tagId)}
-              and ${associationMatches(query.resultLevel)})`);
-        }
+        memberCriteria.push(`exists (select 1
+          from usercards_current_query.association as candidate
+         where candidate.account_id = :account_id
+           and candidate.tag_id = ${sql.bind(criterion.tagId)}
+           and ((candidate.target_level = 'card' and candidate.target_id = member.card_id)
+             or (candidate.target_level = 'printing'
+                 and candidate.target_id = matched_reference.printing_id)
+             or (candidate.target_level = 'copy' and candidate.target_id = copy.copy_id)))`);
         break;
       case 'location':
-        copyCriteria.push(`exists (select 1 from usercards_current_query.association as location_match
+        memberCriteria.push(`exists (select 1 from usercards_current_query.association as location_match
           where location_match.account_id = copy.account_id
             and location_match.target_level = 'copy'
             and location_match.tag_kind = 'location'
@@ -387,44 +283,34 @@ function queryStatement(
             and location_match.tag_id = ${sql.bind(criterion.tagId)})`);
         break;
       case 'finish':
-        copyCriteria.push(`copy.finish = ${sql.bind(criterion.finish)}`);
+        memberCriteria.push(`copy.finish = ${sql.bind(criterion.finish)}`);
         break;
       case 'condition':
-        copyCriteria.push(
+        memberCriteria.push(
           criterion.condition === null
-            ? 'copy.condition is null'
+            ? '(copy.copy_id is not null and copy.condition is null)'
             : `copy.condition = ${sql.bind(criterion.condition)}`,
         );
         break;
       case 'identity':
-        if (hasPhysicalCriteria) {
-          copyCriteria.push(copyIdentityCriterionSql(criterion.references, sql));
-        } else {
-          conditions.push(identityCriterionSql(query.resultLevel, criterion.references, sql));
-        }
+        memberCriteria.push(memberIdentityCriterionSql(criterion.references, sql));
         break;
     }
   }
-  if (copyCriteria.length > 0) {
-    const copyScope =
-      query.scope.kind === 'collection'
-        ? `exists (select 1 from usercards_current_query.association as scope_owned
-            where scope_owned.account_id = copy.account_id
-              and scope_owned.target_level = 'copy'
-              and scope_owned.tag_kind = 'owned'
-              and scope_owned.target_id = copy.copy_id)`
-        : `exists (select 1 from usercards_current_query.association as scope_association
-            where scope_association.account_id = copy.account_id
-              and scope_association.tag_id = ${sql.bind(query.scope.tagId)}
-              and ${copyMatchesAssociation('scope_association')})`;
+  if (memberCriteria.length > 0) {
+    // Nullable descendants retain planned intentions with no printing or physical copy. A scoped
+    // printing/copy stays fixed, so sibling identities cannot satisfy different predicates.
     conditions.push(`exists (select 1
-      from usercards_current_query.copy as copy
-      join usercards_current_query.printing_reference as copy_reference
-        on copy_reference.printing_id = copy.printing_id
-     where copy.account_id = :account_id
-       and ${copyMatches(query.resultLevel)}
-       and ${copyScope}
-       and ${copyCriteria.join('\n       and ')})`);
+      from scope_members as member
+      left join usercards_current_query.printing_reference as matched_reference
+        on matched_reference.card_id = member.card_id
+       and (member.printing_id is null or matched_reference.printing_id = member.printing_id)
+      left join usercards_current_query.copy as copy
+        on copy.account_id = :account_id
+       and copy.printing_id = matched_reference.printing_id
+       and (member.copy_id is null or copy.copy_id = member.copy_id)
+     where ${target} = entry.target_id
+       and ${memberCriteria.join('\n       and ')})`);
   }
   const where = conditions.length === 0 ? 'true' : conditions.join('\n    and ');
   const direction = query.ordering.direction === 'descending' ? 'desc' : 'asc';

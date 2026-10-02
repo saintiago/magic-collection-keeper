@@ -8,6 +8,7 @@ import {
   type PhysicalCopy,
   type TrustedUserContext,
   type UserCards,
+  type UserCardsQueryInput,
   USERCARDS_ACCOUNT_SCOPE_SQL,
   usercardsQueryGrants,
 } from '../../../src/usercards/index.js';
@@ -274,6 +275,136 @@ describe('usercards current private queries', () => {
     expect(refined.entries.map((entry) => entry.target)).toEqual(
       [boltFoil.copyId, boltNonfoil.copyId].sort().map((copyId) => ({ kind: 'copy', copyId })),
     );
+  });
+
+  it.each(['card', 'printing', 'copy'] as const)(
+    'correlates scope, tags and identities without physical filters at %s level',
+    async (resultLevel) => {
+      const outsideIdentity = {
+        kind: 'identity',
+        references: [{ kind: 'copy', copyId: boltNonfoil.copyId }],
+      } as const;
+      const requests: UserCardsQueryInput[] = [
+        { scope: { kind: 'tag', tagId: binderId }, resultLevel, criteria: [outsideIdentity] },
+        {
+          scope: { kind: 'collection' },
+          resultLevel,
+          criteria: [{ kind: 'tag', tagId: binderId }, outsideIdentity],
+        },
+        {
+          scope: { kind: 'tag', tagId: binderId },
+          resultLevel,
+          criteria: [{ kind: 'tag', tagId: boxId }],
+        },
+        {
+          scope: { kind: 'collection' },
+          resultLevel,
+          criteria: [
+            { kind: 'tag', tagId: binderId },
+            { kind: 'tag', tagId: boxId },
+          ],
+        },
+        {
+          scope: { kind: 'collection' },
+          resultLevel,
+          criteria: [
+            outsideIdentity,
+            {
+              kind: 'identity',
+              references: [{ kind: 'copy', copyId: boltFoil.copyId }],
+            },
+          ],
+        },
+      ];
+      for (const request of requests) {
+        expect(await userCards.query(alice, { ...request, pageSize: 1 })).toMatchObject({
+          entries: [],
+          totalCount: 0,
+          continuation: null,
+        });
+      }
+      const matching = await userCards.query(alice, {
+        scope: { kind: 'tag', tagId: binderId },
+        resultLevel,
+        criteria: [
+          { kind: 'tag', tagId: deckId },
+          { kind: 'identity', references: [{ kind: 'copy', copyId: boltFoil.copyId }] },
+        ],
+      });
+      expect(matching.totalCount).toBe(1);
+      expect(matching.entries).toHaveLength(1);
+    },
+  );
+
+  it('retains printing correlation and copy-free intentions through tag and identity filters', async () => {
+    const otherPrinting = { ...boltM11, printingId: 'printing-bolt-other' };
+    await publishCatalog(database, {
+      revisionId: 'revision-2',
+      cards: [bolt, opt, planned],
+      printings: [boltM11, otherPrinting, optDom],
+    });
+    const wishlist = (await userCards.createTag(alice, { kind: 'wishlist', label: 'Wish' })).tag;
+    const otherWishlist = (await userCards.createTag(alice, { kind: 'wishlist', label: 'Other' }))
+      .tag;
+    await userCards.createAssociation(alice, {
+      tagId: wishlist.tagId,
+      targetLevel: 'printing',
+      targetId: otherPrinting.printingId,
+      quantity: 3,
+    });
+    await userCards.createAssociation(alice, {
+      tagId: otherWishlist.tagId,
+      targetLevel: 'printing',
+      targetId: boltM11.printingId,
+      quantity: 2,
+    });
+    for (const resultLevel of ['card', 'printing'] as const) {
+      for (const criteria of [
+        [{ kind: 'identity', references: [{ kind: 'printing', printingId: boltM11.printingId }] }],
+        [{ kind: 'tag', tagId: otherWishlist.tagId }],
+      ] satisfies UserCardsQueryInput['criteria'][]) {
+        expect(
+          await userCards.query(alice, {
+            scope: { kind: 'tag', tagId: wishlist.tagId },
+            resultLevel,
+            criteria,
+          }),
+        ).toMatchObject({ entries: [], totalCount: 0, continuation: null });
+      }
+      const matching = await userCards.query(alice, {
+        scope: { kind: 'tag', tagId: wishlist.tagId },
+        resultLevel,
+        criteria: [
+          { kind: 'tag', tagId: wishlist.tagId },
+          {
+            kind: 'identity',
+            references: [{ kind: 'printing', printingId: otherPrinting.printingId }],
+          },
+        ],
+      });
+      expect(matching.entries).toMatchObject([{ intendedQuantity: 3 }]);
+      expect(matching.totalCount).toBe(1);
+      // An unknown physical condition still needs a physical copy.
+      expect(
+        (
+          await userCards.query(alice, {
+            scope: { kind: 'tag', tagId: wishlist.tagId },
+            resultLevel,
+            criteria: [{ kind: 'condition', condition: null }],
+          })
+        ).totalCount,
+      ).toBe(0);
+    }
+    const plannedResult = await userCards.query(alice, {
+      scope: { kind: 'tag', tagId: deckId },
+      resultLevel: 'card',
+      criteria: [
+        { kind: 'tag', tagId: deckId },
+        { kind: 'owned', value: false },
+        { kind: 'identity', references: [{ kind: 'card', cardId: planned.cardId }] },
+      ],
+    });
+    expect(plannedResult.entries).toMatchObject([{ intendedQuantity: 3, ownedCopyCount: 0 }]);
   });
 
   it('binds continuation to account, request and the account revision only', async () => {

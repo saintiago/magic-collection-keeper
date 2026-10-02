@@ -45,22 +45,29 @@ export async function storePrintingReferences(
       return `(:printing_id_${index}, :card_id_${index})`;
     })
     .join(',\n       ');
-  const rows = await readRows(
+  // Existing mappings are immutable: DO NOTHING avoids locking them until commit. Insert in
+  // stable order for overlapping batches. Callers acquire domain locks before recording refs.
+  await readRows(
     statements,
-    `with requested (printing_id, card_id) as (values ${values}),
-stored as (
-  insert into usercards_private.printing_reference (printing_id, card_id)
-  select printing_id, card_id from requested
-  on conflict (printing_id) do update
-    set card_id = printing_reference.card_id
-  returning printing_id, card_id
-)
-select requested.printing_id
-  from requested
-  join stored
-    on stored.printing_id = requested.printing_id and stored.card_id = requested.card_id`,
+    `insert into usercards_private.printing_reference (printing_id, card_id)
+  select printing_id, card_id from (values ${values}) as requested (printing_id, card_id)
+  order by printing_id
+  on conflict (printing_id) do nothing
+  returning printing_id`,
     parameters,
     'The stable printing references could not be stored.',
+  );
+  // A separate READ COMMITTED statement sees a concurrent winner after the insert waits. A
+  // SELECT in the insert's CTE would retain the older snapshot and falsely report a mismatch.
+  const rows = await readRows(
+    statements,
+    `with requested (printing_id, card_id) as (values ${values})
+select requested.printing_id
+  from requested
+  join usercards_private.printing_reference as stored
+    on stored.printing_id = requested.printing_id and stored.card_id = requested.card_id`,
+    parameters,
+    'The stable printing references could not be verified.',
   );
   if (rows.length !== distinct.size) {
     throw new UserCardsError(

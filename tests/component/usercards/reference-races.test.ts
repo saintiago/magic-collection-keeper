@@ -11,6 +11,7 @@ import {
   createUserCards,
   usercardsSchemaSql,
   type TrustedUserContext,
+  type UserCardsSqlTransactor,
 } from '../../../src/usercards/index.js';
 import {
   startPostgresServer,
@@ -32,6 +33,8 @@ const printing: PrintingRecord = {
   images: { small: null, normal: null, large: null, artCrop: null },
 };
 
+const knownPrintings = new Map([[printing.printingId, printing]]);
+
 const catalog: Catalog = {
   async resolve(references) {
     return {
@@ -43,12 +46,11 @@ const catalog: Catalog = {
       },
       cards: new Map(),
       printings: new Map(
-        references
-          .filter(
-            (reference) =>
-              reference.kind === 'printing' && reference.printingId === printing.printingId,
-          )
-          .map(() => [printing.printingId, printing]),
+        references.flatMap((reference) => {
+          const found =
+            reference.kind === 'printing' ? knownPrintings.get(reference.printingId) : undefined;
+          return found === undefined ? [] : [[found.printingId, found] as const];
+        }),
       ),
       missing: [],
     };
@@ -65,6 +67,47 @@ function within<T>(promise: Promise<T>, message: string): Promise<T> {
       setTimeout(() => reject(new Error(message)), 10_000);
     }),
   ]);
+}
+
+function isTagLock(statement: string): boolean {
+  return (
+    statement.includes('insert into usercards_private.tag') ||
+    (statement.includes('from usercards_private.tag') && statement.includes('for update'))
+  );
+}
+
+function signal() {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function pauseAfterTagLock(connection: PostgresConnection) {
+  const reached = signal();
+  const released = signal();
+  const base = connection.transactor();
+  let paused = false;
+  const sql: UserCardsSqlTransactor = {
+    query: base.query,
+    transaction(work) {
+      return base.transaction((statements) =>
+        work({
+          async query(statement, parameters) {
+            const rows = await statements.query(statement, parameters);
+            if (!paused && isTagLock(statement)) {
+              paused = true;
+              reached.resolve();
+              await released.promise;
+            }
+            return rows;
+          },
+        }),
+      );
+    },
+  };
+  return { sql, reached: reached.promise, release: released.resolve };
 }
 
 describe('usercards stable reference races', () => {
@@ -179,4 +222,129 @@ describe('usercards stable reference races', () => {
       contender.query('select copy_id from usercards_private.copy'),
     ).resolves.toHaveLength(2);
   }, 30_000);
+  it.for([
+    ['ownership', false],
+    ['ownership', true],
+    ['association creation', false],
+    ['association creation', true],
+    ['association correction', false],
+    ['association correction', true],
+  ] as const)(
+    'serializes %s with confirmation (prepared reference: %s)',
+    { timeout: 30_000 },
+    async ([operation, prepared], context) => {
+      if (unavailable !== '') {
+        context.skip(`A real PostgreSQL server is unavailable: ${unavailable}`);
+        return;
+      }
+      if (holder === undefined || contender === undefined) throw new Error('Missing connections.');
+      const id = `${operation}-${prepared}`;
+      const account = { accountId: id };
+      const selected = { ...printing, printingId: id };
+      knownPrintings.set(selected.printingId, selected);
+      const cards = createUserCards({ sql: holder.transactor(), catalog });
+      // Establish the domain tag without preparing the printing under test.
+      await cards.createCopies(account, {
+        printingId: printing.printingId,
+        finish: 'nonfoil',
+        condition: null,
+        quantity: 1,
+      });
+      const tag = (await cards.createTag(account, { kind: 'wishlist', label: 'Planned' })).tag;
+      const existing =
+        operation === 'association correction'
+          ? (
+              await cards.createAssociation(account, {
+                tagId: tag.tagId,
+                targetLevel: 'printing',
+                targetId: printing.printingId,
+                quantity: 1,
+              })
+            ).association
+          : null;
+      if (prepared) {
+        await cards.createCopies(account, {
+          printingId: selected.printingId,
+          finish: 'nonfoil',
+          condition: null,
+          quantity: 1,
+        });
+      }
+      await cards.stageImportEntries(account, {
+        sessionId: id,
+        source: { kind: 'text', id },
+        entries: [{ entryId: id, printingId: selected.printingId, finish: 'nonfoil', quantity: 1 }],
+      });
+      const confirmation = {
+        operationId: id,
+        sessionId: id,
+        destination:
+          operation === 'ownership'
+            ? { kind: 'ownership' as const }
+            : { kind: 'tag' as const, tagId: tag.tagId },
+        entries: [{ entryId: id, expectedRevision: 1 }],
+      };
+      const held = pauseAfterTagLock(holder);
+      const holdingCards = createUserCards({ sql: held.sql, catalog });
+      const waitingForTag = signal();
+      const competingCards = createUserCards({
+        sql: contender.transactor({
+          onStatement(statement) {
+            if (isTagLock(statement)) waitingForTag.resolve();
+          },
+        }),
+        catalog,
+      });
+      const first =
+        operation === 'ownership'
+          ? holdingCards.createCopies(account, {
+              printingId: selected.printingId,
+              finish: 'nonfoil',
+              condition: null,
+              quantity: 1,
+            })
+          : holdingCards.confirmImport(account, confirmation);
+      await within(held.reached, 'The first writer did not acquire its domain tag.');
+      const second =
+        operation === 'ownership'
+          ? competingCards.confirmImport(account, confirmation)
+          : existing === null
+            ? competingCards.createAssociation(account, {
+                tagId: tag.tagId,
+                targetLevel: 'printing',
+                targetId: selected.printingId,
+                quantity: 1,
+              })
+            : competingCards.changeAssociation(account, {
+                associationId: existing.associationId,
+                expectedRevision: existing.revision,
+                targetLevel: 'printing',
+                targetId: selected.printingId,
+                quantity: 1,
+              });
+      const outcomes = Promise.allSettled([first, second]);
+      try {
+        await within(waitingForTag.promise, 'The competing writer did not request its domain tag.');
+      } finally {
+        held.release();
+      }
+      const results = await within(outcomes, 'The competing mutations did not finish.');
+      expect(results[0]?.status).toBe('fulfilled');
+      if (operation === 'ownership') {
+        expect(results[1]?.status).toBe('fulfilled');
+      } else {
+        // Confirmation won this tag/printing. The competing association correctly reports the
+        // duplicate target as a domain conflict, never database unavailability or a deadlock.
+        expect(results[1]).toMatchObject({ status: 'rejected', reason: { code: 'conflict' } });
+      }
+      expect(
+        await contender.query(
+          'select card_id from usercards_private.printing_reference where printing_id = $1',
+          [selected.printingId],
+        ),
+      ).toEqual([{ card_id: selected.cardId }]);
+      const receipt = await competingCards.recoverImportOperation(account, id);
+      expect(receipt.outcome).toBe('recorded');
+    },
+  );
 });
