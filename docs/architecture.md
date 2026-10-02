@@ -223,3 +223,14 @@ private mounted work, subscriptions and retained state before binding the new ac
 write may finish server-side; its receipt stays with the original account. Authentication and
 transport stay in Application, domain operation/recovery semantics in UserCards, loading policy in
 CardList, camera workflow in Capture and presentation in UserInterface.
+
+## Deployment composition
+
+**ARCH-012**
+
+The [CDK deployment design](deployment.md) defines independently deployed browser, Catalog-serving,
+UserCards, Recognition and Catalog-ingestion units, plus shared foundation and gateway stacks.
+Application supplies a composition entry point per runtime. Deployment boundaries do not introduce
+new domain components. UserCards consumes Catalog resolution through its public service contract;
+ordinary private reads remain owner-local. Compatible changes preserve consumer deployments.
+[CI/CD](ci-cd.md) defines their validation and selective deployment.

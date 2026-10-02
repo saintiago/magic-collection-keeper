@@ -1,8 +1,11 @@
 # Rebuild infrastructure
 
-This document describes the approved deployment target. Source implementation and currently deployed
-resources can lag that target. Deployments, data migration and resource deletion are separately
-explicit actions. CI and automatic deployment remain disabled; no scheduled indexing is required.
+The [CDK deployment design](../docs/deployment.md) is the target stack composition, with
+[separate GitHub Actions deployment workflows](../docs/ci-cd.md). This document describes the
+current two-template implementation and its transitional operating procedures. CI and automatic
+deployment remain disabled until that design is implemented and activated. The current environment
+is considered test; production promotion is manual. Data migration, resource moves and deletion
+remain separately explicit actions; no scheduled indexing is required.
 
 ## Stacks and ownership
 

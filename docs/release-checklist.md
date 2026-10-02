@@ -6,6 +6,12 @@ been established for that release and what has not, with source completion, depl
 production acceptance kept separate. Preparation never authorizes a deployment, a collection
 migration, access to owner data or deletion of the previous environment.
 
+The records and two-stack procedures below describe the current packaging/deployment tooling.
+The granular target uses per-stack artifact identities and source revisions, with an environment
+record of the deployed combination ([CI/CD](ci-cd.md#selecting-and-executing-deployment)).
+Migrate the evidence tooling with that implementation; do not require all unchanged components
+to adopt the new release's source revision.
+
 ## Release records
 
 | Record                                | Written by                                                                     | Contents                                                                                                                                                    |
