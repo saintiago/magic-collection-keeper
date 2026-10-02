@@ -1,5 +1,14 @@
 /** Local provider implementations for the mocked-app half of the storybook. */
 
+import {
+  parseCatalogQuery,
+  readCatalogCriterion,
+  CatalogError,
+  type CatalogFilter,
+} from '../src/catalog/browser.js';
+import type { CardListBrowser } from '../src/card-list/index.js';
+import { createLocalCardList } from './card-list.js';
+
 import type {
   CardRecord,
   CatalogEntry,
@@ -85,6 +94,7 @@ const printings: readonly PrintingRecord[] = [
 ];
 
 export interface LocalProviders {
+  readonly cardList: CardListBrowser;
   readonly catalog: CatalogService;
   readonly userCards: UserCardsOperations;
 }
@@ -123,6 +133,8 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
   let tagSequence = 2;
   let associationSequence = 1;
   let copySequence = 1;
+  const tagsRead = sharedRead(progression);
+  const sessionsRead = sharedRead(progression);
   const receipts = new Map<string, import('../src/usercards/index.js').ImportReceipt>();
   const changeEntry = (entryId: string, change: (entry: ImportEntry) => ImportEntry) => {
     const index = entries.findIndex((entry) => entry.entryId === entryId);
@@ -145,7 +157,16 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
       return progression.wait(
         'Loading catalog results',
         () => {
-          const matchingPrintings = printings.filter((printing) => catalogMatches(input, printing));
+          const filters: CatalogFilter[] = [];
+          if (input.query?.trim()) filters.push(parseCatalogQuery(input.query));
+          for (const value of input.criteria ?? []) {
+            const criterion = readCatalogCriterion(value);
+            if (!criterion.ok) throw new CatalogError('invalid-request', criterion.problem);
+            filters.push({ kind: 'criterion', criterion: criterion.criterion });
+          }
+          const matchingPrintings = printings.filter((printing) =>
+            filters.every((filter) => catalogMatches(filter, printing)),
+          );
           const matchingCards = new Set(matchingPrintings.map((printing) => printing.cardId));
           const result: CatalogEntry[] =
             input.resultLevel === 'printing'
@@ -192,16 +213,23 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
         signal,
       );
     },
-    async readPhysicalDetail(copyId) {
-      const copy = copies.get(copyId);
-      if (copy === undefined) throw new Error('The local copy does not exist.');
-      return {
-        copy,
-        memberships: associations.filter(
-          (association) => association.targetLevel === 'copy' && association.targetId === copyId,
-        ),
-        privateRevision: String(privateRevision),
-      };
+    readPhysicalDetail(copyId, signal) {
+      return progression.wait(
+        'Loading copy details',
+        () => {
+          const copy = copies.get(copyId);
+          if (copy === undefined) throw new Error('The local copy does not exist.');
+          return {
+            copy,
+            memberships: associations.filter(
+              (association) =>
+                association.targetLevel === 'copy' && association.targetId === copyId,
+            ),
+            privateRevision: String(privateRevision),
+          };
+        },
+        signal,
+      );
     },
     async readCopies(copyIds) {
       return {
@@ -231,7 +259,7 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
       );
     },
     listTags(_options, signal) {
-      return progression.wait(
+      return tagsRead(
         'Loading tags',
         () => ({
           privateRevision: String(privateRevision),
@@ -409,7 +437,7 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
       );
     },
     listImportSessions(_options, signal) {
-      return progression.wait(
+      return sessionsRead(
         'Loading pending imports',
         () => ({
           privateRevision: String(privateRevision),
@@ -742,9 +770,39 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
       ),
   };
 
-  return {
-    catalog,
-    userCards: createUserCardsOperations({ client, storage: null }),
+  const userCards = createUserCardsOperations({
+    client: {
+      ...client,
+      readCopies: (ids, signal) =>
+        progression.wait('Loading physical copies', () => client.readCopies(ids, signal), signal),
+    },
+    storage: null,
+  });
+  // CardList's visible sources own their gates; dependent record resolution is immediate.
+  const cardList = createLocalCardList(
+    {
+      catalog,
+      userCards: {
+        account: (accountId) => ({
+          ...userCards.account(accountId),
+          readCopies: client.readCopies,
+        }),
+      },
+    },
+    progression,
+  );
+  return { catalog, userCards, cardList };
+}
+
+/** Identical reads within one view share its pending completion, including repeated refreshes. */
+function sharedRead(progression: ManualProgression) {
+  const reads = new Map<AbortSignal | undefined, Promise<unknown>>();
+  return <Value>(label: string, complete: () => Value, signal?: AbortSignal): Promise<Value> => {
+    const pending = reads.get(signal);
+    if (pending !== undefined) return pending as Promise<Value>;
+    const read = progression.wait(label, complete, signal).finally(() => reads.delete(signal));
+    reads.set(signal, read);
+    return read;
   };
 }
 
@@ -758,52 +816,43 @@ function catalogEntry(printing: PrintingRecord): CatalogEntry {
   };
 }
 
-function catalogMatches(
-  input: import('../src/catalog/index.js').CatalogQueryInput,
-  printing: PrintingRecord,
-): boolean {
+function catalogMatches(filter: CatalogFilter, printing: PrintingRecord): boolean {
+  switch (filter.kind) {
+    case 'and':
+      return filter.operands.every((operand) => catalogMatches(operand, printing));
+    case 'or':
+      return filter.operands.some((operand) => catalogMatches(operand, printing));
+    case 'not':
+      return !catalogMatches(filter.operand, printing);
+    case 'criterion':
+      break;
+  }
+  const criterion = filter.criterion;
   const card = cards.find((candidate) => candidate.cardId === printing.cardId)!;
-  const searchable = [
-    card.name,
-    ...card.names.map((name) => name.name),
-    card.rulesText ?? '',
-    card.typeLine ?? '',
-    printing.edition,
-    printing.collectorNumber,
-    printing.language,
-  ]
-    .join(' ')
-    .toLowerCase();
-  const query = input.query?.trim().toLowerCase() ?? '';
-  return (
-    (query === '' || query.split(/\s+/u).every((part) => searchable.includes(part))) &&
-    (input.criteria ?? []).every((criterion) => {
-      const includes = (value: string, wanted: string) =>
-        value.toLowerCase().includes(wanted.toLowerCase());
-      switch (criterion.kind) {
-        case 'name':
-          return [card.name, ...card.names.map((name) => name.name)].some((name) =>
-            includes(name, criterion.text),
-          );
-        case 'rulesText':
-          return includes(card.rulesText ?? '', criterion.text);
-        case 'type':
-          return includes(card.typeLine ?? '', criterion.text);
-        case 'set':
-          return printing.edition.toLowerCase() === criterion.edition.toLowerCase();
-        case 'language':
-          return printing.language === criterion.language;
-        case 'finish':
-          return printing.finishes.includes(criterion.finish);
-        case 'manaValue':
-          return numericComparison(card.manaValue ?? 0, criterion.value, criterion.comparison);
-        case 'color':
-          return setComparison(card.colors, criterion.colors, criterion.comparison);
-        case 'colorIdentity':
-          return setComparison(card.colorIdentity, criterion.colors, criterion.comparison);
-      }
-    })
-  );
+  const includes = (value: string, wanted: string) =>
+    value.toLowerCase().includes(wanted.toLowerCase());
+  switch (criterion.kind) {
+    case 'name':
+      return [card.name, ...card.names.map((name) => name.name)].some((name) =>
+        includes(name, criterion.text),
+      );
+    case 'rulesText':
+      return includes(card.rulesText ?? '', criterion.text);
+    case 'type':
+      return includes(card.typeLine ?? '', criterion.text);
+    case 'set':
+      return printing.edition.toLowerCase() === criterion.edition.toLowerCase();
+    case 'language':
+      return printing.language === criterion.language;
+    case 'finish':
+      return printing.finishes.includes(criterion.finish);
+    case 'manaValue':
+      return numericComparison(card.manaValue ?? 0, criterion.value, criterion.comparison);
+    case 'color':
+      return setComparison(card.colors, criterion.colors, criterion.comparison);
+    case 'colorIdentity':
+      return setComparison(card.colorIdentity, criterion.colors, criterion.comparison);
+  }
 }
 
 function numericComparison(left: number, right: number, comparison: string): boolean {
@@ -866,6 +915,7 @@ function privateQuery(
   const targets = privateTargets(input.resultLevel, copies, associations).filter((target) => {
     const related = associations.filter((item) => associationMatches(target, item, copies));
     const owned = copiesFor(target, copies);
+    if (input.scope.kind === 'collection' && owned.length === 0) return false;
     const scopeTagId = input.scope.kind === 'tag' ? input.scope.tagId : null;
     if (scopeTagId !== null && !related.some((item) => item.tagId === scopeTagId)) return false;
     return (input.criteria ?? []).every((criterion) => {

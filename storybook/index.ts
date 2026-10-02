@@ -7,7 +7,6 @@ import type {
   CaptureBrowserDevice,
   CaptureSnapshot,
 } from '../src/capture/index.js';
-import { createCardListBrowser } from '../src/card-list/index.js';
 import {
   createUserInterface,
   type UiAccount,
@@ -36,7 +35,7 @@ if (!(root instanceof HTMLElement)) throw new Error('The storybook root is missi
 
 const progression = new ManualProgression();
 const providers = createLocalProviders(progression);
-const cardList = createCardListBrowser(providers);
+const cardList = providers.cardList;
 const identity = fixedIdentity();
 const request = localRequest();
 const capture: CaptureBrowser = {
@@ -107,19 +106,6 @@ progression.subscribe((stage) => {
     stage === null ? 'No stage is waiting.' : `Waiting: ${stage.label}. Press Space to continue.`;
 });
 progression.installKeyboard(window);
-window.addEventListener('popstate', () => progression.cancelAll(), { capture: true });
-window.addEventListener('hashchange', () => progression.cancelAll(), { capture: true });
-workspace.addEventListener(
-  'click',
-  (event) => {
-    const target = event.target;
-    if (target instanceof Element && target.closest('.mocked-app a') !== null) {
-      progression.cancelAll();
-    }
-  },
-  { capture: true },
-);
-workspace.addEventListener('submit', () => progression.cancelAll(), { capture: true });
 
 globalThis.keeperStorybook = {
   get stage() {
@@ -237,6 +223,7 @@ function inspectableCapture(
   const listeners = new Set<(value: CaptureSnapshot) => void>();
   let disposed = false;
   let startController: AbortController | null = null;
+  let eventSequence = 0;
   const report = (): void => {
     for (const listener of listeners) listener(snapshot);
   };
@@ -301,7 +288,7 @@ function inspectableCapture(
             ...snapshot.events,
             {
               kind: 'accepted',
-              sequence: 1,
+              sequence: ++eventSequence,
               captureId: 'local-capture-1',
               attempt: 1,
               cue: 'accepted',
@@ -325,7 +312,7 @@ function inspectableCapture(
           ...snapshot.events,
           {
             kind: 'unavailable',
-            sequence: 1,
+            sequence: ++eventSequence,
             captureId: 'local-capture-1',
             attempt: 1,
             cue: 'error',
