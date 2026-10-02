@@ -48,21 +48,16 @@ export async function storePrintingReferences(
   const rows = await readRows(
     statements,
     `with requested (printing_id, card_id) as (values ${values}),
-inserted as (
+stored as (
   insert into usercards_private.printing_reference (printing_id, card_id)
   select printing_id, card_id from requested
-  on conflict (printing_id) do nothing
+  on conflict (printing_id) do update
+    set card_id = printing_reference.card_id
   returning printing_id, card_id
-), resolved as (
-  select printing_id, card_id from inserted
-  union all
-  select stored.printing_id, stored.card_id
-    from usercards_private.printing_reference as stored
-   where not exists (select 1 from inserted where inserted.printing_id = stored.printing_id)
 )
 select requested.printing_id
   from requested
-  join resolved as stored
+  join stored
     on stored.printing_id = requested.printing_id and stored.card_id = requested.card_id`,
     parameters,
     'The stable printing references could not be stored.',

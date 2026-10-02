@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { finishes } from '../../catalog/index.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';
-import type { UserCardsSqlExecutor, UserCardsSqlValue } from './executor.js';
+import type { UserCardsSqlTransactor, UserCardsSqlValue } from './executor.js';
 import { copyConditions, type TrustedUserContext } from './model.js';
 import {
   USERCARDS_QUERY_LIMITS,
@@ -31,7 +31,8 @@ import {
   copyFromRow,
   copyJsonSchema,
 } from './rows.js';
-import { groupRows, parsePayload, readRows, revisionFromPayload } from './sql.js';
+import { USERCARDS_ACCOUNT_SCOPE_SQL } from './schema.js';
+import { groupRows, inTransaction, parsePayload, readRows, revisionFromPayload } from './sql.js';
 
 const identifier = z.string().min(1).max(200);
 const referenceSchema = z.discriminatedUnion('kind', [
@@ -197,20 +198,20 @@ function associationMatches(
   if (level === 'printing') {
     return `((${association}.target_level = 'printing' and ${association}.target_id = ${target})
       or (${association}.target_level = 'copy' and exists (
-        select 1 from usercards_private.copy as associated_copy
+        select 1 from usercards_current_query.copy as associated_copy
          where associated_copy.account_id = ${association}.account_id
            and associated_copy.copy_id = ${association}.target_id
            and associated_copy.printing_id = ${target})))`;
   }
   return `((${association}.target_level = 'card' and ${association}.target_id = ${target})
     or (${association}.target_level = 'printing' and exists (
-      select 1 from usercards_private.printing_reference as associated_reference
+      select 1 from usercards_current_query.printing_reference as associated_reference
        where associated_reference.printing_id = ${association}.target_id
          and associated_reference.card_id = ${target}))
     or (${association}.target_level = 'copy' and exists (
       select 1
-        from usercards_private.copy as associated_copy
-        join usercards_private.printing_reference as associated_reference
+        from usercards_current_query.copy as associated_copy
+        join usercards_current_query.printing_reference as associated_reference
           on associated_reference.printing_id = associated_copy.printing_id
        where associated_copy.account_id = ${association}.account_id
          and associated_copy.copy_id = ${association}.target_id
@@ -228,12 +229,12 @@ function identityCriterionSql(
         return `entry.target_id = ${sql.bind(reference.cardId)}`;
       }
       if (reference.kind === 'printing') {
-        return `exists (select 1 from usercards_private.printing_reference as selected_reference
+        return `exists (select 1 from usercards_current_query.printing_reference as selected_reference
           where selected_reference.printing_id = ${sql.bind(reference.printingId)}
             and selected_reference.card_id = entry.target_id)`;
       }
-      return `exists (select 1 from usercards_private.copy as selected_copy
-        join usercards_private.printing_reference as selected_reference
+      return `exists (select 1 from usercards_current_query.copy as selected_copy
+        join usercards_current_query.printing_reference as selected_reference
           on selected_reference.printing_id = selected_copy.printing_id
        where selected_copy.account_id = :account_id
          and selected_copy.copy_id = ${sql.bind(reference.copyId)}
@@ -244,11 +245,11 @@ function identityCriterionSql(
         return `entry.target_id = ${sql.bind(reference.printingId)}`;
       }
       if (reference.kind === 'card') {
-        return `exists (select 1 from usercards_private.printing_reference as selected_reference
+        return `exists (select 1 from usercards_current_query.printing_reference as selected_reference
           where selected_reference.printing_id = entry.target_id
             and selected_reference.card_id = ${sql.bind(reference.cardId)})`;
       }
-      return `exists (select 1 from usercards_private.copy as selected_copy
+      return `exists (select 1 from usercards_current_query.copy as selected_copy
         where selected_copy.account_id = :account_id
           and selected_copy.copy_id = ${sql.bind(reference.copyId)}
           and selected_copy.printing_id = entry.target_id)`;
@@ -257,17 +258,42 @@ function identityCriterionSql(
       return `entry.target_id = ${sql.bind(reference.copyId)}`;
     }
     if (reference.kind === 'printing') {
-      return `exists (select 1 from usercards_private.copy as selected_copy
+      return `exists (select 1 from usercards_current_query.copy as selected_copy
         where selected_copy.account_id = :account_id
           and selected_copy.copy_id = entry.target_id
           and selected_copy.printing_id = ${sql.bind(reference.printingId)})`;
     }
-    return `exists (select 1 from usercards_private.copy as selected_copy
-      join usercards_private.printing_reference as selected_reference
+    return `exists (select 1 from usercards_current_query.copy as selected_copy
+      join usercards_current_query.printing_reference as selected_reference
         on selected_reference.printing_id = selected_copy.printing_id
      where selected_copy.account_id = :account_id
        and selected_copy.copy_id = entry.target_id
        and selected_reference.card_id = ${sql.bind(reference.cardId)})`;
+  });
+  return `(${conditions.join(' or ')})`;
+}
+
+function copyMatchesAssociation(association: string): string {
+  return `((${association}.target_level = 'card'
+      and ${association}.target_id = copy_reference.card_id)
+    or (${association}.target_level = 'printing'
+      and ${association}.target_id = copy.printing_id)
+    or (${association}.target_level = 'copy'
+      and ${association}.target_id = copy.copy_id))`;
+}
+
+function copyIdentityCriterionSql(
+  references: readonly UserCardsReference[],
+  sql: SqlBuilder,
+): string {
+  const conditions = references.map((reference) => {
+    if (reference.kind === 'card') {
+      return `copy_reference.card_id = ${sql.bind(reference.cardId)}`;
+    }
+    if (reference.kind === 'printing') {
+      return `copy.printing_id = ${sql.bind(reference.printingId)}`;
+    }
+    return `copy.copy_id = ${sql.bind(reference.copyId)}`;
   });
   return `(${conditions.join(' or ')})`;
 }
@@ -292,10 +318,10 @@ function queryStatement(
     query.scope.kind === 'collection'
       ? `select 'copy'::text as member_level, owned.association_id,
           reference.card_id, copy.printing_id, copy.copy_id, null::integer as quantity
-         from usercards_private.copy as copy
-         join usercards_private.printing_reference as reference
+         from usercards_current_query.copy as copy
+         join usercards_current_query.printing_reference as reference
            on reference.printing_id = copy.printing_id
-         join usercards_private.association as owned
+         join usercards_current_query.association as owned
            on owned.account_id = copy.account_id and owned.target_level = 'copy'
           and owned.tag_kind = 'owned' and owned.target_id = copy.copy_id
         where copy.account_id = :account_id`
@@ -309,11 +335,11 @@ function queryStatement(
             when 'copy' then copy.printing_id else null end as printing_id,
           case association.target_level when 'copy' then association.target_id else null end as copy_id,
           association.quantity
-         from usercards_private.association as association
-         left join usercards_private.copy as copy
+         from usercards_current_query.association as association
+         left join usercards_current_query.copy as copy
            on association.target_level = 'copy' and copy.account_id = association.account_id
           and copy.copy_id = association.target_id
-         left join usercards_private.printing_reference as reference
+         left join usercards_current_query.printing_reference as reference
            on reference.printing_id = case association.target_level
              when 'printing' then association.target_id when 'copy' then copy.printing_id else null end
         where association.account_id = :account_id
@@ -327,19 +353,33 @@ function queryStatement(
 
   const conditions: string[] = [];
   const copyCriteria: string[] = [];
+  const hasPhysicalCriteria = query.criteria.some(
+    (criterion) =>
+      criterion.kind === 'location' ||
+      criterion.kind === 'finish' ||
+      criterion.kind === 'condition',
+  );
   for (const criterion of query.criteria) {
     switch (criterion.kind) {
       case 'owned':
         conditions.push(`entry.owned_copy_count ${criterion.value ? '>' : '='} 0`);
         break;
       case 'tag':
-        conditions.push(`exists (select 1 from usercards_private.association as candidate
-          where candidate.account_id = :account_id
-            and candidate.tag_id = ${sql.bind(criterion.tagId)}
-            and ${associationMatches(query.resultLevel)})`);
+        if (hasPhysicalCriteria) {
+          copyCriteria.push(`exists (select 1
+            from usercards_current_query.association as candidate
+           where candidate.account_id = copy.account_id
+             and candidate.tag_id = ${sql.bind(criterion.tagId)}
+             and ${copyMatchesAssociation('candidate')})`);
+        } else {
+          conditions.push(`exists (select 1 from usercards_current_query.association as candidate
+            where candidate.account_id = :account_id
+              and candidate.tag_id = ${sql.bind(criterion.tagId)}
+              and ${associationMatches(query.resultLevel)})`);
+        }
         break;
       case 'location':
-        copyCriteria.push(`exists (select 1 from usercards_private.association as location_match
+        copyCriteria.push(`exists (select 1 from usercards_current_query.association as location_match
           where location_match.account_id = copy.account_id
             and location_match.target_level = 'copy'
             and location_match.tag_kind = 'location'
@@ -357,17 +397,33 @@ function queryStatement(
         );
         break;
       case 'identity':
-        conditions.push(identityCriterionSql(query.resultLevel, criterion.references, sql));
+        if (hasPhysicalCriteria) {
+          copyCriteria.push(copyIdentityCriterionSql(criterion.references, sql));
+        } else {
+          conditions.push(identityCriterionSql(query.resultLevel, criterion.references, sql));
+        }
         break;
     }
   }
   if (copyCriteria.length > 0) {
+    const copyScope =
+      query.scope.kind === 'collection'
+        ? `exists (select 1 from usercards_current_query.association as scope_owned
+            where scope_owned.account_id = copy.account_id
+              and scope_owned.target_level = 'copy'
+              and scope_owned.tag_kind = 'owned'
+              and scope_owned.target_id = copy.copy_id)`
+        : `exists (select 1 from usercards_current_query.association as scope_association
+            where scope_association.account_id = copy.account_id
+              and scope_association.tag_id = ${sql.bind(query.scope.tagId)}
+              and ${copyMatchesAssociation('scope_association')})`;
     conditions.push(`exists (select 1
-      from usercards_private.copy as copy
-      join usercards_private.printing_reference as copy_reference
+      from usercards_current_query.copy as copy
+      join usercards_current_query.printing_reference as copy_reference
         on copy_reference.printing_id = copy.printing_id
      where copy.account_id = :account_id
        and ${copyMatches(query.resultLevel)}
+       and ${copyScope}
        and ${copyCriteria.join('\n       and ')})`);
   }
   const where = conditions.length === 0 ? 'true' : conditions.join('\n    and ');
@@ -400,19 +456,19 @@ function queryStatement(
 ), entry as (
   select grouped.*,
          (select count(*)::int
-            from usercards_private.copy as copy
-            join usercards_private.printing_reference as copy_reference
+            from usercards_current_query.copy as copy
+            join usercards_current_query.printing_reference as copy_reference
               on copy_reference.printing_id = copy.printing_id
-            join usercards_private.association as owned
+            join usercards_current_query.association as owned
               on owned.account_id = copy.account_id and owned.target_level = 'copy'
              and owned.tag_kind = 'owned' and owned.target_id = copy.copy_id
            where copy.account_id = :account_id and ${copyMatches(query.resultLevel, 'grouped.target_id')}
          ) as owned_copy_count,
          (select count(distinct location.tag_id)::int
-            from usercards_private.copy as copy
-            join usercards_private.printing_reference as copy_reference
+            from usercards_current_query.copy as copy
+            join usercards_current_query.printing_reference as copy_reference
               on copy_reference.printing_id = copy.printing_id
-            join usercards_private.association as location
+            join usercards_current_query.association as location
               on location.account_id = copy.account_id and location.target_level = 'copy'
              and location.tag_kind = 'location' and location.target_id = copy.copy_id
            where copy.account_id = :account_id and ${copyMatches(query.resultLevel, 'grouped.target_id')}
@@ -438,24 +494,24 @@ select 'entry' as row_kind,
 union all
 select 'meta', 0,
        json_build_object(
-         'revision', coalesce((select revision from usercards_private.account_state
+         'revision', coalesce((select revision from usercards_current_query.account_state
                                 where account_id = :account_id), 0),
          'total_count', (select count(*) from filtered),
          'tags_available', ${
            requiredTags.length === 0
              ? 'true'
-             : `(select count(*) = ${requiredTags.length} from usercards_private.tag
+             : `(select count(*) = ${requiredTags.length} from usercards_current_query.tag
                   where account_id = :account_id and tag_id in (${requiredTags.join(', ')}))`
          },
          'references_ready', not exists (
            select 1
-             from (select copy.printing_id from usercards_private.copy as copy
+             from (select copy.printing_id from usercards_current_query.copy as copy
                     where copy.account_id = :account_id
                    union
-                   select association.target_id from usercards_private.association as association
+                   select association.target_id from usercards_current_query.association as association
                     where association.account_id = :account_id
                       and association.target_level = 'printing') as required
-             left join usercards_private.printing_reference as prepared
+             left join usercards_current_query.printing_reference as prepared
                on prepared.printing_id = required.printing_id
             where prepared.printing_id is null))::text
 order by row_kind, row_position`,
@@ -515,13 +571,13 @@ function fragmentStatement(
   const associationMatch = `(candidate.target_level = requested.kind
       and candidate.target_id = requested.reference_id)
     or (requested.kind = 'card' and candidate.target_level = 'printing' and exists (
-      select 1 from usercards_private.printing_reference as association_reference
+      select 1 from usercards_current_query.printing_reference as association_reference
        where association_reference.printing_id = candidate.target_id
          and association_reference.card_id = requested.reference_id))
     or (candidate.target_level = 'copy' and exists (
       select 1
-        from usercards_private.copy as associated_copy
-        join usercards_private.printing_reference as association_reference
+        from usercards_current_query.copy as associated_copy
+        join usercards_current_query.printing_reference as association_reference
           on association_reference.printing_id = associated_copy.printing_id
        where associated_copy.account_id = candidate.account_id
          and associated_copy.copy_id = candidate.target_id
@@ -535,33 +591,33 @@ function fragmentStatement(
     statement: `with requested as (${requested}), fragments as (
   select requested.position, requested.kind, requested.reference_id,
          (requested.kind <> 'copy' or exists (
-           select 1 from usercards_private.copy as present
+           select 1 from usercards_current_query.copy as present
             where present.account_id = :account_id and present.copy_id = requested.reference_id
          )) as available,
          (select count(*)::int
-            from usercards_private.copy as copy
-            join usercards_private.printing_reference as copy_reference
+            from usercards_current_query.copy as copy
+            join usercards_current_query.printing_reference as copy_reference
               on copy_reference.printing_id = copy.printing_id
-            join usercards_private.association as owned
+            join usercards_current_query.association as owned
               on owned.account_id = copy.account_id and owned.target_level = 'copy'
              and owned.tag_kind = 'owned' and owned.target_id = copy.copy_id
            where copy.account_id = :account_id and (${copyMatch})) as owned_copy_count,
          (select count(distinct location.tag_id)::int
-            from usercards_private.copy as copy
-            join usercards_private.printing_reference as copy_reference
+            from usercards_current_query.copy as copy
+            join usercards_current_query.printing_reference as copy_reference
               on copy_reference.printing_id = copy.printing_id
-            join usercards_private.association as location
+            join usercards_current_query.association as location
               on location.account_id = copy.account_id and location.target_level = 'copy'
              and location.tag_kind = 'location' and location.target_id = copy.copy_id
            where copy.account_id = :account_id and (${copyMatch})) as location_count,
          coalesce((select jsonb_agg(tag_id order by tag_id)::text from (
            select distinct candidate.tag_id
-             from usercards_private.association as candidate
+             from usercards_current_query.association as candidate
             where candidate.account_id = :account_id and (${associationMatch})
          ) as matched_tags), '[]') as tag_ids,
          case when :tag_id is null then null else (
            select coalesce(sum(candidate.quantity), 0)::int
-             from usercards_private.association as candidate
+             from usercards_current_query.association as candidate
             where candidate.account_id = :account_id and candidate.tag_id = :tag_id
               and candidate.quantity is not null and (${associationMatch})
          ) end as intended_quantity
@@ -574,20 +630,20 @@ select 'fragment' as row_kind, position as row_position,
   from fragments
 union all
 select 'meta', 0, json_build_object(
-  'revision', coalesce((select revision from usercards_private.account_state
+  'revision', coalesce((select revision from usercards_current_query.account_state
                          where account_id = :account_id), 0),
   'tag_available', (:tag_id is null or exists (
-    select 1 from usercards_private.tag
+    select 1 from usercards_current_query.tag
      where account_id = :account_id and tag_id = :tag_id)),
   'references_ready', not exists (
     select 1
-      from (select copy.printing_id from usercards_private.copy as copy
+      from (select copy.printing_id from usercards_current_query.copy as copy
              where copy.account_id = :account_id
             union
-            select association.target_id from usercards_private.association as association
+            select association.target_id from usercards_current_query.association as association
              where association.account_id = :account_id
                and association.target_level = 'printing') as required
-      left join usercards_private.printing_reference as prepared
+      left join usercards_current_query.printing_reference as prepared
         on prepared.printing_id = required.printing_id
      where prepared.printing_id is null))::text
 order by row_kind, row_position`,
@@ -619,13 +675,35 @@ export interface UserCardsQueries {
   readPhysicalDetail(context: TrustedUserContext, copyId: string): Promise<UserCardsPhysicalDetail>;
 }
 
+async function readScopedRows(
+  sql: UserCardsSqlTransactor,
+  accountId: string,
+  statement: string,
+  parameters: Readonly<Record<string, UserCardsSqlValue>>,
+  message: string,
+) {
+  return inTransaction(
+    sql,
+    async (statements) => {
+      await readRows(
+        statements,
+        USERCARDS_ACCOUNT_SCOPE_SQL,
+        { account_id: accountId },
+        'The private query account could not be bound.',
+      );
+      return readRows(statements, statement, parameters, message);
+    },
+    message,
+  );
+}
+
 export function createUserCardsQueries(dependencies: {
-  /** Account-scoped read storage; this capability never needs a writer or Catalog resolver. */
-  readonly sql: UserCardsSqlExecutor;
+  /** Account-scoped read storage; this capability never needs write access or a Catalog resolver. */
+  readonly sql: UserCardsSqlTransactor;
 }): UserCardsQueries {
   const sql = dependencies?.sql;
-  if (typeof sql?.query !== 'function') {
-    throw new TypeError('createUserCardsQueries requires a read-only SQL executor.');
+  if (typeof sql?.query !== 'function' || typeof sql?.transaction !== 'function') {
+    throw new TypeError('createUserCardsQueries requires transactional read-only SQL storage.');
   }
   return {
     async query(context, input) {
@@ -639,8 +717,9 @@ export function createUserCardsQueries(dependencies: {
       const offset = continuation?.offset ?? 0;
       const request = queryStatement(accountId, normalized, offset);
       const rows = groupRows(
-        await readRows(
+        await readScopedRows(
           sql,
+          accountId,
           request.statement,
           request.parameters,
           'The private list could not be read.',
@@ -702,8 +781,9 @@ export function createUserCardsQueries(dependencies: {
       const references = [...distinct.values()];
       const request = fragmentStatement(accountId, references, parsed.data.tagId);
       const rows = groupRows(
-        await readRows(
+        await readScopedRows(
           sql,
+          accountId,
           request.statement,
           request.parameters,
           'The private fragments could not be read.',
@@ -746,13 +826,14 @@ export function createUserCardsQueries(dependencies: {
         throw new UserCardsError('invalid-request', 'A readable copy reference is required.');
       }
       const rows = groupRows(
-        await readRows(
+        await readScopedRows(
           sql,
+          accountId,
           `select 'copy' as row_kind, 0 as row_position,
                   json_build_object('copy_id', copy.copy_id, 'printing_id', copy.printing_id,
                     'finish', copy.finish, 'condition', copy.condition,
                     'revision', copy.revision)::text as payload
-             from usercards_private.copy as copy
+             from usercards_current_query.copy as copy
             where copy.account_id = :account_id and copy.copy_id = :copy_id
            union all
            select 'membership', row_number() over (order by association.association_id)::int,
@@ -760,12 +841,12 @@ export function createUserCardsQueries(dependencies: {
                     'tag_id', association.tag_id, 'target_level', association.target_level,
                     'target_id', association.target_id, 'quantity', association.quantity,
                     'revision', association.revision)::text
-             from usercards_private.association as association
+             from usercards_current_query.association as association
             where association.account_id = :account_id and association.target_level = 'copy'
               and association.target_id = :copy_id
            union all
            select 'revision', 0, json_build_object('revision', coalesce(
-             (select revision from usercards_private.account_state where account_id = :account_id), 0))::text
+             (select revision from usercards_current_query.account_state where account_id = :account_id), 0))::text
            order by row_kind, row_position`,
           { account_id: accountId, copy_id: copyId },
           'The physical copy detail could not be read.',

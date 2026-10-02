@@ -8,6 +8,7 @@ import {
   type PhysicalCopy,
   type TrustedUserContext,
   type UserCards,
+  USERCARDS_ACCOUNT_SCOPE_SQL,
   usercardsQueryGrants,
 } from '../../../src/usercards/index.js';
 import { publishCatalog } from '../../support/catalog-database.js';
@@ -225,6 +226,33 @@ describe('usercards current private queries', () => {
     });
     expect(impossible.entries).toEqual([]);
 
+    const siblingOfSelectedCopy = await userCards.query(alice, {
+      scope: { kind: 'collection' },
+      resultLevel: 'card',
+      criteria: [
+        { kind: 'identity', references: [{ kind: 'copy', copyId: boltFoil.copyId }] },
+        { kind: 'condition', condition: 'NM' },
+      ],
+    });
+    expect(siblingOfSelectedCopy.entries).toEqual([]);
+
+    const siblingOutsideScope = await userCards.query(alice, {
+      scope: { kind: 'tag', tagId: binderId },
+      resultLevel: 'card',
+      criteria: [{ kind: 'finish', finish: 'nonfoil' }],
+    });
+    expect(siblingOutsideScope.entries).toEqual([]);
+
+    const siblingOutsideTag = await userCards.query(alice, {
+      scope: { kind: 'collection' },
+      resultLevel: 'card',
+      criteria: [
+        { kind: 'tag', tagId: binderId },
+        { kind: 'finish', finish: 'nonfoil' },
+      ],
+    });
+    expect(siblingOutsideTag.entries).toEqual([]);
+
     const matching = await userCards.query(alice, {
       scope: { kind: 'collection' },
       resultLevel: 'card',
@@ -341,12 +369,14 @@ describe('usercards current private queries', () => {
   });
 
   it('runs with the provider query role while storage rejects writes and unrelated private state', async () => {
-    await userCards.createCopies(bob, {
-      printingId: boltM11.printingId,
-      finish: 'nonfoil',
-      condition: null,
-      quantity: 1,
-    });
+    const [bobCopy] = (
+      await userCards.createCopies(bob, {
+        printingId: boltM11.printingId,
+        finish: 'nonfoil',
+        condition: null,
+        quantity: 1,
+      })
+    ).copies as [PhysicalCopy];
     await database.exec('create role keeper_usercards_query');
     await database.exec(usercardsQueryGrants('keeper_usercards_query'));
     expect(() => usercardsQueryGrants('query"; drop schema usercards_private; --')).toThrow(
@@ -355,10 +385,42 @@ describe('usercards current private queries', () => {
 
     await database.exec('set role keeper_usercards_query');
     try {
+      await expect(database.query('select copy_id from usercards_private.copy')).rejects.toThrow(
+        /permission denied/,
+      );
+      for (const relation of [
+        'account_state',
+        'printing_reference',
+        'copy',
+        'tag',
+        'association',
+      ]) {
+        await expect(
+          database.query(`select * from usercards_current_query.${relation}`),
+        ).resolves.toEqual([]);
+      }
+      const scopedCopies = await database.sql.transaction(async (statements) => {
+        await statements.query(USERCARDS_ACCOUNT_SCOPE_SQL, { account_id: alice.accountId });
+        return statements.query(
+          'select copy_id from usercards_current_query.copy order by copy_id',
+        );
+      });
+      expect(scopedCopies).toHaveLength(3);
+      expect(scopedCopies).not.toContainEqual({ copy_id: bobCopy.copyId });
+      await expect(
+        database.sql.transaction(async (statements) => {
+          await statements.query(USERCARDS_ACCOUNT_SCOPE_SQL, { account_id: alice.accountId });
+          await statements.query("select set_config('usercards.account_id', '', true)");
+          return statements.query('select copy_id from usercards_current_query.copy');
+        }),
+      ).resolves.toEqual([]);
       const readOnly = createUserCardsQueries({ sql: database.sql });
       await expect(
         readOnly.query(alice, { scope: { kind: 'collection' }, resultLevel: 'copy' }),
       ).resolves.toMatchObject({ totalCount: 3 });
+      await expect(
+        database.query('select copy_id from usercards_current_query.copy'),
+      ).resolves.toEqual([]);
       await expect(
         database.exec(
           "insert into usercards_private.printing_reference (printing_id, card_id) values ('injected', 'card')",
@@ -388,11 +450,19 @@ describe('usercards current private queries', () => {
 
     const readOnly = createUserCardsQueries({
       sql: {
-        query(statement, parameters) {
-          if (!/^\s*(select|with)\b/i.test(statement)) {
-            throw new Error('Query capability attempted a write.');
-          }
-          return database.sql.query(statement, parameters);
+        query: database.sql.query,
+        transaction(work) {
+          return database.sql.transaction((statements) => {
+            const readOnlyStatements = {
+              query(statement: string, parameters = {}) {
+                if (!/^\s*(select|with)\b/i.test(statement)) {
+                  throw new Error('Query capability attempted a write.');
+                }
+                return statements.query(statement, parameters);
+              },
+            };
+            return work(readOnlyStatements);
+          });
         },
       },
     });
