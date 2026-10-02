@@ -315,6 +315,163 @@ describe('search indexing', () => {
     ]);
   });
 
+  it('commits snapshots in set-based record and payload bounded batches and resumes each pass', async () => {
+    const records = Array.from({ length: 205 }, (_, index) => fillerCard(index));
+    catalog = createCatalogPublicationFixture({
+      revision: revision('revision-large'),
+      position: '20',
+      records,
+    });
+    alice = createUserCardsPublicationFixture({ accountId, position: '0', records: [] });
+    let largestTransaction = 0;
+    const boundedSql = {
+      query: database.sql.query,
+      transaction: async <T>(work: Parameters<typeof database.sql.transaction<T>>[0]) =>
+        database.sql.transaction(async (statements) => {
+          let requests = 0;
+          const result = await work({
+            async query(statement, parameters) {
+              requests += 1;
+              if (requests > 12) throw new Error('oversized transaction');
+              return statements.query(statement, parameters);
+            },
+          });
+          largestTransaction = Math.max(largestTransaction, requests);
+          return result;
+        }),
+    };
+    indexer = createSearchIndexer({
+      sql: boundedSql,
+      catalog: catalog.publication,
+      userCards: alice.publication,
+    });
+
+    const first = await indexer.index({ accounts: [accountId], maxBatches: 1 });
+    expect(first).toMatchObject({ published: false, caughtUp: false, rebuilt: true });
+    expect(
+      await database.query(
+        `select record_offset from search_private.snapshot_progress where source = 'catalog'`,
+      ),
+    ).toEqual([{ record_offset: 100 }]);
+
+    await indexer.index({ accounts: [accountId], maxBatches: 1 });
+    await indexer.index({ accounts: [accountId], maxBatches: 1 });
+    const complete = await indexer.index({ accounts: [accountId], maxBatches: 1 });
+
+    expect(complete).toMatchObject({ published: true, caughtUp: true });
+    expect(await database.query('select count(*)::int as count from search.cards')).toEqual([
+      { count: 205 },
+    ]);
+    expect(largestTransaction).toBeLessThanOrEqual(12);
+  });
+
+  it('resumes a committed staging batch when the caller loses the pass outcome', async () => {
+    catalog = createCatalogPublicationFixture({
+      revision: revision('revision-large'),
+      position: '20',
+      records: Array.from({ length: 101 }, (_, index) => fillerCard(index)),
+    });
+    alice = createUserCardsPublicationFixture({ accountId, position: '0', records: [] });
+    let loseOutcome = true;
+    const lostOutcomeSql = {
+      query: database.sql.query,
+      async transaction<T>(work: Parameters<typeof database.sql.transaction<T>>[0]): Promise<T> {
+        const result = await database.sql.transaction(work);
+        if (loseOutcome) {
+          loseOutcome = false;
+          throw new Error('lost response');
+        }
+        return result;
+      },
+    };
+    indexer = createSearchIndexer({
+      sql: lostOutcomeSql,
+      catalog: catalog.publication,
+      userCards: alice.publication,
+    });
+
+    await expect(indexer.index({ accounts: [accountId], maxBatches: 1 })).rejects.toThrow();
+    expect(
+      await database.query(
+        `select record_offset from search_private.snapshot_progress where source = 'catalog'`,
+      ),
+    ).toEqual([{ record_offset: 100 }]);
+
+    indexer = createSearchIndexer({
+      sql: database.sql,
+      catalog: catalog.publication,
+      userCards: alice.publication,
+    });
+    await indexer.index({ accounts: [accountId], maxBatches: 1 });
+    const resumed = await indexer.index({ accounts: [accountId], maxBatches: 1 });
+    expect(resumed).toMatchObject({ published: true, caughtUp: true, rebuilt: false });
+    expect(await database.query('select count(*)::int as count from search.cards')).toEqual([
+      { count: 101 },
+    ]);
+  });
+
+  it('splits a provider page by encoded payload size', async () => {
+    catalog = createCatalogPublicationFixture({
+      revision: revision('revision-payload'),
+      position: '20',
+      records: Array.from({ length: 3 }, (_, index) => {
+        const record = fillerCard(index);
+        if (record.kind !== 'card') throw new Error('Expected a card fixture.');
+        return { ...record, card: { ...record.card, rulesText: 'x'.repeat(40_000) } };
+      }),
+    });
+    alice = createUserCardsPublicationFixture({ accountId, position: '0', records: [] });
+    indexer = createSearchIndexer({
+      sql: database.sql,
+      catalog: catalog.publication,
+      userCards: alice.publication,
+    });
+
+    await indexer.index({ accounts: [accountId], maxBatches: 1 });
+
+    expect(
+      await database.query(
+        `select record_offset from search_private.snapshot_progress where source = 'catalog'`,
+      ),
+    ).toEqual([{ record_offset: 1 }]);
+  });
+
+  it('does not advance staging when a bounded batch rolls back', async () => {
+    catalog = createCatalogPublicationFixture({
+      revision: revision('revision-large'),
+      position: '20',
+      records: Array.from({ length: 101 }, (_, index) => fillerCard(index)),
+    });
+    alice = createUserCardsPublicationFixture({ accountId, position: '0', records: [] });
+    let fail = true;
+    const interruptedSql = {
+      query: database.sql.query,
+      transaction: <T>(work: Parameters<typeof database.sql.transaction<T>>[0]) =>
+        database.sql.transaction((statements) =>
+          work({
+            async query(statement, parameters) {
+              if (fail && statement.includes('jsonb_to_recordset')) {
+                fail = false;
+                throw new Error('interrupted batch');
+              }
+              return statements.query(statement, parameters);
+            },
+          }),
+        ),
+    };
+    indexer = createSearchIndexer({
+      sql: interruptedSql,
+      catalog: catalog.publication,
+      userCards: alice.publication,
+    });
+
+    await expect(indexer.index({ accounts: [accountId], maxBatches: 1 })).rejects.toThrow();
+    expect(await database.query('select * from search_private.snapshot_progress')).toEqual([]);
+    expect(await database.query('select count(*)::int as count from search_private.card')).toEqual([
+      { count: 0 },
+    ]);
+  });
+
   it('applies published upserts and removals with the checkpoint that describes them', async () => {
     await indexer.index({ accounts: [accountId] });
 
@@ -512,9 +669,14 @@ describe('search indexing', () => {
       userCards: alice.publication,
     });
 
-    const result = await indexer.index({ accounts: [accountId], pageSize: 1 });
+    const first = await indexer.index({ accounts: [accountId], pageSize: 1 });
+    expect(first).toMatchObject({ published: false, rebuilt: true, caughtUp: false });
+    let result = first;
+    for (let pass = 0; pass < 4 && !result.published; pass += 1) {
+      result = await indexer.index({ accounts: [accountId], pageSize: 500 });
+    }
 
-    expect(result).toMatchObject({ published: true, rebuilt: true, caughtUp: true });
+    expect(result).toMatchObject({ published: true, caughtUp: true });
     expect(result.catalog).toEqual({
       position: '20',
       revisionId: 'revision-2',
@@ -787,7 +949,11 @@ describe('search indexing', () => {
   it.each([1, 2, 500])(
     'holds a catalog removal pending until a later page resolves it (%i)',
     async (pageSize) => {
-      await indexer.index({ accounts: [accountId], pageSize });
+      let initial = await indexer.index({ accounts: [accountId], pageSize });
+      for (let pass = 0; pass < 4 && !initial.published; pass += 1) {
+        initial = await indexer.index({ accounts: [accountId], pageSize: 500 });
+      }
+      expect(initial.published).toBe(true);
 
       // The catalog drops the card the account's copy belongs to through its printing.
       catalog.publish(
@@ -866,8 +1032,22 @@ describe('search indexing', () => {
     }
     changes.push(catalogRevisionChange(String(11 + recordCount), 'revision-2'));
     catalog.publish(...changes);
+    const latestRecords: CatalogPublishedRecord[] = [];
+    for (const change of changes) {
+      if ('record' in change && change.record !== null) latestRecords.push(change.record);
+    }
+    catalog.replaceSnapshot({
+      revision: revision('revision-2'),
+      position: String(11 + recordCount),
+      records: [boltCard, boltName, boltSpanishName, m11Printing, ...latestRecords],
+    });
 
-    const result = await indexer.index({ accounts: [accountId], pageSize: 1 });
+    const first = await indexer.index({ accounts: [accountId], pageSize: 1 });
+    expect(first).toMatchObject({ published: false, caughtUp: false, rebuilt: true });
+    let result = first;
+    for (let pass = 0; pass < 20 && !result.catalog.caughtUp; pass += 1) {
+      result = await indexer.index({ accounts: [accountId], pageSize: 500 });
+    }
 
     expect(result.catalog).toEqual({
       position: String(11 + recordCount),

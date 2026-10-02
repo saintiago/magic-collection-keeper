@@ -20,7 +20,12 @@ import {
   type ApplicationRuntimeConfiguration,
   type PublicApplicationSettings,
 } from './configuration.js';
-import { recordDiagnostic, silentDiagnostics, type Diagnostics } from './diagnostics.js';
+import {
+  backgroundFailureDiagnostic,
+  recordDiagnostic,
+  silentDiagnostics,
+  type Diagnostics,
+} from './diagnostics.js';
 import { translateFailure } from './errors.js';
 import { ApplicationError } from './failures.js';
 import type { IdentityVerifier } from './identity.js';
@@ -173,6 +178,7 @@ export function createApplication(dependencies: ApplicationDependencies): Applic
         requestId: null,
         outcome: 'failed',
         failureCode: failure.code,
+        stage: 'catalog-synchronization',
         durationMs: Date.now() - startedAt,
       });
       throw failure;
@@ -194,6 +200,7 @@ export function createApplication(dependencies: ApplicationDependencies): Applic
         requestId: null,
         outcome: 'failed',
         failureCode: failure.code,
+        ...backgroundFailureDiagnostic('catalog-synchronization', cause),
         durationMs: Date.now() - startedAt,
       });
       throw failure;
@@ -220,6 +227,7 @@ export function createApplication(dependencies: ApplicationDependencies): Applic
           requestId: null,
           outcome: 'failed',
           failureCode: failure.code,
+          stage: 'search-indexing',
           durationMs: Date.now() - startedAt,
         });
         throw failure;
@@ -241,6 +249,7 @@ export function createApplication(dependencies: ApplicationDependencies): Applic
           requestId: null,
           outcome: 'failed',
           failureCode: failure.code,
+          ...backgroundFailureDiagnostic('search-indexing', cause),
           durationMs: Date.now() - startedAt,
         });
         throw failure;

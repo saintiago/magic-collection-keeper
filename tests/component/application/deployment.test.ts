@@ -28,6 +28,7 @@ import {
   runIndexingJob,
   type DataApiCommand,
 } from '../../../src/application/deployment.js';
+import { backgroundFailureDiagnostic } from '../../../src/application/internal/diagnostics.js';
 import { ConfigurationError } from '../../../src/application/index.js';
 import type { TransportRequest } from '../../../src/application/index.js';
 
@@ -788,6 +789,27 @@ describe('background indexing job outcome', () => {
       'KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN',
     );
     expect(JSON.stringify(records)).not.toContain('keeper-test');
+  });
+});
+
+describe('background failure diagnostics', () => {
+  it('reports only a safe stage and provider classification/correlation identity', () => {
+    const provider = Object.assign(new Error('secret response body'), {
+      name: 'ThrottlingException',
+      requestId: 'request-123',
+      sql: 'select private_value',
+    });
+    const wrapped = new Error('bound values: owner-secret', { cause: provider });
+
+    const diagnostic = backgroundFailureDiagnostic('search-indexing', wrapped);
+
+    expect(diagnostic).toEqual({
+      stage: 'search-indexing',
+      providerErrorClassification: 'ThrottlingException',
+      providerCorrelationId: 'request-123',
+    });
+    expect(JSON.stringify(diagnostic)).not.toContain('secret');
+    expect(JSON.stringify(diagnostic)).not.toContain('select');
   });
 });
 

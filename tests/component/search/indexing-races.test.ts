@@ -493,7 +493,9 @@ describe('search indexing over overlapping runs', () => {
       .finally(() => pause.resume());
     const replacement = await rebuildRun;
     expect(pending).toMatchObject({ published: false, caughtUp: false });
-    expect(pending.accounts).toEqual([{ accountId, position: '6', caughtUp: false }]);
+    // The one-batch pass preserves its earlier committed snapshot position; the next pass resumes
+    // the private publications without exposing a partial account update.
+    expect(pending.accounts).toEqual([{ accountId, position: '4', caughtUp: false }]);
     expect(replacement).toMatchObject({ published: true, caughtUp: true });
     expect(replacement.accounts).toEqual([{ accountId, position: '8', caughtUp: true }]);
     expect(await scopedCopies(second)).toEqual([

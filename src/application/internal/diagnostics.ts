@@ -18,6 +18,12 @@ export interface DiagnosticEvent {
   readonly failureCode: ApplicationFailureCode | null;
   /** Milliseconds the operation took, including validation and dispatch. */
   readonly durationMs: number;
+  /** Safe finite-job phase; never derived from an exception message. */
+  readonly stage?: string;
+  /** Sanitized provider classification, when an underlying provider supplied one. */
+  readonly providerErrorClassification?: string;
+  /** Sanitized provider request/correlation identity, when one was supplied. */
+  readonly providerCorrelationId?: string;
 }
 
 export interface Diagnostics {
@@ -37,4 +43,52 @@ export function recordDiagnostic(diagnostics: Diagnostics, event: DiagnosticEven
   } catch {
     // A diagnostics failure is never a business failure.
   }
+}
+
+/** Safe failure context for background-job diagnostics; messages and request values are ignored. */
+export function backgroundFailureDiagnostic(
+  stage: string,
+  cause: unknown,
+): Pick<DiagnosticEvent, 'stage' | 'providerErrorClassification' | 'providerCorrelationId'> {
+  let current: unknown = cause;
+  let classification: string | undefined;
+  let correlationId: string | undefined;
+  for (let depth = 0; depth < 8 && isRecord(current); depth += 1) {
+    const name = safeDiagnosticValue(current['name']);
+    const code = safeDiagnosticValue(current['code']);
+    if (classification === undefined && name !== undefined && !internalErrorNames.has(name)) {
+      classification = name;
+    } else if (classification === undefined && name === undefined && code !== undefined) {
+      classification = code;
+    }
+    const metadata = isRecord(current['$metadata']) ? current['$metadata'] : null;
+    correlationId ??=
+      safeDiagnosticValue(current['requestId']) ??
+      safeDiagnosticValue(current['correlationId']) ??
+      safeDiagnosticValue(metadata?.['requestId']);
+    current = current['cause'];
+  }
+  return {
+    stage,
+    ...(classification === undefined ? {} : { providerErrorClassification: classification }),
+    ...(correlationId === undefined ? {} : { providerCorrelationId: correlationId }),
+  };
+}
+
+const internalErrorNames = new Set([
+  'Error',
+  'ApplicationError',
+  'CatalogError',
+  'SearchError',
+  'UserCardsError',
+]);
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null;
+}
+
+function safeDiagnosticValue(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/u.test(value)
+    ? value
+    : undefined;
 }
