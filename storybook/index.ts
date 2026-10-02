@@ -15,7 +15,7 @@ import {
   type UiIdentity,
   type UserInterface,
 } from '../src/ui/index.js';
-import { mountDesignLanguage } from './design-language.js';
+import { mountDesignLanguage, type DesignLanguage } from './design-language.js';
 import { createLocalEditors } from './editors.js';
 import { createLocalProviders } from './fixtures.js';
 import { ManualProgression, type StorybookStage } from './progression.js';
@@ -93,6 +93,7 @@ root.replaceChildren(header, workspace);
 
 let view: 'app' | 'design' = 'app';
 let application: UserInterface | null = null;
+let designLanguage: DesignLanguage | null = null;
 let initialLoaded = false;
 let initialController: AbortController | null = null;
 
@@ -132,6 +133,7 @@ startInitialLoad();
 function showApp(): void {
   view = 'app';
   updateTabs();
+  disposeDesignLanguage();
   if (initialLoaded) mountApp();
   else {
     workspace.replaceChildren(loadingMessage());
@@ -146,7 +148,8 @@ function showDesign(): void {
   initialController = null;
   progression.cancelAll();
   disposeApp();
-  mountDesignLanguage(workspace);
+  disposeDesignLanguage();
+  designLanguage = mountDesignLanguage(workspace, progression);
 }
 
 function mountApp(): void {
@@ -175,6 +178,11 @@ function mountApp(): void {
 function disposeApp(): void {
   application?.dispose();
   application = null;
+}
+
+function disposeDesignLanguage(): void {
+  designLanguage?.dispose();
+  designLanguage = null;
 }
 
 function updateTabs(): void {

@@ -167,9 +167,12 @@ describe('packaging the deployable artifacts', () => {
     // make a direct regression check that production packaging did not start from that entry.
     expect(bundle).not.toContain('keeperStorybook');
     expect(bundle).not.toContain('ManualProgression');
-    expect(manifest.artifacts.browser.files.map((file) => file.file)).not.toContain(
-      'storybook/card-back.svg',
-    );
+    expect(
+      manifest.artifacts.browser.files.some(
+        (file) =>
+          file.file.endsWith('card-back.svg') || file.file.endsWith('fracture-atmosphere.png'),
+      ),
+    ).toBe(false);
   });
 
   it('carries every module the preserved browser recognition engines reach by URL', async () => {

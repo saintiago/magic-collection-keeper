@@ -30,10 +30,11 @@ function storybookBundle(): Promise<string> {
 async function openStorybook(page: Page, route = ''): Promise<string[]> {
   const requests: string[] = [];
   page.on('request', (request) => requests.push(request.url()));
-  const [html, css, card, javascript] = await Promise.all([
+  const [html, css, card, atmosphere, javascript] = await Promise.all([
     readFile(path.join(storybookRoot, 'index.html'), 'utf8'),
     readFile(path.join(storybookRoot, 'storybook.css'), 'utf8'),
     readFile(path.join(storybookRoot, 'card-back.svg'), 'utf8'),
+    readFile(path.join(storybookRoot, 'fracture-atmosphere.png')),
     storybookBundle(),
   ]);
   await page.route('http://keeper-storybook.test/**', (route) => {
@@ -46,6 +47,9 @@ async function openStorybook(page: Page, route = ''): Promise<string[]> {
     }
     if (pathname === '/card-back.svg') {
       return route.fulfill({ contentType: 'image/svg+xml', body: card });
+    }
+    if (pathname === '/fracture-atmosphere.png') {
+      return route.fulfill({ contentType: 'image/png', body: atmosphere });
     }
     return route.fulfill({ contentType: 'text/html', body: html });
   });
@@ -253,14 +257,192 @@ test('shows the design language through shared card, dialog and notice presenter
     'Error:The mock operation could not be completed.',
   );
   await expect(page.locator('[data-ui-notice="design-error"]')).toContainText('Try again');
+  await page.locator('#design-search').fill('Lightning Bolt');
+  await page.locator('#design-level').selectOption('printing');
+  await page.getByRole('button', { name: 'Search' }).click();
+  await expect(page.locator('#design-search-result')).toHaveText(
+    'Showing printing-level examples for “Lightning Bolt”.',
+  );
+
+  await page.locator('#design-name').fill('');
+  await page.getByRole('button', { name: 'Save example' }).click();
+  await expect(page.locator('#design-validation')).toHaveText(
+    'Enter a collection name before saving.',
+  );
+  await expect(page.locator('#design-name')).toHaveAttribute('aria-invalid', 'true');
+
+  await page.locator('#design-name').fill('Fractured favorites');
+  await page.locator('#fail-next-stage').check();
+  await page.getByRole('button', { name: 'Save example' }).click();
+  await expect(page.locator('#design-save-status')).toHaveText('Saving “Fractured favorites”…');
+  await expect(page.locator('#stage-status')).toContainText('Saving gallery example');
+  await page.getByRole('button', { name: 'Preview details' }).click();
+  await expect(page.locator('#design-preview-status')).toContainText('Preview ready');
+  await expect(page.locator('#design-save-status')).toHaveText('Saving “Fractured favorites”…');
+  await expect(page.locator('#design-save-status')).toHaveAttribute('aria-busy', 'true');
+  await advance(page);
+  await expect(page.locator('#design-save-status')).toContainText('Save failed');
+  await page.getByRole('button', { name: 'Retry save' }).click();
+  await advance(page);
+  await expect(page.locator('#design-save-status')).toHaveText(
+    'Saved “Fractured favorites” in this local example.',
+  );
+
+  await page.getByLabel('Compact').check();
+  await expect(page.locator('#design-selection-status')).toHaveText(
+    'Compact card density selected.',
+  );
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.locator('[data-ui-notice="design-error"]')).toContainText(
+    'Retry completed in the local example.',
+  );
   await page.getByRole('button', { name: 'Open confirmation' }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await page.getByRole('button', { name: 'Cancel' }).click();
   await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.locator('#design-dialog-status')).toHaveText('Kept the local example entry.');
+  await expect(page.getByRole('button', { name: 'Open confirmation' })).toBeFocused();
+
+  await expect
+    .poll(() =>
+      requests.some((request) => new URL(request).pathname.endsWith('fracture-atmosphere.png')),
+    )
+    .toBe(true);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--rf-accent').trim(),
+      ),
+    )
+    .toBe('#77deed');
 
   expect(
     requests.every((request) => new URL(request).origin === 'http://keeper-storybook.test'),
   ).toBe(true);
+});
+
+test('keeps gallery section links separate from the mocked-app route', async ({ page }) => {
+  await openStorybook(page, '#/catalog');
+  await page.getByRole('button', { name: 'Design language' }).click();
+
+  for (const name of ['Explore the interactive states', 'Return to controls']) {
+    await page.getByRole('link', { name }).click();
+    await expect(page).toHaveURL(/#\/catalog$/);
+    await page.getByRole('button', { name: 'Mocked app' }).click();
+    if (name === 'Explore the interactive states') await advance(page);
+    await expect(page.getByRole('heading', { name: 'Catalog and search' })).toBeVisible();
+    await expect(page.getByText('Page not found')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Design language' }).click();
+  }
+});
+
+test('reflows the Reality Fracture preset and retains static feedback with reduced motion', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 760 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await openStorybook(page);
+  await page.getByRole('button', { name: 'Design language' }).click();
+
+  await expect(page.locator('.design-hero')).toHaveCSS(
+    'background-image',
+    /fracture-atmosphere\.png/,
+  );
+  expect(
+    await page.evaluate(() => ({
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: document.documentElement.clientWidth,
+    })),
+  ).toEqual({ documentWidth: 360, viewportWidth: 360 });
+  await page.getByRole('button', { name: 'Save example' }).hover();
+  expect(
+    await page.getByRole('button', { name: 'Save example' }).evaluate((element) => ({
+      minHeight: getComputedStyle(element).minHeight,
+      transform: getComputedStyle(element).transform,
+      transitionMilliseconds:
+        Number.parseFloat(getComputedStyle(element).transitionDuration) * 1_000,
+    })),
+  ).toEqual({ minHeight: '44px', transform: 'none', transitionMilliseconds: 0.01 });
+  await page.getByLabel('Compact').check();
+  await expect(page.locator('.selection-option').filter({ hasText: 'Compact' })).toHaveCSS(
+    'border-color',
+    'rgb(119, 222, 237)',
+  );
+  await page.getByLabel('Select Lightning Bolt').uncheck();
+  await expect(page.getByLabel('Select Lightning Bolt')).not.toBeChecked();
+});
+
+for (const viewport of [
+  { width: 360, height: 760 },
+  { width: 1440, height: 1000 },
+]) {
+  for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+    test(`keeps gallery controls reachable with notices at ${viewport.width}px and ${reducedMotion} motion`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.emulateMedia({ reducedMotion });
+      await openStorybook(page);
+      await page.getByRole('button', { name: 'Design language' }).click();
+      await page.locator('.design-grid').evaluate(async (grid) => {
+        await Promise.all(
+          grid
+            .getAnimations({ subtree: true })
+            .filter((animation) => animation.effect?.getTiming().iterations !== Infinity)
+            .map((animation) => animation.finished),
+        );
+      });
+
+      await page.getByLabel('Select Lightning Bolt').uncheck();
+      await expect(page.getByLabel('Select Lightning Bolt')).not.toBeChecked();
+      await page.evaluate(() =>
+        window.scrollTo({
+          top: document.documentElement.scrollHeight,
+          behavior: 'instant',
+        }),
+      );
+      const notices = page.locator('[data-ui-notice]');
+      await expect(notices).toHaveCount(2);
+      const open = page.getByRole('button', { name: 'Open confirmation' });
+      await expect(open).toBeInViewport();
+      await open.click({ timeout: 5_000 });
+      await expect(page.getByRole('dialog')).toBeVisible();
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(page.locator('#design-dialog-status')).toHaveText(
+        'Kept the local example entry.',
+      );
+      await expect(open).toBeFocused();
+      await open.click();
+      await page.getByRole('button', { name: 'Discard entry', exact: true }).click();
+      await expect(page.locator('#design-dialog-status')).toHaveText(
+        'Discarded the local example entry.',
+      );
+      await expect(open).toBeFocused();
+      await expect(notices).toHaveCount(2);
+
+      await page.getByRole('button', { name: 'Try again' }).click();
+      await expect(page.locator('[data-ui-notice="design-error"]')).toContainText(
+        'Retry completed in the local example.',
+      );
+      await notices.first().getByRole('button', { name: 'Dismiss' }).click();
+      await expect(notices).toHaveCount(1);
+    });
+  }
+}
+
+test('disposes a pending gallery action when leaving the design-language tab', async ({ page }) => {
+  await openStorybook(page);
+  await page.getByRole('button', { name: 'Design language' }).click();
+  await page.getByRole('button', { name: 'Save example' }).click();
+  await expect(page.locator('#stage-status')).toContainText('Saving gallery example');
+
+  await page.getByRole('button', { name: 'Mocked app' }).click();
+  await expect(page.locator('#stage-status')).toContainText('Loading mocked app');
+  await advance(page);
+  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+  await expect(page.locator('#stage-status')).toHaveText('No stage is waiting.');
+  await expect(page.getByText('Saved “Fractured favorites”')).toHaveCount(0);
+  await expect(page.locator('.mocked-app')).toHaveCSS('color', 'rgb(238, 245, 248)');
 });
 
 test('evaluates supported Catalog expressions and rejects unsupported syntax', async ({ page }) => {
