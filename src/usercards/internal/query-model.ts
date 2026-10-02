@@ -1,4 +1,4 @@
-import type { Finish } from '../../catalog/index.js';
+import type { Finish } from '../../catalog/contract.js';
 import type { CopyCondition, TagId } from './model.js';
 
 export const userCardsResultLevels = ['card', 'printing', 'copy'] as const;

@@ -1,6 +1,9 @@
 /** Component scope: production Catalog/UserCards runtime separation and internal route adaptation. */
 
 import { describe, expect, it, vi } from 'vitest';
+import { Hash } from '@smithy/hash-node';
+import { HttpRequest } from '@smithy/protocol-http';
+import { SignatureV4 } from '@smithy/signature-v4';
 
 import {
   createAwsCatalogRequest,
@@ -122,7 +125,76 @@ describe('independent serving deployments', () => {
       restoreEnvironment('AWS_SESSION_TOKEN', previous.token);
     }
   });
+
+  it('signs paginated Catalog query parameters separately from the URI path', async () => {
+    const previous = {
+      accessKey: process.env.AWS_ACCESS_KEY_ID,
+      secretKey: process.env.AWS_SECRET_ACCESS_KEY,
+      token: process.env.AWS_SESSION_TOKEN,
+    };
+    process.env.AWS_ACCESS_KEY_ID = 'AKIDEXAMPLE';
+    process.env.AWS_SECRET_ACCESS_KEY = 'secret-example';
+    process.env.AWS_SESSION_TOKEN = 'session-example';
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      void input;
+      void init;
+      return new Response(JSON.stringify({ cardId: 'test', printings: [], continuation: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    try {
+      const request = createAwsCatalogRequest({
+        baseUrl: 'https://keeper.execute-api.us-east-1.amazonaws.com',
+        region: 'us-east-1',
+        fetch,
+      });
+      await request(
+        '/api/catalog/cards/test/printings?pageSize=20&continuation=abc%2Fdef%2Bghi%3D%3D',
+      );
+      const [url, init] = fetch.mock.calls[0] ?? [];
+      expect(String(url)).toBe(
+        'https://keeper.execute-api.us-east-1.amazonaws.com/internal/api/catalog/cards/test/printings?pageSize=20&continuation=abc%2Fdef%2Bghi%3D%3D',
+      );
+      const headers = (init?.headers ?? {}) as Readonly<Record<string, string>>;
+      const expected = await new SignatureV4({
+        credentials: {
+          accessKeyId: 'AKIDEXAMPLE',
+          secretAccessKey: 'secret-example',
+          sessionToken: 'session-example',
+        },
+        region: 'us-east-1',
+        service: 'execute-api',
+        sha256: Hash.bind(null, 'sha256'),
+      }).sign(
+        new HttpRequest({
+          protocol: 'https:',
+          hostname: 'keeper.execute-api.us-east-1.amazonaws.com',
+          method: 'GET',
+          path: '/internal/api/catalog/cards/test/printings',
+          query: { pageSize: '20', continuation: 'abc/def+ghi==' },
+          headers: {
+            host: 'keeper.execute-api.us-east-1.amazonaws.com',
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+        }),
+        { signingDate: readSigningDate(headers['x-amz-date'] ?? '') },
+      );
+      expect(headers.authorization).toBe(expected.headers.authorization);
+    } finally {
+      restoreEnvironment('AWS_ACCESS_KEY_ID', previous.accessKey);
+      restoreEnvironment('AWS_SECRET_ACCESS_KEY', previous.secretKey);
+      restoreEnvironment('AWS_SESSION_TOKEN', previous.token);
+    }
+  });
 });
+
+function readSigningDate(value: string): Date {
+  const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(value);
+  if (match === null) throw new Error(`Unreadable signing date ${value}.`);
+  return new Date(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z`);
+}
 
 function restoreEnvironment(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name];

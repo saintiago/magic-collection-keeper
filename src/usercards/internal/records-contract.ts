@@ -1,4 +1,4 @@
-import { type CatalogResolver, type Finish } from '../../catalog/index.js';
+import { type CatalogResolver, type Finish } from '../../catalog/contract.js';
 import type { UserCardsSqlTransactor } from './executor.js';
 import { type ImportOperations } from './import-contract.js';
 import { type MigrationOperations } from './migration-contract.js';

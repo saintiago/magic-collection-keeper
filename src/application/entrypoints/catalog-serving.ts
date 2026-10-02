@@ -1,13 +1,15 @@
 /** Lambda entry point of the independently deployed Catalog serving runtime. */
 
 import {
-  createApiGatewayHandler,
   createCatalogServingDeployment,
-  createConsoleDiagnostics,
   withoutInternalCatalogPrefix,
-  type ServingDeployment,
-} from '../deployment.js';
-import { ConfigurationError } from '../index.js';
+} from '../internal/catalog-serving-deployment.js';
+import { ConfigurationError } from '../internal/configuration.js';
+import {
+  createApiGatewayHandler,
+  createConsoleDiagnostics,
+} from '../internal/lambda-deployment.js';
+import type { ServingDeployment } from '../internal/serving-deployment-shared.js';
 
 let runtime: ServingDeployment | null = null;
 

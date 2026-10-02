@@ -53,6 +53,49 @@ npm run synth -- --context environment=test --context layout=target \
 The release record must belong to the selected environment and pin both images by digest. Synthesis
 does not publish or rebuild any artifact.
 
+`release.json` is a schema-1 environment record. Every component owns its provenance and immutable
+identity, so an unchanged component can keep an older revision:
+
+```json
+{
+  "schema": 1,
+  "environment": "test",
+  "components": {
+    "catalogServing": {
+      "revision": "<40-character revision>",
+      "version": "<artifact version>",
+      "manifest": "manifest.json",
+      "codeKey": "releases/<artifact version>/catalog-serving.zip",
+      "codeVersion": "<S3 object version>"
+    },
+    "userCards": {
+      "revision": "<40-character revision>",
+      "version": "<artifact version>",
+      "manifest": "provenance/usercards-manifest.json",
+      "codeKey": "releases/<artifact version>/usercards.zip",
+      "codeVersion": "<S3 object version>"
+    },
+    "recognition": {
+      "revision": "<40-character revision>",
+      "version": "<artifact version>",
+      "manifest": "recognition/manifest.json",
+      "imageUri": "<repository>@sha256:<digest>"
+    },
+    "catalogIngestion": {
+      "revision": "<40-character revision>",
+      "version": "<artifact version>",
+      "manifest": "manifest.json",
+      "imageUri": "<repository>@sha256:<digest>"
+    }
+  }
+}
+```
+
+Manifest paths are relative to the release directory. Copy the manifest from a retained older
+release into `provenance/` when that component remains deployed. `npm run release:evidence` verifies
+each referenced manifest is clean, matches that component's revision/version and records the
+serving artifact digest; it separately requires object versions and digest-pinned image URIs.
+
 Capture actual stack outputs and parameters; do not guess generated physical names. Read/write roles
 are separate for each owner. Runtime workloads never use the master credential.
 
@@ -176,12 +219,40 @@ restorable inputs.
 ## Create
 
 Creation requires explicit authorization for the concrete environment and inspected change sets.
-Synthesize `layout=target`, then create stacks in dependency order: Foundation, Web, Gateway,
-Catalog serving, UserCards, Recognition and Catalog ingestion. Capture provider outputs before
-planning a consumer. Bootstrap owner schemas/roles through their supplied contracts, using the
-temporary master credential only for bootstrap, and verify isolation. Publish immutable artifacts
-before supplying their object versions or image digests. Publish the browser from captured Gateway
-and Web outputs and invalidate CloudFront.
+Image repositories are established first, before either consuming runtime exists:
+
+1. Synthesize the repository-only stage:
+
+   ```sh
+   npm run synth -- --context environment=test --context layout=target \
+     --context stage=image-repositories --output .turbo/cdk-repositories.out
+   ```
+
+2. Create and inspect change sets only for `keeper-test-recognition` and
+   `keeper-test-catalog-ingestion` from that assembly. Execute them and capture
+   `RecognitionRepositoryName` and `CatalogRepositoryName`. These templates contain only the
+   owning ECR repository and its outputs; do not deploy the other synthesized stacks from this
+   stage.
+3. Build and push Recognition and Catalog-ingestion images to those captured repositories, resolve
+   both digests, and create `artifacts/release.json` with the component provenance above.
+4. Synthesize the complete target:
+
+   ```sh
+   npm run synth -- --context environment=test --context layout=target \
+     --context stage=complete --context release=artifacts/release.json \
+     --output .turbo/cdk-release.out
+   ```
+
+   Create Foundation, Web, Gateway, Catalog serving and UserCards in dependency order, capturing
+   provider outputs before planning consumers. Update the two repository stacks from the complete
+   assembly to add their consuming runtimes. Inspect that `RecognitionRepository` and
+   `CatalogRepository` keep the same logical and physical IDs and have no replacement action; the
+   repository definitions are identical in both stages.
+
+Bootstrap owner schemas/roles through their supplied contracts, using the temporary master
+credential only for bootstrap, and verify isolation. Publish serving artifacts before supplying
+their object versions. Publish the browser from captured Gateway and Web outputs and invalidate
+CloudFront.
 
 Use the AWS CLI's `cloudformation create-change-set`, `describe-change-set`, `execute-change-set` and
 stack waiters with the intended stack name, template and explicit parameter file. Inspection must

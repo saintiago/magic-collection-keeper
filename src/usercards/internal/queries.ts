@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { z } from 'zod';
 
-import { finishes } from '../../catalog/index.js';
+import { finishes } from '../../catalog/contract.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';
 import type { UserCardsSqlTransactor, UserCardsSqlValue } from './executor.js';

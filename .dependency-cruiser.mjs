@@ -37,10 +37,10 @@ const componentEntries = {
   application: ['index', 'backend', 'deployment'],
   'card-list': ['index'],
   capture: ['index'],
-  catalog: ['index', 'browser'],
+  catalog: ['index', 'browser', 'contract', 'serving'],
   recognition: ['index'],
   ui: ['index', 'deployment'],
-  usercards: ['index', 'browser'],
+  usercards: ['index', 'browser', 'contract', 'serving'],
 };
 
 const publicInterfaceRules = components.map((component) => ({

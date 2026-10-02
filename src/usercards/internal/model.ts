@@ -1,4 +1,4 @@
-import type { Finish, PrintingId } from '../../catalog/index.js';
+import type { Finish, PrintingId } from '../../catalog/contract.js';
 
 /**
  * Physical copies and their attributes (docs/user-cards.md#records-and-associations). A copy has

@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 /**
  * Validates the rebuild's CloudFormation templates (docs/operations.md#infrastructure).
  *
- * The two migration-source templates and both synthesized CDK layouts are linted with the cfn-lint
+ * The two migration-source templates, both CDK layouts and the repository bootstrap stage are
+ * linted with the cfn-lint
  * version pinned in infra/requirements-lint.txt, provisioned once into the ignored
  * `.infrastructure-python` environment. The check establishes template validity only: configured
  * identity and network boundaries and an applicable change plan are inspected against a deployed
@@ -50,12 +51,16 @@ function pinnedVersion(): string {
   return version;
 }
 
-/** The templates to validate: migration sources plus synthesized legacy and target layouts. */
+/** The templates to validate: migration sources, both layouts and repository bootstrap. */
 function templates(): readonly string[] {
   const files = readdirSync(infraRoot)
     .filter((name) => name.endsWith('.json') && !CAPTURES.has(name))
     .map((name) => path.join('infra', name));
-  for (const directory of ['.turbo/cdk-legacy.out', '.turbo/cdk.out']) {
+  for (const directory of [
+    '.turbo/cdk-legacy.out',
+    '.turbo/cdk.out',
+    '.turbo/cdk-repositories.out',
+  ]) {
     const absolute = path.join(root, directory);
     if (!existsSync(absolute)) {
       fail(`The synthesized infrastructure directory is missing (${directory}).`);

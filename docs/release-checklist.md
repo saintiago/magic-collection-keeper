@@ -16,7 +16,7 @@ artifact and source revision; one repository revision does not force a coordinat
 | ------------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `artifacts/manifest.json`             | `npm run package`                                                           | Source revision, version label and the byte size and SHA-256 of every artifact ([packaging and deployment](operations.md#packaging-and-deployment)).        |
 | `artifacts/recognition/manifest.json` | `npm run package:recognition`                                               | Engine, model, browser and corresponding-source identities of the recognition image context ([recognition packaging](operations.md#recognition-packaging)). |
-| `artifacts/release.json`              | Deployment environment-record capture ([Create](../infra/README.md#create)) | Environment plus Catalog-serving/UserCards object keys and versions and Recognition/Catalog-ingestion image digests.                                        |
+| `artifacts/release.json`              | Deployment environment-record capture ([Create](../infra/README.md#create)) | Environment plus each component's source revision, source manifest and immutable object version or image digest.                                            |
 | `artifacts/release-evidence.json`     | `npm run release:evidence -- --out artifacts`                               | The acceptance record: the stages below, every verified release byte and the unresolved checks.                                                             |
 
 Keep the complete release directory — manifest, release record, evidence record, packaged
@@ -38,13 +38,15 @@ Run from a fresh Linux/WSL checkout of the release revision
 | Infrastructure definitions | [Infrastructure](operations.md#infrastructure)                                           | `npm run lint:infrastructure`; legacy-template and `tests/integration/cdk-stacks.test.ts` checks                        |
 | Acceptance evidence        | This checklist                                                                           | `npm run release:evidence -- --out artifacts` re-verifies every recorded byte and writes the stages beside the manifest |
 
-The release revision is the packaging manifest's `revision`, and the packaging and recognition
+The candidate revision is the packaging manifest's `revision`, and the packaging and recognition
 manifests' `workingTree` must both be `clean`: artifacts built from uncommitted changes cannot be
 restored. Record the command output with the release. `release-evidence.json` records source
 completion only when every byte the packaging and recognition manifests name still matches, the
 recognition image context (when it is packaged) belongs to the same release, and its browser assets
-are the ones the packaged browser manifest carries. The deployment record, when one exists, has to
-name this release as well.
+are the ones the packaged browser manifest carries. A deployment record may retain an older
+component. Each component therefore names its own clean packaging or recognition manifest; the
+evidence command verifies that manifest's revision/version and immutable artifact identity instead
+of requiring every component to use the candidate version.
 
 Package the browser after `npm run prepare:recognition`, because the browser bundle carries the
 prepared recognition assets; the evidence command rejects a recognition context whose browser
@@ -65,7 +67,8 @@ an isolated test environment with test data. The concrete procedure is
    ([packaging and publication](../infra/README.md#packaging-and-publication)).
 3. Build the browser bundle from captured Gateway/Web outputs, publish it and invalidate the
    distribution, so only public settings reach the browser.
-4. Capture the resulting multi-stack combination into `artifacts/release.json`. Starting finite
+4. Capture the resulting multi-stack combination into `artifacts/release.json`, including each
+   component's source revision and retained source manifest. Starting finite
    Catalog ingestion is a separate explicit operation; when authorized, verify its test snapshot,
    public queries and authoritative private reads.
 5. Verify the changed live boundaries and keep the results separate from the local checks: change

@@ -20,6 +20,7 @@ import { WebStack } from '../../infra/cdk/stacks/web.js';
 const configuration: DeploymentConfiguration = {
   environment: 'test',
   layout: 'target',
+  stage: 'complete',
   artifacts: null,
 };
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -97,6 +98,27 @@ describe('CDK deployment units', () => {
         }),
       ]),
     });
+  });
+
+  it('bootstraps image repositories before adding their consuming runtimes', () => {
+    const app = new App({ analyticsReporting: false, treeMetadata: false });
+    const props = { synthesizer: new BootstraplessSynthesizer() };
+    const bootstrap = { ...configuration, stage: 'image-repositories' as const };
+    const recognitionStack = new RecognitionStack(app, 'RecognitionBootstrap', bootstrap, props);
+    const catalogStack = new CatalogIngestionStack(app, 'CatalogBootstrap', bootstrap, props);
+    const recognition = Template.fromStack(recognitionStack).toJSON();
+    const catalog = Template.fromStack(catalogStack).toJSON();
+
+    expect(Object.keys(recognition.Parameters)).toEqual(['Environment']);
+    expect(Object.keys(catalog.Parameters)).toEqual(['Environment']);
+    expect(Object.keys(recognition.Resources)).toEqual(['RecognitionRepository']);
+    expect(Object.keys(catalog.Resources)).toEqual(['CatalogRepository']);
+    expect(recognition.Resources.RecognitionRepository).toEqual(
+      stacks.recognition.toJSON().Resources.RecognitionRepository,
+    );
+    expect(catalog.Resources.CatalogRepository).toEqual(
+      stacks.catalogIngestion.toJSON().Resources.CatalogRepository,
+    );
   });
 
   it('pins independent serving artifacts and gives each runtime only owner credentials', () => {

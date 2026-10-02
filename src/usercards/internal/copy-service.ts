@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { finishes, type CatalogResolver } from '../../catalog/index.js';
+import { finishes, type CatalogResolver } from '../../catalog/contract.js';
 import { resolvePhysicalPrinting } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';

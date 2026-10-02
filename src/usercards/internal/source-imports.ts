@@ -31,7 +31,7 @@ import {
   type CatalogResolver,
   type Finish,
   type PrintingRecord,
-} from '../../catalog/index.js';
+} from '../../catalog/contract.js';
 import { pendingFinish, resolveAvailablePrintings } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';

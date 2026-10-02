@@ -21,7 +21,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { build } from 'esbuild';
+import { build, type BuildOptions } from 'esbuild';
 import JSZip from 'jszip';
 
 import { resolvePublicSettings, type PublicApplicationSettings } from '../src/application/index.js';
@@ -175,17 +175,23 @@ async function buildServingArtifacts(root: string, outDir: string): Promise<void
       entry: artifactLayout.userCardsEntry,
       archive: artifactLayout.userCardsArchive,
     },
-  ]) {
+  ] as const) {
     const entry = path.join(outDir, artifact.entry);
-    await bundle(
-      root,
-      path.join(root, 'src', 'application', 'entrypoints', artifact.source),
-      entry,
-      'node',
-    );
+    await build(servingBundleOptions(root, artifact.source, entry));
     const source = await readFile(entry);
     await writeFile(path.join(outDir, artifact.archive), await zipArchive({ 'index.mjs': source }));
   }
+}
+
+/** The exact production options for one independently packaged serving entry point. */
+export function servingBundleOptions(
+  root: string,
+  source: 'catalog-serving.ts' | 'usercards.ts',
+  outfile: string,
+): BuildOptions {
+  return bundleOptions(root, outfile, 'node', {
+    entryPoints: [path.join(root, 'src', 'application', 'entrypoints', source)],
+  });
 }
 
 async function buildBrowser(

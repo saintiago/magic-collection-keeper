@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { PrintingRecord } from '../../catalog/index.js';
+import type { PrintingRecord } from '../../catalog/contract.js';
 import { physicalFinish, resolveCards, resolvePrintings } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';

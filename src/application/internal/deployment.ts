@@ -1,12 +1,6 @@
 /** Default runtime wiring, environment validation and deployed transport adapters for Catalog and UserCards. */
 
-import {
-  BeginTransactionCommand,
-  CommitTransactionCommand,
-  ExecuteStatementCommand,
-  RDSDataClient,
-  RollbackTransactionCommand,
-} from '@aws-sdk/client-rds-data';
+import { RDSDataClient } from '@aws-sdk/client-rds-data';
 import {
   GetObjectCommand,
   HeadObjectCommand,
@@ -25,6 +19,7 @@ import {
 } from '../../catalog/index.js';
 
 import type { Application } from './application.js';
+import { createDataApiTransactor, createRdsDataApiClient, type DataApiClient } from './data-api.js';
 import {
   ConfigurationError,
   resolveApplicationConfiguration,
@@ -38,7 +33,23 @@ import {
   isApplicationFailureCode,
   type ApplicationFailureCode,
 } from './failures.js';
-import { failureResponse, type TransportRequest, type TransportResponse } from './transport.js';
+
+export type {
+  DataApiClient,
+  DataApiCommand,
+  DataApiCommandName,
+  DeploymentSqlExecutor,
+  DeploymentSqlRow,
+  DeploymentSqlTransactor,
+  DeploymentSqlValue,
+} from './data-api.js';
+export { createDataApiTransactor, createRdsDataApiClient } from './data-api.js';
+export {
+  createApiGatewayHandler,
+  createConsoleDiagnostics,
+  type ApiGatewayHttpApiEvent,
+  type LambdaHttpResponse,
+} from './lambda-deployment.js';
 
 /** Provider dataset the finite catalog job ingests; the configured source maps it to one object. */
 export const CATALOG_JOB_DATASET = 'default_cards';
@@ -48,64 +59,6 @@ export const CATALOG_SNAPSHOT_SOURCE_NAME = 'scryfall';
 
 /** Object metadata key that carries the provider's version of one snapshot object. */
 export const SNAPSHOT_VERSION_METADATA_KEY = 'source-version';
-
-/**
- * Diagnostics sink of a deployed runtime: one JSON record per operation, carrying the operation,
- * its request identity, its outcome, the failure code and the duration — never a request body,
- * credential, image or private record content. The container and function runtimes write the
- * record to their own CloudWatch log group.
- */
-export function createConsoleDiagnostics(
-  write: (line: string) => void = (line) => console.info(line),
-): Diagnostics {
-  return {
-    record(event) {
-      write(JSON.stringify({ event: 'keeper-operation', ...event }));
-    },
-  };
-}
-
-/** One scalar value the deployment's SQL transports carry; the Data API rejects arrays. */
-export type DeploymentSqlValue = string | number | boolean | null;
-
-export type DeploymentSqlRow = Readonly<Record<string, DeploymentSqlValue>>;
-
-export interface DeploymentSqlExecutor {
-  query(
-    statement: string,
-    parameters?: Readonly<Record<string, DeploymentSqlValue>>,
-  ): Promise<readonly DeploymentSqlRow[]>;
-}
-
-/**
- * Transaction-capable executor of one deployed runtime. It satisfies the provider-owned executor
- * contracts Catalog and UserCards declare: a transaction begins, commits or rolls back
- * through the RDS Data API, and the statements handed to the work run inside it only.
- */
-export interface DeploymentSqlTransactor extends DeploymentSqlExecutor {
-  transaction<T>(work: (statements: DeploymentSqlExecutor) => Promise<T>): Promise<T>;
-}
-
-/**
- * RDS Data API calls the composition issues. The port is deliberately small: one call carries one
- * statement or one transaction control and returns the service's response fields.
- */
-export type DataApiCommandName =
-  'ExecuteStatement' | 'BeginTransaction' | 'CommitTransaction' | 'RollbackTransaction';
-
-export interface DataApiCommand {
-  readonly name: DataApiCommandName;
-  readonly input: Readonly<Record<string, unknown>>;
-}
-
-export interface DataApiClient {
-  send(command: DataApiCommand): Promise<Readonly<Record<string, unknown>>>;
-  /**
-   * Releases the SDK client an adapter owns. A runtime that constructed its adapter calls this when
-   * its work ends; a client a caller supplied without it stays open and stays the caller's.
-   */
-  destroy?(): void;
-}
 
 /** Head and body reads of the private snapshot bucket. */
 export type SnapshotObjectCommandName = 'HeadObject' | 'GetObject';
@@ -313,180 +266,6 @@ function booleanVariable(
     return false;
   }
   throw new ConfigurationError([`${name}: use true or false.`]);
-}
-
-/** Adapts the AWS RDS Data API client to the port this composition issues calls through. */
-export function createRdsDataApiClient(client: RDSDataClient): DataApiClient {
-  if (typeof client?.send !== 'function') {
-    throw new TypeError('createRdsDataApiClient requires an RDS Data API client.');
-  }
-  return {
-    async send(command): Promise<Readonly<Record<string, unknown>>> {
-      switch (command.name) {
-        case 'ExecuteStatement':
-          return (await client.send(
-            new ExecuteStatementCommand(command.input as never),
-          )) as unknown as Readonly<Record<string, unknown>>;
-        case 'BeginTransaction':
-          return (await client.send(
-            new BeginTransactionCommand(command.input as never),
-          )) as unknown as Readonly<Record<string, unknown>>;
-        case 'CommitTransaction':
-          return (await client.send(
-            new CommitTransactionCommand(command.input as never),
-          )) as unknown as Readonly<Record<string, unknown>>;
-        case 'RollbackTransaction':
-          return (await client.send(
-            new RollbackTransactionCommand(command.input as never),
-          )) as unknown as Readonly<Record<string, unknown>>;
-      }
-    },
-    destroy() {
-      destroyClient(client);
-    },
-  };
-}
-
-/**
- * One transaction-capable executor over the RDS Data API. Statements keep the provider contracts'
- * named parameters; the response is read through the Data API's JSON record format so a row stays
- * a scalar record and the components parse their own aggregates.
- */
-export function createDataApiTransactor(options: {
-  readonly client: DataApiClient;
-  readonly resourceArn: string;
-  readonly secretArn: string;
-  readonly database: string;
-}): DeploymentSqlTransactor {
-  const client = options?.client;
-  if (typeof client?.send !== 'function') {
-    throw new TypeError('createDataApiTransactor requires a Data API client.');
-  }
-  const target = {
-    resourceArn: options.resourceArn,
-    secretArn: options.secretArn,
-    database: options.database,
-  };
-  const statements = createExecutor(client, target, null);
-  return {
-    query: statements.query,
-    async transaction<T>(work: (statements: DeploymentSqlExecutor) => Promise<T>): Promise<T> {
-      const begun = await client.send({
-        name: 'BeginTransaction',
-        input: { ...target },
-      });
-      const transactionId = begun.transactionId;
-      if (typeof transactionId !== 'string' || transactionId.length === 0) {
-        throw new Error('The RDS Data API did not open the requested transaction.');
-      }
-      try {
-        const result = await work(createExecutor(client, target, transactionId));
-        await client.send({
-          name: 'CommitTransaction',
-          input: { ...target, transactionId },
-        });
-        return result;
-      } catch (cause) {
-        try {
-          await client.send({
-            name: 'RollbackTransaction',
-            input: { ...target, transactionId },
-          });
-        } catch {
-          // The operation's own failure is what the caller acts on; a failed rollback must not
-          // replace it, and the transaction is abandoned server-side either way.
-        }
-        throw cause;
-      }
-    },
-  };
-}
-
-function createExecutor(
-  client: DataApiClient,
-  target: {
-    readonly resourceArn: string;
-    readonly secretArn: string;
-    readonly database: string;
-  },
-  transactionId: string | null,
-): DeploymentSqlExecutor {
-  return {
-    async query(statement, parameters = {}) {
-      const response = await client.send({
-        name: 'ExecuteStatement',
-        input: {
-          ...target,
-          sql: statement,
-          parameters: dataApiParameters(parameters),
-          formatRecordsAs: 'JSON',
-          includeResultMetadata: false,
-          ...(transactionId === null ? {} : { transactionId }),
-        },
-      });
-      return readFormattedRecords(response.formattedRecords);
-    },
-  };
-}
-
-/** Maps named parameters to the Data API's typed parameter list; values stay scalar. */
-function dataApiParameters(
-  parameters: Readonly<Record<string, DeploymentSqlValue>>,
-): readonly { readonly name: string; readonly value: Readonly<Record<string, unknown>> }[] {
-  return Object.entries(parameters).map(([name, value]) => ({
-    name,
-    value:
-      value === null
-        ? { isNull: true }
-        : typeof value === 'string'
-          ? { stringValue: value }
-          : typeof value === 'boolean'
-            ? { booleanValue: value }
-            : Number.isInteger(value)
-              ? { longValue: value }
-              : { doubleValue: value },
-  }));
-}
-
-function readFormattedRecords(value: unknown): readonly DeploymentSqlRow[] {
-  if (value === undefined || value === null) {
-    return [];
-  }
-  if (typeof value !== 'string') {
-    throw new Error('The RDS Data API returned a result that is not readable.');
-  }
-  if (value.trim() === '') {
-    return [];
-  }
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(value);
-  } catch (cause) {
-    throw new Error('The RDS Data API returned a result that is not readable.', { cause });
-  }
-  if (!Array.isArray(decoded)) {
-    throw new Error('The RDS Data API returned a result that is not a record list.');
-  }
-  return decoded.map((record) => readRecord(record));
-}
-
-function readRecord(value: unknown): DeploymentSqlRow {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('The RDS Data API returned a record that is not readable.');
-  }
-  const record: Record<string, DeploymentSqlValue> = {};
-  for (const [name, entry] of Object.entries(value)) {
-    if (
-      entry !== null &&
-      typeof entry !== 'string' &&
-      typeof entry !== 'number' &&
-      typeof entry !== 'boolean'
-    ) {
-      throw new Error('The RDS Data API returned a column value that is not scalar.');
-    }
-    record[name] = entry;
-  }
-  return record;
 }
 
 /** Adapts the AWS S3 client to the snapshot-object port this composition reads through. */
@@ -719,152 +498,6 @@ export function createInteractiveDeployment(
       }
     },
   };
-}
-
-/** One HTTP API (payload format 2.0) event as the deployed entry point receives it. */
-export interface ApiGatewayHttpApiEvent {
-  readonly rawPath?: unknown;
-  readonly rawQueryString?: unknown;
-  readonly queryStringParameters?: unknown;
-  readonly headers?: unknown;
-  readonly body?: unknown;
-  readonly isBase64Encoded?: unknown;
-  readonly requestContext?: unknown;
-}
-
-export interface LambdaHttpResponse {
-  readonly statusCode: number;
-  readonly headers: Readonly<Record<string, string>>;
-  readonly body: string;
-}
-
-/**
- * The interactive entry point: a CORS preflight succeeds at the unauthenticated deployment
- * boundary, while every actual operation becomes one transport request that carries the claims the
- * API's JWT authorizer verified, the request identity and the decoded body. The request boundary
- * re-checks the claims against this environment's pool and app client before any private operation
- * runs, so a development or test token authorizes nothing here.
- */
-export function createApiGatewayHandler(
-  target: Pick<Application, 'handle'>,
-): (event: unknown) => Promise<LambdaHttpResponse> {
-  if (typeof target?.handle !== 'function') {
-    throw new TypeError('createApiGatewayHandler requires the application request boundary.');
-  }
-  return async function handler(event: unknown): Promise<LambdaHttpResponse> {
-    if (isPreflight(event)) {
-      // The HTTP API adds its configured CORS headers to this integration response.
-      return { statusCode: 204, headers: {}, body: '' };
-    }
-    const response = await dispatch(target, event);
-    return { statusCode: response.status, headers: response.headers, body: response.body };
-  };
-}
-
-/** Whether the dedicated unauthenticated API route delivered one browser preflight. */
-function isPreflight(event: unknown): boolean {
-  const record = readRecordValue(event);
-  const requestContext = readRecordValue(record?.requestContext);
-  const http = readRecordValue(requestContext?.http);
-  return readStringValue(http?.method)?.toUpperCase() === 'OPTIONS';
-}
-
-async function dispatch(
-  target: Pick<Application, 'handle'>,
-  event: unknown,
-): Promise<TransportResponse> {
-  let request: TransportRequest;
-  try {
-    request = readTransportRequest(event);
-  } catch (cause) {
-    return failureResponse(
-      new ApplicationError('invalid-request', 'The invocation is not a readable HTTP request.', {
-        cause,
-      }),
-    );
-  }
-  try {
-    return await target.handle(request);
-  } catch (cause) {
-    // The request boundary reports its own failures; a failure it cannot classify is an
-    // unavailable operation, and never leaks storage, credentials or provider exceptions.
-    return failureResponse(
-      cause instanceof ApplicationError
-        ? cause
-        : new ApplicationError('unavailable', 'The operation could not be completed.', { cause }),
-    );
-  }
-}
-
-function readTransportRequest(event: unknown): TransportRequest {
-  if (typeof event !== 'object' || event === null) {
-    throw new TypeError('The invocation carries no event.');
-  }
-  const record = event as Readonly<Record<string, unknown>>;
-  const requestContext = readRecordValue(record.requestContext);
-  const http = readRecordValue(requestContext?.http);
-  const method = readStringValue(http?.method);
-  const path = readStringValue(record.rawPath) ?? readStringValue(http?.path);
-  if (method === null || path === null) {
-    throw new TypeError('The invocation carries no method or path.');
-  }
-  const claims = readRecordValue(readRecordValue(requestContext?.authorizer)?.jwt)?.claims;
-  const body = readBody(record);
-  return {
-    method,
-    path,
-    query: readQuery(record.queryStringParameters),
-    authentication: { claims: normalizeAuthorizerClaims(claims) },
-    body,
-    requestId: readStringValue(requestContext?.requestId),
-  };
-}
-
-/**
- * Claims of an HTTP API JWT authorizer: the verified token's claims, with every value delivered as
- * text (AWS's `APIGatewayV2HTTPRequestContextAuthorizerJWTDescription`). Application's verifier
- * reads the registered expiry as a number of seconds, so this boundary normalizes that one claim
- * back to its JSON type and passes everything else on unchanged. A claim that does not carry a
- * whole number of seconds stays as it arrived, and the verifier rejects the invocation.
- */
-function normalizeAuthorizerClaims(value: unknown): Readonly<Record<string, unknown>> | null {
-  const claims = readRecordValue(value);
-  if (claims === null) {
-    return null;
-  }
-  const expiry = claims.exp;
-  if (typeof expiry !== 'string' || !/^\d+$/.test(expiry)) {
-    return claims;
-  }
-  return { ...claims, exp: Number(expiry) };
-}
-
-function readBody(event: Readonly<Record<string, unknown>>): string | null {
-  const body = event.body;
-  if (body === null || body === undefined) {
-    return null;
-  }
-  if (typeof body !== 'string') {
-    throw new TypeError('The invocation carries a body that is not text.');
-  }
-  if (event.isBase64Encoded === true) {
-    return Buffer.from(body, 'base64').toString('utf8');
-  }
-  return body;
-}
-
-function readQuery(value: unknown): Readonly<Record<string, string>> | null {
-  const query = readRecordValue(value);
-  if (query === null) {
-    return null;
-  }
-  const values: Record<string, string> = {};
-  for (const [name, entry] of Object.entries(query)) {
-    if (typeof entry === 'string') {
-      values[name] = entry;
-    }
-  }
-  return values;
 }
 
 function readRecordValue(value: unknown): Readonly<Record<string, unknown>> | null {

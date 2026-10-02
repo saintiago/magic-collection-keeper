@@ -38,6 +38,26 @@ export class RecognitionStack extends Stack {
     const foundation = readLegacyTemplate('foundation.json');
     const service = readLegacyTemplate('service.json');
     const fragment = new TemplateFragment(this, 'Recognition');
+    if (configuration.stage === 'image-repositories') {
+      fragment.addParameters({ Environment: environmentParameter(configuration.environment) }, [
+        'Environment',
+      ]);
+      fragment.addResource(
+        'RecognitionRepository',
+        requiredResource(foundation, 'RecognitionRepository'),
+      );
+      fragment.addOutput(
+        'RecognitionRepositoryUri',
+        exportOutput(
+          { 'Fn::GetAtt': ['RecognitionRepository', 'RepositoryUri'] },
+          'keeper-${Environment}-recognition-repository-uri',
+        ),
+      );
+      fragment.addOutput('RecognitionRepositoryName', {
+        Value: { Ref: 'RecognitionRepository' },
+      });
+      return;
+    }
     fragment.addParameters(
       {
         Environment: environmentParameter(configuration.environment),

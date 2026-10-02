@@ -8,7 +8,7 @@
 
 import { createHash } from 'node:crypto';
 
-import type { Finish } from '../../catalog/index.js';
+import type { Finish } from '../../catalog/contract.js';
 import type { CopyCondition, ImportCandidate } from './model.js';
 
 /** Digest of a canonical value, so identical input replays and different input fails. */

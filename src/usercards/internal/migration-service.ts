@@ -10,7 +10,7 @@
 
 import { z } from 'zod';
 
-import type { CatalogResolver } from '../../catalog/index.js';
+import type { CatalogResolver } from '../../catalog/contract.js';
 import { resolveAvailablePrintings, resolveCards } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';

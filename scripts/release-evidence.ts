@@ -3,8 +3,8 @@
  *
  * One command prepares the acceptance record of one packaged release beside its manifest. It
  * re-verifies every byte the packaging manifest names, requires the packaging and recognition
- * manifests to come from a clean committed revision, ties the optional recognition manifest and the
- * deployment's release record to the same release, and keeps source completion, deployment and
+ * manifests to come from a clean committed revision, verifies every deployed component against
+ * its own retained source manifest, and keeps source completion, deployment and
  * production acceptance separate. The provider, physical-device and collection-reconciliation
  * checks the rebuild cannot establish stay recorded as unresolved. Nothing here deploys, migrates
  * or reads owner data.
@@ -67,12 +67,30 @@ export interface DeploymentStage {
   readonly reason: string | null;
   readonly release: ReleaseEvidenceFile | null;
   readonly environment: string | null;
-  readonly catalogServingCodeKey: string | null;
-  readonly catalogServingCodeVersion: string | null;
-  readonly userCardsCodeKey: string | null;
-  readonly userCardsCodeVersion: string | null;
-  readonly recognitionImageUri: string | null;
-  readonly catalogJobImageUri: string | null;
+  readonly components: DeploymentComponents | null;
+}
+
+export interface DeploymentComponentSource {
+  readonly revision: string;
+  readonly version: string;
+  readonly manifest: ReleaseEvidenceFile;
+}
+
+export interface ServingDeploymentComponent extends DeploymentComponentSource {
+  readonly codeKey: string;
+  readonly codeVersion: string;
+  readonly sha256: string;
+}
+
+export interface ImageDeploymentComponent extends DeploymentComponentSource {
+  readonly imageUri: string;
+}
+
+export interface DeploymentComponents {
+  readonly catalogServing: ServingDeploymentComponent;
+  readonly userCards: ServingDeploymentComponent;
+  readonly recognition: ImageDeploymentComponent;
+  readonly catalogIngestion: ImageDeploymentComponent;
 }
 
 export interface ProductionAcceptanceStage {
@@ -162,7 +180,7 @@ export async function prepareReleaseEvidence(
 
   const verifiedFiles = await verifyManifestArtifacts(outDir, manifest);
   const recognition = await readRecognitionEvidence(outDir, manifest);
-  const deployment = await readDeploymentEvidence(outDir, manifest);
+  const deployment = await readDeploymentEvidence(outDir);
   const evidence: ReleaseEvidence = {
     schema: 1,
     checklist: 'docs/release-checklist.md',
@@ -306,13 +324,10 @@ function verifyRecognitionBrowserAssets(
 
 /**
  * The deployment stage, recorded only from the release record a deployment captures beside the
- * manifest (infra/README.md#create). The record has to name this release, so an inspected
- * deployment can be restored from the release it actually ran.
+ * manifest (infra/README.md#create). Each component names its own retained source evidence, so an
+ * inspected mixed-version deployment can be restored from the combination it actually ran.
  */
-async function readDeploymentEvidence(
-  outDir: string,
-  manifest: ArtifactManifest,
-): Promise<DeploymentStage> {
+async function readDeploymentEvidence(outDir: string): Promise<DeploymentStage> {
   if (!existsSync(path.join(outDir, releaseEvidenceLayout.releaseRecord))) {
     return {
       status: 'not-recorded',
@@ -321,96 +336,228 @@ async function readDeploymentEvidence(
         'Deployment execution requires explicit authorization (docs/operations.md#release-acceptance).',
       release: null,
       environment: null,
-      catalogServingCodeKey: null,
-      catalogServingCodeVersion: null,
-      userCardsCodeKey: null,
-      userCardsCodeVersion: null,
-      recognitionImageUri: null,
-      catalogJobImageUri: null,
+      components: null,
     };
   }
   const file = await readRecordedFile(outDir, releaseEvidenceLayout.releaseRecord);
-  const parameters = readStackParameters(
+  const record = readDeploymentRecord(
     await readJsonFile(outDir, releaseEvidenceLayout.releaseRecord),
   );
-  const required = [
-    'Environment',
-    'CatalogServingCodeKey',
-    'CatalogServingCodeVersion',
-    'UserCardsCodeKey',
-    'UserCardsCodeVersion',
-    'RecognitionImageUri',
-    'CatalogJobImageUri',
-  ] as const;
-  for (const name of required) {
-    if ((parameters[name] ?? '').length === 0) {
-      throw new Error(
-        `${releaseEvidenceLayout.releaseRecord} names no ${name}; capture the service stack's ` +
-          'parameters after a deployment (infra/README.md#create).',
-      );
-    }
-  }
-  for (const [name, expected] of [
-    ['CatalogServingCodeKey', `releases/${manifest.version}/catalog-serving.zip`],
-    ['UserCardsCodeKey', `releases/${manifest.version}/usercards.zip`],
-  ] as const) {
-    if (parameters[name] !== expected) {
-      throw new Error(
-        `${releaseEvidenceLayout.releaseRecord}'s ${name} ${parameters[name] ?? ''} does not ` +
-          `name this release; publish it as ${expected} ` +
-          '(infra/README.md#packaging-and-publication).',
-      );
-    }
-  }
-  for (const name of ['RecognitionImageUri', 'CatalogJobImageUri'] as const) {
-    const uri = parameters[name] as string;
-    if (!/@sha256:[0-9a-f]{64}$/.test(uri)) {
-      throw new Error(
-        `${releaseEvidenceLayout.releaseRecord}'s ${name} is not pinned by digest (${uri}); ` +
-          'artifacts are restored by their immutable identity.',
-      );
-    }
-  }
+  const catalogServing = await readServingDeploymentComponent(
+    outDir,
+    'catalogServing',
+    record.components.catalogServing,
+    'catalogServing',
+    'catalog-serving.zip',
+  );
+  const userCards = await readServingDeploymentComponent(
+    outDir,
+    'userCards',
+    record.components.userCards,
+    'userCards',
+    'usercards.zip',
+  );
+  const catalogIngestion = await readImageDeploymentComponent(
+    outDir,
+    'catalogIngestion',
+    record.components.catalogIngestion,
+    'packaging',
+  );
+  const recognition = await readImageDeploymentComponent(
+    outDir,
+    'recognition',
+    record.components.recognition,
+    'recognition',
+  );
   return {
     status: 'recorded',
     reason: null,
     release: file,
-    environment: parameters['Environment'] as string,
-    catalogServingCodeKey: parameters['CatalogServingCodeKey'] as string,
-    catalogServingCodeVersion: parameters['CatalogServingCodeVersion'] as string,
-    userCardsCodeKey: parameters['UserCardsCodeKey'] as string,
-    userCardsCodeVersion: parameters['UserCardsCodeVersion'] as string,
-    recognitionImageUri: parameters['RecognitionImageUri'] as string,
-    catalogJobImageUri: parameters['CatalogJobImageUri'] as string,
+    environment: record.environment,
+    components: { catalogServing, userCards, recognition, catalogIngestion },
   };
 }
 
-/** The flattened environment parameters captured across independently deployed stacks. */
-function readStackParameters(value: unknown): Readonly<Record<string, string>> {
-  if (!Array.isArray(value)) {
+interface DeploymentRecordComponent {
+  readonly revision: string;
+  readonly version: string;
+  readonly manifest: string;
+}
+
+interface ServingDeploymentRecordComponent extends DeploymentRecordComponent {
+  readonly codeKey: string;
+  readonly codeVersion: string;
+}
+
+interface ImageDeploymentRecordComponent extends DeploymentRecordComponent {
+  readonly imageUri: string;
+}
+
+interface DeploymentRecord {
+  readonly schema: 1;
+  readonly environment: string;
+  readonly components: {
+    readonly catalogServing: ServingDeploymentRecordComponent;
+    readonly userCards: ServingDeploymentRecordComponent;
+    readonly recognition: ImageDeploymentRecordComponent;
+    readonly catalogIngestion: ImageDeploymentRecordComponent;
+  };
+}
+
+function readDeploymentRecord(value: unknown): DeploymentRecord {
+  const record = readRecord(value);
+  const components = readRecord(record?.['components']);
+  if (
+    record?.['schema'] !== 1 ||
+    typeof record['environment'] !== 'string' ||
+    record['environment'].length === 0 ||
+    components === null
+  ) {
+    throw new Error(`${releaseEvidenceLayout.releaseRecord} is not a schema 1 environment record.`);
+  }
+  return {
+    schema: 1,
+    environment: record['environment'],
+    components: {
+      catalogServing: readServingRecord(components['catalogServing'], 'catalogServing'),
+      userCards: readServingRecord(components['userCards'], 'userCards'),
+      recognition: readImageRecord(components['recognition'], 'recognition'),
+      catalogIngestion: readImageRecord(components['catalogIngestion'], 'catalogIngestion'),
+    },
+  };
+}
+
+function readServingRecord(value: unknown, name: string): ServingDeploymentRecordComponent {
+  const common = readComponentRecord(value, name);
+  const record = readRecord(value);
+  if (typeof record?.['codeKey'] !== 'string' || typeof record['codeVersion'] !== 'string') {
     throw new Error(
-      `${releaseEvidenceLayout.releaseRecord} is not the captured Stack[0].Parameters array ` +
-        '(infra/README.md#create).',
+      `${releaseEvidenceLayout.releaseRecord}'s ${name} has no immutable object identity.`,
     );
   }
-  const parameters: Record<string, string> = {};
-  for (const entry of value) {
-    const record =
-      typeof entry === 'object' && entry !== null && !Array.isArray(entry)
-        ? (entry as Readonly<Record<string, unknown>>)
-        : null;
-    const key = record?.['ParameterKey'];
-    const captured = record?.['ParameterValue'];
-    if (typeof key === 'string' && typeof captured === 'string') {
-      parameters[key] = captured;
-    }
+  return { ...common, codeKey: record['codeKey'], codeVersion: record['codeVersion'] };
+}
+
+function readImageRecord(value: unknown, name: string): ImageDeploymentRecordComponent {
+  const common = readComponentRecord(value, name);
+  const imageUri = readRecord(value)?.['imageUri'];
+  if (typeof imageUri !== 'string' || !/@sha256:[0-9a-f]{64}$/.test(imageUri)) {
+    throw new Error(
+      `${releaseEvidenceLayout.releaseRecord}'s ${name} image is not pinned by digest.`,
+    );
   }
-  return parameters;
+  return { ...common, imageUri };
+}
+
+function readComponentRecord(value: unknown, name: string): DeploymentRecordComponent {
+  const record = readRecord(value);
+  if (
+    typeof record?.['revision'] !== 'string' ||
+    !/^[0-9a-f]{40}$/.test(record['revision']) ||
+    typeof record['version'] !== 'string' ||
+    record['version'].length === 0 ||
+    typeof record['manifest'] !== 'string' ||
+    record['manifest'].length === 0
+  ) {
+    throw new Error(
+      `${releaseEvidenceLayout.releaseRecord}'s ${name} has no readable source provenance.`,
+    );
+  }
+  return {
+    revision: record['revision'],
+    version: record['version'],
+    manifest: record['manifest'],
+  };
+}
+
+async function readServingDeploymentComponent(
+  outDir: string,
+  name: string,
+  record: ServingDeploymentRecordComponent,
+  artifact: 'catalogServing' | 'userCards',
+  archive: string,
+): Promise<ServingDeploymentComponent> {
+  const manifest = await readPackagingProvenance(outDir, name, record);
+  const file = manifest.artifacts[artifact];
+  const expectedManifestFile =
+    artifact === 'catalogServing'
+      ? artifactLayout.catalogServingArchive
+      : artifactLayout.userCardsArchive;
+  const expectedKey = `releases/${record.version}/${archive}`;
+  if (
+    file.file !== expectedManifestFile ||
+    record.codeKey !== expectedKey ||
+    record.codeVersion.length === 0
+  ) {
+    throw new Error(
+      `${releaseEvidenceLayout.releaseRecord}'s ${name} object identity does not match ` +
+        `${record.manifest}; expected ${expectedKey} with an object version.`,
+    );
+  }
+  return {
+    revision: record.revision,
+    version: record.version,
+    manifest: await readRecordedFile(outDir, record.manifest),
+    codeKey: record.codeKey,
+    codeVersion: record.codeVersion,
+    sha256: file.sha256,
+  };
+}
+
+async function readImageDeploymentComponent(
+  outDir: string,
+  name: string,
+  record: ImageDeploymentRecordComponent,
+  manifestKind: 'packaging' | 'recognition',
+): Promise<ImageDeploymentComponent> {
+  if (manifestKind === 'packaging') await readPackagingProvenance(outDir, name, record);
+  else await readRecognitionProvenance(outDir, name, record);
+  return {
+    revision: record.revision,
+    version: record.version,
+    manifest: await readRecordedFile(outDir, record.manifest),
+    imageUri: record.imageUri,
+  };
+}
+
+async function readPackagingProvenance(
+  outDir: string,
+  name: string,
+  record: DeploymentRecordComponent,
+): Promise<ArtifactManifest> {
+  const manifest = readArtifactManifest(await readJsonFile(outDir, record.manifest));
+  verifyComponentProvenance(name, record, manifest);
+  return manifest;
+}
+
+async function readRecognitionProvenance(
+  outDir: string,
+  name: string,
+  record: DeploymentRecordComponent,
+): Promise<RecognitionArtifactManifest> {
+  const manifest = readRecognitionManifest(await readJsonFile(outDir, record.manifest));
+  verifyComponentProvenance(name, record, manifest);
+  return manifest;
+}
+
+function verifyComponentProvenance(
+  name: string,
+  record: DeploymentRecordComponent,
+  manifest: Pick<ArtifactManifest, 'revision' | 'version' | 'workingTree'>,
+): void {
+  if (manifest.workingTree !== 'clean') {
+    throw new Error(`${record.manifest} records a dirty working tree for ${name}.`);
+  }
+  if (manifest.revision !== record.revision || manifest.version !== record.version) {
+    throw new Error(
+      `${releaseEvidenceLayout.releaseRecord}'s ${name} provenance does not match ${record.manifest}.`,
+    );
+  }
 }
 
 /** Describes one file of the release directory, failing when it is missing. */
 async function readRecordedFile(outDir: string, file: string): Promise<ReleaseEvidenceFile> {
-  const content = await readFile(path.join(outDir, file)).catch(() => {
+  const content = await readFile(releaseFile(outDir, file)).catch(() => {
     throw new Error(`The release directory has no ${file}.`);
   });
   return { file, bytes: content.byteLength, sha256: sha256(content) };
@@ -438,7 +585,7 @@ async function verifyRecordedFile(outDir: string, recorded: ArtifactFile): Promi
 }
 
 async function readJsonFile(outDir: string, file: string): Promise<unknown> {
-  const content = await readFile(path.join(outDir, file)).catch(() => {
+  const content = await readFile(releaseFile(outDir, file)).catch(() => {
     throw new Error(`The release directory has no ${file}.`);
   });
   try {
@@ -446,6 +593,15 @@ async function readJsonFile(outDir: string, file: string): Promise<unknown> {
   } catch {
     throw new Error(`${file} is not readable JSON.`);
   }
+}
+
+function releaseFile(outDir: string, file: string): string {
+  const target = path.resolve(outDir, file);
+  const relative = path.relative(outDir, target);
+  if (relative.length === 0 || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`The release record names ${file} outside the release directory.`);
+  }
+  return target;
 }
 
 function readArtifactManifest(value: unknown): ArtifactManifest {

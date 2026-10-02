@@ -1,4 +1,4 @@
-import { type CatalogResolver, type Finish } from '../../catalog/index.js';
+import { type CatalogResolver, type Finish } from '../../catalog/contract.js';
 import {
   type Association,
   type CopyCondition,

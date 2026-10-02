@@ -10,10 +10,13 @@ import {
 
 export const deploymentLayouts = ['legacy', 'target'] as const;
 export type DeploymentLayout = (typeof deploymentLayouts)[number];
+export const deploymentStages = ['complete', 'image-repositories'] as const;
+export type DeploymentStage = (typeof deploymentStages)[number];
 
 export interface DeploymentConfiguration {
   readonly environment: ApplicationEnvironment;
   readonly layout: DeploymentLayout;
+  readonly stage: DeploymentStage;
   readonly artifacts: DeploymentArtifacts | null;
 }
 
@@ -36,9 +39,17 @@ export function readDeploymentConfiguration(app: App): DeploymentConfiguration {
   if (!deploymentLayouts.includes(layout as DeploymentLayout)) {
     throw new Error(`CDK context "layout" must be one of ${deploymentLayouts.join(', ')}.`);
   }
+  const stage = app.node.tryGetContext('stage') ?? 'complete';
+  if (!deploymentStages.includes(stage as DeploymentStage)) {
+    throw new Error(`CDK context "stage" must be one of ${deploymentStages.join(', ')}.`);
+  }
+  if (layout === 'legacy' && stage !== 'complete') {
+    throw new Error('The image-repositories stage applies only to the target layout.');
+  }
   return {
     environment: environment as ApplicationEnvironment,
     layout: layout as DeploymentLayout,
+    stage: stage as DeploymentStage,
     artifacts: readArtifacts(app, environment as ApplicationEnvironment),
   };
 }
@@ -54,29 +65,29 @@ function readArtifacts(app: App, environment: ApplicationEnvironment): Deploymen
     throw new Error('CDK context "release" must name the captured release parameter file.');
   }
   const value = JSON.parse(readFileSync(path.resolve(release), 'utf8')) as unknown;
-  if (!Array.isArray(value)) throw new Error('The release parameter file must be a JSON array.');
-  const parameters = new Map<string, string>();
-  for (const entry of value) {
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue;
-    const record = entry as Readonly<Record<string, unknown>>;
-    if (typeof record.ParameterKey === 'string' && typeof record.ParameterValue === 'string') {
-      parameters.set(record.ParameterKey, record.ParameterValue);
-    }
+  const record = asRecord(value);
+  const components = asRecord(record?.components);
+  if (record?.schema !== 1 || components === null) {
+    throw new Error('The release parameter file must be a schema 1 environment record.');
   }
-  if (parameters.get('Environment') !== environment) {
+  if (record.environment !== environment) {
     throw new Error('The release parameter file belongs to another environment.');
   }
+  const catalogServing = component(components, 'catalogServing');
+  const userCards = component(components, 'userCards');
+  const recognition = component(components, 'recognition');
+  const catalogIngestion = component(components, 'catalogIngestion');
   const artifacts: DeploymentArtifacts = {
     catalogServing: {
-      key: required(parameters, 'CatalogServingCodeKey'),
-      version: required(parameters, 'CatalogServingCodeVersion'),
+      key: required(catalogServing, 'codeKey'),
+      version: required(catalogServing, 'codeVersion'),
     },
     userCards: {
-      key: required(parameters, 'UserCardsCodeKey'),
-      version: required(parameters, 'UserCardsCodeVersion'),
+      key: required(userCards, 'codeKey'),
+      version: required(userCards, 'codeVersion'),
     },
-    recognitionImageUri: required(parameters, 'RecognitionImageUri'),
-    catalogIngestionImageUri: required(parameters, 'CatalogJobImageUri'),
+    recognitionImageUri: required(recognition, 'imageUri'),
+    catalogIngestionImageUri: required(catalogIngestion, 'imageUri'),
   };
   for (const image of [artifacts.recognitionImageUri, artifacts.catalogIngestionImageUri]) {
     if (!/@sha256:[0-9a-f]{64}$/.test(image)) {
@@ -86,10 +97,26 @@ function readArtifacts(app: App, environment: ApplicationEnvironment): Deploymen
   return artifacts;
 }
 
-function required(parameters: ReadonlyMap<string, string>, name: string): string {
-  const value = parameters.get(name);
-  if (value === undefined || value.length === 0) {
+function component(
+  components: Readonly<Record<string, unknown>>,
+  name: string,
+): Readonly<Record<string, unknown>> {
+  const value = asRecord(components[name]);
+  if (value === null) throw new Error(`The release parameter file names no ${name} component.`);
+  return value;
+}
+
+function required(parameters: Readonly<Record<string, unknown>>, name: string): string {
+  const value = parameters[name];
+  if (value === undefined || value === '') {
     throw new Error(`The release parameter file names no ${name}.`);
   }
+  if (typeof value !== 'string') throw new Error(`The release parameter file has invalid ${name}.`);
   return value;
+}
+
+function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : null;
 }

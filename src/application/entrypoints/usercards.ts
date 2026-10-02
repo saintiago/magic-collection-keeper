@@ -1,12 +1,12 @@
 /** Lambda entry point of the independently deployed UserCards runtime. */
 
+import { ConfigurationError } from '../internal/configuration.js';
 import {
   createApiGatewayHandler,
   createConsoleDiagnostics,
-  createUserCardsServingDeployment,
-  type ServingDeployment,
-} from '../deployment.js';
-import { ConfigurationError } from '../index.js';
+} from '../internal/lambda-deployment.js';
+import type { ServingDeployment } from '../internal/serving-deployment-shared.js';
+import { createUserCardsServingDeployment } from '../internal/usercards-serving-deployment.js';
 
 let runtime: ServingDeployment | null = null;
 

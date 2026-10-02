@@ -5,9 +5,9 @@
  * composition imports ./failures.ts instead and never reaches this module.
  */
 
-import { CatalogError } from '../../catalog/index.js';
+import { CatalogError } from '../../catalog/contract.js';
 import { RecognitionError } from '../../recognition/index.js';
-import { UserCardsError } from '../../usercards/index.js';
+import { UserCardsError } from '../../usercards/contract.js';
 
 import { ApplicationError, isAbortCause } from './failures.js';
 

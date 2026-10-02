@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import JSZip from 'jszip';
+import { build, type Plugin } from 'esbuild';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { ConfigurationError } from '../../src/application/index.js';
@@ -25,6 +26,7 @@ import {
   artifactLayout,
   packageArtifacts,
   publicSettingsFromStackOutputs,
+  servingBundleOptions,
   type ArtifactManifest,
 } from '../../scripts/package-artifacts.js';
 import { readRevision } from '../../scripts/packaging-support.js';
@@ -63,7 +65,7 @@ describe('packaging the deployable artifacts', () => {
 
   afterAll(async () => {
     await rm(workspace, { recursive: true, force: true });
-  });
+  }, 30_000);
 
   it('records the source revision, version and digest of every artifact', async () => {
     expect(manifest.schema).toBe(2);
@@ -149,6 +151,48 @@ describe('packaging the deployable artifacts', () => {
     expect(manifest.artifacts.catalogServing.entry).toBe('index.mjs');
     expect(manifest.artifacts.userCards.entry).toBe('index.mjs');
   }, 120_000);
+
+  it('keeps provider storage internals out of the other serving artifact', async () => {
+    for (const isolation of [
+      {
+        consumer: 'usercards.ts' as const,
+        providerStorage: path.join(repoRoot, 'src/catalog/internal/schema.ts'),
+      },
+      {
+        consumer: 'catalog-serving.ts' as const,
+        providerStorage: path.join(repoRoot, 'src/usercards/internal/schema.ts'),
+      },
+    ]) {
+      const baseline = await build({
+        ...servingBundleOptions(repoRoot, isolation.consumer, 'isolated.mjs'),
+        write: false,
+        metafile: true,
+      });
+      const mutation: Plugin = {
+        name: 'provider-storage-mutation',
+        setup(builder) {
+          builder.onLoad({ filter: /[/\\]schema\.ts$/ }, async (args) => {
+            if (path.resolve(args.path) !== isolation.providerStorage) return null;
+            return {
+              contents: `${await readFile(args.path, 'utf8')}\nvoid 'provider-storage-mutation';\n`,
+              loader: 'ts',
+            };
+          });
+        },
+      };
+      const changedProvider = await build({
+        ...servingBundleOptions(repoRoot, isolation.consumer, 'isolated.mjs'),
+        write: false,
+        plugins: [mutation],
+      });
+      const providerInput = path
+        .relative(repoRoot, isolation.providerStorage)
+        .split(path.sep)
+        .join('/');
+      expect(baseline.metafile?.inputs).not.toHaveProperty(providerInput);
+      expect(changedProvider.outputFiles[0]?.contents).toEqual(baseline.outputFiles[0]?.contents);
+    }
+  }, 30_000);
 
   it('publishes only the public browser settings with the browser artifact', async () => {
     const settings = JSON.parse(

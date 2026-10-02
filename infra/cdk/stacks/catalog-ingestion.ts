@@ -32,6 +32,17 @@ export class CatalogIngestionStack extends Stack {
     const foundation = readLegacyTemplate('foundation.json');
     const service = readLegacyTemplate('service.json');
     const fragment = new TemplateFragment(this, 'CatalogIngestion');
+    if (configuration.stage === 'image-repositories') {
+      fragment.addParameters({ Environment: environmentParameter(configuration.environment) }, [
+        'Environment',
+      ]);
+      fragment.addResource('CatalogRepository', requiredResource(foundation, 'CatalogRepository'));
+      fragment.addOutput('CatalogRepositoryUri', {
+        Value: { 'Fn::GetAtt': ['CatalogRepository', 'RepositoryUri'] },
+      });
+      fragment.addOutput('CatalogRepositoryName', { Value: { Ref: 'CatalogRepository' } });
+      return;
+    }
     fragment.addParameters(
       {
         Environment: environmentParameter(configuration.environment),

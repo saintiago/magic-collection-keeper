@@ -81,7 +81,7 @@ async function createRelease(options: ReleaseFixtureOptions = {}): Promise<strin
   );
   const browserFiles: ArtifactFile[] = [browserEntry, browserPage];
   const recognition =
-    options.recognition === true
+    options.recognition === true || options.deployment === true
       ? await createRecognitionFixture(root, browserFiles, options, label)
       : null;
   await write(
@@ -202,34 +202,56 @@ async function createRecognitionFixture(
 async function writeReleaseRecord(
   root: string,
   options: {
-    readonly version?: string;
     readonly environment?: string;
-    /** Whether the captured parameters name the indexing image, as a deployment of this release does. */
+    readonly catalogServing?: ComponentSource;
+    readonly userCards?: ComponentSource;
+    readonly recognition?: ComponentSource;
+    readonly catalogIngestion?: ComponentSource;
   },
 ): Promise<void> {
-  const label = options.version ?? version;
-  const parameters = [
-    { ParameterKey: 'Environment', ParameterValue: options.environment ?? 'test' },
-    {
-      ParameterKey: 'CatalogServingCodeKey',
-      ParameterValue: `releases/${label}/catalog-serving.zip`,
-    },
-    { ParameterKey: 'CatalogServingCodeVersion', ParameterValue: 'object-version-3' },
-    {
-      ParameterKey: 'UserCardsCodeKey',
-      ParameterValue: `releases/${label}/usercards.zip`,
-    },
-    { ParameterKey: 'UserCardsCodeVersion', ParameterValue: 'object-version-4' },
-    {
-      ParameterKey: 'RecognitionImageUri',
-      ParameterValue: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-recognition@sha256:${'a'.repeat(64)}`,
-    },
-    {
-      ParameterKey: 'CatalogJobImageUri',
-      ParameterValue: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-catalog@sha256:${'b'.repeat(64)}`,
-    },
-  ];
-  await write(root, 'release.json', `${JSON.stringify(parameters, null, 2)}\n`);
+  const packaging = { revision, version, manifest: 'manifest.json' };
+  const recognition = { revision, version, manifest: 'recognition/manifest.json' };
+  const catalogServing = options.catalogServing ?? packaging;
+  const userCards = options.userCards ?? packaging;
+  const catalogIngestion = options.catalogIngestion ?? packaging;
+  await write(
+    root,
+    'release.json',
+    `${JSON.stringify(
+      {
+        schema: 1,
+        environment: options.environment ?? 'test',
+        components: {
+          catalogServing: {
+            ...catalogServing,
+            codeKey: `releases/${catalogServing.version}/catalog-serving.zip`,
+            codeVersion: 'object-version-3',
+          },
+          userCards: {
+            ...userCards,
+            codeKey: `releases/${userCards.version}/usercards.zip`,
+            codeVersion: 'object-version-4',
+          },
+          recognition: {
+            ...(options.recognition ?? recognition),
+            imageUri: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-recognition@sha256:${'a'.repeat(64)}`,
+          },
+          catalogIngestion: {
+            ...catalogIngestion,
+            imageUri: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-catalog@sha256:${'b'.repeat(64)}`,
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+interface ComponentSource {
+  readonly revision: string;
+  readonly version: string;
+  readonly manifest: string;
 }
 
 function markdownLinks(markdown: string): readonly string[] {
@@ -316,7 +338,7 @@ describe('release acceptance evidence', () => {
     );
   });
 
-  it('records a deployment only from a release record that names this release', async () => {
+  it('records a deployment only from verified component provenance', async () => {
     const outDir = await createRelease({ deployment: true });
 
     const { evidence } = await prepareReleaseEvidence({ outDir, repoRoot });
@@ -326,18 +348,66 @@ describe('release acceptance evidence', () => {
     expect(deployment.reason).toBeNull();
     expect(deployment.release?.file).toBe('release.json');
     expect(deployment.environment).toBe('test');
-    expect(deployment.catalogServingCodeKey).toBe(`releases/${version}/catalog-serving.zip`);
-    expect(deployment.catalogServingCodeVersion).toBe('object-version-3');
-    expect(deployment.userCardsCodeKey).toBe(`releases/${version}/usercards.zip`);
-    expect(deployment.userCardsCodeVersion).toBe('object-version-4');
-    expect(deployment.recognitionImageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
-    expect(deployment.catalogJobImageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
+    expect(deployment.components?.catalogServing).toMatchObject({
+      revision,
+      version,
+      codeKey: `releases/${version}/catalog-serving.zip`,
+      codeVersion: 'object-version-3',
+    });
+    expect(deployment.components?.userCards.codeKey).toBe(`releases/${version}/usercards.zip`);
+    expect(deployment.components?.userCards.codeVersion).toBe('object-version-4');
+    expect(deployment.components?.recognition.imageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
+    expect(deployment.components?.catalogIngestion.imageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
+  });
 
-    const foreign = await createRelease();
-    await writeReleaseRecord(foreign, { version: '0.1.0-ffffffffffff' });
-    await expect(prepareReleaseEvidence({ outDir: foreign, repoRoot })).rejects.toThrow(
-      /does not name this release/,
+  it('records mixed component versions and the previous rollback combination', async () => {
+    const outDir = await createRelease({ deployment: true });
+    const previousRevision = 'f'.repeat(40);
+    const previousVersion = `0.1.0-${previousRevision.slice(0, 12)}`;
+    const currentManifest = JSON.parse(
+      await readFile(path.join(outDir, 'manifest.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    const previousManifest = {
+      ...currentManifest,
+      revision: previousRevision,
+      version: previousVersion,
+    };
+    await write(
+      outDir,
+      'provenance/previous-manifest.json',
+      `${JSON.stringify(previousManifest, null, 2)}\n`,
     );
+    const previous = {
+      revision: previousRevision,
+      version: previousVersion,
+      manifest: 'provenance/previous-manifest.json',
+    };
+    await writeReleaseRecord(outDir, { userCards: previous });
+
+    const candidate = await prepareReleaseEvidence({ outDir, repoRoot });
+    expect(candidate.evidence.stages.deployment.components?.catalogServing.revision).toBe(revision);
+    expect(candidate.evidence.stages.deployment.components?.userCards).toMatchObject({
+      revision: previous.revision,
+      version: previous.version,
+      manifest: { file: previous.manifest },
+    });
+
+    await writeReleaseRecord(outDir, {
+      catalogServing: previous,
+      userCards: previous,
+      catalogIngestion: previous,
+    });
+    const rolledBack = await prepareReleaseEvidence({ outDir, repoRoot });
+    expect(rolledBack.evidence.stages.deployment.components?.catalogServing).toMatchObject({
+      revision: previous.revision,
+      version: previous.version,
+      manifest: { file: previous.manifest },
+    });
+    expect(rolledBack.evidence.stages.deployment.components?.userCards).toMatchObject({
+      revision: previous.revision,
+      version: previous.version,
+      manifest: { file: previous.manifest },
+    });
   });
 
   it('verifies the recognition context and the source download it carries', async () => {

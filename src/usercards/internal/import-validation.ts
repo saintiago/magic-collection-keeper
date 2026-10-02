@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { finishes } from '../../catalog/index.js';
+import { finishes } from '../../catalog/contract.js';
 import { USERCARDS_LIMITS, copyConditions, type ImportCandidate } from './model.js';
 
 const identifierLength = USERCARDS_LIMITS.maxIdentifierLength;

@@ -22,7 +22,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint . --cache --cache-location .turbo/eslint/.eslintcache --cache-strategy content",
     "lint:fix": "eslint . --fix",
-    "lint:infrastructure": "npm run synth -- --context environment=test --context layout=legacy --output .turbo/cdk-legacy.out && npm run synth -- --context environment=test --context layout=target --output .turbo/cdk.out && node scripts/lint-infrastructure.ts",
+    "lint:infrastructure": "npm run synth -- --context environment=test --context layout=legacy --output .turbo/cdk-legacy.out && npm run synth -- --context environment=test --context layout=target --output .turbo/cdk.out && npm run synth -- --context environment=test --context layout=target --context stage=image-repositories --output .turbo/cdk-repositories.out && node scripts/lint-infrastructure.ts",
     "typecheck": "tsc --noEmit",
     "boundaries": "depcruise src",
     "test": "vitest run",
