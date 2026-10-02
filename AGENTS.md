@@ -60,6 +60,7 @@ them; an existing ticket or old implementation does not establish a requirement.
 All documents in `docs/` are relevant to the rebuild.
 
 - [Product charter](docs/PRODUCT-CHARTER.md)
+- [Product requirements and user journeys](docs/requirements/README.md)
 - [Architecture](docs/architecture.md)
 - [Data architecture](docs/data-architecture.md)
 - [Application](docs/application.md)
