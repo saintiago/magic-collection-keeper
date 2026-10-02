@@ -307,3 +307,10 @@ Verify both workspace parts run without login, credentials, database access or e
 requests, and that mock changes are reflected locally. Check production artifacts exclude workspace
 code, fixtures and stepping behavior. These checks establish presentation and isolation; they do not
 measure performance or prove live-service behavior.
+
+For the [design language](ui/design-language.md), inspect desktop and narrow-screen layouts and
+representative hover, keyboard focus, press, selection, validation, loading and outcome feedback.
+Exercise the gallery's forms, retry and dialog actions rather than only checking static samples.
+Verify gallery loading holds for Space, reduced motion retains clear static feedback, and switching
+tabs disposes hidden demo work. Check readable contrast and local texture loading. Production
+packaging must also exclude the opt-in design preset and texture.
