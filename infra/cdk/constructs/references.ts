@@ -27,8 +27,16 @@ export function replaceImportWithRef(
   exportName: string,
   logicalId: string,
 ): ResourceDefinition {
+  return replaceImportValue(definition, exportName, { Ref: logicalId });
+}
+
+export function replaceImportValue(
+  definition: ResourceDefinition,
+  exportName: string,
+  replacement: unknown,
+): ResourceDefinition {
   return mapValue(definition, (value) =>
-    same(value, importValue(exportName)) ? { Ref: logicalId } : value,
+    same(value, importValue(exportName)) ? replacement : value,
   ) as ResourceDefinition;
 }
 

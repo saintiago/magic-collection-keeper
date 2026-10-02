@@ -1,7 +1,7 @@
 /** Integration contract of the independently deployable CDK stack composition. */
 
 import { App, BootstraplessSynthesizer } from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,15 +65,14 @@ describe('CDK deployment units', () => {
       >;
       const target = synthesized[index];
       expect(target).toBeDefined();
-      for (const section of ['Parameters', 'Conditions', 'Resources', 'Outputs'] as const) {
-        expect(target?.[section] ?? {}).toEqual(source[section] ?? {});
-      }
+      expect(target).toEqual(source);
     }
   });
 
   it('synthesizes seven top-level stacks with their documented resource owners', () => {
     stacks.foundation.resourceCountIs('AWS::RDS::DBCluster', 1);
     stacks.foundation.resourceCountIs('AWS::S3::Bucket', 1);
+    expect(stacks.foundation.toJSON().Rules).toHaveProperty('DistinctDatabaseRoles');
     stacks.gateway.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
     stacks.web.resourceCountIs('AWS::CloudFront::Distribution', 1);
     stacks.web.resourceCountIs('AWS::S3::Bucket', 1);
@@ -84,6 +83,20 @@ describe('CDK deployment units', () => {
     stacks.catalogIngestion.resourceCountIs('AWS::ECR::Repository', 1);
     stacks.catalogIngestion.resourceCountIs('AWS::ECS::TaskDefinition', 1);
     stacks.catalogIngestion.resourceCountIs('AWS::S3::Bucket', 1);
+    stacks.catalogIngestion.hasResourceProperties('AWS::IAM::Role', {
+      Policies: Match.arrayWith([
+        Match.objectLike({
+          PolicyDocument: {
+            Statement: Match.arrayWith([
+              Match.objectLike({
+                Sid: 'CatalogImage',
+                Resource: { 'Fn::GetAtt': ['CatalogRepository', 'Arn'] },
+              }),
+            ]),
+          },
+        }),
+      ]),
+    });
   });
 
   it('pins independent serving artifacts and gives each runtime only owner credentials', () => {

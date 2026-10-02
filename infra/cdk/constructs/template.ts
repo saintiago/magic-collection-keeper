@@ -2,7 +2,15 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { CfnCondition, CfnOutput, CfnParameter, CfnResource, Fn, Stack } from 'aws-cdk-lib';
+import {
+  CfnCondition,
+  CfnOutput,
+  CfnParameter,
+  CfnResource,
+  CfnRule,
+  Fn,
+  Stack,
+} from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 
 type Json = Readonly<Record<string, unknown>>;
@@ -26,9 +34,19 @@ export interface OutputDefinition extends Json {
   readonly Export?: { readonly Name: unknown };
 }
 
+export interface RuleDefinition extends Json {
+  readonly RuleCondition?: unknown;
+  readonly Assertions: readonly {
+    readonly Assert: unknown;
+    readonly AssertDescription: string;
+  }[];
+}
+
 export interface TemplateDefinition {
+  readonly AWSTemplateFormatVersion?: string;
   readonly Description?: string;
   readonly Parameters?: Readonly<Record<string, ParameterDefinition>>;
+  readonly Rules?: Readonly<Record<string, RuleDefinition>>;
   readonly Conditions?: Readonly<Record<string, unknown>>;
   readonly Resources: Readonly<Record<string, ResourceDefinition>>;
   readonly Outputs?: Readonly<Record<string, OutputDefinition>>;
@@ -65,6 +83,22 @@ export class TemplateFragment extends Construct {
         expression: definitions[name] as never,
       });
       condition.overrideLogicalId(name);
+    }
+  }
+
+  addRules(definitions: Readonly<Record<string, RuleDefinition>>, names: readonly string[]): void {
+    for (const name of names) {
+      const definition = required(definitions[name], `rule ${name}`);
+      const rule = new CfnRule(this, `Rule${name}`, {
+        ...(definition.RuleCondition === undefined
+          ? {}
+          : { ruleCondition: definition.RuleCondition as never }),
+        assertions: definition.Assertions.map((assertion) => ({
+          assert: assertion.Assert as never,
+          assertDescription: assertion.AssertDescription,
+        })),
+      });
+      rule.overrideLogicalId(name);
     }
   }
 

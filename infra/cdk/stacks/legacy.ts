@@ -15,8 +15,10 @@ export class LegacyFoundationStack extends Stack {
     super(scope, id, props);
     const source = readLegacyTemplate('foundation.json');
     this.templateOptions.description = source.Description;
+    this.templateOptions.templateFormatVersion = source.AWSTemplateFormatVersion;
     const fragment = new TemplateFragment(this, 'Foundation');
     fragment.addParameters(source.Parameters ?? {}, Object.keys(source.Parameters ?? {}));
+    fragment.addRules(source.Rules ?? {}, Object.keys(source.Rules ?? {}));
     fragment.addResources(source.Resources, Object.keys(source.Resources));
     fragment.addOutputs(source.Outputs ?? {}, Object.keys(source.Outputs ?? {}));
   }
@@ -33,8 +35,10 @@ export class LegacyServiceStack extends Stack {
     super(scope, id, props);
     const source = readLegacyTemplate('service.json');
     this.templateOptions.description = source.Description;
+    this.templateOptions.templateFormatVersion = source.AWSTemplateFormatVersion;
     const fragment = new TemplateFragment(this, 'Service');
     fragment.addParameters(source.Parameters ?? {}, Object.keys(source.Parameters ?? {}));
+    fragment.addRules(source.Rules ?? {}, Object.keys(source.Rules ?? {}));
     fragment.addConditions(source.Conditions ?? {}, Object.keys(source.Conditions ?? {}));
     fragment.addResources(source.Resources, Object.keys(source.Resources));
     fragment.addOutputs(source.Outputs ?? {}, Object.keys(source.Outputs ?? {}));

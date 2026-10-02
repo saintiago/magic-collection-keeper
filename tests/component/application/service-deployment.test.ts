@@ -94,14 +94,14 @@ describe('independent serving deployments', () => {
     process.env.AWS_ACCESS_KEY_ID = 'AKIDEXAMPLE';
     process.env.AWS_SECRET_ACCESS_KEY = 'secret-example';
     process.env.AWS_SESSION_TOKEN = 'session-example';
-    const fetch = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
-      Promise.resolve(
-        new Response(
-          JSON.stringify({ revision: 'catalog-revision', cards: [], printings: [], missing: [] }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        ),
-      ),
-    );
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      void input;
+      void init;
+      return new Response(
+        JSON.stringify({ revision: 'catalog-revision', cards: [], printings: [], missing: [] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
     try {
       const request = createAwsCatalogRequest({
         baseUrl: 'https://keeper.execute-api.us-east-1.amazonaws.com',

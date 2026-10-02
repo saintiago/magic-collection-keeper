@@ -41,6 +41,7 @@ export class FoundationStack extends Stack {
       { ...source.Parameters, Environment: environmentParameter(configuration.environment) },
       Object.keys(source.Parameters ?? {}).filter((name) => name !== 'SnapshotPrefix'),
     );
+    fragment.addRules(source.Rules ?? {}, Object.keys(source.Rules ?? {}));
     fragment.addResources(
       source.Resources,
       Object.keys(source.Resources).filter((name) => !movedResources.has(name)),

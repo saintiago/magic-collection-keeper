@@ -2,7 +2,7 @@ import { Stack, type StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 
 import type { DeploymentConfiguration } from '../configuration.js';
-import { replaceImportWithRef } from '../constructs/references.js';
+import { replaceImportValue, replaceImportWithRef } from '../constructs/references.js';
 import {
   environmentParameter,
   exportOutput,
@@ -52,11 +52,9 @@ export class CatalogIngestionStack extends Stack {
         'keeper-${Environment}-snapshot-bucket',
         'SnapshotBucket',
       );
-      resource = replaceImportWithRef(
-        resource,
-        'keeper-${Environment}-catalog-repository-arn',
-        'CatalogRepository',
-      );
+      resource = replaceImportValue(resource, 'keeper-${Environment}-catalog-repository-arn', {
+        'Fn::GetAtt': ['CatalogRepository', 'Arn'],
+      });
       resource = replaceImportWithRef(
         resource,
         'keeper-${Environment}-snapshot-prefix',
