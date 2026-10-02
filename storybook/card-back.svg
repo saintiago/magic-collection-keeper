@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 488 680" role="img" aria-labelledby="title">
+  <title id="title">Local card fixture</title>
+  <rect width="488" height="680" rx="28" fill="#211a17"/>
+  <rect x="22" y="22" width="444" height="636" rx="20" fill="#583e2c" stroke="#d8b36a" stroke-width="8"/>
+  <circle cx="244" cy="340" r="146" fill="#161d2d" stroke="#d8b36a" stroke-width="10"/>
+  <path d="M244 205 283 303 388 312 308 379 333 482 244 427 155 482 180 379 100 312 205 303Z" fill="#d8b36a"/>
+</svg>
