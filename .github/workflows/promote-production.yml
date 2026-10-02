@@ -1,0 +1,114 @@
+name: Promote production
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Full test-verified Git revision to promote
+        required: true
+        type: string
+
+concurrency:
+  group: keeper-production-deployment
+  cancel-in-progress: false
+
+permissions: { contents: read }
+
+jobs:
+  plan:
+    name: Validate test evidence and plan promotion
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions: { contents: read, id-token: write }
+    outputs:
+      foundation: ${{ steps.plan.outputs.foundation }}
+      gateway: ${{ steps.plan.outputs.gateway }}
+      web: ${{ steps.plan.outputs.web }}
+      catalog_serving: ${{ steps.plan.outputs.catalog_serving }}
+      usercards: ${{ steps.plan.outputs.usercards }}
+      recognition: ${{ steps.plan.outputs.recognition }}
+      catalog_ingestion: ${{ steps.plan.outputs.catalog_ingestion }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.revision }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1 }
+      - id: plan
+        env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
+        run: |
+          [[ '${{ inputs.revision }}' =~ ^[0-9a-f]{40}$ ]]
+          mkdir -p .turbo/ci
+          aws s3 cp "s3://$STATE_BUCKET/environments/test/current.json" .turbo/ci/test.json
+          aws s3 cp "s3://$STATE_BUCKET/environments/production/current.json" .turbo/ci/production.json
+          aws s3 cp "s3://$STATE_BUCKET/environments/production/parameters/" .turbo/ci/production-parameters/ --recursive
+          npm run ci:promotion-plan -- .turbo/ci/test.json .turbo/ci/production.json '${{ inputs.revision }}' .turbo/ci/plan.json .turbo/ci/production-parameters "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with: { name: deployment-plan, path: .turbo/ci/plan.json, if-no-files-found: error }
+
+  foundation:
+    needs: plan
+    if: needs.plan.outputs.foundation == 'true'
+    uses: ./.github/workflows/deploy-foundation.yml
+    with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
+    secrets: inherit
+  gateway:
+    needs: [plan, foundation]
+    if: ${{ !cancelled() && needs.plan.outputs.gateway == 'true' && (needs.foundation.result == 'success' || needs.foundation.result == 'skipped') }}
+    uses: ./.github/workflows/deploy-gateway.yml
+    with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
+    secrets: inherit
+  web:
+    needs: [plan, foundation, gateway]
+    if: ${{ !cancelled() && needs.plan.outputs.web == 'true' && !contains(needs.*.result, 'failure') }}
+    uses: ./.github/workflows/deploy-web.yml
+    with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
+    secrets: inherit
+  catalog-serving:
+    needs: [plan, foundation, gateway, web]
+    if: ${{ !cancelled() && needs.plan.outputs.catalog_serving == 'true' && !contains(needs.*.result, 'failure') }}
+    uses: ./.github/workflows/deploy-catalog-serving.yml
+    with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
+    secrets: inherit
+  usercards:
+    needs: [plan, foundation, gateway, catalog-serving]
+    if: ${{ !cancelled() && needs.plan.outputs.usercards == 'true' && !contains(needs.*.result, 'failure') }}
+    uses: ./.github/workflows/deploy-usercards.yml
+    with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
+    secrets: inherit
+  recognition:
+    needs: [plan, foundation, gateway, usercards]
+    if: ${{ !cancelled() && needs.plan.outputs.recognition == 'true' && !contains(needs.*.result, 'failure') }}
+    uses: ./.github/workflows/deploy-recognition.yml
+    with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
+    secrets: inherit
+  catalog-ingestion:
+    needs: [plan, foundation, recognition]
+    if: ${{ !cancelled() && needs.plan.outputs.catalog_ingestion == 'true' && !contains(needs.*.result, 'failure') }}
+    uses: ./.github/workflows/deploy-catalog-ingestion.yml
+    with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
+    secrets: inherit
+
+  finalize:
+    needs:
+      [plan, foundation, gateway, web, catalog-serving, usercards, recognition, catalog-ingestion]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.revision }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1 }
+      - env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
+        run: |
+          mkdir -p .turbo/ci
+          aws s3 cp "s3://$STATE_BUCKET/environments/production/current.json" .turbo/ci/current.json
+          npm run ci:record -- finalize --record .turbo/ci/current.json --environment production --revision '${{ inputs.revision }}' --out .turbo/ci/final.json
+          aws s3 cp .turbo/ci/final.json "s3://$STATE_BUCKET/environments/production/current.json"

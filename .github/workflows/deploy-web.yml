@@ -1,0 +1,131 @@
+name: Deploy WebStack
+
+on:
+  workflow_call:
+    inputs:
+      environment: { required: true, type: string }
+      revision: { required: true, type: string }
+      promote_from: { required: false, type: string, default: '' }
+
+permissions: { contents: read, id-token: write }
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.revision }}', fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - uses: actions/setup-python@v5
+        if: inputs.promote_from == ''
+        with: { python-version: '3.12' }
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1 }
+      - uses: actions/download-artifact@v4
+        with: { name: deployment-plan, path: .turbo/ci }
+      - name: Prepare stack and public settings
+        env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
+        run: |
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json || true
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/web.json" .turbo/ci/parameters.json
+          cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
+          npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out
+          aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query 'Stacks[0].Outputs' --output json > .turbo/ci/gateway-outputs.json
+          if aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-recognition --query 'Stacks[0].Outputs' --output json > .turbo/ci/recognition-outputs.json; then
+            jq -s 'add' .turbo/ci/gateway-outputs.json .turbo/ci/recognition-outputs.json > .turbo/ci/outputs.json
+          else
+            cp .turbo/ci/gateway-outputs.json .turbo/ci/outputs.json
+          fi
+      - name: Build browser bytes
+        if: inputs.promote_from == ''
+        run: |
+          python -m venv .recognition-build/runtime
+          .recognition-build/runtime/bin/pip install -r src/recognition/python/requirements-visual.txt
+          python -m venv .recognition-build/converter
+          .recognition-build/converter/bin/pip install -r src/recognition/python/requirements-converter.txt
+          npm run prepare:recognition -- --python .recognition-build/runtime/bin/python --converter-python .recognition-build/converter/bin/python
+          npm run package -- --out .turbo/release --from-outputs .turbo/ci/outputs.json --environment ${{ inputs.environment }}
+      - name: Recover test-verified browser bytes
+        if: inputs.promote_from != ''
+        env:
+          STATE_BUCKET: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
+          PROMOTE_FROM: ${{ inputs.promote_from }}
+        run: |
+          set -euo pipefail
+          mkdir -p .turbo/release/browser
+          aws s3 cp "s3://$STATE_BUCKET/environments/$PROMOTE_FROM/current.json" .turbo/ci/source.json
+          source_bucket="$(jq -r '.components.web.artifact.values.bucket' .turbo/ci/source.json)"
+          while IFS=$'\t' read -r key version sha; do
+            mkdir -p ".turbo/release/browser/$(dirname "$key")"
+            aws s3api get-object --bucket "$source_bucket" --key "$key" --version-id "$version" ".turbo/release/browser/$key" >/dev/null
+            test "$(sha256sum ".turbo/release/browser/$key" | cut -d' ' -f1)" = "$sha"
+          done < <(jq -r '.components.web.artifact.values.files | fromjson | to_entries[] | select(.key != "config.json") | [.key,.value.version,.value.sha256] | @tsv' .turbo/ci/source.json)
+          npm run ci:public-settings -- .turbo/ci/outputs.json ${{ inputs.environment }} .turbo/release/browser/config.json
+      - name: Inspect and deploy only WebStack
+        run: npm run ci:deploy-stack -- --stack keeper-${{ inputs.environment }}-web --template "$PWD/.turbo/cdk.out/WebStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
+      - name: Publish and verify browser
+        run: |
+          bucket="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-web --query "Stacks[0].Outputs[?OutputKey=='BrowserBucketName'].OutputValue | [0]" --output text)"
+          distribution="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-web --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue | [0]" --output text)"
+          browser_url="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-web --query "Stacks[0].Outputs[?OutputKey=='BrowserUrl'].OutputValue | [0]" --output text)"
+          printf '{}' > .turbo/ci/files.json
+          changed=0
+          while IFS= read -r file; do
+            key="${file#.turbo/release/browser/}"
+            case "$key" in *.html) content_type=text/html;; *.js) content_type=text/javascript;; *.json) content_type=application/json;; *.wasm) content_type=application/wasm;; *) content_type=application/octet-stream;; esac
+            sha="$(sha256sum "$file" | cut -d' ' -f1)"
+            current_sha="$(jq -r --arg key "$key" '(.components.web.artifact.values.files // "{}" | fromjson)[$key].sha256 // empty' .turbo/ci/current.json 2>/dev/null || true)"
+            if [[ "$current_sha" = "$sha" ]]; then
+              version="$(jq -r --arg key "$key" '(.components.web.artifact.values.files | fromjson)[$key].version' .turbo/ci/current.json)"
+            else
+              version="$(aws s3api put-object --bucket "$bucket" --key "$key" --body "$file" --content-type "$content_type" --query VersionId --output text)"
+              changed=1
+            fi
+            jq --arg key "$key" --arg version "$version" --arg sha256 "$sha" '. + {($key):{version:$version,sha256:$sha256}}' .turbo/ci/files.json > .turbo/ci/files.next.json
+            mv .turbo/ci/files.next.json .turbo/ci/files.json
+          done < <(find .turbo/release/browser -type f | sort)
+          while IFS= read -r old_key; do
+            if ! jq -e --arg key "$old_key" 'has($key)' .turbo/ci/files.json >/dev/null; then
+              aws s3api delete-object --bucket "$bucket" --key "$old_key" >/dev/null
+              changed=1
+            fi
+          done < <(jq -r '.components.web.artifact.values.files // "{}" | fromjson | keys[]' .turbo/ci/current.json 2>/dev/null || true)
+          if [[ "$changed" = 1 ]]; then
+            invalidation="$(aws cloudfront create-invalidation --distribution-id "$distribution" --paths '/*' --query 'Invalidation.Id' --output text)"
+            aws cloudfront wait invalidation-completed --distribution-id "$distribution" --id "$invalidation"
+          else
+            invalidation=not-required
+          fi
+          code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$browser_url/")"
+          test "$code" = 200
+          files="$(jq -cS . .turbo/ci/files.json)"
+          jq -n --arg bucket "$bucket" --arg files "$files" '{kind:"files",values:{bucket:$bucket,files:$files}}' > .turbo/ci/artifact.json
+          printf 'CloudFront served the published browser with status 200 after invalidation %s.\n' "$invalidation" > .turbo/ci/evidence.txt
+      - uses: ./.github/actions/record-verified
+        with:
+          environment: ${{ inputs.environment }}
+          unit: web
+          stack_name: keeper-${{ inputs.environment }}-web
+          revision: ${{ inputs.revision }}
+          template: .turbo/cdk.out/WebStack.template.json
+          parameters: .turbo/ci/parameters.json
+          environment_parameters: .turbo/ci/environment-parameters.json
+          artifact: .turbo/ci/artifact.json
+          plan: .turbo/ci/plan.json
+          evidence: .turbo/ci/evidence.txt
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
+      - env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
+        run: aws s3 cp .turbo/ci/current.json "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json"
+      - if: failure()
+        uses: ./.github/actions/record-attempt
+        with:
+          environment: ${{ inputs.environment }}
+          unit: web
+          revision: ${{ inputs.revision }}
+          template: .turbo/cdk.out/WebStack.template.json
+          parameters: .turbo/ci/parameters.json
+          artifact: .turbo/ci/artifact.json
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}

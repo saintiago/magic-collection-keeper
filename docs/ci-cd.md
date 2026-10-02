@@ -2,9 +2,11 @@
 
 ## Status and triggers
 
-This is the workflow design for the [CDK deployment units](deployment.md). GitHub Actions and
-automatic deployment are currently disabled; implementing and activating this design is subsequent
-work. The current environment is the test deployment target.
+This design is implemented by `.github/workflows/ci-cd.yml`, the reusable validation and deployment
+workflows beside it, and the planner under `scripts/ci/`. Automatic deployment remains disabled by
+default until the current test environment's CDK baseline and deployment record have been verified;
+activation is the explicit repository configuration described below. The current environment is the
+test deployment target. Committing the workflows alone does not mutate it.
 
 | Event                         | Validation                                                                 | Deployment                                                                            |
 | ----------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -134,6 +136,39 @@ candidate artifact does not imply that it must replace the deployed version.
 
 Catalog synchronization, owner-data migration and destructive cleanup are separately invoked
 operations. Neither automatic test deployment nor production promotion starts them implicitly.
+
+## Activation and deployment records
+
+Keep `DEPLOYMENT_ENABLED` unset or unequal to `true` until the current test stacks have a verified
+CDK baseline. PRs and pushes still publish the required `CI` validation and a deployment plan while
+deployment is disabled. To activate test deployment:
+
+1. Configure the `test` GitHub Environment with `AWS_DEPLOY_ROLE_ARN` and
+   `DEPLOYMENT_STATE_BUCKET`. The state bucket is versioned and retained so records and their
+   referenced evidence stay recoverable. The role uses GitHub OIDC and is limited to the intended
+   test stacks, artifact locations and verification reads. Set the digest-pinned
+   `CATALOG_NODE_BASE_IMAGE` used to package the finite ingestion job.
+2. Put the captured, non-secret CloudFormation parameters for each unit at
+   `s3://<state-bucket>/environments/test/parameters/<unit>.json`. Secrets remain stack references;
+   never place credential values in these files.
+3. Verify and seed `environments/test/current.json` as a schema-1 record for the actual deployed
+   combination. Each component records its template/configuration content identity, immutable
+   artifact references, source inputs, passing live evidence and previous restorable identity.
+4. Confirm the first plan from that recorded revision proposes only the expected units and that the
+   independently prepared change sets preserve retained resources. Then set the repository variable
+   `DEPLOYMENT_ENABLED=true`.
+
+Runs are serialized per environment without cancellation. They reject revisions older than the
+recorded environment revision and refuse removal or replacement of retained database, identity,
+bucket, repository and secret resources. A failed attempt is written under the environment's
+`attempts/` prefix but does not replace `current.json`; the planner baseline advances only after all
+selected units verify successfully.
+
+Configure the `production` GitHub Environment with required reviewers and its own role, state record
+and parameter files. `promote-production.yml` accepts only the exact revision in the current test
+record with passing evidence for every component. It copies the recorded S3 object versions, browser
+bytes and ECR manifests into production-owned locations, applies production public settings and
+configuration, and does not rebuild application code or start Catalog synchronization or migration.
 
 ## Design verification
 

@@ -2,13 +2,12 @@
 
 ## Rebuild delivery policy
 
-GitHub Actions CI and automatic deployment are currently disabled. The agreed target is
-[separate CDK deployment units](deployment.md) and [GitHub Actions CI/CD](ci-cd.md): validate PRs
-and merges to `main`, automatically deploy changed units to the current test environment, and
-manually promote verified artifacts to production. Implementation and activation are subsequent work.
-Until then, pushes, pull requests and merges do not deploy the service. Nexus runs the repository's
-committed preparation and validation commands (README.md). A passing task check is not deployed
-verification.
+GitHub Actions validation and selective deployment are implemented as described by
+[GitHub Actions CI/CD](ci-cd.md). The required workflow validates pull requests and merges to `main`;
+automatic test deployment remains inactive until `DEPLOYMENT_ENABLED=true` is set after the current
+environment's CDK baseline and deployment record are verified. Until that activation, pushes, pull
+requests and merges do not deploy the service. Nexus runs the repository's committed preparation and
+validation commands (README.md). A passing task check is not deployed verification.
 
 Nexus Lens review is required for merges to main during Nexus execution. The required check is
 `Nexus Lens review`, published by the configured Nexus Lens GitHub App. This review gate is enabled

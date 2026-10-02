@@ -1,0 +1,81 @@
+name: Record verified deployment
+description: Preserve one verified component identity without advancing the environment baseline.
+inputs:
+  environment:
+    required: true
+  unit:
+    required: true
+  stack_name:
+    required: true
+  revision:
+    required: true
+  template:
+    required: true
+  parameters:
+    required: true
+  environment_parameters:
+    required: true
+  artifact:
+    required: true
+  plan:
+    required: true
+  evidence:
+    required: true
+  state_bucket:
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Build verified component record
+      shell: bash
+      env:
+        RECORD_ENVIRONMENT: ${{ inputs.environment }}
+        RECORD_UNIT: ${{ inputs.unit }}
+        RECORD_STACK: ${{ inputs.stack_name }}
+        RECORD_REVISION: ${{ inputs.revision }}
+        RECORD_TEMPLATE: ${{ inputs.template }}
+        RECORD_PARAMETERS: ${{ inputs.parameters }}
+        RECORD_ENVIRONMENT_PARAMETERS: ${{ inputs.environment_parameters }}
+        RECORD_ARTIFACT: ${{ inputs.artifact }}
+        RECORD_PLAN: ${{ inputs.plan }}
+        RECORD_EVIDENCE: ${{ inputs.evidence }}
+        STATE_BUCKET: ${{ inputs.state_bucket }}
+      run: |
+        set -euo pipefail
+        template_sha="$(sha256sum "$RECORD_TEMPLATE" | cut -d' ' -f1)"
+        configuration_sha="$(jq -cSj . "$RECORD_PARAMETERS" | sha256sum | cut -d' ' -f1)"
+        environment_configuration_sha="$(jq -cSj . "$RECORD_ENVIRONMENT_PARAMETERS" | sha256sum | cut -d' ' -f1)"
+        checked_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        if [[ -f .turbo/ci/source.json ]]; then
+          RECORD_REVISION="$(jq -r --arg unit "$RECORD_UNIT" '.components[$unit].sourceRevision' .turbo/ci/source.json)"
+        fi
+        record_prefix="environments/$RECORD_ENVIRONMENT/deployments/$RECORD_UNIT/$RECORD_REVISION-$template_sha"
+        template_uri="s3://$STATE_BUCKET/$record_prefix/template.json"
+        configuration_uri="s3://$STATE_BUCKET/$record_prefix/parameters.json"
+        evidence_uri="s3://$STATE_BUCKET/$record_prefix/evidence.txt"
+        aws s3 cp "$RECORD_TEMPLATE" "$template_uri"
+        aws s3 cp "$RECORD_PARAMETERS" "$configuration_uri"
+        aws s3 cp "$RECORD_EVIDENCE" "$evidence_uri"
+        aws s3 cp "$RECORD_ARTIFACT" "s3://$STATE_BUCKET/$record_prefix/artifact.json"
+        jq -n \
+          --arg revision "$RECORD_REVISION" \
+          --arg stack "$RECORD_STACK" \
+          --arg template "$template_sha" \
+          --arg configuration "$configuration_sha" \
+          --arg environmentConfiguration "$environment_configuration_sha" \
+          --arg templateUri "$template_uri" \
+          --arg configurationUri "$configuration_uri" \
+          --arg evidenceUri "$evidence_uri" \
+          --arg checkedAt "$checked_at" \
+          --argjson artifact "$(jq -c . "$RECORD_ARTIFACT")" \
+          --argjson inputs "$(jq -c --arg unit "$RECORD_UNIT" '.productionInputs[$unit] // []' "$RECORD_PLAN")" \
+          --argjson evidence "$(jq -Rc '[inputs]' "$RECORD_EVIDENCE")" \
+          '{sourceRevision:$revision,stackName:$stack,templateSha256:$template,configurationSha256:$configuration,environmentConfigurationSha256:$environmentConfiguration,templateUri:$templateUri,configurationUri:$configurationUri,evidenceUri:$evidenceUri,artifact:$artifact,inputs:$inputs,verification:{status:"passed",checkedAt:$checkedAt,evidence:$evidence}}' \
+          > .turbo/ci/component.json
+        npm run ci:record -- verified \
+          --record .turbo/ci/current.json \
+          --environment "$RECORD_ENVIRONMENT" \
+          --unit "$RECORD_UNIT" \
+          --component .turbo/ci/component.json \
+          --out .turbo/ci/updated.json
+        mv .turbo/ci/updated.json .turbo/ci/current.json

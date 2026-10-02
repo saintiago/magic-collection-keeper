@@ -1,0 +1,185 @@
+{
+  "schema": 1,
+  "stacks": {
+    "foundation": {
+      "cdkStack": "FoundationStack",
+      "unit": "foundation",
+      "workflow": "deploy-foundation.yml"
+    },
+    "gateway": {
+      "cdkStack": "GatewayStack",
+      "unit": "gateway",
+      "workflow": "deploy-gateway.yml"
+    },
+    "web": {
+      "cdkStack": "WebStack",
+      "unit": "web",
+      "workflow": "deploy-web.yml"
+    },
+    "catalog-serving": {
+      "cdkStack": "CatalogServingStack",
+      "unit": "catalog-serving",
+      "workflow": "deploy-catalog-serving.yml"
+    },
+    "usercards": {
+      "cdkStack": "UserCardsStack",
+      "unit": "usercards",
+      "workflow": "deploy-usercards.yml"
+    },
+    "recognition": {
+      "cdkStack": "RecognitionStack",
+      "unit": "recognition",
+      "workflow": "deploy-recognition.yml"
+    },
+    "catalog-ingestion": {
+      "cdkStack": "CatalogIngestionStack",
+      "unit": "catalog-ingestion",
+      "workflow": "deploy-catalog-ingestion.yml"
+    }
+  },
+  "rules": [
+    {
+      "paths": ["infra/cdk/stacks/foundation.ts"],
+      "stacks": ["foundation"]
+    },
+    {
+      "paths": ["infra/cdk/stacks/gateway.ts"],
+      "stacks": ["gateway"]
+    },
+    {
+      "paths": ["infra/cdk/stacks/web.ts"],
+      "stacks": ["web"]
+    },
+    {
+      "paths": ["infra/cdk/stacks/catalog-serving.ts"],
+      "stacks": ["catalog-serving"]
+    },
+    {
+      "paths": ["infra/cdk/stacks/usercards.ts"],
+      "stacks": ["usercards"]
+    },
+    {
+      "paths": ["infra/cdk/stacks/recognition.ts"],
+      "stacks": ["recognition"]
+    },
+    {
+      "paths": ["infra/cdk/stacks/catalog-ingestion.ts"],
+      "stacks": ["catalog-ingestion"]
+    },
+    {
+      "paths": ["infra/cdk/constructs/template.ts"],
+      "stacks": [
+        "foundation",
+        "gateway",
+        "web",
+        "catalog-serving",
+        "usercards",
+        "recognition",
+        "catalog-ingestion"
+      ]
+    },
+    {
+      "paths": ["infra/cdk/constructs/lambda-service.ts"],
+      "stacks": ["catalog-serving", "usercards"]
+    },
+    {
+      "paths": ["infra/cdk/constructs/references.ts"],
+      "stacks": ["recognition", "catalog-ingestion"]
+    },
+    {
+      "paths": [
+        "infra/cdk/app.ts",
+        "infra/cdk/configuration.ts",
+        "infra/cdk/stacks/legacy.ts",
+        "infra/foundation.json",
+        "infra/service.json",
+        "cdk.json"
+      ],
+      "stacks": [
+        "foundation",
+        "gateway",
+        "web",
+        "catalog-serving",
+        "usercards",
+        "recognition",
+        "catalog-ingestion"
+      ]
+    },
+    {
+      "paths": ["src/recognition/python/**"],
+      "stacks": ["recognition"]
+    },
+    {
+      "paths": [
+        "src/recognition/browser/**",
+        "src/recognition/baseline.json",
+        "src/recognition/browser-runtime.json",
+        "scripts/prepare-recognition.ts",
+        "scripts/recognition-manifests.ts"
+      ],
+      "stacks": ["recognition", "web"]
+    },
+    {
+      "paths": ["scripts/package-recognition.ts"],
+      "stacks": ["recognition"]
+    },
+    {
+      "paths": ["scripts/package-artifacts.ts", "scripts/packaging-support.ts"],
+      "stacks": ["web", "catalog-serving", "usercards", "catalog-ingestion"]
+    },
+    {
+      "paths": [
+        "package.json",
+        "package-lock.json",
+        "tsconfig.build.json",
+        "tsconfig.json",
+        "turbo.json"
+      ],
+      "stacks": [
+        "foundation",
+        "gateway",
+        "web",
+        "catalog-serving",
+        "usercards",
+        "recognition",
+        "catalog-ingestion"
+      ]
+    }
+  ],
+  "replanDependents": {
+    "foundation": [
+      "gateway",
+      "web",
+      "catalog-serving",
+      "usercards",
+      "recognition",
+      "catalog-ingestion"
+    ],
+    "gateway": ["web", "catalog-serving", "usercards", "recognition"]
+  },
+  "orchestrationOnly": [".github/actions/**", ".github/workflows/**", "scripts/ci/**"],
+  "validationOnly": [
+    "docs/**",
+    "tests/**",
+    "storybook/**",
+    "infra/README.md",
+    "infra/requirements-lint.txt",
+    "scripts/lint-infrastructure.ts",
+    "scripts/migration/**",
+    "scripts/release-evidence.ts",
+    "scripts/run-python-tests.ts",
+    "scripts/start-storybook.ts",
+    "src/recognition/README.md",
+    ".dependency-cruiser.mjs",
+    ".gitattributes",
+    ".gitignore",
+    ".prettierignore",
+    ".prettierrc.json",
+    "AGENTS.md",
+    "README.md",
+    "eslint.config.mjs",
+    "nexus.project.json",
+    "playwright.config.ts",
+    "vitest.config.ts"
+  ]
+}

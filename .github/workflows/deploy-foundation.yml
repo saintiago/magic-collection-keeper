@@ -1,0 +1,74 @@
+name: Deploy FoundationStack
+
+on:
+  workflow_call:
+    inputs:
+      environment: { required: true, type: string }
+      revision: { required: true, type: string }
+      promote_from: { required: false, type: string, default: '' }
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.revision }}', fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+      - uses: actions/download-artifact@v4
+        with: { name: deployment-plan, path: .turbo/ci }
+      - name: Prepare stack
+        env:
+          STATE_BUCKET: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
+        run: |
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json || true
+          if [[ -n '${{ inputs.promote_from }}' ]]; then aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.promote_from }}/current.json" .turbo/ci/source.json; fi
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/foundation.json" .turbo/ci/parameters.json
+          cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
+          npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out
+          printf '{"kind":"none","values":{}}\n' > .turbo/ci/artifact.json
+      - name: Inspect and deploy only FoundationStack
+        run: npm run ci:deploy-stack -- --stack keeper-${{ inputs.environment }}-foundation --template "$PWD/.turbo/cdk.out/FoundationStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
+      - name: Verify foundation boundary
+        run: |
+          cluster="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-foundation --query "Stacks[0].Outputs[?OutputKey=='DatabaseClusterArn'].OutputValue | [0]" --output text)"
+          status="$(aws rds describe-db-clusters --db-cluster-identifier "$cluster" --query 'DBClusters[0].Status' --output text)"
+          test "$status" = available
+          printf 'Aurora cluster %s is available.\n' "$cluster" > .turbo/ci/evidence.txt
+      - uses: ./.github/actions/record-verified
+        with:
+          environment: ${{ inputs.environment }}
+          unit: foundation
+          stack_name: keeper-${{ inputs.environment }}-foundation
+          revision: ${{ inputs.revision }}
+          template: .turbo/cdk.out/FoundationStack.template.json
+          parameters: .turbo/ci/parameters.json
+          environment_parameters: .turbo/ci/environment-parameters.json
+          artifact: .turbo/ci/artifact.json
+          plan: .turbo/ci/plan.json
+          evidence: .turbo/ci/evidence.txt
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
+      - name: Publish verified record
+        env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
+        run: aws s3 cp .turbo/ci/current.json "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json"
+      - name: Preserve failed attempt
+        if: failure()
+        uses: ./.github/actions/record-attempt
+        with:
+          environment: ${{ inputs.environment }}
+          unit: foundation
+          revision: ${{ inputs.revision }}
+          template: .turbo/cdk.out/FoundationStack.template.json
+          parameters: .turbo/ci/parameters.json
+          artifact: .turbo/ci/artifact.json
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}

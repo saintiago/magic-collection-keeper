@@ -1,0 +1,111 @@
+name: Deploy CatalogIngestionStack
+
+on:
+  workflow_call:
+    inputs:
+      environment: { required: true, type: string }
+      revision: { required: true, type: string }
+      promote_from: { required: false, type: string, default: '' }
+
+permissions: { contents: read, id-token: write }
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.revision }}', fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1 }
+      - uses: actions/download-artifact@v4
+        with: { name: deployment-plan, path: .turbo/ci }
+      - name: Prepare state and stack
+        env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
+        run: |
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json || true
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/catalog-ingestion.json" .turbo/ci/parameters.json
+          cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
+          repository="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-catalog-ingestion --query "Stacks[0].Outputs[?OutputKey=='CatalogRepositoryUri'].OutputValue | [0]" --output text)"
+          printf '%s\n' "$repository" > .turbo/ci/repository
+      - name: Build and publish ingestion image
+        if: inputs.promote_from == ''
+        env: { NODE_BASE_IMAGE: '${{ vars.CATALOG_NODE_BASE_IMAGE }}' }
+        run: |
+          [[ "$NODE_BASE_IMAGE" == *@sha256:* ]]
+          npm run package -- --out .turbo/release
+          repository="$(cat .turbo/ci/repository)"
+          registry="${repository%%/*}"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
+          version="$(jq -r .version .turbo/release/manifest.json)"
+          docker build --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" --tag "$repository:$version" .turbo/release/catalog-ingestion
+          docker push "$repository:$version"
+          digest="$(aws ecr describe-images --repository-name "${repository#*/}" --image-ids imageTag="$version" --query 'imageDetails[0].imageDigest' --output text)"
+          image_uri="$repository@$digest"
+          manifest_sha="$(sha256sum .turbo/release/manifest.json | cut -d' ' -f1)"
+          jq -n --arg imageUri "$image_uri" --arg digest "$digest" --arg version "$version" --arg manifestSha256 "$manifest_sha" '{kind:"image",values:{imageUri:$imageUri,digest:$digest,version:$version,manifestSha256:$manifestSha256}}' > .turbo/ci/artifact.json
+      - name: Copy test-verified ingestion image
+        if: inputs.promote_from != ''
+        env:
+          STATE_BUCKET: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
+          PROMOTE_FROM: ${{ inputs.promote_from }}
+        run: |
+          aws s3 cp "s3://$STATE_BUCKET/environments/$PROMOTE_FROM/current.json" .turbo/ci/source.json
+          source_uri="$(jq -r '.components["catalog-ingestion"].artifact.values.imageUri' .turbo/ci/source.json)"
+          source_path="${source_uri%%@*}"
+          source_digest="${source_uri##*@}"
+          source_repository="${source_path#*/}"
+          target_repository="$(cat .turbo/ci/repository)"
+          version="$(jq -r '.components["catalog-ingestion"].artifact.values.version' .turbo/ci/source.json)"
+          manifest_sha="$(jq -r '.components["catalog-ingestion"].artifact.values.manifestSha256' .turbo/ci/source.json)"
+          aws ecr batch-get-image --repository-name "$source_repository" --image-ids imageDigest="$source_digest" --query 'images[0].imageManifest' --output text > .turbo/ci/image-manifest.json
+          digest="$(aws ecr put-image --repository-name "${target_repository#*/}" --image-tag "$version" --image-manifest file://.turbo/ci/image-manifest.json --query 'image.imageId.imageDigest' --output text)"
+          test "$digest" = "$source_digest"
+          image_uri="$target_repository@$digest"
+          jq -n --arg imageUri "$image_uri" --arg digest "$digest" --arg version "$version" --arg manifestSha256 "$manifest_sha" '{kind:"image",values:{imageUri:$imageUri,digest:$digest,version:$version,manifestSha256:$manifestSha256}}' > .turbo/ci/artifact.json
+      - name: Synthesize selected image
+        run: |
+          desired_digest="$(jq -r .values.digest .turbo/ci/artifact.json)"
+          current_digest="$(jq -r '.components["catalog-ingestion"].artifact.values.digest // empty' .turbo/ci/current.json 2>/dev/null || true)"
+          if [[ "$desired_digest" = "$current_digest" ]]; then
+            jq '.components["catalog-ingestion"].artifact' .turbo/ci/current.json > .turbo/ci/artifact.json
+          fi
+          image_uri="$(jq -r .values.imageUri .turbo/ci/artifact.json)"
+          jq --arg image "$image_uri" '. + {CatalogJobImageUri:$image}' .turbo/ci/parameters.json > .turbo/ci/parameters.next.json
+          mv .turbo/ci/parameters.next.json .turbo/ci/parameters.json
+          npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out
+      - run: npm run ci:deploy-stack -- --stack keeper-${{ inputs.environment }}-catalog-ingestion --template "$PWD/.turbo/cdk.out/CatalogIngestionStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
+      - name: Verify finite task boundary without starting synchronization
+        run: |
+          task_definition="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-catalog-ingestion --query "Stacks[0].Outputs[?OutputKey=='CatalogTaskDefinitionArn'].OutputValue | [0]" --output text)"
+          status="$(aws ecs describe-task-definition --task-definition "$task_definition" --query 'taskDefinition.status' --output text)"
+          test "$status" = ACTIVE
+          printf 'Catalog task definition %s is ACTIVE; no task was started.\n' "$task_definition" > .turbo/ci/evidence.txt
+      - uses: ./.github/actions/record-verified
+        with:
+          environment: ${{ inputs.environment }}
+          unit: catalog-ingestion
+          stack_name: keeper-${{ inputs.environment }}-catalog-ingestion
+          revision: ${{ inputs.revision }}
+          template: .turbo/cdk.out/CatalogIngestionStack.template.json
+          parameters: .turbo/ci/parameters.json
+          environment_parameters: .turbo/ci/environment-parameters.json
+          artifact: .turbo/ci/artifact.json
+          plan: .turbo/ci/plan.json
+          evidence: .turbo/ci/evidence.txt
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
+      - env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
+        run: aws s3 cp .turbo/ci/current.json "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json"
+      - if: failure()
+        uses: ./.github/actions/record-attempt
+        with:
+          environment: ${{ inputs.environment }}
+          unit: catalog-ingestion
+          revision: ${{ inputs.revision }}
+          template: .turbo/cdk.out/CatalogIngestionStack.template.json
+          parameters: .turbo/ci/parameters.json
+          artifact: .turbo/ci/artifact.json
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
