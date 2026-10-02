@@ -7,6 +7,8 @@ export { createOrganizationPages } from './pages/index.js';
 export { createPages } from './pages/index.js';
 export {
   createNavigation,
+  createDialogs,
+  createNoticeHost,
   createViewStateStore,
   readUiCatalogFinish,
   readUiCatalogLevel,
@@ -26,9 +28,11 @@ export {
   type UiCatalogLevel,
   type UiCollectionLevel,
   type UiDialogOptions,
+  type UiDialogHost,
   type UiDialogs,
   type UiIdentity,
   type UiNotice,
+  type UiNoticeHost,
   type UiNoticeAction,
   type UiNotices,
   type UiNoticeSeverity,

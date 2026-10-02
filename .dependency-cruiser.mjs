@@ -36,7 +36,7 @@ const componentEntries = {
   application: ['index', 'backend', 'deployment'],
   'card-list': ['index'],
   capture: ['index'],
-  catalog: ['index'],
+  catalog: ['index', 'browser'],
   recognition: ['index'],
   ui: ['index', 'deployment'],
   usercards: ['index', 'browser'],

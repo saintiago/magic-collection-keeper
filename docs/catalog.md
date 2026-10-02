@@ -38,6 +38,9 @@ empty result. Consumers needing reference resolution depend on the narrower Cata
 
 ### Public query semantics
 
+The browser-safe `src/catalog/browser.ts` entry point exposes the same query parser and criterion
+reader without storage or synchronization dependencies.
+
 Support the defined Scryfall-compatible subset: names, rules text, colors, color identity, types,
 mana value, set, language and finish. Text and equivalent structured criteria use one query model.
 Preserve supported operators, comparisons, combination and negation. Explicitly reject unsupported

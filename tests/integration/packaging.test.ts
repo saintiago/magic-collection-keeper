@@ -163,6 +163,13 @@ describe('packaging the deployable artifacts', () => {
     // A backend or recognition container dependency must never reach the browser bundle.
     expect(bundle).not.toContain('@aws-sdk/');
     expect(bundle).not.toContain('RDSDataClient');
+    // The local design workspace has a separate entry and output. Its fixture/controller names
+    // make a direct regression check that production packaging did not start from that entry.
+    expect(bundle).not.toContain('keeperStorybook');
+    expect(bundle).not.toContain('ManualProgression');
+    expect(manifest.artifacts.browser.files.map((file) => file.file)).not.toContain(
+      'storybook/card-back.svg',
+    );
   });
 
   it('carries every module the preserved browser recognition engines reach by URL', async () => {
