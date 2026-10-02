@@ -35,3 +35,11 @@ export {
   type SnapshotObjectCommandName,
   type SnapshotObjectHandle,
 } from './internal/deployment.js';
+
+export {
+  createAwsCatalogRequest,
+  createCatalogServingDeployment,
+  createUserCardsServingDeployment,
+  withoutInternalCatalogPrefix,
+  type ServingDeployment,
+} from './internal/service-deployment.js';

@@ -37,14 +37,16 @@ export interface ArtifactFile {
 
 /** Paths of the packaging output directory one release publishes (scripts/package-artifacts.ts). */
 export const artifactLayout = {
-  backendArchive: 'backend/api.zip',
-  backendEntry: 'backend/index.mjs',
+  catalogServingArchive: 'catalog-serving/api.zip',
+  catalogServingEntry: 'catalog-serving/index.mjs',
+  userCardsArchive: 'usercards/api.zip',
+  userCardsEntry: 'usercards/index.mjs',
   browserDirectory: 'browser',
   browserEntry: 'browser/app.js',
   browserPage: 'browser/index.html',
   browserSettings: 'browser/config.json',
-  catalogEntry: 'catalog/job.mjs',
-  catalogDockerfile: 'catalog/Dockerfile',
+  catalogIngestionEntry: 'catalog-ingestion/job.mjs',
+  catalogIngestionDockerfile: 'catalog-ingestion/Dockerfile',
   manifest: 'manifest.json',
 } as const;
 

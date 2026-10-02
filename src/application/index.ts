@@ -6,8 +6,8 @@
  * entries: this module is the runtime-independent contract a browser bundle loads — configuration
  * and public settings, the verified-claims identity boundary, the failure vocabulary, the routes
  * and authenticated transports, the Catalog read client and the browser composition — while
- * ./backend.ts assembles the interactive backend application, the finite catalog job and the
- * provider failure translation a browser must never reach.
+ * ./backend.ts exposes runtime-independent backend composition, while ./deployment.ts and the
+ * production entrypoints assemble independent Catalog-serving, UserCards and ingestion runtimes.
  *
  * The browser side composes the same contracts for the running environment:
  * `createBrowserApplication` validates the public settings, builds the authenticated request, the

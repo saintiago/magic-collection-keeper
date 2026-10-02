@@ -67,8 +67,10 @@ export interface DeploymentStage {
   readonly reason: string | null;
   readonly release: ReleaseEvidenceFile | null;
   readonly environment: string | null;
-  readonly apiCodeKey: string | null;
-  readonly apiCodeVersion: string | null;
+  readonly catalogServingCodeKey: string | null;
+  readonly catalogServingCodeVersion: string | null;
+  readonly userCardsCodeKey: string | null;
+  readonly userCardsCodeVersion: string | null;
   readonly recognitionImageUri: string | null;
   readonly catalogJobImageUri: string | null;
 }
@@ -195,11 +197,12 @@ async function verifyManifestArtifacts(
   manifest: ArtifactManifest,
 ): Promise<number> {
   const recorded: readonly ArtifactFile[] = [
-    manifest.artifacts.backend,
+    manifest.artifacts.catalogServing,
+    manifest.artifacts.userCards,
     ...manifest.artifacts.browser.files,
     ...(manifest.artifacts.browser.settings === null ? [] : [manifest.artifacts.browser.settings]),
-    manifest.artifacts.catalog,
-    manifest.artifacts.catalog.dockerfile,
+    manifest.artifacts.catalogIngestion,
+    manifest.artifacts.catalogIngestion.dockerfile,
   ];
   for (const file of recorded) {
     await verifyRecordedFile(outDir, file);
@@ -318,8 +321,10 @@ async function readDeploymentEvidence(
         'Deployment execution requires explicit authorization (docs/operations.md#release-acceptance).',
       release: null,
       environment: null,
-      apiCodeKey: null,
-      apiCodeVersion: null,
+      catalogServingCodeKey: null,
+      catalogServingCodeVersion: null,
+      userCardsCodeKey: null,
+      userCardsCodeVersion: null,
       recognitionImageUri: null,
       catalogJobImageUri: null,
     };
@@ -330,8 +335,10 @@ async function readDeploymentEvidence(
   );
   const required = [
     'Environment',
-    'ApiCodeKey',
-    'ApiCodeVersion',
+    'CatalogServingCodeKey',
+    'CatalogServingCodeVersion',
+    'UserCardsCodeKey',
+    'UserCardsCodeVersion',
     'RecognitionImageUri',
     'CatalogJobImageUri',
   ] as const;
@@ -343,14 +350,17 @@ async function readDeploymentEvidence(
       );
     }
   }
-  const apiCodeKey = parameters['ApiCodeKey'] as string;
-  const expectedKey = `releases/${manifest.version}/api.zip`;
-  if (apiCodeKey !== expectedKey) {
-    throw new Error(
-      `${releaseEvidenceLayout.releaseRecord}'s ApiCodeKey ${apiCodeKey} does not name this ` +
-        `release; the interactive package is published as ${expectedKey} ` +
-        '(infra/README.md#packaging-and-publication).',
-    );
+  for (const [name, expected] of [
+    ['CatalogServingCodeKey', `releases/${manifest.version}/catalog-serving.zip`],
+    ['UserCardsCodeKey', `releases/${manifest.version}/usercards.zip`],
+  ] as const) {
+    if (parameters[name] !== expected) {
+      throw new Error(
+        `${releaseEvidenceLayout.releaseRecord}'s ${name} ${parameters[name] ?? ''} does not ` +
+          `name this release; publish it as ${expected} ` +
+          '(infra/README.md#packaging-and-publication).',
+      );
+    }
   }
   for (const name of ['RecognitionImageUri', 'CatalogJobImageUri'] as const) {
     const uri = parameters[name] as string;
@@ -366,14 +376,16 @@ async function readDeploymentEvidence(
     reason: null,
     release: file,
     environment: parameters['Environment'] as string,
-    apiCodeKey,
-    apiCodeVersion: parameters['ApiCodeVersion'] as string,
+    catalogServingCodeKey: parameters['CatalogServingCodeKey'] as string,
+    catalogServingCodeVersion: parameters['CatalogServingCodeVersion'] as string,
+    userCardsCodeKey: parameters['UserCardsCodeKey'] as string,
+    userCardsCodeVersion: parameters['UserCardsCodeVersion'] as string,
     recognitionImageUri: parameters['RecognitionImageUri'] as string,
     catalogJobImageUri: parameters['CatalogJobImageUri'] as string,
   };
 }
 
-/** The captured service-stack parameters `aws cloudformation describe-stacks` writes. */
+/** The flattened environment parameters captured across independently deployed stacks. */
 function readStackParameters(value: unknown): Readonly<Record<string, string>> {
   if (!Array.isArray(value)) {
     throw new Error(
@@ -443,7 +455,7 @@ function readArtifactManifest(value: unknown): ArtifactManifest {
   const browserFiles = browser?.['files'];
   if (
     manifest === null ||
-    manifest['schema'] !== 1 ||
+    manifest['schema'] !== 2 ||
     typeof manifest['revision'] !== 'string' ||
     typeof manifest['version'] !== 'string' ||
     (manifest['workingTree'] !== 'clean' && manifest['workingTree'] !== 'dirty') ||
@@ -451,23 +463,24 @@ function readArtifactManifest(value: unknown): ArtifactManifest {
     !Array.isArray(browserFiles)
   ) {
     throw new Error(
-      `${artifactLayout.manifest} is not the schema 1 packaging manifest this evidence command ` +
+      `${artifactLayout.manifest} is not the schema 2 packaging manifest this evidence command ` +
         'reads.',
     );
   }
   const settings = browser['settings'];
   const recorded: readonly unknown[] = [
-    artifacts?.['backend'],
+    artifacts?.['catalogServing'],
+    artifacts?.['userCards'],
     ...browserFiles,
     ...(settings === null || settings === undefined ? [] : [settings]),
-    artifacts?.['catalog'],
+    artifacts?.['catalogIngestion'],
   ];
   for (const file of recorded) {
     readArtifactFile(file);
   }
   // Every background job's container definition is a release byte of its own: verified like the
   // module it packages (docs/release-checklist.md#source-completion).
-  readArtifactFile(readRecord(artifacts?.['catalog'])?.['dockerfile']);
+  readArtifactFile(readRecord(artifacts?.['catalogIngestion'])?.['dockerfile']);
   return value as ArtifactManifest;
 }
 

@@ -6,20 +6,18 @@ been established for that release and what has not, with source completion, depl
 production acceptance kept separate. Preparation never authorizes a deployment, a collection
 migration, access to owner data or deletion of the previous environment.
 
-The records and two-stack procedures below describe the current packaging/deployment tooling.
-The granular target uses per-stack artifact identities and source revisions, with an environment
-record of the deployed combination ([CI/CD](ci-cd.md#selecting-and-executing-deployment)).
-Migrate the evidence tooling with that implementation; do not require all unchanged components
-to adopt the new release's source revision.
+The records use per-stack artifact identities and an environment record of the deployed combination
+([CI/CD](ci-cd.md#selecting-and-executing-deployment)). Unchanged components retain their previous
+artifact and source revision; one repository revision does not force a coordinated redeployment.
 
 ## Release records
 
-| Record                                | Written by                                                                     | Contents                                                                                                                                                    |
-| ------------------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `artifacts/manifest.json`             | `npm run package`                                                              | Source revision, version label and the byte size and SHA-256 of every artifact ([packaging and deployment](operations.md#packaging-and-deployment)).        |
-| `artifacts/recognition/manifest.json` | `npm run package:recognition`                                                  | Engine, model, browser and corresponding-source identities of the recognition image context ([recognition packaging](operations.md#recognition-packaging)). |
-| `artifacts/release.json`              | The deployment's stack-parameter capture ([Create](../infra/README.md#create)) | Service-stack parameters of the deployed combination: environment, interactive code object version and image digests.                                       |
-| `artifacts/release-evidence.json`     | `npm run release:evidence -- --out artifacts`                                  | The acceptance record: the stages below, every verified release byte and the unresolved checks.                                                             |
+| Record                                | Written by                                                                  | Contents                                                                                                                                                    |
+| ------------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `artifacts/manifest.json`             | `npm run package`                                                           | Source revision, version label and the byte size and SHA-256 of every artifact ([packaging and deployment](operations.md#packaging-and-deployment)).        |
+| `artifacts/recognition/manifest.json` | `npm run package:recognition`                                               | Engine, model, browser and corresponding-source identities of the recognition image context ([recognition packaging](operations.md#recognition-packaging)). |
+| `artifacts/release.json`              | Deployment environment-record capture ([Create](../infra/README.md#create)) | Environment plus Catalog-serving/UserCards object keys and versions and Recognition/Catalog-ingestion image digests.                                        |
+| `artifacts/release-evidence.json`     | `npm run release:evidence -- --out artifacts`                               | The acceptance record: the stages below, every verified release byte and the unresolved checks.                                                             |
 
 Keep the complete release directory — manifest, release record, evidence record, packaged
 `browser/` directory and recognition context — before packaging a replacement: it is what the
@@ -37,7 +35,7 @@ Run from a fresh Linux/WSL checkout of the release revision
 | Aggregate checks           | [Checks](../README.md#checks), [integrated acceptance](testing.md#integrated-acceptance) | `npm run validate` over the release revision                                                                            |
 | Reproducible artifacts     | [Packaging and deployment](operations.md#packaging-and-deployment)                       | `npm run package`; `tests/integration/packaging.test.ts` rebuilds the same bytes and verifies every digest              |
 | Recognition packaging      | [Recognition packaging](operations.md#recognition-packaging)                             | `npm run package:recognition` verifies the pinned manifests, hashes and corresponding-source download                   |
-| Infrastructure definitions | [Infrastructure](operations.md#infrastructure)                                           | `npm run lint:infrastructure`; `tests/integration/infrastructure-templates.test.ts`                                     |
+| Infrastructure definitions | [Infrastructure](operations.md#infrastructure)                                           | `npm run lint:infrastructure`; legacy-template and `tests/integration/cdk-stacks.test.ts` checks                        |
 | Acceptance evidence        | This checklist                                                                           | `npm run release:evidence -- --out artifacts` re-verifies every recorded byte and writes the stages beside the manifest |
 
 The release revision is the packaging manifest's `revision`, and the packaging and recognition
@@ -59,16 +57,17 @@ A deployment happens only with the owner's explicit authorization
 an isolated test environment with test data. The concrete procedure is
 [Create](../infra/README.md#create):
 
-1. Inspect each CloudFormation change set before executing it: foundation first, then the service
-   stack of the same `test` environment, importing the foundation's exports.
-2. Publish the artifacts of the release revision: the interactive package under
-   `releases/<version>/api.zip` with its object version, and the recognition and catalog
+1. Inspect each selected CloudFormation change set before executing it, following provider-before-
+   consumer order and deploying no unchanged stack.
+2. Publish the artifacts of the release revision: Catalog-serving and UserCards zips under their
+   separate `releases/<version>/` keys with object versions, and Recognition/Catalog-ingestion
    images by digest
    ([packaging and publication](../infra/README.md#packaging-and-publication)).
-3. Build the browser bundle from the captured service-stack outputs, publish it and invalidate the
+3. Build the browser bundle from captured Gateway/Web outputs, publish it and invalidate the
    distribution, so only public settings reach the browser.
-4. Capture the service stack's parameters into `artifacts/release.json`, start the finite catalog
-   job for the snapshot of the test data, then verify public queries and authoritative private reads.
+4. Capture the resulting multi-stack combination into `artifacts/release.json`. Starting finite
+   Catalog ingestion is a separate explicit operation; when authorized, verify its test snapshot,
+   public queries and authoritative private reads.
 5. Verify the changed live boundaries and keep the results separate from the local checks: change
    plan, deployed artifacts, identity and routing, network, IAM, data path, delivery and alarms
    ([Verification](../infra/README.md#verification)).
@@ -77,15 +76,15 @@ an isolated test environment with test data. The concrete procedure is
    reads synthetic test data, never the owner's collection, and creates or removes only resources
    isolated from the existing production application
    ([contracts and cooperation](testing.md#contracts-and-cooperation)).
-7. Rehearse rollback before calling the rehearsal complete: update the service stack to the previous
-   release's retained parameters, restore the previous browser bundle, run the catalog job
-   again and verify that the test account's identity and data are unchanged
+7. Rehearse rollback before calling the rehearsal complete: restore each changed component's prior
+   artifact/configuration, restore the previous browser bundle where applicable, and verify that the
+   test account's identity and data are unchanged without rerunning Catalog ingestion
    ([rollback and recovery](#rollback-and-recovery)). Keep the candidate's captured
    `artifacts/release.json`: capturing the stack's parameters again while the previous release runs
    would replace the candidate's record with the previous release's.
 8. Record the candidate's deployment stage from its preserved release record by re-running the
    evidence command, and keep the rollback outcome — previous parameters and browser bundle back in
-   place, catalog job re-run, identity and data unchanged — with the rehearsal evidence. The
+   place, no data job replayed, identity and data unchanged — with the rehearsal evidence. The
    rehearsal is deployment evidence for the `test` environment, not production acceptance.
 
 ## Production acceptance
@@ -114,9 +113,9 @@ test-environment rehearsal above are recorded:
 
 The artifacts of a release are immutable, so a rollback restores identities instead of rebuilding:
 
-- **Application.** Update the service stack to the previous release's `ApiCodeKey`,
-  `ApiCodeVersion`, `RecognitionImageUri` and `CatalogJobImageUri`, which the
-  retained `release.json` beside its manifest names ([Update](../infra/README.md#update)).
+- **Components.** Update only changed stacks to the prior `CatalogServingCodeKey`/object version,
+  `UserCardsCodeKey`/object version, `RecognitionImageUri` or `CatalogJobImageUri` recorded for the
+  previous combination ([Update](../infra/README.md#update)).
 - **Browser.** Re-upload the retained packaged `browser/` directory, or the bucket's previous object
   versions, and invalidate the distribution again ([Update](../infra/README.md#update)).
 - **Background jobs.** Catalog synchronization uses the pinned image digest on its next explicit run;
@@ -124,15 +123,13 @@ The artifacts of a release are immutable, so a rollback restores identities inst
   ([background jobs](../infra/README.md#background-jobs)).
 - **Failed create or update.** CloudFormation rolls back automatically;
   `aws cloudformation continue-update-rollback` continues an interrupted rollback. A failed create
-  removes the buckets that create made, because the three foundation buckets carry
-  `RetainExceptOnCreate`; the image repositories and the reader/writer secrets instead carry
-  `Retain` and the cluster's deletion protection blocks an accidental drop, so those survive the
-  rollback. Retention on later deletion is separate: the buckets, repositories and reader/writer
-  secrets stay in place when the foundation stack is deleted, and the cluster goes with a final
+  removes newly created buckets carrying `RetainExceptOnCreate`; image repositories and owner
+  secrets carry `Retain`, and cluster deletion protection blocks an accidental drop. Retention on
+  later deletion is separate: buckets, repositories and secrets stay in place, and the cluster has a final
   snapshot ([deletion and rollback](../infra/README.md#deletion-and-rollback)).
 - **Data.** Recovery starts from the final cluster snapshot: the restored cluster keeps the
   database roles, the retained reader and writer secrets keep working, a new master credential is
-  established, and the schema bootstrap runs again before the service stack points at it
+  established, and schema bootstrap runs again before component stacks point at it
   ([data retention](../infra/README.md#data-retention)).
 - **Boundaries.** A rollback never mutates owner data, deletes the previous environment or performs
   a migration; deletion and migration are separate authorized actions

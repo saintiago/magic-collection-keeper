@@ -2,8 +2,9 @@
 
 ## Status and environment
 
-This is the target deployment design. The current two-template CloudFormation implementation
-remains in place until migrated. Designing the stacks does not execute that migration.
+This design is implemented by the CDK app under `infra/cdk/`. The checked-in two-template
+CloudFormation definitions remain migration sources for the legacy-adoption synthesis mode; no live
+stack has been adopted or split merely because the repository implementation exists.
 
 Treat the current environment as test. Merges to the repository's default branch, `main`, will
 deploy changed stacks there through [CI/CD](ci-cd.md). Production uses manual promotion of
@@ -75,7 +76,8 @@ module, a `stacks/` directory and focused `constructs/` modules. Use these stack
 Separate production Application entry-point wiring under `src/application/entrypoints/` using
 `web.ts`, `catalog-serving.ts`, `usercards.ts` and `catalog-ingestion.ts`. Recognition retains its
 Python entry point. Shared transport/composition helpers may remain shared; they do not own domain
-policy. This is a target layout, not a claim that these files already exist.
+policy. These files are the production layout. The legacy entry points remain for migration
+compatibility and are not packaging inputs.
 
 Build application artifacts before synthesis. CDK receives immutable artifact references from a
 release manifest and preserves the deployed references for unchanged components. Synthesis does
