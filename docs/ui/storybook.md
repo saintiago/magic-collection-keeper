@@ -17,7 +17,8 @@ second implementation of the screens or add mock behavior to production componen
   authorization or sign-in flow. All API calls and database-backed capabilities use local fixtures
   and mocks. Changes affect only local mock state, so the existing workflows can be inspected.
 - **Design language:** one page showing the common presentation elements used by those screens,
-  including typography, colors, spacing, controls, card views, dialogs and notices. Show their
+  following the [design language](design-language.md), including typography, colors, spacing, controls,
+  card views, dialogs and notices. Show their
   applicable loading, disabled, empty, validation, success and error presentations using the same
   presentation code as the app.
 
@@ -47,6 +48,6 @@ than reaching external services. Keep mocks, fixtures, the stepping controller a
 outside deployable artifacts; production startup and authorization remain unchanged.
 
 Editing shared UI code or styles updates the local workspace promptly and reaches the frontend only
-through its normal build and explicit deployment. Adding the workspace itself does not redesign the
-current interface or change application behavior. [Operations](../operations.md#local-design-workspace)
+through its normal build and explicit deployment. The first design-language iteration opts into new
+presentation only in this local entry point, without changing deployed styling or application behavior. [Operations](../operations.md#local-design-workspace)
 owns startup and packaging, and [Testing](../testing.md#local-design-storybook) owns verification.
