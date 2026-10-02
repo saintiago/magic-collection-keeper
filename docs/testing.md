@@ -314,3 +314,9 @@ Exercise the gallery's forms, retry and dialog actions rather than only checking
 Verify gallery loading holds for Space, reduced motion retains clear static feedback, and switching
 tabs disposes hidden demo work. Check readable contrast and local texture loading. Production
 packaging must also exclude the opt-in design preset and texture.
+
+For [Motion Design](ui/motion-design.md), inspect the before, transition and after presentations of
+hover, press, selection, related card/detail views, loading and outcomes. Check visual continuity,
+readable text and controls, and equivalent keyboard and touch feedback. Inspect the same stages with
+reduced motion. Motion cannot complete mock work or expire held states; leaving a view disposes its
+motion resources and listeners.

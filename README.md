@@ -1,6 +1,7 @@
 # Magic Collection Keeper
 
-Architecture and requirements are indexed in [AGENTS.md](AGENTS.md).
+The app has [three design pillars](docs/PRODUCT-CHARTER.md#design-pillars): architecture, user journeys
+and UI design, including motion. Their documents are indexed in [AGENTS.md](AGENTS.md).
 [Product requirements](docs/requirements/README.md) define user categories and journeys. The
 [task index](docs/tasks/inventory.md) groups delivery work; Jira Rank owns execution order.
 

@@ -10,6 +10,21 @@ Every proposal must answer: **Does this help someone do something meaningful wit
 
 The owner is the first user. The intended audience is Magic collectors who want an easy, organized hobby, a dependable representation of physical cards, assistance building and improving decks, and help managing trades and sales. Broader demand and willingness to pay remain hypotheses.
 
+## Design pillars
+
+Three first-class pillars guide the app:
+
+- **Architecture:** component responsibilities, public contracts, state ownership and system composition.
+- **User journeys:** who uses the app, what they need to accomplish and the intended outcomes.
+- **UI design:** visual foundations, accessible interaction and motion that make those journeys clear
+  and give the collection a game-like experience.
+
+Each pillar has its own authoritative documents. [Architecture](architecture.md) owns the technical
+structure; [product requirements](requirements/README.md) own categories and journeys;
+[UI design language](ui/design-language.md) and [Motion Design](ui/motion-design.md) own presentation.
+The local storybook makes UI design inspectable before frontend deployment. Documentation describes
+intended behavior; implementation and deployment require their own evidence.
+
 ## Connected jobs
 
 1. Capture, correct, locate, and organize physical cards with minimal friction and accurate exact-printing, language, finish, condition, and quantity representation.
