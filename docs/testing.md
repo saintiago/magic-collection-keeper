@@ -128,6 +128,9 @@ writes do not. Zero and successful absence remain distinct from unavailable read
 After real commits and recovered outcomes, verify new authoritative list/fragment reads contain the
 saved state with no worker or projection. Interrupt compatible reference upgrades and repeat them;
 all existing identities, receipts, archives, intended quantities and ownership must remain exact.
+Construct current private queries/fragments with a read-only role and no resolver/writer. Verify
+reads succeed after preparation without either capability, and incomplete preparation reports
+unavailability without writing or resolving anything. Exercise the upgrade capability separately.
 Inspect query plans when assessing performance; timing thresholds do not replace correctness.
 
 CardList integration verifies public membership with private enrichment and private membership with
