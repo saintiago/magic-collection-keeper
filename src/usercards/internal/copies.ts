@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { UserCardsSqlExecutor, UserCardsSqlRow, UserCardsSqlValue } from './executor.js';
 import { UserCardsError } from './errors.js';
 import { copyPayloadSql } from './rows.js';
+import { storePrintingReferences } from './references.js';
 import { readRows } from './sql.js';
 import type { NewCopy } from './store.js';
 
@@ -140,6 +141,12 @@ export async function storeCopiesWithOwnedTag(
   ownedTagId: string,
   copies: readonly NewCopy[],
 ): Promise<Omit<StoredCopies, 'ownedTag'>> {
+  await storePrintingReferences(
+    statements,
+    copies.flatMap((copy) =>
+      copy.cardId === undefined ? [] : [{ printingId: copy.printingId, cardId: copy.cardId }],
+    ),
+  );
   const insert = insertCopiesStatement(accountId, copies);
   const rows = await readRows(
     statements,

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { UserCardsSqlTransactor, UserCardsSqlValue } from './executor.js';
 import { publishMutation } from './publication.js';
+import { storePrintingReferences } from './references.js';
 import {
   associationFromRow,
   associationPayloadSql,
@@ -497,6 +498,11 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
             lock.parameters,
             'The tag could not be locked before storing the association.',
           );
+          if (association.cardId !== null) {
+            await storePrintingReferences(statements, [
+              { printingId: association.targetId, cardId: association.cardId },
+            ]);
+          }
           const insert = insertAssociationStatement(accountId, association);
           const rows = await readRows(
             statements,
@@ -533,6 +539,11 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
             lock.parameters,
             'The tag could not be locked before changing the association.',
           );
+          if (correction.cardId !== null) {
+            await storePrintingReferences(statements, [
+              { printingId: correction.targetId, cardId: correction.cardId },
+            ]);
+          }
           const update = correctAssociationStatement(accountId, correction);
           const rows = await readRows(
             statements,

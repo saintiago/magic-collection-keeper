@@ -7,6 +7,7 @@ import { createPostgresCopyStore } from './postgres.js';
 import type { UserCards, UserCardsDependencies } from './records-contract.js';
 import { createCopyOperations } from './copy-service.js';
 import { createOrganizationOperations } from './organization-service.js';
+import { createUserCardsQueries } from './queries.js';
 export type * from './records-contract.js';
 export function createUserCards(dependencies: UserCardsDependencies): UserCards {
   const sql = dependencies?.sql;
@@ -27,5 +28,6 @@ export function createUserCards(dependencies: UserCardsDependencies): UserCards 
     ...createOrganizationOperations(records),
     ...createImportOperations({ store: createPostgresImportStore(sql), catalog }),
     ...createMigrationOperations({ store: createPostgresMigrationStore(sql), catalog }),
+    ...createUserCardsQueries({ sql }),
   };
 }

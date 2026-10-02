@@ -199,13 +199,13 @@ async function requireAssociationTarget(
   accountId: string,
   targetLevel: AssociationTargetLevel,
   targetId: string,
-): Promise<void> {
+): Promise<string | null> {
   if (targetLevel === 'copy') {
     const data = await store.readCopies(accountId, [targetId]);
     if (!data.copies.some((copy) => copy.copyId === targetId)) {
       throw new UserCardsError('not-found', 'This account has no copy with that identity.');
     }
-    return;
+    return null;
   }
   const resolution = await resolveCatalog(
     catalog,
@@ -223,6 +223,7 @@ async function requireAssociationTarget(
         : 'The printing is not available in the catalog.',
     );
   }
+  return targetLevel === 'card' ? targetId : (resolution.printings.get(targetId)?.cardId ?? null);
 }
 
 export function createOrganizationOperations(dependencies: {
@@ -452,7 +453,13 @@ export function createOrganizationOperations(dependencies: {
 
       const tag = await requireTag(organization, accountId, tagId);
       const quantity = associationQuantityFrom(tag.kind, targetLevel, request.data.quantity);
-      await requireAssociationTarget(store, catalog, accountId, targetLevel, targetId);
+      const cardId = await requireAssociationTarget(
+        store,
+        catalog,
+        accountId,
+        targetLevel,
+        targetId,
+      );
 
       const outcome = await organization.insertAssociation(accountId, {
         associationId: randomUUID(),
@@ -460,6 +467,7 @@ export function createOrganizationOperations(dependencies: {
         tagKind: tag.kind,
         targetLevel,
         targetId,
+        cardId: targetLevel === 'printing' ? cardId : null,
         quantity,
       });
       if (outcome.outcome === 'conflict') {
@@ -488,13 +496,20 @@ export function createOrganizationOperations(dependencies: {
       const stored = await requireAssociation(organization, accountId, associationId);
       const tag = await requireTag(organization, accountId, stored.tagId);
       const quantity = associationQuantityFrom(tag.kind, targetLevel, request.data.quantity);
-      await requireAssociationTarget(store, catalog, accountId, targetLevel, targetId);
+      const cardId = await requireAssociationTarget(
+        store,
+        catalog,
+        accountId,
+        targetLevel,
+        targetId,
+      );
 
       const outcome = await organization.correctAssociation(accountId, {
         associationId,
         expectedRevision,
         targetLevel,
         targetId,
+        cardId: targetLevel === 'printing' ? cardId : null,
         quantity,
       });
       if (outcome.outcome === 'missing') {

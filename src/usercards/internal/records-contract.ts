@@ -2,6 +2,7 @@ import { type CatalogResolver, type Finish } from '../../catalog/index.js';
 import type { UserCardsSqlTransactor } from './executor.js';
 import { type ImportOperations } from './import-contract.js';
 import { type MigrationOperations } from './migration-contract.js';
+import type { UserCardsQueries } from './queries.js';
 import {
   type Association,
   type AssociationId,
@@ -199,7 +200,7 @@ export interface CopyLocationResult {
  * contract: it loads only into an empty account and is repeat-safe
  * (docs/migration.md#rehearsal-and-execution-gates).
  */
-export interface UserCards extends ImportOperations, MigrationOperations {
+export interface UserCards extends ImportOperations, MigrationOperations, UserCardsQueries {
   readCopies(context: TrustedUserContext, copyIds: readonly CopyId[]): Promise<CopyReadResult>;
   createCopies(context: TrustedUserContext, input: CreateCopiesInput): Promise<CopyChangeResult>;
   correctCopy(context: TrustedUserContext, input: CorrectCopyInput): Promise<CopyChangeResult>;

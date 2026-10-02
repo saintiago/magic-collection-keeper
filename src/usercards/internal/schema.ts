@@ -28,6 +28,7 @@ import {
 
 export const usercardsQuerySchema = 'usercards';
 export const usercardsPrivateSchema = 'usercards_private';
+export const usercardsCurrentQuerySchema = 'usercards_current_query';
 
 /**
  * Connection setting that carries the trusted account while the views are read. It is bound inside
@@ -230,6 +231,7 @@ const boundAccountSql = `nullif(current_setting('${USERCARDS_ACCOUNT_SETTING}', 
 export const usercardsSchemaSql = `
 create schema if not exists ${usercardsPrivateSchema};
 create schema if not exists ${usercardsQuerySchema};
+create schema if not exists ${usercardsCurrentQuerySchema};
 
 create table if not exists ${usercardsPrivateSchema}.account_state (
   account_id text primary key check (length(account_id) between 1 and ${identifierLength}),
@@ -238,6 +240,19 @@ create table if not exists ${usercardsPrivateSchema}.account_state (
   -- drops older publications, so a resume from before it fails explicitly instead of skipping.
   expired_below bigint not null default 0 check (expired_below >= 0)
 );
+
+-- UserCards keeps the stable playable-card relationship needed to group its printing-specific
+-- facts without joining Catalog during a private read. Current writes record this derived
+-- reference with the domain record; compatible preparation fills it for older records through
+-- Catalog's resolver. It is deliberately separate from receipts, provenance and source archives.
+create table if not exists ${usercardsPrivateSchema}.printing_reference (
+  printing_id text primary key check (length(printing_id) between 1 and ${identifierLength}),
+  card_id text not null check (length(card_id) between 1 and ${identifierLength}),
+  prepared_at timestamptz not null default now()
+);
+
+create index if not exists printing_reference_card_index
+  on ${usercardsPrivateSchema}.printing_reference (card_id, printing_id);
 
 create table if not exists ${usercardsPrivateSchema}.copy (
   copy_id text primary key check (length(copy_id) between 1 and ${identifierLength}),
@@ -252,6 +267,9 @@ create table if not exists ${usercardsPrivateSchema}.copy (
 
 create index if not exists copy_account_identity_index
   on ${usercardsPrivateSchema}.copy (account_id, copy_id);
+
+create index if not exists copy_account_printing_index
+  on ${usercardsPrivateSchema}.copy (account_id, printing_id, copy_id);
 
 create table if not exists ${usercardsPrivateSchema}.tag (
   tag_id text primary key check (length(tag_id) between 1 and ${identifierLength}),
@@ -296,6 +314,9 @@ create index if not exists association_copy_index
 
 create index if not exists association_tag_index
   on ${usercardsPrivateSchema}.association (account_id, tag_id);
+
+create index if not exists association_target_index
+  on ${usercardsPrivateSchema}.association (account_id, target_level, target_id);
 
 create table if not exists ${usercardsPrivateSchema}.import_session (
   session_id text not null check (length(session_id) between 1 and ${identifierLength}),
@@ -560,6 +581,44 @@ create unique index if not exists publication_revision_index
 create index if not exists publication_account_position_index
   on ${usercardsPrivateSchema}.publication (account_id, position);
 
+-- The provider-owned current-query capability reads only these account-scoped relations. They
+-- retain the storage columns its query construction needs while preventing its database role from
+-- selecting another account's base records directly. Stable references are visible only when the
+-- bound account has a copy or printing association that requires them.
+create or replace view ${usercardsCurrentQuerySchema}.account_state with (security_barrier) as
+  select account_id, revision, expired_below
+  from ${usercardsPrivateSchema}.account_state
+  where account_id = ${boundAccountSql};
+
+create or replace view ${usercardsCurrentQuerySchema}.printing_reference with (security_barrier) as
+  select reference.printing_id, reference.card_id
+  from ${usercardsPrivateSchema}.printing_reference as reference
+  where exists (
+    select 1 from ${usercardsPrivateSchema}.copy as copy
+     where copy.account_id = ${boundAccountSql}
+       and copy.printing_id = reference.printing_id
+  ) or exists (
+    select 1 from ${usercardsPrivateSchema}.association as association
+     where association.account_id = ${boundAccountSql}
+       and association.target_level = 'printing'
+       and association.target_id = reference.printing_id
+  );
+
+create or replace view ${usercardsCurrentQuerySchema}.copy with (security_barrier) as
+  select copy_id, account_id, printing_id, finish, condition, revision
+  from ${usercardsPrivateSchema}.copy
+  where account_id = ${boundAccountSql};
+
+create or replace view ${usercardsCurrentQuerySchema}.tag with (security_barrier) as
+  select tag_id, account_id, kind, label, system, revision
+  from ${usercardsPrivateSchema}.tag
+  where account_id = ${boundAccountSql};
+
+create or replace view ${usercardsCurrentQuerySchema}.association with (security_barrier) as
+  select association_id, account_id, tag_id, tag_kind, target_level, target_id, quantity, revision
+  from ${usercardsPrivateSchema}.association
+  where account_id = ${boundAccountSql};
+
 create or replace view ${usercardsQuerySchema}.copies with (security_barrier) as
   select copy.copy_id,
          copy.printing_id,
@@ -598,6 +657,7 @@ create or replace view ${usercardsQuerySchema}.private_revision as
   where bound.account_id is not null;
 
 revoke all on schema ${usercardsPrivateSchema} from public;
+revoke all on schema ${usercardsCurrentQuerySchema} from public;
 `.trim();
 
 const readerRolePattern = /^[a-z_][a-z0-9_]{0,62}$/;
@@ -614,6 +674,19 @@ export function usercardsReaderGrants(readerRole: string): string {
   return [
     `grant usage on schema ${usercardsQuerySchema} to "${readerRole}";`,
     `grant select on ${relations.join(', ')} to "${readerRole}";`,
+  ].join('\n');
+}
+
+/**
+ * Grants the provider-owned current query capability read-only access to exactly the authoritative
+ * relations it evaluates. Import state, receipts, provenance, archives and all mutations remain
+ * unavailable; the capability itself owns trusted account scoping.
+ */
+export function usercardsQueryGrants(role: string): string {
+  assertRole(role);
+  return [
+    `grant usage on schema ${usercardsCurrentQuerySchema} to "${role}";`,
+    `grant select on ${usercardsCurrentQuerySchema}.account_state, ${usercardsCurrentQuerySchema}.printing_reference, ${usercardsCurrentQuerySchema}.copy, ${usercardsCurrentQuerySchema}.tag, ${usercardsCurrentQuerySchema}.association to "${role}";`,
   ].join('\n');
 }
 

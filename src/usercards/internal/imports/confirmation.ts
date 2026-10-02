@@ -17,6 +17,7 @@ import {
   type PhysicalCopy,
 } from '../model.js';
 import { publishMutation } from '../publication.js';
+import { storePrintingReferences } from '../references.js';
 import {
   associationFromRow,
   associationPayload,
@@ -1123,6 +1124,7 @@ async function confirmTagDestination(
   tagKind: string,
   pending: readonly ConfirmedImportEntry[],
 ): Promise<ConfirmationOutcome> {
+  await storeReviewedPrintingReferences(statements, pending);
   const recorded = await applyTagDestination(statements, accountId, tagId, tagKind, pending);
   await closeConfirmedEntries(
     statements,
@@ -1275,6 +1277,9 @@ async function confirmOwnershipDestination(
     }
   }
 
+  // Match ordinary copy creation: acquire the owned tag before any new reference locks.
+  // Keep the complete reference batch together so its insertion order is stable.
+  await storeReviewedPrintingReferences(statements, pending);
   for (const [entryId, acquisitionId] of bindings) {
     const binding = bindEntryStatement(accountId, entryId, acquisitionId);
     await readRows(
@@ -1327,4 +1332,22 @@ async function confirmOwnershipDestination(
     privateRevision,
     receipt: await requireReceipt(statements, accountId, plan.operationId),
   };
+}
+
+async function storeReviewedPrintingReferences(
+  statements: UserCardsSqlExecutor,
+  pending: readonly ConfirmedImportEntry[],
+): Promise<void> {
+  const references = pending.flatMap((entry) => {
+    const { printingId, cardId } = entry.reviewed;
+    if (printingId === null) return [];
+    if (cardId === null) {
+      throw new UserCardsError(
+        'unavailable',
+        'UserCards did not report the reviewed printing’s playable card.',
+      );
+    }
+    return [{ printingId, cardId }];
+  });
+  await storePrintingReferences(statements, references);
 }

@@ -20,6 +20,8 @@ import type {
 export interface NewCopy {
   readonly copyId: string;
   readonly printingId: PrintingId;
+  /** Stable playable identity resolved with this printing; absent only for compatible legacy loads. */
+  readonly cardId?: string;
   readonly finish: Finish;
   readonly condition: CopyCondition | null;
 }
@@ -29,6 +31,7 @@ export interface CopyCorrection {
   readonly copyId: string;
   readonly expectedRevision: number;
   readonly printingId: PrintingId;
+  readonly cardId: string;
   readonly finish: Finish;
   readonly condition: CopyCondition | null;
 }
@@ -124,6 +127,8 @@ export interface NewAssociation {
   readonly tagKind: TagKind;
   readonly targetLevel: AssociationTargetLevel;
   readonly targetId: string;
+  /** Stable playable identity for a printing target. */
+  readonly cardId: string | null;
   readonly quantity: number | null;
 }
 
@@ -133,6 +138,8 @@ export interface AssociationCorrection {
   readonly expectedRevision: number;
   readonly targetLevel: AssociationTargetLevel;
   readonly targetId: string;
+  /** Stable playable identity for a printing target. */
+  readonly cardId: string | null;
   readonly quantity: number | null;
 }
 

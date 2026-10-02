@@ -124,6 +124,7 @@ export {
   USERCARDS_ACCOUNT_SCOPE_SQL,
   USERCARDS_ACCOUNT_SETTING,
   usercardsPublicationGrants,
+  usercardsQueryGrants,
   usercardsReaderGrants,
   usercardsSchemaSql,
 } from './internal/schema.js';
@@ -148,6 +149,34 @@ export {
   type UserCardsSnapshotRequest,
   type UserCardsTagRecord,
 } from './internal/query-publication.js';
+export {
+  USERCARDS_QUERY_LIMITS,
+  userCardsOrderingFields,
+  userCardsReferenceKey,
+  userCardsResultLevels,
+  userCardsSortDirections,
+  type ReadUserCardsFragmentsInput,
+  type UserCardsFragment,
+  type UserCardsFragmentsResult,
+  type UserCardsOrdering,
+  type UserCardsOrderingField,
+  type UserCardsPhysicalDetail,
+  type UserCardsQuery,
+  type UserCardsQueryCriterion,
+  type UserCardsQueryEntry,
+  type UserCardsQueryInput,
+  type UserCardsQueryPage,
+  type UserCardsQueryScope,
+  type UserCardsReference,
+  type UserCardsResultLevel,
+  type UserCardsSortDirection,
+} from './internal/query-model.js';
+export { createUserCardsQueries, type UserCardsQueries } from './internal/queries.js';
+export {
+  createUserCardsReferencePreparation,
+  type UserCardsReferencePreparation,
+  type UserCardsReferencePreparationResult,
+} from './internal/references.js';
 export {
   createUserCards,
   type AssociationChangeResult,

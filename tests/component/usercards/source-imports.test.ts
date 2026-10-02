@@ -978,6 +978,14 @@ describe('usercards source imports', () => {
 
     await confirmSession(first.session.sessionId, 'operation-1');
     expect(await countCopies(database, alice.accountId)).toBe(3);
+    expect(
+      await database.query(
+        'select printing_id, card_id from usercards_private.printing_reference order by printing_id',
+      ),
+    ).toEqual([
+      { printing_id: counterspellPrinting.printingId, card_id: counterspell.cardId },
+      { printing_id: m11Printing.printingId, card_id: lightningBolt.cardId },
+    ]);
 
     const acquiredAgain = await stageDeck({ mainboard: [boltLine(2), counterLine(1)] });
     expect(acquiredAgain.staged).toBe(0);

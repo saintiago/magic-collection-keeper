@@ -88,11 +88,12 @@ export function createCopyOperations(dependencies: {
         throw new UserCardsError('invalid-request', invalidCreateMessage(request.error));
       }
       const { printingId, finish, condition, quantity } = request.data;
-      await resolvePhysicalPrinting(catalog, printingId, finish);
+      const resolved = await resolvePhysicalPrinting(catalog, printingId, finish);
 
       const copies = Array.from({ length: quantity }, () => ({
         copyId: randomUUID(),
         printingId,
+        cardId: resolved.printing.cardId,
         finish,
         condition,
       }));
@@ -117,12 +118,13 @@ export function createCopyOperations(dependencies: {
         );
       }
       const { copyId, expectedRevision, printingId, finish, condition } = request.data;
-      await resolvePhysicalPrinting(catalog, printingId, finish);
+      const resolved = await resolvePhysicalPrinting(catalog, printingId, finish);
 
       const outcome = await store.correctCopy(accountId, {
         copyId,
         expectedRevision,
         printingId,
+        cardId: resolved.printing.cardId,
         finish,
         condition,
       });

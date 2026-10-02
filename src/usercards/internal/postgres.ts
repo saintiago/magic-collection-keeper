@@ -2,6 +2,7 @@ import { storeCopies } from './copies.js';
 import { UserCardsError } from './errors.js';
 import type { UserCardsSqlTransactor, UserCardsSqlValue } from './executor.js';
 import { publishMutation } from './publication.js';
+import { storePrintingReferences } from './references.js';
 import { copyFromRow, copyPayloadSql, copiesFromRows } from './rows.js';
 import {
   groupRows,
@@ -131,6 +132,9 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
           );
           const row = rows[0];
           if (row !== undefined) {
+            await storePrintingReferences(statements, [
+              { printingId: correction.printingId, cardId: correction.cardId },
+            ]);
             const publication = await publishMutation(statements, accountId, {
               copies: [correction.copyId],
             });
