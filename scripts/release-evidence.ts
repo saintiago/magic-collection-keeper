@@ -71,7 +71,6 @@ export interface DeploymentStage {
   readonly apiCodeVersion: string | null;
   readonly recognitionImageUri: string | null;
   readonly catalogJobImageUri: string | null;
-  readonly indexingJobImageUri: string | null;
 }
 
 export interface ProductionAcceptanceStage {
@@ -201,8 +200,6 @@ async function verifyManifestArtifacts(
     ...(manifest.artifacts.browser.settings === null ? [] : [manifest.artifacts.browser.settings]),
     manifest.artifacts.catalog,
     manifest.artifacts.catalog.dockerfile,
-    manifest.artifacts.indexing,
-    manifest.artifacts.indexing.dockerfile,
   ];
   for (const file of recorded) {
     await verifyRecordedFile(outDir, file);
@@ -325,7 +322,6 @@ async function readDeploymentEvidence(
       apiCodeVersion: null,
       recognitionImageUri: null,
       catalogJobImageUri: null,
-      indexingJobImageUri: null,
     };
   }
   const file = await readRecordedFile(outDir, releaseEvidenceLayout.releaseRecord);
@@ -338,7 +334,6 @@ async function readDeploymentEvidence(
     'ApiCodeVersion',
     'RecognitionImageUri',
     'CatalogJobImageUri',
-    'IndexingJobImageUri',
   ] as const;
   for (const name of required) {
     if ((parameters[name] ?? '').length === 0) {
@@ -357,11 +352,7 @@ async function readDeploymentEvidence(
         '(infra/README.md#packaging-and-publication).',
     );
   }
-  for (const name of [
-    'RecognitionImageUri',
-    'CatalogJobImageUri',
-    'IndexingJobImageUri',
-  ] as const) {
+  for (const name of ['RecognitionImageUri', 'CatalogJobImageUri'] as const) {
     const uri = parameters[name] as string;
     if (!/@sha256:[0-9a-f]{64}$/.test(uri)) {
       throw new Error(
@@ -379,7 +370,6 @@ async function readDeploymentEvidence(
     apiCodeVersion: parameters['ApiCodeVersion'] as string,
     recognitionImageUri: parameters['RecognitionImageUri'] as string,
     catalogJobImageUri: parameters['CatalogJobImageUri'] as string,
-    indexingJobImageUri: parameters['IndexingJobImageUri'] as string,
   };
 }
 
@@ -471,7 +461,6 @@ function readArtifactManifest(value: unknown): ArtifactManifest {
     ...browserFiles,
     ...(settings === null || settings === undefined ? [] : [settings]),
     artifacts?.['catalog'],
-    artifacts?.['indexing'],
   ];
   for (const file of recorded) {
     readArtifactFile(file);
@@ -479,7 +468,6 @@ function readArtifactManifest(value: unknown): ArtifactManifest {
   // Every background job's container definition is a release byte of its own: verified like the
   // module it packages (docs/release-checklist.md#source-completion).
   readArtifactFile(readRecord(artifacts?.['catalog'])?.['dockerfile']);
-  readArtifactFile(readRecord(artifacts?.['indexing'])?.['dockerfile']);
   return value as ArtifactManifest;
 }
 

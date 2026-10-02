@@ -10,9 +10,7 @@
  * handle stays opaque: Navigation keeps it for its history entry and hands it back to its owning
  * factory without inspecting its contents.
  *
- * The shell also presents the floating notices of the component: the indexing notice of the
- * account-scoped progress Application connected to Search's browser indexing capability, and the
- * operation and service failures the presented pages report through the notice capability. Closing
+ * The shell also presents the floating notices of the component: the operation and service failures the presented pages report through the notice capability. Closing
  * a page aborts its work and detaches its container so a late result cannot change the new view; a
  * changed account clears the private presentation state and its notices, ends the authenticated
  * session the transport serves and reports the ended account to every page implementation.
@@ -26,7 +24,6 @@
 
 import type { UserInterfaceCapabilities } from '../../../application/index.js';
 import type { CaptureBrowserDevice } from '../../../capture/index.js';
-import type { SearchIndexingObservable, SearchIndexingStatus } from '../../../search/browser.js';
 
 import { observeUiInput } from '../../shared/interaction.js';
 import type { UiPresentationModules } from '../../shared/modules.js';
@@ -96,8 +93,6 @@ export interface Navigation {
   dispose(): void;
 }
 
-/** Notice identity of the account-scoped indexing progress, owned by the shell. */
-const indexingNotice = 'navigation:indexing';
 /** Notice identities of the shell's own sign-in and sign-out operations. */
 const signInNotice = 'navigation:sign-in';
 const signOutNotice = 'navigation:sign-out';
@@ -179,10 +174,6 @@ export function createNavigation(options: NavigationOptions): Navigation {
   let identityOperation = 0;
   let lastHref = '';
   let lastToken: string | null = null;
-  /** Account-scoped indexing progress Application supplied for the presented account. */
-  let indexing: SearchIndexingObservable | null = null;
-  /** Withdrawal of the subscription to that progress. */
-  let unsubscribeIndexing: (() => void) | null = null;
   /**
    * Whether the presented entry still keeps the interaction context it is restoring: the scroll
    * offset, focused element and visible anchor it had when the user left it. It holds from the
@@ -267,7 +258,6 @@ export function createNavigation(options: NavigationOptions): Navigation {
       // Disposal ends the presented account's private state with the UI that presented it.
       endAccount(current.accountId);
     }
-    bindIndexing(null);
     notices.dispose();
     store.clear();
     releaseDevice();
@@ -299,17 +289,13 @@ export function createNavigation(options: NavigationOptions): Navigation {
     signOutButton.disabled = false;
     closePage();
     store.clear();
-    // The notices of the presented view end with the account that presented them, and the progress
-    // of the account the shell leaves is fenced before the next account is bound
-    // (docs/ui/navigation.md#error-notices, docs/ui/navigation.md#indexing-notice).
-    bindIndexing(null);
+    // The notices of the presented view end with the account that presented them.
     notices.clear();
     if (previous !== null) {
       endAccount(previous.accountId);
       capabilities.request.endSession();
       releaseDevice();
     }
-    bindIndexing(next);
     render();
   }
 
@@ -810,99 +796,6 @@ export function createNavigation(options: NavigationOptions): Navigation {
     };
   }
 
-  /**
-   * Binds the account-scoped indexing status Application supplies. Application replaces the
-   * tracker with the account, so the shell subscribes when the account changes, presents every
-   * published status and drops the binding of the account it left; the shell neither compares
-   * positions nor checks progress itself (docs/ui/navigation.md#indexing-notice).
-   */
-  function bindIndexing(current: UiAccount | null): void {
-    unsubscribeIndexing?.();
-    unsubscribeIndexing = null;
-    indexing = null;
-    notices.dismiss(indexingNotice);
-    if (current === null) {
-      return;
-    }
-    let progress: SearchIndexingObservable;
-    try {
-      progress = capabilities.indexing(current.accountId);
-    } catch {
-      // A composition without tracked progress of this account presents no indexing notice.
-      return;
-    }
-    if (progress.status().accountId !== current.accountId) {
-      // Progress of another account is never presented as this account's saving state.
-      return;
-    }
-    indexing = progress;
-    unsubscribeIndexing = progress.subscribe((status) => {
-      applyIndexingStatus(current.accountId, status);
-    });
-    applyIndexingStatus(current.accountId, progress.status());
-  }
-
-  /**
-   * Presents one published indexing status. The notice means the save succeeded and search results
-   * are catching up: it disappears once the known changes are incorporated, reports delayed or
-   * failed progress explicitly with a status check that repeats no write, and never invents a
-   * percentage (docs/ui/navigation.md#indexing-notice).
-   */
-  function applyIndexingStatus(accountId: string, status: SearchIndexingStatus): void {
-    if (disposed || status.accountId !== accountId || account?.accountId !== accountId) {
-      // A late status of the account the shell left never reaches another account's notice.
-      return;
-    }
-    switch (status.state) {
-      case 'idle':
-      case 'incorporated':
-        // Nothing known awaits indexing: no notice is presented.
-        notices.dismiss(indexingNotice);
-        return;
-      case 'indexing':
-        notices.show({
-          id: indexingNotice,
-          severity: 'progress',
-          message: 'Indexing your cards…',
-        });
-        return;
-      case 'delayed':
-        notices.show({
-          id: indexingNotice,
-          severity: 'status',
-          message: 'Indexing is delayed',
-          action: checkIndexing(),
-        });
-        return;
-      case 'unavailable':
-        notices.show({
-          id: indexingNotice,
-          severity: 'status',
-          message: 'The indexing status is unavailable',
-          action: checkIndexing(),
-        });
-        return;
-      case 'failed':
-        notices.show({
-          id: indexingNotice,
-          severity: 'error',
-          message: 'Indexing failed',
-          action: checkIndexing(),
-        });
-        return;
-    }
-  }
-
-  /** Status retry of the indexing notice; it checks progress and repeats no original write. */
-  function checkIndexing(): UiNotice['action'] {
-    return {
-      label: 'Check indexing status',
-      run: () => {
-        indexing?.recheck();
-      },
-    };
-  }
-
   /** Device access lasts through synchronous teardown, but never into a replacement page. */
   function pageDevice(currentGeneration: number): CaptureBrowserDevice {
     const available = (): boolean =>
@@ -1158,9 +1051,8 @@ function readCapabilities(value: unknown): UserInterfaceCapabilities {
     typeof capture?.create !== 'function' ||
     readObject(record.settings) === null ||
     typeof readObject(record.catalog)?.resolve !== 'function' ||
-    typeof readObject(record.search)?.execute !== 'function' ||
+    typeof readObject(record.catalog)?.query !== 'function' ||
     typeof userCards?.account !== 'function' ||
-    typeof record.indexing !== 'function' ||
     typeof request !== 'function' ||
     typeof (request as { endSession?: unknown }).endSession !== 'function'
   ) {

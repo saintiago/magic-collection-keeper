@@ -12,7 +12,7 @@ export const UI_LIMITS = {
   /**
    * Characters one route segment may carry before it is rejected. The bound covers the longest
    * identity the components a route names publish: Catalog card/printing references, UserCards
-   * copy and tag references and Search references all accept at most 200 characters
+   * copy and tag references and Catalog references all accept at most 200 characters
    * (docs/catalog.md#identities-and-information, docs/user-cards.md#interface), so every result a
    * provider can publish renders and opens instead of being rejected as a link.
    */
@@ -40,7 +40,7 @@ export const UI_LIMITS = {
   fragmentBatch: CARD_LIST_LIMITS.fragmentBatch,
   /** Items one entry's fragment result may present, so a broken source cannot grow one row. */
   fragmentItems: CARD_LIST_LIMITS.fragmentItems,
-  /** Printings one page of a manual entry search asks Search for. */
+  /** Printings one page of a manual entry search asks Catalog for. */
   importPrintings: 20,
   /**
    * References one Catalog resolve request carries. The provider's own accepted bound is

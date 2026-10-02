@@ -195,7 +195,7 @@ describe('catalog query surface', () => {
     expect(counts[0]).toEqual({ cards: 1, names: 3, named_cards: 1, printings: 2 });
   });
 
-  it('upgrades the finish constraint without replacing records or publication history', async () => {
+  it('upgrades the finish constraint without replacing records or the current revision', async () => {
     await publishCatalog(database, {
       revisionId: 'revision-1',
       cards: [lightningBolt],
@@ -213,13 +213,9 @@ describe('catalog query surface', () => {
     expect(await database.query('select printing_id from catalog.printings')).toEqual([
       { printing_id: m11Printing.printingId },
     ]);
-    expect(
-      await database.query(
-        `select revision_id, kind
-           from catalog_private.publication
-          order by position`,
-      ),
-    ).toEqual([{ revision_id: 'revision-1', kind: 'revision' }]);
+    expect(await database.query('select revision_id from catalog_private.revision')).toEqual([
+      { revision_id: 'revision-1' },
+    ]);
     await database.query(
       `insert into catalog_private.printing
          (printing_id, card_id, edition, collector_number, language, finishes, physical)

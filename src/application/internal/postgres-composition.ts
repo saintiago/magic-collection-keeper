@@ -1,23 +1,14 @@
 /** Default deployment composition. Only this module selects backend implementations. */
 import {
   createCatalog,
-  createCatalogPublication,
   createCatalogSynchronizer,
-  type CatalogSqlExecutor,
   type CatalogSnapshotSource,
   type CatalogSqlTransactor,
 } from '../../catalog/index.js';
 import {
-  createSearch,
-  createSearchIndexer,
-  SEARCH_ACCOUNT_SCOPE_SQL,
-  type SearchSqlExecutor,
-  type SearchSqlTransactor,
-} from '../../search/index.js';
-import {
   createSourceImports,
   createUserCards,
-  createUserCardsPublication,
+  createUserCardsQueries,
   type MoxfieldDeckSource,
   type UserCardsSqlTransactor,
 } from '../../usercards/index.js';
@@ -29,17 +20,10 @@ import {
 import { resolveApplicationConfiguration } from './configuration.js';
 
 export interface ApplicationResources {
-  /**
-   * Reader role: the published Catalog and UserCards views the interactive operations read.
-   */
-  readonly readSql: UserCardsSqlTransactor;
-  /**
-   * Search's own query role: its published projection only, with the transaction-local account
-   * scope Search's private queries bind. It reaches no provider relation, so a Search query can
-   * never fall back to Catalog or UserCards storage
-   * (docs/data-architecture.md#access-and-deployment).
-   */
-  readonly searchSql: UserCardsSqlTransactor;
+  /** Read-only Catalog role. */
+  readonly catalogReadSql: CatalogSqlTransactor;
+  /** Read-only, account-scoped UserCards query role. */
+  readonly userCardsReadSql: UserCardsSqlTransactor;
   /** Private writer role, supplied only to the owner of private mutations. */
   readonly writeSql: UserCardsSqlTransactor;
   /**
@@ -50,17 +34,6 @@ export interface ApplicationResources {
   readonly catalogSynchronization: {
     readonly sql: CatalogSqlTransactor;
     readonly snapshots: CatalogSnapshotSource;
-  } | null;
-  /**
-   * Search indexing resources of a runtime that runs background indexing, or null for a runtime
-   * that holds none of the credentials. `sql` maintains Search's own projection with the indexing
-   * role; the other two carry trusted publication access to Catalog and UserCards, never a
-   * provider's writer credential (docs/data-architecture.md#access-and-deployment).
-   */
-  readonly searchIndexing: {
-    readonly sql: SearchSqlTransactor;
-    readonly catalogPublicationSql: CatalogSqlExecutor;
-    readonly userCardsPublicationSql: UserCardsSqlTransactor;
   } | null;
   readonly deckSource?: MoxfieldDeckSource | null;
 }
@@ -78,20 +51,18 @@ export function createPostgresApplication(
   const configuration = resolveApplicationConfiguration(dependencies?.configuration);
   const resources = dependencies?.resources;
   const sql = resources?.writeSql;
-  const readSql = resources?.readSql;
-  const searchSql = resources?.searchSql;
+  const catalogReadSql = resources?.catalogReadSql;
+  const userCardsReadSql = resources?.userCardsReadSql;
   const synchronization = resources?.catalogSynchronization;
-  const searchIndexing = resources?.searchIndexing;
   if (
-    typeof readSql?.query !== 'function' ||
-    typeof readSql?.transaction !== 'function' ||
-    typeof searchSql?.query !== 'function' ||
-    typeof searchSql?.transaction !== 'function' ||
+    typeof catalogReadSql?.query !== 'function' ||
+    typeof userCardsReadSql?.query !== 'function' ||
+    typeof userCardsReadSql?.transaction !== 'function' ||
     typeof sql?.query !== 'function' ||
     typeof sql?.transaction !== 'function'
   ) {
     throw new TypeError(
-      'The PostgreSQL composition requires the reader, Search query and private writer executors.',
+      'The PostgreSQL composition requires Catalog and UserCards readers and the private writer.',
     );
   }
   if (
@@ -103,24 +74,14 @@ export function createPostgresApplication(
       'A supplied catalog synchronization requires its executor and snapshot source.',
     );
   }
-  if (
-    searchIndexing !== null &&
-    (typeof searchIndexing?.sql?.transaction !== 'function' ||
-      typeof searchIndexing?.catalogPublicationSql?.query !== 'function' ||
-      typeof searchIndexing?.userCardsPublicationSql?.query !== 'function' ||
-      typeof searchIndexing?.userCardsPublicationSql?.transaction !== 'function')
-  ) {
-    throw new TypeError(
-      'Supplied Search indexing requires its projection writer and both publication readers.',
-    );
-  }
-  const catalog = createCatalog({ sql: readSql });
+  const catalog = createCatalog({ sql: catalogReadSql });
   return createApplication({
     ...dependencies,
     configuration,
     components: {
       catalog,
       userCards: createUserCards({ sql, catalog }),
+      userCardsQueries: createUserCardsQueries({ sql: userCardsReadSql }),
       sourceImports: configuration.capabilities.sourceImports
         ? createSourceImports({
             sql,
@@ -128,33 +89,12 @@ export function createPostgresApplication(
             ...(resources.deckSource == null ? {} : { decks: resources.deckSource }),
           })
         : null,
-      search: createSearch({
-        sql: searchSql,
-        withAccountScope: <T>(
-          accountId: string,
-          work: (scoped: SearchSqlExecutor) => Promise<T>,
-        ): Promise<T> =>
-          searchSql.transaction(async (statements) => {
-            await statements.query(SEARCH_ACCOUNT_SCOPE_SQL, { account_id: accountId });
-            return work(statements);
-          }),
-      }),
       synchronizer:
         synchronization === null
           ? null
           : createCatalogSynchronizer({
               sql: synchronization.sql,
               snapshots: synchronization.snapshots,
-            }),
-      indexer:
-        searchIndexing === null
-          ? null
-          : createSearchIndexer({
-              sql: searchIndexing.sql,
-              catalog: createCatalogPublication({ sql: searchIndexing.catalogPublicationSql }),
-              userCards: createUserCardsPublication({
-                sql: searchIndexing.userCardsPublicationSql,
-              }),
             }),
     },
   });

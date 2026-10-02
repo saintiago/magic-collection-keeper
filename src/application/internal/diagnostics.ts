@@ -77,13 +77,7 @@ export function backgroundFailureDiagnostic(
   };
 }
 
-const internalErrorNames = new Set([
-  'Error',
-  'ApplicationError',
-  'CatalogError',
-  'SearchError',
-  'UserCardsError',
-]);
+const internalErrorNames = new Set(['Error', 'ApplicationError', 'CatalogError', 'UserCardsError']);
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null;

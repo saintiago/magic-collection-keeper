@@ -1,3 +1,4 @@
+import { advanceRevision } from '../revision.js';
 /** staging persistence for private imports. See docs/user-cards.md#internal-design. */
 import { createHash } from 'node:crypto';
 import { UserCardsError } from '../errors.js';
@@ -24,7 +25,6 @@ import type {
   SourceLineStagePlan,
 } from '../store.js';
 import {
-  advanceRevision,
   bumpSessionStatement,
   currentRevision,
   integerValue,

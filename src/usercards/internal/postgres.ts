@@ -1,7 +1,7 @@
 import { storeCopies } from './copies.js';
 import { UserCardsError } from './errors.js';
 import type { UserCardsSqlTransactor, UserCardsSqlValue } from './executor.js';
-import { publishMutation } from './publication.js';
+import { advanceRevision } from './revision.js';
 import { storePrintingReferences } from './references.js';
 import { copyFromRow, copyPayloadSql, copiesFromRows } from './rows.js';
 import {
@@ -104,14 +104,10 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
         sql,
         async (statements) => {
           const stored = await storeCopies(statements, accountId, copies);
-          const publication = await publishMutation(statements, accountId, {
-            copies: copies.map((copy) => copy.copyId),
-            tags: stored.ownedTag.created ? [stored.ownedTag.tagId] : [],
-            associations: stored.ownedMemberships,
-          });
+          const committedRevision = await advanceRevision(statements, accountId);
           return {
-            privateRevision: publication.revision,
-            publicationPosition: publication.position,
+            privateRevision: committedRevision,
+
             copies: copiesFromRows(stored.rows),
           };
         },
@@ -135,13 +131,11 @@ export function createPostgresCopyStore(sql: UserCardsSqlTransactor): CopyStore 
             await storePrintingReferences(statements, [
               { printingId: correction.printingId, cardId: correction.cardId },
             ]);
-            const publication = await publishMutation(statements, accountId, {
-              copies: [correction.copyId],
-            });
+            const committedRevision = await advanceRevision(statements, accountId);
             return {
               outcome: 'updated',
-              privateRevision: publication.revision,
-              publicationPosition: publication.position,
+              privateRevision: committedRevision,
+
               copy: copyFromRow(row),
             };
           }

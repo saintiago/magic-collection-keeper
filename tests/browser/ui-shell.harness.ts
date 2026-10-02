@@ -8,8 +8,6 @@
  * without a backend or a production account.
  */
 
-import { idleProgress } from './card-list-progress.js';
-
 import {
   createCardList,
   createCardListBrowser,
@@ -25,9 +23,8 @@ import {
   type UiView,
   type UserInterface,
 } from '../../src/ui/index.js';
-import type { SearchClient, UserInterfaceCapabilities } from '../../src/application/index.js';
-import type { Catalog } from '../../src/catalog/index.js';
-import type { SearchIndexingStatus } from '../../src/search/browser.js';
+import type { UserInterfaceCapabilities } from '../../src/application/index.js';
+import type { CatalogService } from '../../src/catalog/index.js';
 
 import { unusedUserCards } from './unused-usercards.js';
 import { unusedCapture } from './unused-capture.js';
@@ -58,16 +55,6 @@ export interface UiShellControl {
   shiftAsyncLayout(): void;
   /** Result requests the asynchronous page holds, waiting for the journey to answer them. */
   asyncPending(): number;
-  /** Publishes one indexing status of an account, as Search's progress tracker would. */
-  publishIndexing(
-    accountId: string,
-    state: SearchIndexingStatus['state'],
-    outstanding?: readonly string[],
-  ): void;
-  /** Status checks the notice's retry action requested; a status check repeats no write. */
-  indexingChecks(accountId: string): number;
-  /** Listeners one account's progress tracker still holds. */
-  indexingListeners(accountId: string): number;
   /** Resolves the deferred page factory of the late-factory journeys. */
   resolveDeferredPage(): void;
   /** Defers the next Tags mount, preserving its resource-owning factory. */
@@ -171,16 +158,11 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
   );
   // The shell fixture presents no browsing page, so the component access they read through is
   // only present to satisfy the capabilities Application supplies.
-  const catalog: Catalog = {
+  const catalog: CatalogService = {
+    query: () => Promise.reject(new Error('No catalog query in this journey.')),
     resolve: () => Promise.reject(new Error('The shell journey reads no catalog.')),
     listCardPrintings: () => Promise.reject(new Error('The shell journey reads no catalog.')),
   };
-  const search: SearchClient = {
-    execute: () => Promise.reject(new Error('The shell journey runs no search.')),
-    counts: () => Promise.reject(new Error('The shell journey reads no private counts.')),
-    observe: () => Promise.reject(new Error('The shell journey observes no progress.')),
-  };
-  const indexing = createControlledIndexing();
   let deferred = start.deferredPages === true ? createDeferredPage(document, log) : null;
   const pageDefinitions = fixturePages(
     document,
@@ -203,16 +185,12 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
     identity,
     request,
     catalog,
-    search,
     userCards: unusedUserCards,
     cardList: createCardListBrowser({
-      progress: idleProgress,
-      search,
       catalog,
       userCards: unusedUserCards,
     }),
     capture: unusedCapture(unusedUserCards),
-    indexing: (accountId) => indexing.tracker(accountId),
   };
   const shell: UserInterface = createUserInterface({
     root,
@@ -297,10 +275,6 @@ export function installUiShell(root: Element | null, start: UiShellStart = {}): 
       asyncResults.grow();
     },
     asyncPending: () => asyncResults.pending(),
-    publishIndexing: (accountId, state, outstanding) =>
-      indexing.publish(accountId, state, outstanding),
-    indexingChecks: (accountId) => indexing.checks(accountId),
-    indexingListeners: (accountId) => indexing.listeners(accountId),
     deferNextPage: () => {
       deferred = createDeferredPage(
         document,
@@ -870,72 +844,6 @@ function noticeButton(
   return button;
 }
 
-/** Controlled indexing progress of the shell journeys: one tracker state per account. */
-interface ControlledIndexing {
-  tracker(accountId: string): {
-    status(): SearchIndexingStatus;
-    subscribe(listener: (status: SearchIndexingStatus) => void): () => void;
-    recheck(): void;
-  };
-  publish(
-    accountId: string,
-    state: SearchIndexingStatus['state'],
-    outstanding?: readonly string[],
-  ): void;
-  checks(accountId: string): number;
-  listeners(accountId: string): number;
-}
-
-function createControlledIndexing(): ControlledIndexing {
-  const accounts = new Map<
-    string,
-    {
-      status: SearchIndexingStatus;
-      readonly listeners: Set<(status: SearchIndexingStatus) => void>;
-      checks: number;
-    }
-  >();
-  const stateOf = (accountId: string) => {
-    const current = accounts.get(accountId);
-    if (current !== undefined) {
-      return current;
-    }
-    const created = {
-      status: { accountId, state: 'idle' as const, outstanding: [], revisions: null },
-      listeners: new Set<(status: SearchIndexingStatus) => void>(),
-      checks: 0,
-    };
-    accounts.set(accountId, created);
-    return created;
-  };
-  return {
-    tracker(accountId) {
-      const state = stateOf(accountId);
-      return {
-        status: () => state.status,
-        subscribe: (listener) => {
-          state.listeners.add(listener);
-          return () => {
-            state.listeners.delete(listener);
-          };
-        },
-        recheck: () => {
-          state.checks += 1;
-        },
-      };
-    },
-    publish(accountId, state, outstanding = []) {
-      const current = stateOf(accountId);
-      current.status = { ...current.status, state, outstanding: [...outstanding] };
-      for (const listener of [...current.listeners]) {
-        listener(current.status);
-      }
-    },
-    checks: (accountId) => stateOf(accountId).checks,
-    listeners: (accountId) => stateOf(accountId).listeners.size,
-  };
-}
-
 /**
  * Deferred Tags factory of the late-factory journeys: Navigation resolves the route while this
  * factory is still loading, and the journey decides whether it resolves or rejects afterwards.
@@ -1070,7 +978,7 @@ function listHomePage(document: Document, identity: 'identified' | 'anonymous'):
           load: () =>
             Promise.resolve({
               status: 'page' as const,
-              current: true,
+
               entries: [
                 {
                   key: 'card:1',

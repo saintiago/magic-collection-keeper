@@ -17,24 +17,10 @@ import {
   createApiGatewayHandler,
   createInteractiveDeployment,
   runCatalogJob,
-  runIndexingJob,
   type SnapshotObjectClient,
 } from '../../src/application/deployment.js';
-import {
-  catalogPublicationGrants,
-  catalogReaderGrants,
-  catalogSchemaSql,
-} from '../../src/catalog/index.js';
-import {
-  searchIndexingGrants,
-  searchReaderGrants,
-  searchSchemaSql,
-} from '../../src/search/index.js';
-import {
-  usercardsPublicationGrants,
-  usercardsReaderGrants,
-  usercardsSchemaSql,
-} from '../../src/usercards/index.js';
+import { catalogSchemaSql, catalogReaderGrants } from '../../src/catalog/index.js';
+import { usercardsSchemaSql, usercardsQueryGrants } from '../../src/usercards/index.js';
 import { createDataApiTestClient, type DataApiTestClient } from '../support/data-api.js';
 import {
   startPostgresServer,
@@ -50,14 +36,8 @@ const userCardsWriterSecret =
   'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-usercards-writer';
 const catalogWriterSecret =
   'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-catalog-writer';
-const searchIndexingSecret =
-  'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-search-indexing';
-const searchQuerySecret =
-  'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-search-query';
-const catalogPublicationSecret =
-  'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-catalog-publication';
-const userCardsPublicationSecret =
-  'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-usercards-publication';
+const userCardsReaderSecret =
+  'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-usercards-reader';
 const clusterArn = 'arn:aws:rds:us-east-1:123456789012:cluster:keeper-test';
 const snapshotKey = 'snapshots/default_cards.jsonl';
 const sourceVersion = '2026-09-01T00:00:00.000Z';
@@ -96,8 +76,8 @@ const interactiveEnvironment: Record<string, string> = {
   KEEPER_USER_POOL_CLIENT_ID: appClientId,
   KEEPER_DATABASE_CLUSTER_ARN: clusterArn,
   KEEPER_DATABASE_NAME: 'keeper',
-  KEEPER_DATABASE_READER_SECRET_ARN: readerSecret,
-  KEEPER_DATABASE_SEARCH_QUERY_SECRET_ARN: searchQuerySecret,
+  KEEPER_DATABASE_CATALOG_READER_SECRET_ARN: readerSecret,
+  KEEPER_DATABASE_USERCARDS_READER_SECRET_ARN: userCardsReaderSecret,
   KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN: userCardsWriterSecret,
   KEEPER_SNAPSHOT_BUCKET: 'keeper-test-snapshots',
   KEEPER_SNAPSHOT_PREFIX: 'snapshots/',
@@ -116,21 +96,6 @@ const catalogJobEnvironment: Record<string, string> = {
   KEEPER_DATABASE_CATALOG_WRITER_SECRET_ARN: catalogWriterSecret,
   KEEPER_SNAPSHOT_BUCKET: 'keeper-test-snapshots',
   KEEPER_SNAPSHOT_PREFIX: 'snapshots/',
-};
-
-/**
- * The variables the background indexing job receives: Search's own projection-maintenance
- * credential plus one trusted publication reader per provider, and no provider writer or end-user
- * reader credential (docs/data-architecture.md#access-and-deployment).
- */
-const indexingJobEnvironment: Record<string, string> = {
-  KEEPER_ENVIRONMENT: 'test',
-  AWS_REGION: 'us-east-1',
-  KEEPER_DATABASE_CLUSTER_ARN: clusterArn,
-  KEEPER_DATABASE_NAME: 'keeper',
-  KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN: searchIndexingSecret,
-  KEEPER_DATABASE_CATALOG_PUBLICATION_SECRET_ARN: catalogPublicationSecret,
-  KEEPER_DATABASE_USERCARDS_PUBLICATION_SECRET_ARN: userCardsPublicationSecret,
 };
 
 function claimsFor(accountId: string, overrides: Readonly<Record<string, unknown>> = {}) {
@@ -174,9 +139,7 @@ describe('packaged runtimes', () => {
   let records: Record<string, unknown>[];
 
   beforeEach(async () => {
-    server = await startPostgresServer(
-      `${catalogSchemaSql}\n\n${usercardsSchemaSql}\n\n${searchSchemaSql}`,
-    );
+    server = await startPostgresServer(`${catalogSchemaSql}\n\n${usercardsSchemaSql}`);
     database = await server.connect();
     // General runtime cases use bootstrap privileges; the exact-grants case maps every secret.
     dataApi = createDataApiTestClient(server);
@@ -208,19 +171,6 @@ describe('packaged runtimes', () => {
     return createInteractiveDeployment({
       environment: interactiveEnvironment,
       dataApi,
-    });
-  }
-
-  /** Runs one bounded indexing pass against the published providers, as the deployed task runs it. */
-  function indexJob(
-    environment: Record<string, string> = indexingJobEnvironment,
-  ): ReturnType<typeof runIndexingJob> {
-    return runIndexingJob({
-      environment,
-      dataApi,
-      log: (record) => {
-        records.push({ ...record });
-      },
     });
   }
 
@@ -331,415 +281,60 @@ describe('packaged runtimes', () => {
     deployment.dispose();
   });
 
-  it('indexes the committed catalog and copies and serves them to their owner through Search', async () => {
+  it('serves owner queries using separate read-only roles and no publication credentials', async () => {
     await runJob({
       metadata: { 'source-version': sourceVersion },
-      version: 'snapshot-version-1',
-      text: `${JSON.stringify(bolt)}\n`,
+      version: '1',
+      text: JSON.stringify(bolt) + '\n',
     });
-    const deployment = interactive();
-    const handler = createApiGatewayHandler(deployment.application);
-    const ownedCopies = { resultLevel: 'copy', criteria: [{ kind: 'owned' }] };
-    const searchAs = (accountId: string) =>
-      handler(
-        invocation({
-          method: 'POST',
-          path: '/api/search',
-          claims: claimsFor(accountId),
-          body: ownedCopies,
-        }),
-      );
-
-    const created = await handler(
-      invocation({
-        method: 'POST',
-        path: '/api/collection/copies',
-        claims: claimsFor('cognito-alice'),
-        body: {
-          printingId: 'printing-tle-32-en',
-          finish: 'nonfoil',
-          condition: 'NM',
-          quantity: 2,
-        },
+    const writer = interactive();
+    const created = await writer.application.handle({
+      method: 'POST',
+      path: '/api/collection/copies',
+      authentication: { claims: claimsFor('alice', { exp: Math.floor(Date.now() / 1000) + 300 }) },
+      body: JSON.stringify({
+        printingId: bolt.id,
+        finish: 'nonfoil',
+        condition: null,
+        quantity: 2,
       }),
-    );
-    expect(created.statusCode).toBe(200);
-
-    // Saving and indexing stay separate outcomes: the committed copies are not queryable yet.
-    const before = await searchAs('cognito-alice');
-    expect(before.statusCode).toBe(200);
-    expect(JSON.parse(before.body)).toMatchObject({ status: 'updating', entries: [] });
-
-    const outcome = await indexJob({
-      ...indexingJobEnvironment,
-      KEEPER_INDEXING_ACCOUNTS: 'cognito-alice',
     });
-
-    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
-    expect(outcome.result).toMatchObject({
-      rebuilt: true,
-      published: true,
-      caughtUp: true,
-      unresolvedReferences: 0,
-    });
-    expect(outcome.result?.accounts).toEqual([
-      { accountId: 'cognito-alice', position: expect.any(String), caughtUp: true },
-    ]);
-    expect(records.at(-1)).toMatchObject({
-      operation: 'search.index',
-      environment: 'test',
-      outcome: 'ok',
-      published: true,
-      caughtUp: true,
-      indexedAccounts: 1,
-    });
-
-    const after = await searchAs('cognito-alice');
-    expect(after.statusCode).toBe(200);
-    expect(
-      (JSON.parse(after.body) as { readonly entries: readonly unknown[] }).entries,
-    ).toHaveLength(2);
-    // The private projection stays account-scoped: another account's query returns none of them.
-    const other = await searchAs('cognito-bob');
-    expect((JSON.parse(other.body) as { readonly entries: readonly unknown[] }).entries).toEqual(
-      [],
-    );
-
-    // Search's projection writer holds only its own credential: every write it makes maintains
-    // Search's own schema, and it reads no provider relation. Each provider's publication is read
-    // with the credential that provider granted for indexing.
-    const indexingStatements = dataApi
-      .statements()
-      .filter((entry) => entry.secretArn === searchIndexingSecret);
-    expect(indexingStatements.length).toBeGreaterThan(0);
-    expect(indexingStatements.some((entry) => entry.sql.includes('search_private'))).toBe(true);
-    expect(indexingStatements.every((entry) => !entry.sql.includes('catalog_private'))).toBe(true);
-    expect(indexingStatements.every((entry) => !entry.sql.includes('usercards_private'))).toBe(
-      true,
-    );
-    expect(
-      indexingStatements
-        .filter((entry) => /\b(insert|update|delete)\b/i.test(entry.sql))
-        .every((entry) => entry.sql.includes('search_private')),
-    ).toBe(true);
-    const publicationStatements = (secretArn: string) =>
-      dataApi.statements().filter((entry) => entry.secretArn === secretArn);
-    const catalogStatements = publicationStatements(catalogPublicationSecret);
-    expect(
-      catalogStatements.some((entry) => entry.sql.includes('catalog_private.publication')),
-    ).toBe(true);
-    expect(catalogStatements.every((entry) => !entry.sql.includes('search_private'))).toBe(true);
-    expect(catalogStatements.every((entry) => !entry.sql.includes('catalog_private.card'))).toBe(
-      true,
-    );
-    const userCardsStatements = publicationStatements(userCardsPublicationSecret);
-    expect(
-      userCardsStatements.some((entry) => entry.sql.includes('usercards_private.publication')),
-    ).toBe(true);
-    expect(
-      userCardsStatements.some((entry) => entry.sql.includes('usercards_private.account_state')),
-    ).toBe(true);
-    expect(userCardsStatements.every((entry) => !entry.sql.includes('search_private'))).toBe(true);
-    expect(
-      userCardsStatements.every((entry) => !entry.sql.includes('usercards_private.copy')),
-    ).toBe(true);
-    deployment.dispose();
-  });
-
-  it('keeps indexing later commits and newly active accounts without per-run account overrides', async () => {
-    await runJob({
-      metadata: { 'source-version': sourceVersion },
-      version: 'snapshot-version-1',
-      text: `${JSON.stringify(bolt)}\n`,
-    });
-    const deployment = interactive();
-    const handler = createApiGatewayHandler(deployment.application);
-    const ownedCopies = { resultLevel: 'copy', criteria: [{ kind: 'owned' }] };
-    const searchAs = (accountId: string) =>
-      handler(
-        invocation({
-          method: 'POST',
-          path: '/api/search',
-          claims: claimsFor(accountId),
-          body: ownedCopies,
-        }),
-      );
-    const ownsCopy = async (accountId: string): Promise<number> => {
-      const response = await searchAs(accountId);
-      expect(response.statusCode).toBe(200);
-      return (JSON.parse(response.body) as { readonly entries: readonly unknown[] }).entries.length;
-    };
-    const createCopy = (accountId: string) =>
-      handler(
-        invocation({
-          method: 'POST',
-          path: '/api/collection/copies',
-          claims: claimsFor(accountId),
-          body: {
-            printingId: 'printing-tle-32-en',
-            finish: 'nonfoil',
-            condition: null,
-            quantity: 1,
-          },
-        }),
-      );
-
-    // A routine run covers the account that published, without an operator naming it.
-    expect((await createCopy('cognito-alice')).statusCode).toBe(200);
-    const first = await indexJob();
-    expect(first.result).toMatchObject({ caughtUp: true });
-    expect(first.result?.accounts.map((progress) => progress.accountId)).toEqual(['cognito-alice']);
-    expect(await ownsCopy('cognito-alice')).toBe(1);
-
-    // A later commit of the same account is applied by the next routine run: the projection holds
-    // the account's checkpoint and keeps reading its publication.
-    expect((await createCopy('cognito-alice')).statusCode).toBe(200);
-    const second = await indexJob();
-    expect(second.result).toMatchObject({ caughtUp: true });
-    expect(second.result?.accounts).toEqual([
-      { accountId: 'cognito-alice', position: expect.any(String), caughtUp: true },
-    ]);
-    expect(await ownsCopy('cognito-alice')).toBe(2);
-
-    // An account that publishes for the first time is discovered by the provider's register and
-    // indexed by the same routine run, and it stays account-scoped.
-    expect((await createCopy('cognito-bob')).statusCode).toBe(200);
-    const third = await indexJob();
-    expect(third.result).toMatchObject({ caughtUp: true });
-    expect(third.result?.accounts.map((progress) => progress.accountId)).toEqual([
-      'cognito-alice',
-      'cognito-bob',
-    ]);
-    expect(await ownsCopy('cognito-bob')).toBe(1);
-    expect(await ownsCopy('cognito-alice')).toBe(2);
-    deployment.dispose();
-  });
-
-  it('runs the packaged runtimes with exactly the privileges the documented bootstrap grants', async () => {
-    // The schema bootstrap of infra/README.md: one role per workload credential. The reader role
-    // reaches the published Catalog and UserCards views, Search's query role reaches Search's own
-    // projection only, each provider grants its publication contract to the indexing reader of
-    // that provider, and the indexing role maintains Search's private schema
-    // (docs/data-architecture.md#access-and-deployment).
-    for (const role of [
-      'keeper_reader',
-      'keeper_usercards_writer',
-      'keeper_catalog_writer',
-      'keeper_search_indexing',
-      'keeper_search_query',
-      'keeper_catalog_publication',
-      'keeper_usercards_publication',
-    ]) {
-      await database.query(`create role ${role}`);
-    }
-    for (const component of ['catalog', 'usercards']) {
-      await database.query(`
-        grant usage on schema ${component}_private to keeper_${component}_writer;
-        grant select, insert, update, delete on all tables in schema ${component}_private to keeper_${component}_writer;
-        grant usage, select on all sequences in schema ${component}_private to keeper_${component}_writer;
-      `);
-    }
-    await database.query(catalogReaderGrants('keeper_catalog_writer'));
-    await database.query(usercardsReaderGrants('keeper_usercards_writer'));
-    await database.query(catalogReaderGrants('keeper_reader'));
-    await database.query(usercardsReaderGrants('keeper_reader'));
-    await database.query(searchReaderGrants('keeper_search_query'));
-    await database.query(searchIndexingGrants('keeper_search_indexing'));
-    await database.query(catalogPublicationGrants('keeper_catalog_publication'));
-    await database.query(usercardsPublicationGrants('keeper_usercards_publication'));
-
-    // Each secret executes as the role it names, so the packaged runtimes run under exactly the
-    // deployment's grants rather than the bootstrap connection's own privileges.
+    expect(created.status, created.body).toBe(200);
+    writer.dispose();
+    await database.query('create role catalog_query; create role private_query');
+    await database.query(catalogReaderGrants('catalog_query'));
+    await database.query(usercardsQueryGrants('private_query'));
+    await dataApi.close();
     dataApi = createDataApiTestClient(server, {
-      roles: {
-        [readerSecret]: 'keeper_reader',
-        [catalogWriterSecret]: 'keeper_catalog_writer',
-        [userCardsWriterSecret]: 'keeper_usercards_writer',
-        [searchQuerySecret]: 'keeper_search_query',
-        [searchIndexingSecret]: 'keeper_search_indexing',
-        [catalogPublicationSecret]: 'keeper_catalog_publication',
-        [userCardsPublicationSecret]: 'keeper_usercards_publication',
-      },
+      roles: { [readerSecret]: 'catalog_query', [userCardsReaderSecret]: 'private_query' },
     });
-
-    const catalogOutcome = await runJob({
-      metadata: { 'source-version': sourceVersion },
-      version: 'snapshot-version-1',
-      text: `${JSON.stringify(bolt)}\n`,
-    });
-    expect(catalogOutcome.ok, JSON.stringify(catalogOutcome)).toBe(true);
-    const deployment = interactive();
-    const handler = createApiGatewayHandler(deployment.application);
-    const saved = await handler(
-      invocation({
-        method: 'POST',
-        path: '/api/collection/copies',
-        claims: claimsFor('cognito-alice'),
-        body: {
-          printingId: 'printing-tle-32-en',
-          finish: 'nonfoil',
-          condition: null,
-          quantity: 1,
-        },
-      }),
-    );
-
-    expect(saved.statusCode, saved.body).toBe(200);
-
-    // A Search query answers as Search's query role: its projection is reachable and no provider
-    // relation is, even though the interactive runtime also holds the reader credential.
-    const searched = await handler(
-      invocation({
-        method: 'POST',
-        path: '/api/search',
-        claims: claimsFor('cognito-alice'),
-        body: { resultLevel: 'copy', criteria: [{ kind: 'owned' }] },
-      }),
-    );
-    expect(searched.statusCode).toBe(200);
-
-    const outcome = await indexJob({
-      ...indexingJobEnvironment,
-      KEEPER_INDEXING_ACCOUNTS: 'cognito-alice',
-    });
-    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
-    expect(outcome.result).toMatchObject({ published: true, caughtUp: true });
-
-    for (const [accountId, copies] of [
-      ['cognito-alice', 1],
-      ['cognito-bob', 0],
+    const runtime = interactive();
+    const query = { scope: { kind: 'collection' }, resultLevel: 'card' };
+    for (const [account, total] of [
+      ['alice', 1],
+      ['bob', 0],
     ] as const) {
-      const response = await handler(
-        invocation({
-          method: 'POST',
-          path: '/api/search',
-          claims: claimsFor(accountId),
-          body: { resultLevel: 'copy', criteria: [{ kind: 'owned' }] },
-        }),
-      );
-      expect(response.statusCode, response.body).toBe(200);
-      expect((JSON.parse(response.body) as { entries: readonly unknown[] }).entries).toHaveLength(
-        copies,
-      );
-    }
-
-    /** Exercise denied and permitted reads through the same adapter as the runtime. */
-    async function asSecret(secretArn: string, sql: string): Promise<unknown> {
-      const result = await dataApi.send({ name: 'ExecuteStatement', input: { secretArn, sql } });
-      return JSON.parse(String(result['formattedRecords'])) as unknown;
-    }
-
-    // Each credential reaches what its own role owns and no other component's storage.
-    await expect(
-      asSecret(catalogWriterSecret, 'select copy_id from usercards_private.copy'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(
-      asSecret(userCardsWriterSecret, 'select card_id from catalog_private.card'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(
-      asSecret(readerSecret, 'select card_id from catalog_private.card'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(
-      asSecret(readerSecret, 'select copy_id from usercards_private.copy'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(
-      asSecret(searchIndexingSecret, 'select card_id from catalog_private.card'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(
-      asSecret(searchIndexingSecret, 'select copy_id from usercards_private.copy'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(
-      asSecret(searchIndexingSecret, 'select card_id from catalog.cards'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(
-      asSecret(searchIndexingSecret, 'select copy_id from usercards.copies'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(
-      asSecret(searchIndexingSecret, 'select position from catalog_private.publication'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(asSecret(searchQuerySecret, 'select card_id from catalog.cards')).rejects.toThrow(
-      /permission denied/,
-    );
-    await expect(
-      asSecret(searchQuerySecret, 'select copy_id from usercards.copies'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(
-      asSecret(searchQuerySecret, 'select card_id from search_private.card'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(
-      asSecret(catalogPublicationSecret, 'select card_id from catalog_private.card'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(
-      asSecret(catalogPublicationSecret, 'select copy_id from usercards_private.copy'),
-    ).rejects.toThrow(/permission denied/);
-    await expect(
-      asSecret(
-        userCardsPublicationSecret,
-        'select account_id from usercards_private.account_state',
-      ),
-    ).resolves.not.toThrow();
-    await expect(
-      asSecret(userCardsPublicationSecret, 'select card_id from catalog_private.card'),
-    ).rejects.toThrow(/permission denied/);
-    expect(
-      await asSecret(searchQuerySecret, 'select count(*)::int as cards from search.cards'),
-    ).toEqual([{ cards: 1 }]);
-
-    const indexed = await database.query(`select count(*)::int as copies from search_private.copy`);
-    expect(indexed).toEqual([{ copies: 1 }]);
-    deployment.dispose();
-  });
-
-  it('publishes a replacement indexing generation when an explicit run asks to rebuild', async () => {
-    await runJob({
-      metadata: { 'source-version': sourceVersion },
-      version: 'snapshot-version-1',
-      text: `${JSON.stringify(bolt)}\n`,
-    });
-    const deployment = interactive();
-    const handler = createApiGatewayHandler(deployment.application);
-    await handler(
-      invocation({
+      const result = await runtime.application.handle({
         method: 'POST',
-        path: '/api/collection/copies',
-        claims: claimsFor('cognito-alice'),
-        body: {
-          printingId: 'printing-tle-32-en',
-          finish: 'nonfoil',
-          condition: null,
-          quantity: 1,
+        path: '/api/collection/query',
+        authentication: {
+          claims: claimsFor(account, { exp: Math.floor(Date.now() / 1000) + 300 }),
         },
-      }),
-    );
-    const first = await indexJob({
-      ...indexingJobEnvironment,
-      KEEPER_INDEXING_ACCOUNTS: 'cognito-alice',
+        body: JSON.stringify(query),
+      });
+      expect(result.status, result.body).toBe(200);
+      expect(JSON.parse(result.body)).toMatchObject({ totalCount: total });
+    }
+    const publicResult = await runtime.application.handle({
+      method: 'POST',
+      path: '/api/catalog/query',
+      body: JSON.stringify({ resultLevel: 'card' }),
     });
-    expect(first.result).toMatchObject({ rebuilt: true, published: true, caughtUp: true });
-
-    // The explicit rebuild input builds a replacement generation beside the published one and
-    // publishes it only once the carried account is caught up.
-    const second = await indexJob({
-      ...indexingJobEnvironment,
-      KEEPER_INDEXING_ACCOUNTS: 'cognito-alice',
-      KEEPER_INDEXING_REBUILD: 'true',
-    });
-
-    expect(second.ok).toBe(true);
-    expect(second.result).toMatchObject({ rebuilt: true, published: true, caughtUp: true });
-    expect(second.result?.generation).not.toBe(first.result?.generation);
-    const response = await handler(
-      invocation({
-        method: 'POST',
-        path: '/api/search',
-        claims: claimsFor('cognito-alice'),
-        body: { resultLevel: 'copy', criteria: [{ kind: 'owned' }] },
-      }),
+    expect(publicResult.status, publicResult.body).toBe(200);
+    expect(new Set(dataApi.statements().map((statement) => statement.secretArn))).toEqual(
+      new Set([readerSecret, userCardsReaderSecret]),
     );
-    expect(
-      (JSON.parse(response.body) as { readonly entries: readonly unknown[] }).entries,
-    ).toHaveLength(1);
-    deployment.dispose();
+    runtime.dispose();
   });
 
   it('rejects an invocation of another environment’s identity before it writes anything', async () => {

@@ -18,18 +18,16 @@
 import type {
   CardRecord,
   CardPrintingsPage,
-  Catalog,
+  CatalogService,
+  CatalogQueryInput,
+  CatalogQueryPage,
+  CatalogEntry,
   CatalogReference,
   CatalogResolution,
   CatalogRevision,
   ListCardPrintingsOptions,
   PrintingRecord,
 } from '../../catalog/index.js';
-import {
-  createSearchProgress,
-  type SearchIndexingObservable,
-  type SearchIndexingProgress,
-} from '../../search/browser.js';
 import { createCardListBrowser, type CardListBrowser } from '../../card-list/index.js';
 import { createCaptureBrowser, type CaptureBrowser } from '../../capture/index.js';
 import {
@@ -39,21 +37,6 @@ import {
   type Recognition,
   type RecognitionFrameFacts,
 } from '../../recognition/index.js';
-// Search stays a type-only import here for the same reason: the browser reaches its contract
-// through the request it already carries (docs/application.md#interface).
-import type {
-  SearchCount,
-  SearchCountInput,
-  SearchCountResult,
-  SearchEntry,
-  SearchEntryTarget,
-  SearchObservationOptions,
-  SearchPage,
-  SearchProgress,
-  SearchProgressRequest,
-  SearchRequestInput,
-  SearchRevisions,
-} from '../../search/index.js';
 // UserCards follows the same rule: the collection views reach its private operations through this
 // authenticated contract, whose domain records and operation lifecycle stay behind UserCards'
 // browser entry point, so a value import of the component would pull its Node-only internals into
@@ -110,6 +93,12 @@ import type {
   TagListOptions,
   TagListResult,
   TagReadResult,
+  ReadUserCardsFragmentsInput,
+  UserCardsFragmentsResult,
+  UserCardsPhysicalDetail,
+  UserCardsQueryInput,
+  UserCardsQueryPage,
+  UserCardsFragment,
 } from '../../usercards/index.js';
 import {
   createUserCardsOperations,
@@ -232,11 +221,20 @@ export function createAuthenticatedRequest(
  * A Catalog contract over the interactive entry point. The preserved recognition resolution and the
  * UserInterface read the published catalog through it instead of reaching the provider directly.
  */
-export function createCatalogClient(request: RequestTransport): Catalog {
+export function createCatalogClient(request: RequestTransport): CatalogService {
   if (typeof request !== 'function') {
     throw new TypeError('createCatalogClient requires the authenticated request contract.');
   }
   return {
+    async query(input: CatalogQueryInput, signal?: AbortSignal): Promise<CatalogQueryPage> {
+      return readCatalogQueryPage(
+        await request(applicationRoutes.catalogQuery, {
+          method: 'POST',
+          body: JSON.stringify(input),
+          ...(signal === undefined ? {} : { signal }),
+        }),
+      );
+    },
     async resolve(references: readonly CatalogReference[]): Promise<CatalogResolution> {
       const payload = await request(applicationRoutes.catalogResolve, {
         method: 'POST',
@@ -259,114 +257,6 @@ export function createCatalogClient(request: RequestTransport): Catalog {
 }
 
 /**
- * The Search contract over the interactive entry point. The caller sends its request; the
- * transport derives the trusted account from the verified identity, so no account crosses into the
- * browser and a private query is authorized at the backend boundary. A page keeps the provider's
- * result unchanged: stable entry keys, typed targets, basic information, quantity context and the
- * opaque continuation of the query.
- */
-export interface SearchClient {
-  /** Evaluates one request; an aborted signal withdraws the invocation. */
-  execute(request: SearchRequestInput, signal?: AbortSignal): Promise<SearchPage>;
-  /**
-   * Reads the account's private counts of explicit references: owned copies, the distinct physical
-   * locations holding them and one tag's intended quantity covering each reference. The read
-   * enriches presented entries without changing which entries a query selected.
-   */
-  counts(request: SearchCountInput, signal?: AbortSignal): Promise<SearchCountResult>;
-  /**
-   * Reports whether the account's indexed state incorporates the explicit committed positions and
-   * the published catalog revision, waiting at most the requested bound. The capability creates no
-   * indexing work and never claims the index holds every current source write
-   * (docs/search.md#freshness).
-   */
-  observe(
-    request: SearchProgressRequest,
-    options?: SearchObservationOptions,
-  ): Promise<SearchProgress>;
-}
-
-/** Builds the Search contract the UserInterface queries through the interactive entry point. */
-export function createSearchClient(request: RequestTransport): SearchClient {
-  if (typeof request !== 'function') {
-    throw new TypeError('createSearchClient requires the authenticated request contract.');
-  }
-  return {
-    async execute(input: SearchRequestInput, signal?: AbortSignal): Promise<SearchPage> {
-      const payload = await request(applicationRoutes.search, {
-        method: 'POST',
-        body: JSON.stringify(input),
-        ...(signal === undefined ? {} : { signal }),
-      });
-      return readSearchPage(payload);
-    },
-
-    async counts(input: SearchCountInput, signal?: AbortSignal): Promise<SearchCountResult> {
-      const payload = await request(applicationRoutes.searchCounts, {
-        method: 'POST',
-        body: JSON.stringify(input),
-        ...(signal === undefined ? {} : { signal }),
-      });
-      return readSearchCountResult(payload);
-    },
-
-    async observe(
-      input: SearchProgressRequest,
-      options: SearchObservationOptions = {},
-    ): Promise<SearchProgress> {
-      const payload = await request(applicationRoutes.searchProgress, {
-        method: 'POST',
-        body: JSON.stringify({
-          positions: input.positions ?? [],
-          catalogRevision: input.catalogRevision ?? null,
-          ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-        }),
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-      });
-      return readSearchProgress(payload);
-    },
-  };
-}
-
-/**
- * One bounded observation as the browser reads it. A response outside the declared shape is
- * unavailable, never incorporation: a status that cannot be read must not clear awaited progress
- * (docs/search.md#freshness).
- */
-function readSearchProgress(payload: unknown): SearchProgress {
-  const record = readObject(payload);
-  const state = record?.state;
-  if (
-    record === null ||
-    (state !== 'incorporated' && state !== 'indexing' && state !== 'delayed' && state !== 'failed')
-  ) {
-    throw new ApplicationError('unavailable', 'The indexing status could not be read.');
-  }
-  const rawRevisions = record.revisions ?? null;
-  if (rawRevisions === null) {
-    return { state, revisions: null };
-  }
-  const indexed = readObject(rawRevisions);
-  const generation = indexed?.generation ?? null;
-  const catalogRevision = indexed?.catalogRevision ?? null;
-  const catalogPosition = indexed?.catalogPosition ?? null;
-  const privateRevision = indexed?.privateRevision ?? null;
-  if (
-    indexed === null ||
-    !isIdentifier(generation) ||
-    !isIdentifier(catalogRevision) ||
-    !isIdentifier(catalogPosition) ||
-    !isIdentifierOrNull(privateRevision)
-  ) {
-    throw new ApplicationError('unavailable', 'The indexing status could not be read.');
-  }
-  return {
-    state,
-    revisions: { generation, catalogRevision, catalogPosition, privateRevision },
-  };
-}
-
-/**
  * Builds UserCards' private browser client over the authenticated transport: every operation the
  * component publishes is reached through the route Application serves it at, the trusted account
  * is derived from the verified identity, and the response is read into the component's records.
@@ -379,6 +269,41 @@ export function createUserCardsClient(request: RequestTransport): UserCardsBrows
     throw new TypeError('createUserCardsClient requires the authenticated request contract.');
   }
   return {
+    async query(input: UserCardsQueryInput, signal?: AbortSignal): Promise<UserCardsQueryPage> {
+      return readUserCardsQueryPage(
+        await request(applicationRoutes.userCardsQuery, {
+          method: 'POST',
+          body: JSON.stringify(input),
+          ...(signal === undefined ? {} : { signal }),
+        }),
+      );
+    },
+
+    async readFragments(
+      input: ReadUserCardsFragmentsInput,
+      signal?: AbortSignal,
+    ): Promise<UserCardsFragmentsResult> {
+      return readUserCardsFragments(
+        await request(applicationRoutes.userCardsFragments, {
+          method: 'POST',
+          body: JSON.stringify(input),
+          ...(signal === undefined ? {} : { signal }),
+        }),
+      );
+    },
+
+    async readPhysicalDetail(
+      copyId: string,
+      signal?: AbortSignal,
+    ): Promise<UserCardsPhysicalDetail> {
+      return readPhysicalDetail(
+        await request(
+          applicationPath(applicationRoutes.userCardsPhysicalDetail, { copyId }),
+          signal === undefined ? {} : { signal },
+        ),
+      );
+    },
+
     async readCopies(copyIds: readonly CopyId[], signal?: AbortSignal): Promise<CopyReadResult> {
       const payload = await request(applicationRoutes.copiesRead, {
         method: 'POST',
@@ -719,9 +644,7 @@ export interface UserInterfaceCapabilities {
   /** Authenticated transport to the interactive backend entry point. */
   readonly request: AuthenticatedRequest;
   /** Public Catalog reads: card and printing information of the presented entries. */
-  readonly catalog: Catalog;
-  /** Combined Catalog and UserCards queries with their ordering and continuation. */
-  readonly search: SearchClient;
+  readonly catalog: CatalogService;
   /** UserCards' browser operation facade: private reads, retained operations and invalidations. */
   readonly userCards: UserCardsOperations;
   /**
@@ -738,13 +661,6 @@ export interface UserInterfaceCapabilities {
    * component's implementation or constructing its providers.
    */
   readonly capture: CaptureBrowser;
-  /**
-   * Account-scoped observable indexing status of the presented account, connected by this
-   * composition to UserCards' committed-change positions (docs/application.md#interface). The
-   * UserInterface shell presents it as its floating indexing notice and performs no indexing work
-   * of its own (docs/ui/navigation.md#indexing-notice).
-   */
-  readonly indexing: (accountId: string) => SearchIndexingObservable;
 }
 
 export interface BrowserApplicationOptions {
@@ -786,7 +702,7 @@ export interface BrowserApplication {
 }
 
 /**
- * Assembles the browser runtime: the authenticated transports, the Catalog and Search contracts
+ * Assembles the browser runtime: the authenticated transports and owner contracts
  * and the Recognition contract over the preserved browser engines, and hands the UserInterface its
  * capabilities and public configuration.
  */
@@ -814,7 +730,6 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
         });
   const request = createEntryPointRequest(api, compute);
   const catalog = createCatalogClient(request);
-  const search = createSearchClient(request);
   // UserCards owns the browser operation lifecycle: its facade composes the transport adapter,
   // retains unfinished attempts in the account's browsing session and publishes the constraints
   // and invalidations its consumers present (docs/user-cards.md#browser-operation-lifecycle).
@@ -846,44 +761,11 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
   };
   // Application selects the CardList implementation and hands the UserInterface its factory with
   // the provider bindings of the authenticated clients, so pages describe their lists instead of
-  // naming the component or constructing Search, Catalog or UserCards bindings
+  // naming the component or constructing Catalog or UserCards bindings
   // (docs/architecture.md#composition-and-replacement).
-  let progress: SearchIndexingProgress | null = null;
-  let unsubscribeProgress: (() => void) | null = null;
-  function bindProgress(id: string): void {
-    progress = createSearchProgress({
-      accountId: id,
-      read: (input, options) => search.observe(input, { ...options, timeoutMs: 0 }),
-    });
-    const tracker = progress;
-    unsubscribeProgress = userCards.account(id).subscribe((change) => {
-      if (change.position !== null) tracker.committed([change.position]);
-    });
-  }
-  /**
-   * Supplies the UserInterface the progress tracker of one authenticated account. A retained shell
-   * that asks for the progress of an account that is not the authenticated one receives no
-   * tracker of another account (docs/architecture.md#runtime-boundaries).
-   */
-  function indexingProgress(id: string): SearchIndexingObservable {
-    if (progress === null || progress.status().accountId !== id) {
-      throw new ApplicationError(
-        'unauthorized',
-        'Indexing progress requires the authenticated account.',
-      );
-    }
-    return progress;
-  }
   const cardList = createCardListBrowser({
-    search,
     catalog,
     userCards,
-    progress: (id) => {
-      if (progress === null || progress.status().accountId !== id) {
-        throw new Error('CardList progress requires the authenticated account.');
-      }
-      return progress;
-    },
   });
   const createRecognitionContract = () =>
     options.createRecognition !== undefined
@@ -912,16 +794,11 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
   // operation handle of the departed account reaches the transport the next one serves
   // (docs/architecture.md#runtime-boundaries).
   let accountId = authentication.identity.current()?.accountId ?? null;
-  if (accountId !== null) bindProgress(accountId);
   authentication.identity.subscribe((account) => {
     const nextAccountId = account?.accountId ?? null;
     if (nextAccountId !== accountId) {
       const ended = accountId;
       accountId = nextAccountId;
-      unsubscribeProgress?.();
-      unsubscribeProgress = null;
-      progress?.dispose();
-      progress = null;
       if (ended !== null) {
         // Live capture work of the departed account ends with it even when no page presented the
         // session: Application disposes what its own composition handed out
@@ -931,7 +808,6 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
         userCards.release(ended);
       }
       request.endSession();
-      if (nextAccountId !== null) bindProgress(nextAccountId);
     }
   });
   const userInterface =
@@ -941,11 +817,9 @@ export function createBrowserApplication(options: BrowserApplicationOptions): Br
           identity: authentication.identity,
           request,
           catalog,
-          search,
           userCards,
           cardList,
           capture,
-          indexing: indexingProgress,
         })
       : null;
   return {
@@ -1155,198 +1029,89 @@ function unreadableCatalog(): ApplicationError {
   return new ApplicationError('unavailable', 'The catalog response could not be read.');
 }
 
-/**
- * Reads one search page. A response outside the declared shape is an unavailable evaluation
- * rather than an empty page or a different outcome (docs/search.md#request-and-result).
- */
-function readSearchPage(payload: unknown): SearchPage {
+function readCatalogQueryPage(payload: unknown): CatalogQueryPage {
   const record = readObject(payload);
   const entries = record?.entries;
-  if (record === null || !Array.isArray(entries)) {
-    throw unreadableSearch();
-  }
-  const read: SearchEntry[] = [];
-  for (const candidate of entries) {
-    const entry = readSearchEntry(candidate);
-    if (entry === null) {
-      throw unreadableSearch();
-    }
-    read.push(entry);
-  }
-  const totalCount = record.totalCount ?? null;
-  const continuation = record.continuation ?? null;
-  const status = record.status;
-  const rawRevisions = record.revisions ?? null;
-  let revisions: SearchRevisions | null = null;
-  if (rawRevisions !== null) {
-    const indexed = readObject(rawRevisions);
-    const generation = indexed?.generation ?? null;
-    const catalogRevision = indexed?.catalogRevision ?? null;
-    const catalogPosition = indexed?.catalogPosition ?? null;
-    const privateRevision = indexed?.privateRevision ?? null;
-    if (
-      indexed === null ||
-      !isIdentifier(generation) ||
-      !isIdentifier(catalogRevision) ||
-      !isIdentifier(catalogPosition) ||
-      !isIdentifierOrNull(privateRevision)
-    ) {
-      throw unreadableSearch();
-    }
-    revisions = { generation, catalogRevision, catalogPosition, privateRevision };
-  }
+  const revision = readObject(record?.revision);
+  const continuation = record?.continuation;
   if (
-    (status !== 'ready' && status !== 'updating') ||
-    !isSearchCountOrNull(totalCount) ||
+    record === null ||
+    !Array.isArray(entries) ||
+    revision === null ||
+    !isCount(record.totalCount) ||
     (continuation !== null && typeof continuation !== 'string')
   ) {
-    throw unreadableSearch();
+    throw unreadableCatalog();
   }
   return {
-    status,
-    entries: read,
-    totalCount,
+    entries: entries as readonly CatalogEntry[],
+    totalCount: record.totalCount,
+    revision: revision as unknown as CatalogRevision,
     continuation,
-    revisions,
   };
 }
 
-/** One entry of a search page, or null when the response does not carry the declared shape. */
-function readSearchEntry(value: unknown): SearchEntry | null {
-  const entry = readObject(value);
-  const entryKey = entry?.entryKey;
-  const target = readSearchTarget(entry?.target);
-  const card = readObject(entry?.card);
-  const cardId = card?.cardId;
-  const name = card?.name;
-  const matchedName = card?.matchedName ?? null;
+function readUserCardsQueryPage(payload: unknown): UserCardsQueryPage {
+  const record = readObject(payload);
+  const continuation = record?.continuation;
   if (
-    entry === null ||
-    target === null ||
-    !isIdentifier(entryKey) ||
-    card === null ||
-    !isIdentifier(cardId) ||
-    !isIdentifier(name) ||
-    (matchedName !== null && typeof matchedName !== 'string')
+    record === null ||
+    !Array.isArray(record.entries) ||
+    !isIdentifier(record.privateRevision) ||
+    !isCount(record.totalCount) ||
+    (continuation !== null && typeof continuation !== 'string')
   ) {
-    return null;
+    throw unreadableUserCardsQuery();
   }
-  const printing = readSearchPrinting(entry.printing);
-  if (printing === null && entry.printing !== null) {
-    return null;
+  return record as unknown as UserCardsQueryPage;
+}
+
+function readUserCardsFragments(payload: unknown): UserCardsFragmentsResult {
+  const record = readObject(payload);
+  if (
+    record === null ||
+    !isIdentifier(record.privateRevision) ||
+    !Array.isArray(record.fragments) ||
+    !Array.isArray(record.missing)
+  ) {
+    throw unreadableUserCardsQuery();
   }
-  const quantity = readSearchQuantity(entry.quantity);
-  if (quantity === null && entry.quantity !== null) {
-    return null;
+  const fragments = new Map<string, UserCardsFragment>();
+  for (const value of record.fragments) {
+    const fragment = readObject(value);
+    if (fragment === null || !isIdentifier(fragment.key)) throw unreadableUserCardsQuery();
+    fragments.set(fragment.key, fragment as unknown as UserCardsFragment);
   }
   return {
-    entryKey,
-    target,
-    card: { cardId, name, matchedName: matchedName === null ? null : String(matchedName) },
-    printing,
-    quantity,
+    privateRevision: record.privateRevision,
+    fragments,
+    missing: record.missing as UserCardsFragmentsResult['missing'],
   };
 }
 
-/** Typed target of one entry, at the level the query requested. */
-function readSearchTarget(value: unknown): SearchEntryTarget | null {
-  const target = readObject(value);
-  const kind = target?.kind;
-  const cardId = target?.cardId;
-  const printingId = target?.printingId;
-  const copyId = target?.copyId;
-  if (kind === 'card' && isIdentifier(cardId)) {
-    return { kind, cardId };
-  }
-  if (kind === 'printing' && isIdentifier(printingId)) {
-    return { kind, printingId };
-  }
-  if (kind === 'copy' && isIdentifier(copyId)) {
-    return { kind, copyId };
-  }
-  return null;
-}
-
-/** Printing information of one entry; null at card level. */
-function readSearchPrinting(value: unknown): SearchEntry['printing'] {
-  if (value === null) {
-    return null;
-  }
-  const printing = readObject(value);
-  const printingId = printing?.printingId;
-  const edition = printing?.edition;
-  const collectorNumber = printing?.collectorNumber;
-  const language = printing?.language;
-  if (
-    printing === null ||
-    !isIdentifier(printingId) ||
-    !isIdentifier(edition) ||
-    !isIdentifier(collectorNumber) ||
-    !isIdentifier(language)
-  ) {
-    return null;
-  }
-  return { printingId, edition, collectorNumber, language };
-}
-
-/** Quantity context of one entry: both counts exact, or null when the query evaluated none. */
-function readSearchQuantity(value: unknown): SearchEntry['quantity'] {
-  if (value === null) {
-    return null;
-  }
-  const quantity = readObject(value);
-  if (quantity === null) {
-    return null;
-  }
-  const copies = quantity.copies;
-  const intended = quantity.intended;
-  if (!isSearchCountOrNull(copies) || !isSearchCountOrNull(intended)) {
-    return null;
-  }
-  return { copies, intended };
-}
-
-function isSearchCountOrNull(value: unknown): value is number | null {
-  return value === null || isSearchCount(value);
-}
-
-/**
- * Reads one private count result. Every requested reference arrives with exact counts; a response
- * outside the declared shape is unavailable rather than an inferred zero.
- */
-function readSearchCountResult(payload: unknown): SearchCountResult {
+function readPhysicalDetail(payload: unknown): UserCardsPhysicalDetail {
   const record = readObject(payload);
-  const privateRevision = record?.privateRevision;
-  const counts = record?.counts;
-  if (record === null || !isIdentifier(privateRevision) || !Array.isArray(counts)) {
-    throw unreadableSearch();
+  const copy = readCopyRecords([record?.copy])?.[0] ?? null;
+  const memberships = Array.isArray(record?.memberships)
+    ? record.memberships.map(readAssociation)
+    : null;
+  if (
+    record === null ||
+    copy === null ||
+    memberships === null ||
+    memberships.some((membership) => membership === null) ||
+    !isIdentifier(record.privateRevision)
+  ) {
+    throw unreadableUserCardsQuery();
   }
-  const read = new Map<string, SearchCount>();
-  for (const candidate of counts) {
-    const count = readObject(candidate);
-    const key = count?.key;
-    const owned = count?.owned;
-    const locations = count?.locations;
-    const intended = count?.intended;
-    if (
-      count === null ||
-      !isIdentifier(key) ||
-      !isSearchCount(owned) ||
-      !isSearchCount(locations) ||
-      !isSearchCountOrNull(intended)
-    ) {
-      throw unreadableSearch();
-    }
-    read.set(key, { owned, locations, intended });
-  }
-  return { privateRevision, counts: read };
+  return {
+    copy,
+    memberships: memberships as readonly Association[],
+    privateRevision: record.privateRevision,
+  };
 }
 
-function isIdentifierOrNull(value: unknown): value is string | null {
-  return value === null || isIdentifier(value);
-}
-
-function isSearchCount(value: unknown): value is number {
+function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
@@ -1354,18 +1119,8 @@ function isIdentifier(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
-/**
- * Reads a durable publication position: a positive decimal integer carried as text
- * (docs/user-cards.md#query-surface). A change reported without one is unreadable, never a change
- * whose progress a consumer could skip.
- */
-function readPublicationPosition(record: Readonly<Record<string, unknown>> | null): string | null {
-  const position = record?.publicationPosition;
-  return typeof position === 'string' && /^[1-9][0-9]*$/.test(position) ? position : null;
-}
-
-function unreadableSearch(): ApplicationError {
-  return new ApplicationError('unavailable', 'The search response could not be read.');
+function unreadableUserCardsQuery(): ApplicationError {
+  return new ApplicationError('unavailable', 'The private query response could not be read.');
 }
 
 /** Reads one private copy read. A response outside the declared shape is unavailable, never an
@@ -1386,23 +1141,16 @@ function readCopyReadResult(payload: unknown): CopyReadResult {
 }
 
 /**
- * Reads one copy change: the committed copies, the private revision the change published and the
- * publication position a consumer resumes from.
+ * Reads one copy change: the committed copies, the authoritative private revision.
  */
 function readCopyChangeResult(payload: unknown): CopyChangeResult {
   const record = readObject(payload);
   const copies = readCopyRecords(record?.copies);
   const privateRevision = record?.privateRevision;
-  const publicationPosition = readPublicationPosition(record);
-  if (
-    record === null ||
-    copies === null ||
-    !isIdentifier(privateRevision) ||
-    publicationPosition === null
-  ) {
+  if (record === null || copies === null || !isIdentifier(privateRevision)) {
     throw unreadableCopies();
   }
-  return { privateRevision, publicationPosition, copies };
+  return { privateRevision, copies };
 }
 
 function readCopyRecords(value: unknown): PhysicalCopy[] | null {
@@ -1541,16 +1289,10 @@ function readTagChangeResult(payload: unknown): TagChangeResult {
   const record = readObject(payload);
   const tag = readTag(record?.tag);
   const privateRevision = record?.privateRevision;
-  const publicationPosition = readPublicationPosition(record);
-  if (
-    record === null ||
-    tag === null ||
-    !isIdentifier(privateRevision) ||
-    publicationPosition === null
-  ) {
+  if (record === null || tag === null || !isIdentifier(privateRevision)) {
     throw unreadableTags();
   }
-  return { privateRevision, publicationPosition, tag };
+  return { privateRevision, tag };
 }
 
 /** Reads one association record; card and printing targets carry a quantity, copy targets none. */
@@ -1568,7 +1310,7 @@ function readAssociation(value: unknown): Association | null {
     !isIdentifier(tagId) ||
     (targetLevel !== 'card' && targetLevel !== 'printing' && targetLevel !== 'copy') ||
     !isIdentifier(targetId) ||
-    (quantity !== null && !isSearchCount(quantity)) ||
+    (quantity !== null && !isCount(quantity)) ||
     !isCopyRevision(revision)
   ) {
     return null;
@@ -1636,16 +1378,10 @@ function readAssociationChangeResult(payload: unknown): AssociationChangeResult 
   const record = readObject(payload);
   const association = readAssociation(record?.association);
   const privateRevision = record?.privateRevision;
-  const publicationPosition = readPublicationPosition(record);
-  if (
-    record === null ||
-    association === null ||
-    !isIdentifier(privateRevision) ||
-    publicationPosition === null
-  ) {
+  if (record === null || association === null || !isIdentifier(privateRevision)) {
     throw unreadableAssociations();
   }
-  return { privateRevision, publicationPosition, association };
+  return { privateRevision, association };
 }
 
 /** Reads one association removal: the removed identity and the published private revision. */
@@ -1653,16 +1389,10 @@ function readAssociationRemovalResult(payload: unknown): AssociationRemovalResul
   const record = readObject(payload);
   const associationId = record?.associationId;
   const privateRevision = record?.privateRevision;
-  const publicationPosition = readPublicationPosition(record);
-  if (
-    record === null ||
-    !isIdentifier(associationId) ||
-    !isIdentifier(privateRevision) ||
-    publicationPosition === null
-  ) {
+  if (record === null || !isIdentifier(associationId) || !isIdentifier(privateRevision)) {
     throw unreadableAssociations();
   }
-  return { privateRevision, publicationPosition, associationId };
+  return { privateRevision, associationId };
 }
 
 /** Reads the new single location of one copy; an absent location is an explicit null. */
@@ -1671,18 +1401,16 @@ function readCopyLocationResult(payload: unknown): CopyLocationResult {
   const copies = readCopyRecords(record === null ? null : [record.copy]);
   const location = readAssociation(record?.location);
   const privateRevision = record?.privateRevision;
-  const publicationPosition = readPublicationPosition(record);
   if (
     record === null ||
     copies === null ||
     copies[0] === undefined ||
     !isIdentifier(privateRevision) ||
-    publicationPosition === null ||
     (record.location !== null && location === null)
   ) {
     throw unreadableCopies();
   }
-  return { privateRevision, publicationPosition, copy: copies[0], location };
+  return { privateRevision, copy: copies[0], location };
 }
 
 function unreadableTags(): ApplicationError {
@@ -1715,9 +1443,9 @@ function readImportSession(value: unknown): ImportSession | null {
     !isIdentifier(sourceId) ||
     (sourceReference !== null && !isIdentifier(sourceReference)) ||
     !isImportState(state) ||
-    !isSearchCount(pendingEntries) ||
-    !isSearchCount(confirmedEntries) ||
-    !isSearchCount(discardedEntries) ||
+    !isCount(pendingEntries) ||
+    !isCount(confirmedEntries) ||
+    !isCount(discardedEntries) ||
     !isCopyRevision(revision)
   ) {
     return null;
@@ -1776,7 +1504,7 @@ function readImportSourceLine(value: unknown): ImportSourceLine | null {
     !isTextOrNull(collectorNumber) ||
     !isTextOrNull(language) ||
     (finish !== null && !isIdentifier(finish)) ||
-    !isSearchCount(declaredQuantity) ||
+    !isCount(declaredQuantity) ||
     !isTextOrNull(problem)
   ) {
     return null;
@@ -1816,13 +1544,13 @@ function readImportEntry(value: unknown): ImportEntry | null {
     entry === null ||
     !isIdentifier(entryId) ||
     !isIdentifier(sessionId) ||
-    !isSearchCount(position) ||
+    !isCount(position) ||
     !isImportState(state) ||
     (cardId !== null && !isIdentifier(cardId)) ||
     (printingId !== null && !isIdentifier(printingId)) ||
     (finish !== null && !isIdentifier(finish)) ||
     (condition !== null && !isIdentifier(condition)) ||
-    !isSearchCount(quantity) ||
+    !isCount(quantity) ||
     candidates === null ||
     (entry.sourceLine !== null && sourceLine === null) ||
     !isCopyRevision(revision)
@@ -1937,7 +1665,7 @@ function readImportStageResult(payload: unknown): ImportStageResult {
     !isIdentifier(privateRevision) ||
     session === null ||
     entries === null ||
-    !isSearchCount(staged) ||
+    !isCount(staged) ||
     typeof replayed !== 'boolean'
   ) {
     throw unreadableImports();
@@ -1957,7 +1685,7 @@ function readSourceImportRow(value: unknown): SourceImportRow | null {
   const parsedLine = line === null ? null : readImportSourceLine(line);
   if (
     row === null ||
-    !isSearchCount(position) ||
+    !isCount(position) ||
     position < 1 ||
     (line !== null && parsedLine === null) ||
     !isSourceImportOutcome(outcome) ||
@@ -1989,7 +1717,7 @@ function readSourceImportResult(payload: unknown): SourceImportResult {
     !isIdentifier(privateRevision) ||
     session === null ||
     rows === null ||
-    !isSearchCount(staged)
+    !isCount(staged)
   ) {
     throw unreadableImports();
   }
@@ -2060,7 +1788,7 @@ function readImportSessionChange(payload: unknown): ImportSessionChange {
 
 /**
  * One recorded confirmation: the operation, its acquisition source, the explicit destination it
- * applied, the position its records were published at and the associations or copies it produced.
+ * applied and the associations or copies it produced.
  */
 function readImportReceipt(value: unknown): ImportReceipt | null {
   const receipt = readObject(value);
@@ -2069,7 +1797,6 @@ function readImportReceipt(value: unknown): ImportReceipt | null {
   const sourceKind = receipt?.sourceKind;
   const sourceId = receipt?.sourceId;
   const destination = readImportDestination(receipt?.destination);
-  const publicationPosition = readPublicationPosition(receipt);
   const copies = readCopyRecords(receipt?.copies);
   const associations = readAssociationRecords(receipt?.associations);
   if (
@@ -2079,7 +1806,6 @@ function readImportReceipt(value: unknown): ImportReceipt | null {
     !isIdentifier(sourceKind) ||
     !isIdentifier(sourceId) ||
     destination === null ||
-    publicationPosition === null ||
     copies === null ||
     associations === null
   ) {
@@ -2091,7 +1817,6 @@ function readImportReceipt(value: unknown): ImportReceipt | null {
     sourceKind,
     sourceId,
     destination,
-    publicationPosition,
     copies,
     associations,
   };

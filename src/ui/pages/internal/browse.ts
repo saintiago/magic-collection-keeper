@@ -63,6 +63,8 @@ function homePage(): UiPageDefinition {
         context: accountId,
         accountId,
         pageSize: UI_LIMITS.recentCards,
+        changes: bindings.changes(),
+        fragments: { ownership: bindings.ownership(null) },
         restored: readListState<string>(restored),
         presentation: context.modules.cardViews.openEntries({
           document,
@@ -107,12 +109,14 @@ function catalogPage(): UiPageDefinition {
         source: bindings.catalogQuery(),
         context: catalogQueryOf(view),
         accountId: context.account.accountId,
-        // A committed private change can alter an owned-only query, so the list reacquires the
-        // result through Search with the position the change reported.
+        // Private changes refresh enrichment independently of public membership.
         changes: bindings.changes(),
         pageSize: UI_LIMITS.catalogPage,
         restored: readListState<CardListCatalogQuery>(restored),
-        ...(view.level === 'printing' ? { fragments: { images: bindings.printingImages() } } : {}),
+        fragments: {
+          ownership: bindings.ownership(null),
+          ...(view.level === 'printing' ? { images: bindings.printingImages() } : {}),
+        },
         presentation: context.modules.cardViews.openEntries({
           document,
           idPrefix: 'catalog-result',

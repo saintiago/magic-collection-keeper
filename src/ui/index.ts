@@ -1,23 +1,4 @@
-/**
- * UserInterface public entry point (docs/ui/architecture.md).
- *
- * The component presents the collection behind one shell. UI composition constructs the
- * replaceable presentation modules and the page implementations of this build and mounts them
- * through Navigation (docs/ui/navigation.md), which owns the routes, the persistent frame, the
- * mounted page lifetime, the bounded account-isolated retention of opaque page state and the
- * floating notices. Its indexing notice presents the account-scoped progress Application connected
- * to Search's browser indexing capability; the pages report the operation and service failures
- * they present through the notice capability Navigation supplies them
- * (docs/ui/navigation.md#indexing-notice, docs/ui/navigation.md#error-notices).
- *
- * Pages (docs/ui/pages.md) compose one screen around an activity: they compose CardViews, Editors
- * and CaptureControls through the factories composition supplies, pass CardList descriptions to
- * card views and use UserCards for import and tag resource references. Application supplies the
- * public configuration, the authenticated transport and the component access, including the
- * Capture factory; the deployment supplies the verified identity and the device capability the
- * capture sessions open. Other components import UserInterface through this module only; its
- * internal modules stay private to the component (docs/architecture.md, .dependency-cruiser.mjs).
- */
+/** UserInterface public contract: navigation, pages, card views, editors and capture controls (docs/ui/architecture.md). */
 
 export { createBrowsePages } from './pages/index.js';
 export { createCollectionPages } from './pages/index.js';

@@ -379,7 +379,7 @@ export function createOrganizationOperations(dependencies: {
       });
       return {
         privateRevision: data.privateRevision,
-        publicationPosition: data.publicationPosition,
+
         tag: data.tag,
       };
     },
@@ -411,7 +411,7 @@ export function createOrganizationOperations(dependencies: {
       }
       return {
         privateRevision: outcome.privateRevision,
-        publicationPosition: outcome.publicationPosition,
+
         tag: outcome.tag,
       };
     },
@@ -478,7 +478,7 @@ export function createOrganizationOperations(dependencies: {
       }
       return {
         privateRevision: outcome.privateRevision,
-        publicationPosition: outcome.publicationPosition,
+
         association: outcome.association,
       };
     },
@@ -532,7 +532,7 @@ export function createOrganizationOperations(dependencies: {
       }
       return {
         privateRevision: outcome.privateRevision,
-        publicationPosition: outcome.publicationPosition,
+
         association: outcome.association,
       };
     },
@@ -581,7 +581,7 @@ export function createOrganizationOperations(dependencies: {
       }
       return {
         privateRevision: outcome.privateRevision,
-        publicationPosition: outcome.publicationPosition,
+
         associationId: outcome.associationId,
       };
     },
@@ -625,7 +625,7 @@ export function createOrganizationOperations(dependencies: {
       }
       return {
         privateRevision: outcome.privateRevision,
-        publicationPosition: outcome.publicationPosition,
+
         copy: outcome.copy,
         location: outcome.location,
       };

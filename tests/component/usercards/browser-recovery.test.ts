@@ -21,7 +21,7 @@ const receipt: ImportReceipt = {
   sourceKind: 'pasted-list',
   sourceId: 'import-1',
   destination: { kind: 'ownership' },
-  publicationPosition: '7',
+
   copies: [],
   associations: [],
 };
@@ -65,13 +65,13 @@ it('keeps in-flight source reconciliation observable when existing entries are c
   expect(
     createUserCardsOperations({ client, storage }).account('alice').resume('import-1')?.request,
   ).toEqual(sourceRequest);
-  expect(changes).toEqual([{ scope: 'copies', records: [], imports: ['import-1'], position: '7' }]);
+  expect(changes).toEqual([{ scope: 'copies', records: [], imports: ['import-1'] }]);
 
   staging.resolve(sourceResult);
   expect(await observed).toEqual({ state: 'committed', record: sourceResult });
   expect(changes).toEqual([
-    { scope: 'copies', records: [], imports: ['import-1'], position: '7' },
-    { scope: 'imports', records: [], imports: ['import-1'], position: null },
+    { scope: 'copies', records: [], imports: ['import-1'] },
+    { scope: 'imports', records: [], imports: ['import-1'] },
   ]);
   expect(account.retained()).toEqual([]);
   expect(storage.values.size).toBe(0);
@@ -128,9 +128,7 @@ it.each([
     expect((await confirmation.observe()).state).toBe('committed');
     expect(account.retained().map((attempt) => attempt.operationId)).toEqual(['import-1']);
     expect(account.resume('import-1')?.outcome().state).toBe('unknown');
-    expect(changes).toEqual([
-      { scope: 'copies', records: [], imports: ['import-1'], position: '7' },
-    ]);
+    expect(changes).toEqual([{ scope: 'copies', records: [], imports: ['import-1'] }]);
 
     const reloaded = createUserCardsOperations(options).account('alice');
     reloaded.subscribe((change) => changes.push(change));
@@ -142,8 +140,8 @@ it.each([
       { ...sourceRequest, sessionId: 'import-1' },
     ]);
     expect(changes).toEqual([
-      { scope: 'copies', records: [], imports: ['import-1'], position: '7' },
-      { scope: 'imports', records: [], imports: ['import-1'], position: null },
+      { scope: 'copies', records: [], imports: ['import-1'] },
+      { scope: 'imports', records: [], imports: ['import-1'] },
     ]);
     expect(reloaded.retained()).toEqual([]);
     expect(storage.values.size).toBe(0);
@@ -227,9 +225,7 @@ it.each(['recover', 'retry'] as const)(
     expect(await observed).toEqual(expected);
     expect(reads).toBe(2);
     expect(writes).toBe(1);
-    expect(changes).toEqual([
-      { scope: 'copies', records: [], imports: ['import-1'], position: '7' },
-    ]);
+    expect(changes).toEqual([{ scope: 'copies', records: [], imports: ['import-1'] }]);
     expect(account.retained()).toEqual([]);
     expect(storage.values.size).toBe(0);
   },

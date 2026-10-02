@@ -77,7 +77,7 @@ describe('usercards browser entry point', () => {
           sourceKind: 'manual',
           sourceId: 'manual',
           destination: { kind: 'ownership' },
-          publicationPosition: '4',
+
           copies: [
             {
               copyId: 'copy-1',
@@ -106,7 +106,6 @@ describe('usercards browser entry point', () => {
         scope: 'copies',
         records: [{ kind: 'copy', copyId: 'copy-1' }],
         imports: ['import-1'],
-        position: '4',
       },
     ]);
     expect(account.retained()).toEqual([]);

@@ -68,7 +68,6 @@ test('a search finds a card and the account’s wishlist keeps it', async ({ pag
     await expect(page.locator('#tag-heading')).toHaveText('Wanted');
 
     // Searching the tag's own view adds the found card with the intended quantity.
-    await page.fill('#tag-add-query', 'Lightning Bolt');
     await page.selectOption('#tag-add-level', 'card');
     await page.fill('#tag-add-quantity', '2');
     await page.click('#tag-add-submit');
@@ -190,7 +189,6 @@ test('moving a copy into a location changes the collection’s location count', 
     await expect(page.locator('#tag-create-status')).toHaveText('Created “Binder”.');
     await page.locator('#tags-list [data-ui-tag] a', { hasText: 'Binder' }).click();
     await expect(page.locator('#tag-add-heading')).toHaveText('Move copies into this location');
-    await page.fill('#tag-add-query', 'Lightning Bolt');
     await page.click('#tag-add-submit');
     const copy = page.locator(`#tag-add-results [data-ui-entry="copy:${copyId}"]`);
     await expect(copy).toContainText('Lightning Bolt');

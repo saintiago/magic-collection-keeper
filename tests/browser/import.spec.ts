@@ -269,16 +269,9 @@ function printingResult(printing: PrintingRecord) {
 /** One search page of the manual entry form. */
 function searchPage(printings: readonly PrintingRecord[]) {
   return {
-    status: 'ready',
     entries: printings.map((printing) => printingResult(printing)),
     totalCount: printings.length,
     continuation: null,
-    revisions: {
-      generation: 'imports-generation',
-      catalogRevision: 'imports-revision',
-      catalogPosition: '1',
-      privateRevision: 'private-1',
-    },
   };
 }
 
@@ -467,9 +460,8 @@ test('stages a manual printing into review and only its confirmation creates cop
 });
 
 /** One card-level search page of the review's card picker. */
-function cardSearchPage(cards: readonly CardRecord[]) {
+function cardQueryPageFixture(cards: readonly CardRecord[]) {
   return {
-    status: 'ready',
     entries: cards.map((card) => ({
       key: `card:${card.cardId}`,
       target: { kind: 'card' as const, cardId: card.cardId },
@@ -480,12 +472,6 @@ function cardSearchPage(cards: readonly CardRecord[]) {
     })),
     totalCount: cards.length,
     continuation: null,
-    revisions: {
-      generation: 'imports-generation',
-      catalogRevision: 'imports-revision',
-      catalogPosition: '1',
-      privateRevision: 'private-1',
-    },
   };
 }
 
@@ -549,7 +535,7 @@ test('accepts an unowned deck from card names and quantities without creating co
   await page.click('#import-card-find-entry-1');
   const search = await requested<Record<string, unknown>>(page, 'searches');
   expect(search.arguments).toMatchObject({ resultLevel: 'card', query: 'Lightning Bolt' });
-  await settle(page, 'settleSearch', search.id, cardSearchPage([boltCard]));
+  await settle(page, 'settleSearch', search.id, cardQueryPageFixture([boltCard]));
   const picker = page.locator('[data-ui-import-picker="pending:entry-1"]');
   await picker.locator(`[data-ui-select="card:${boltCard.cardId}"]`).check();
   await picker.locator('[data-ui-tool="choose-entry"]').click();
@@ -954,37 +940,6 @@ test('reads further printing pages of a review search and saves an exact printin
   await expect(
     page.locator('#import-pending [data-ui-entry="pending:entry-1"] [data-ui-import-printing]'),
   ).toHaveText('Printing: M10 146 · en');
-  expect(errors).toEqual([]);
-});
-
-test('reports an indexing printing search instead of offering no printing', async ({ page }) => {
-  const errors = await openPendingReview(page, [
-    entry({
-      entryId: 'entry-capture',
-      printingId: null,
-      finish: null,
-      candidates: [{ printingId: m10.printingId, provider: 'visual', evidence: 'art-match' }],
-    }),
-  ]);
-  await page.fill('#import-printing-query-entry-capture', 'Lightning Bolt');
-  await page.click('#import-printing-find-entry-capture');
-  const search = await requested<Record<string, unknown>>(page, 'searches');
-  // The index has no complete answer yet: mapping the empty page to no printing would tell the
-  // account that the catalog publishes none for the search (docs/search.md#freshness).
-  await settle(page, 'settleSearch', search.id, {
-    status: 'updating',
-    entries: [],
-    totalCount: null,
-    continuation: null,
-    revisions: null,
-  });
-
-  const picker = page.locator('[data-ui-import-picker="pending:entry-capture"]');
-  await expect(picker.locator('[data-ui-status]')).toHaveText(
-    'The search results are still being indexed.',
-  );
-  await expect(picker.locator('[data-ui-entry]')).toHaveCount(0);
-  await expect(page.locator('#import-entry-status-entry-capture')).toBeEmpty();
   expect(errors).toEqual([]);
 });
 

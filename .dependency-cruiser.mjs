@@ -5,11 +5,10 @@
  * the component's internals. Application serves a browser and a backend runtime, so its browser-safe
  * contract is src/application/index.ts and its backend compositions are src/application/backend.ts,
  * the packaged deployment composition src/application/deployment.ts and the packaged finite job
- * entry points src/application/catalog-job.ts and src/application/indexing-job.ts. UserInterface's
+ * entry point src/application/catalog-job.ts. UserInterface's
  * browser entry points are src/ui/index.ts and the deployment composition src/ui/deployment.ts.
- * Search's browser-safe contract is src/search/browser.ts; its query, count and indexing
- * capabilities stay in src/search/index.ts. UserCards publishes its browser operation facade and
- * constraints through src/usercards/browser.ts, while its backend contracts stay in
+ * UserCards publishes its browser operation facade and constraints through
+ * src/usercards/browser.ts, while its backend contracts stay in
  * src/usercards/index.ts.
  * CardList publishes its headless list contract, its source bindings and its account-local recent
  * activity through src/card-list/index.ts, and Capture publishes its headless session contract,
@@ -28,7 +27,6 @@ export const components = [
   'capture',
   'catalog',
   'recognition',
-  'search',
   'ui',
   'usercards',
 ];
@@ -40,7 +38,6 @@ const componentEntries = {
   capture: ['index'],
   catalog: ['index'],
   recognition: ['index'],
-  search: ['index', 'browser'],
   ui: ['index', 'deployment'],
   usercards: ['index', 'browser'],
 };
@@ -62,15 +59,14 @@ const publicInterfaceRules = components.map((component) => ({
 
 // Source dependencies follow the composition graph, including type-only imports.
 const providers = {
-  application: ['card-list', 'capture', 'catalog', 'recognition', 'search', 'usercards'],
-  'card-list': ['catalog', 'search', 'usercards'],
+  application: ['card-list', 'capture', 'catalog', 'recognition', 'usercards'],
+  'card-list': ['catalog', 'usercards'],
   capture: ['recognition', 'usercards'],
   // UserInterface presents Capture instead of reaching Recognition: the composed capability
   // carries the recognition and staging bindings a capture session needs.
-  ui: ['application', 'card-list', 'capture', 'catalog', 'search', 'usercards'],
+  ui: ['application', 'card-list', 'capture', 'catalog', 'usercards'],
   catalog: [],
   recognition: ['catalog'],
-  search: ['catalog', 'usercards'],
   usercards: ['catalog'],
 };
 const directionRules = components.map((component) => ({
@@ -154,7 +150,7 @@ const config = {
       name: 'no-backend-in-ui',
       severity: 'error',
       from: { path: '^src/ui/' },
-      to: { path: '^src/application/(backend|deployment|catalog-job|indexing-job)\\.ts$' },
+      to: { path: '^src/application/(backend|deployment|catalog-job)\\.ts$' },
     },
   ],
   options: {

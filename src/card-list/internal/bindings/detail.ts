@@ -71,7 +71,7 @@ export function detailTargetSource(
   return {
     // The Catalog publishes printings and cards, and the account's copies carry revisions: both
     // change the level this entry presents.
-    affects: () => true,
+    affects: (change) => target.kind === 'copy' || change.scope === 'catalog',
     async load(request: CardListSourceRequest<CardListDetailTarget>) {
       if (request.continuation !== null) {
         // The level is one entry; a continuation is a list the source never produced.
@@ -82,7 +82,6 @@ export function detailTargetSource(
         entries: [await readDetailEntry(options, target, request.signal)],
         continuation: null,
         // The level reads the providers directly, so the entry describes the state it observed.
-        current: true,
       };
     },
   };

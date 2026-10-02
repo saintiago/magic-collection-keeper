@@ -45,16 +45,9 @@ const sessionToken = idToken({ sub: 'cognito-alice', name: 'Alice' });
 
 /** One empty catalog page as the interactive entry point reports it. */
 const searchPage = {
-  status: 'ready',
   entries: [],
   totalCount: 0,
   continuation: null,
-  revisions: {
-    generation: 'browse-generation',
-    catalogRevision: 'browse-revision',
-    catalogPosition: '1',
-    privateRevision: null,
-  },
 };
 
 let artifactDirectory: string;
@@ -154,7 +147,7 @@ test('the packaged browser artifact signs in on its page and reaches the API wit
 
   // A page read reaches the API with the session token the sign-in established.
   await expect.poll(() => requests.length).toBeGreaterThan(0);
-  expect(requests[0]?.url).toBe(`${apiOrigin}/api/search`);
+  expect(requests[0]?.url).toBe(`${apiOrigin}/api/catalog/query`);
   expect(requests[0]?.authorization).toBe(`Bearer ${sessionToken}`);
 
   await page.getByRole('button', { name: 'Sign out' }).click();
@@ -353,7 +346,7 @@ test('disposing a browser deployment prevents pending sign-in from restoring cre
       );
       await signingIn;
       const failure = await deployment.application
-        .request('/api/search')
+        .request('/api/catalog/query')
         .catch((cause: unknown) => (cause as { code: string }).code);
       return {
         account: deployment.identity.current(),

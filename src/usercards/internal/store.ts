@@ -43,12 +43,10 @@ export interface CopiesData {
 }
 
 /**
- * Copies one write committed, the revision it published and the durable publication position a
- * consumer resumes from (docs/user-cards.md#query-surface).
+ * Copies one write committed and its authoritative private revision.
  */
 export interface CopyChangeData {
   readonly privateRevision: string;
-  readonly publicationPosition: string;
   readonly copies: readonly PhysicalCopy[];
 }
 
@@ -56,7 +54,6 @@ export type CopyCorrectionOutcome =
   | {
       readonly outcome: 'updated';
       readonly privateRevision: string;
-      readonly publicationPosition: string;
       readonly copy: PhysicalCopy;
     }
   | { readonly outcome: 'missing' }
@@ -104,7 +101,6 @@ export interface TagsData {
 export interface TagChangeData {
   readonly privateRevision: string;
   /** Position of the revision that completes this change. */
-  readonly publicationPosition: string;
   readonly tag: Tag;
 }
 
@@ -112,7 +108,6 @@ export type TagCorrectionOutcome =
   | {
       readonly outcome: 'updated';
       readonly privateRevision: string;
-      readonly publicationPosition: string;
       readonly tag: Tag;
     }
   | { readonly outcome: 'missing' }
@@ -153,7 +148,6 @@ export type AssociationInsertOutcome =
   | {
       readonly outcome: 'inserted';
       readonly privateRevision: string;
-      readonly publicationPosition: string;
       readonly association: Association;
     }
   /** The tag already associates this exact target; the existing association must be changed. */
@@ -163,7 +157,6 @@ export type AssociationCorrectionOutcome =
   | {
       readonly outcome: 'updated';
       readonly privateRevision: string;
-      readonly publicationPosition: string;
       readonly association: Association;
     }
   | { readonly outcome: 'missing' }
@@ -175,7 +168,6 @@ export type AssociationRemovalOutcome =
   | {
       readonly outcome: 'removed';
       readonly privateRevision: string;
-      readonly publicationPosition: string;
       readonly associationId: string;
     }
   | { readonly outcome: 'missing' }
@@ -196,7 +188,6 @@ export type CopyLocationOutcome =
   | {
       readonly outcome: 'moved';
       readonly privateRevision: string;
-      readonly publicationPosition: string;
       readonly copy: PhysicalCopy;
       /** The copy's location membership after the move, or `null` when it has none. */
       readonly location: Association | null;
@@ -731,7 +722,7 @@ export interface MigrationStore {
     archive: readonly string[],
   ): Promise<MigrationStartOutcome>;
   /**
-   * Applies one batch, its replay receipt and its publication in one transaction, or returns the
+   * Applies one batch, its replay receipt and its revision in one transaction, or returns the
    * recorded receipt when the identical batch already committed.
    */
   applyBatch(

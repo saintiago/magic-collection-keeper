@@ -40,27 +40,7 @@ export {
   type PrintingRecord,
   type PrintingReference,
 } from './internal/model.js';
-export {
-  catalogReaderGrants,
-  catalogPublicationGrants,
-  catalogSchemaSql,
-} from './internal/schema.js';
-export {
-  CATALOG_PUBLICATION_LIMITS,
-  createCatalogPublication,
-  type CatalogChange,
-  type CatalogChangePosition,
-  type CatalogChangesPage,
-  type CatalogChangesRequest,
-  type CatalogPublication,
-  type CatalogPublicationDependencies,
-  type CatalogPublishedRecord,
-  type CatalogRecordChange,
-  type CatalogRecordReference,
-  type CatalogRevisionChange,
-  type CatalogSnapshotPage,
-  type CatalogSnapshotRequest,
-} from './internal/query-publication.js';
+export { catalogReaderGrants, catalogSchemaSql } from './internal/schema.js';
 export {
   createCatalog,
   type CardPrintingsPage,

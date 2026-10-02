@@ -1,33 +1,4 @@
-/**
- * UserCards public entry point (docs/user-cards.md#interface).
- *
- * Application wires the private operations with a transaction-capable SQL executor and the
- * Catalog contract: a copy is stored with one printing reference and its physical attributes,
- * corrections keep the copy identity and quote the revision they started from, and tags,
- * associations and a copy's single physical location follow the same revision-checked,
- * account-scoped rules. Pending imports, review and confirmation follow the same rules: an
- * observation or parsed line is staged once, review quotes the entry revision, and a confirmation
- * under an operation identity applies its explicit destination — the reviewed associations of a
- * tag, or the individual copies and provenance of an ownership action — or returns the recorded
- * outcome. Consumers read private copies, tags and associations through their own operations;
- * another component builds searchable data from the provider-owned publication contract
- * (createUserCardsPublication) instead of reading UserCards' relations, whose views stay internal
- * implementation choices (docs/user-cards.md#query-surface). Pending imports have no published
- * relation and are read through the component's own pending reads. Source imports parse a pasted
- * list, a public Moxfield deck or a reviewed Wizards preconstructed list inside this boundary into
- * the same pending entries, preserving what the source published and reconciling a repeated import
- * of the list the caller identified with what that import already acquired, while another import
- * owns its own acquisitions. Every query-visible mutation also publishes its records durably
- * through that contract; the caller receives the change's publication position, and recovering a
- * recorded outcome returns the position it was published at. Other components import UserCards
- * through this module or its browser operation facade (src/usercards/browser.ts), which owns the
- * operation lifecycle, the account-scoped attempts and the input constraints a browser consumer
- * presents; its internal modules stay private to the component (docs/architecture.md,
- * .dependency-cruiser.mjs). The component also owns loading a verified offline migration plan into
- * an empty account: it retains the plan's source archive, applies it in repeat-safe batches whose
- * records, replay receipt and publication commit together, and reads the result back for the
- * offline reconciliation (docs/migration.md#ownership-and-interfaces).
- */
+/** UserCards public contract: authoritative private operations, queries, imports, recovery and compatible reference preparation (docs/user-cards.md). */
 
 export { UserCardsError, type UserCardsFailureCode } from './internal/errors.js';
 export type {
@@ -123,32 +94,9 @@ export {
 export {
   USERCARDS_ACCOUNT_SCOPE_SQL,
   USERCARDS_ACCOUNT_SETTING,
-  usercardsPublicationGrants,
   usercardsQueryGrants,
-  usercardsReaderGrants,
   usercardsSchemaSql,
 } from './internal/schema.js';
-export {
-  USERCARDS_PUBLICATION_LIMITS,
-  createUserCardsPublication,
-  type UserCardsAccountsPage,
-  type UserCardsAccountsRequest,
-  type UserCardsAssociationRecord,
-  type UserCardsChange,
-  type UserCardsChangePosition,
-  type UserCardsChangesPage,
-  type UserCardsChangesRequest,
-  type UserCardsCopyRecord,
-  type UserCardsPublication,
-  type UserCardsPublicationDependencies,
-  type UserCardsPublishedRecord,
-  type UserCardsRecordChange,
-  type UserCardsRecordReference,
-  type UserCardsRevisionChange,
-  type UserCardsSnapshotPage,
-  type UserCardsSnapshotRequest,
-  type UserCardsTagRecord,
-} from './internal/query-publication.js';
 export {
   USERCARDS_QUERY_LIMITS,
   userCardsOrderingFields,

@@ -12,13 +12,10 @@
  * component contracts.
  */
 
-import { idleProgress } from './card-list-progress.js';
-
 import {
   ApplicationError,
   inspectCanvasFrame,
   type ApplicationFailureCode,
-  type SearchClient,
   type UserInterfaceCapabilities,
 } from '../../src/application/index.js';
 import {
@@ -30,7 +27,7 @@ import { createCardListBrowser } from '../../src/card-list/index.js';
 // synchronization job, out of the browser bundle (docs/application.md#interface).
 import type {
   CardRecord,
-  Catalog,
+  CatalogService,
   CatalogReference,
   CatalogResolution,
   PrintingRecord,
@@ -331,25 +328,14 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
   );
 
   /** Answers the references from the declared fixture, like the published Catalog. */
-  const catalog: Catalog = {
+  const catalog: CatalogService = {
+    query: () => Promise.reject(new Error('No catalog query in this journey.')),
     resolve(references) {
       catalogRequests.push([...references]);
       return Promise.resolve(resolution(references));
     },
     listCardPrintings() {
       return Promise.reject(new Error('The capture page reads no card printing page.'));
-    },
-  };
-
-  const search: SearchClient = {
-    execute() {
-      return Promise.reject(new Error('The capture journeys run no search.'));
-    },
-    counts() {
-      return Promise.reject(new Error('The capture journeys read no private counts.'));
-    },
-    observe() {
-      return Promise.reject(new Error('The capture journeys observe no progress.'));
     },
   };
 
@@ -434,15 +420,13 @@ export function installCaptureHarness(root: Element | null): UiCaptureControl {
     identity,
     request,
     catalog,
-    search,
     userCards,
-    cardList: createCardListBrowser({ progress: idleProgress, search, catalog, userCards }),
+    cardList: createCardListBrowser({ catalog, userCards }),
     capture: createCaptureBrowser({
       userCards,
       createRecognition: createRecognitionContract,
       engines: recognitionEngineNames(false),
     }),
-    indexing: idleProgress,
   };
 
   const shell: UserInterface = createUserInterface({

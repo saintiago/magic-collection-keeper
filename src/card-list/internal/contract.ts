@@ -190,30 +190,12 @@ export interface CardListSourceRequest<Context> {
   readonly continuation: string | null;
   /** Cancelling it withdraws the request; a withdrawn page is never presented. */
   readonly signal: AbortSignal;
-  /**
-   * Known committed publication positions the read must have incorporated to be current. A query
-   * source passes them to its provider's freshness read; a source whose reads are already
-   * authoritative ignores them (docs/card-list.md#required-interfaces-and-source-bindings).
-   */
-  readonly required: CardListRequiredProgress;
-}
-
-/** Known committed progress a read should have incorporated before it presents a caught-up result. */
-export interface CardListRequiredProgress {
-  /** Account-scoped publication positions still awaiting indexing. */
-  readonly positions: readonly string[];
 }
 
 export interface CardListPage {
   readonly entries: readonly CardListEntry[];
   /** Opaque continuation of the next page, or null when this page ends the result. */
   readonly continuation: string | null;
-  /**
-   * Whether the page incorporated every required position the request named. A usable page that
-   * has not incorporated them presents content that is still updating; it is never an empty or
-   * failed result (docs/search.md#freshness).
-   */
-  readonly current: boolean;
 }
 
 /**
@@ -235,32 +217,7 @@ export interface CardListSource<Context = unknown> {
    * reacquired for every notification (docs/card-list.md#loading-and-recovery).
    */
   affects?(change: CardListChange, context: Context): boolean;
-  /**
-   * One bounded observation of committed positions the list still awaits incorporation of
-   * (docs/search.md#freshness). The list calls it after a usable result reports that it has not
-   * incorporated every named position: `incorporated` resolves once the provider established
-   * every position, `delayed` when the bounded wait ended without establishing them and `failed`
-   * when indexing is known to have failed. A rejected observation is unavailable, never
-   * completion. A source whose reads are already authoritative omits the hook.
-   */
-  observe?(request: CardListObservationRequest): Promise<CardListObservation>;
 }
-
-/** Explicit committed positions one bounded observation asks the provider to establish. */
-export interface CardListObservationRequest {
-  /** Account-scoped publication positions still awaiting indexing. */
-  readonly positions: readonly string[];
-  /** Cancelling it withdraws the observation; a withdrawn wait establishes nothing. */
-  readonly signal: AbortSignal;
-}
-
-/**
- * Outcome of one bounded observation (docs/search.md#freshness). `incorporated` means the
- * provider established every named position; `delayed` that its bounded wait ended without
- * establishing them; `failed` that an indexing failure is known. An observation that cannot
- * answer at all rejects, and the list reports that as unavailable.
- */
-export type CardListObservation = 'incorporated' | 'delayed' | 'failed';
 
 /** Source position of the first entry of one list window (docs/card-list.md#selection-and-restoration). */
 export interface CardListPosition {
@@ -409,24 +366,7 @@ export interface CardListSnapshot<Context = unknown> {
    * A presentation re-renders what depends on content outside the snapshot when it changed.
    */
   readonly generation: number;
-  /**
-   * Committed publication positions the presented result is still waiting for; empty when the
-   * result is current. Usable content labelled this way is neither an empty result nor a failure
-   * (docs/card-list.md#interface, docs/card-list.md#loading-and-recovery).
-   */
-  readonly awaiting: readonly string[];
-  /**
-   * How the awaited committed changes stand: `current` while none wait, `indexing` while the list
-   * observes them, `delayed` when a bounded observation ended without incorporation, `failed`
-   * when indexing is known to have failed and `unavailable` when the status could not be read.
-   * The last three are explicit and recoverable through `retry` or `refresh`; none of them is an
-   * empty or failed result (docs/card-list.md#loading-and-recovery).
-   */
-  readonly freshness: CardListIndexingStatus;
 }
-
-/** Status of the committed changes a presented result still awaits (docs/search.md#freshness). */
-export type CardListIndexingStatus = 'current' | 'indexing' | 'delayed' | 'failed' | 'unavailable';
 
 /**
  * Extent of the presentation's viewport. A consumer reports the range it can present and the
@@ -458,8 +398,6 @@ export interface CardListChange {
   readonly records: readonly string[];
   /** Pending imports whose entries may have changed. */
   readonly imports: readonly string[];
-  /** Durable publication position awaiting indexing, or null when indexing is unaffected. */
-  readonly position: string | null;
 }
 
 export interface CardListOptions<Context = unknown> {
@@ -530,8 +468,7 @@ export interface CardList<Context = unknown> {
   refresh(): void;
   /**
    * Recovers the active result: it repeats the failed request — the position a temporary failure
-   * kept, or the first page of a sequence whose restart failed — or observes and refreshes the
-   * committed changes still awaiting indexing; never another query's continuation.
+   * kept, or the first page of a sequence whose restart failed; never another query's continuation.
    */
   retry(): void;
   /**

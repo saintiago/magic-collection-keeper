@@ -31,7 +31,6 @@ interface SourceRequest {
   readonly context: string;
   readonly pageSize: number;
   readonly continuation: string | null;
-  readonly required: readonly string[];
   readonly aborted: () => boolean;
 }
 
@@ -67,7 +66,6 @@ function controlledSource(
         context: request.context,
         pageSize: request.pageSize,
         continuation: request.continuation,
-        required: [...request.required.positions],
         aborted: () => aborted,
       });
       return new Promise((resolve, reject) => {
@@ -88,7 +86,6 @@ function controlledSource(
         status: 'page',
         entries: page.entries,
         continuation: page.continuation ?? null,
-        current: page.current !== false,
       });
     },
     invalidate(id) {
@@ -169,65 +166,6 @@ function options(
  * A source with a bounded observation capability: every observation the list asks for is recorded
  * and settled by the test, exactly as Search's freshness capability answers.
  */
-interface ObservationRequest {
-  readonly positions: readonly string[];
-  readonly aborted: () => boolean;
-}
-
-interface ObservedSource extends ControlledSource {
-  readonly observations: readonly ObservationRequest[];
-  settleObservation(id: number, state: 'incorporated' | 'delayed' | 'failed'): void;
-  failObservation(id: number, message: string): void;
-}
-
-function observedSource(
-  affects?: (change: CardListChange, context: string) => boolean,
-): ObservedSource {
-  const controlled = controlledSource(affects);
-  const observations: ObservationRequest[] = [];
-  const pending = new Map<
-    number,
-    {
-      resolve(state: 'incorporated' | 'delayed' | 'failed'): void;
-      reject(cause: Error): void;
-    }
-  >();
-  return {
-    ...controlled,
-    source: {
-      ...controlled.source,
-      observe(request) {
-        const id = observations.length + 1;
-        let aborted = false;
-        request.signal.addEventListener('abort', () => {
-          aborted = true;
-        });
-        observations.push({ positions: [...request.positions], aborted: () => aborted });
-        return new Promise((resolve, reject) => {
-          pending.set(id, { resolve, reject });
-        });
-      },
-    },
-    observations,
-    settleObservation(id, state) {
-      const waiting = pending.get(id);
-      if (waiting === undefined) {
-        throw new Error(`No observation ${id} is waiting.`);
-      }
-      pending.delete(id);
-      waiting.resolve(state);
-    },
-    failObservation(id, message) {
-      const waiting = pending.get(id);
-      if (waiting === undefined) {
-        throw new Error(`No observation ${id} is waiting.`);
-      }
-      pending.delete(id);
-      waiting.reject(new Error(message));
-    },
-  };
-}
-
 /** Waits until the list work started by a call settled. */
 async function settle(): Promise<void> {
   await Promise.resolve();
@@ -757,40 +695,16 @@ describe('retention and restoration', () => {
 });
 
 describe('local committed changes and freshness', () => {
-  it('reacquires from a change, reports the awaited position until the source incorporated it', async () => {
-    const controlled = controlledSource();
-    const list = createCardList(options(controlled.source));
-    controlled.settle(1, { entries: [card('1')], continuation: null });
-    await settle();
-
-    list.changed({ scope: 'copies', records: ['copy-1'], imports: [], position: '42' });
-    expect(controlled.requests[1]).toMatchObject({ required: ['42'] });
-    expect(list.snapshot().awaiting).toEqual(['42']);
-
-    // A usable page that has not incorporated the position stays labelled as updating.
-    controlled.settle(2, { entries: [card('1')], continuation: null, current: false });
-    await settle();
-    expect(list.snapshot().awaiting).toEqual(['42']);
-    expect(list.snapshot().empty).toBe(false);
-
-    list.changed({ scope: 'copies', records: [], imports: [], position: null });
-    controlled.settle(3, { entries: [card('1')], continuation: null, current: true });
-    await settle();
-    expect(list.snapshot().awaiting).toEqual([]);
-    list.dispose();
-  });
-
   it('reacquires only the changes the source declares affected', async () => {
     const controlled = controlledSource((change, context) => change.imports.includes(context));
     const list = createCardList(options(controlled.source, { context: 'import-a' }));
     controlled.settle(1, { entries: [card('1')], continuation: null });
     await settle();
 
-    list.changed({ scope: 'imports', records: [], imports: ['import-b'], position: null });
+    list.changed({ scope: 'imports', records: [], imports: ['import-b'] });
     expect(controlled.requests).toHaveLength(1);
-    list.changed({ scope: 'imports', records: [], imports: ['import-a'], position: '7' });
+    list.changed({ scope: 'imports', records: [], imports: ['import-a'] });
     expect(controlled.requests).toHaveLength(2);
-    expect(controlled.requests[1]).toMatchObject({ required: ['7'] });
     list.dispose();
   });
 
@@ -808,120 +722,11 @@ describe('local committed changes and freshness', () => {
     await settle();
 
     for (const listener of listeners) {
-      listener({ scope: 'associations', records: [], imports: [], position: null });
+      listener({ scope: 'associations', records: [], imports: [] });
     }
     expect(controlled.requests).toHaveLength(2);
     list.dispose();
     expect(listeners.size).toBe(0);
-  });
-
-  it('observes awaited positions through the source and refreshes once they are incorporated', async () => {
-    const controlled = observedSource();
-    const list = createCardList(options(controlled.source));
-    controlled.settle(1, { entries: [card('1')], continuation: null });
-    await settle();
-
-    list.changed({ scope: 'copies', records: [], imports: [], position: '7' });
-    expect(controlled.observations[0]?.positions).toEqual(['7']);
-    controlled.settle(2, { entries: [card('1')], continuation: null, current: false });
-    await settle();
-    expect(list.snapshot().freshness).toBe('indexing');
-
-    // Once the provider established the position, the generation is read again without it and no
-    // position stays awaited.
-    controlled.settleObservation(1, 'incorporated');
-    await settle();
-    expect(controlled.requests[2]).toMatchObject({ required: ['7'] });
-    expect(list.snapshot().freshness).toBe('indexing');
-    expect(controlled.requests[2]!.aborted()).toBe(false);
-    controlled.settle(3, { entries: [card('1'), card('2')], continuation: null });
-    await settle();
-    expect(list.snapshot().awaiting).toEqual([]);
-    expect(list.snapshot().freshness).toBe('current');
-    expect(list.snapshot().entries.map((entry) => entry.entry.key)).toEqual(['card:1', 'card:2']);
-    list.dispose();
-  });
-
-  it('keeps a position that arrived while the observation was waiting', async () => {
-    const controlled = observedSource();
-    const list = createCardList(options(controlled.source));
-    controlled.settle(1, { entries: [card('1')], continuation: null });
-    await settle();
-
-    list.changed({ scope: 'copies', records: [], imports: [], position: '20' });
-    controlled.settle(2, { entries: [card('1')], continuation: null, current: false });
-    await settle();
-    expect(controlled.observations[0]?.positions).toEqual(['20']);
-
-    // A recovered commit arrives during the wait: the observation only establishes the positions
-    // it named, so the newer requirement survives.
-    list.changed({ scope: 'copies', records: [], imports: [], position: '10' });
-    controlled.settleObservation(1, 'incorporated');
-    await settle();
-    expect(list.snapshot().awaiting).toEqual(['20', '10']);
-    expect(controlled.requests.at(-1)).toMatchObject({ required: ['20', '10'] });
-    list.dispose();
-  });
-
-  it('reports delayed, failed and unavailable observations and recovers through retry', async () => {
-    const controlled = observedSource();
-    const list = createCardList(options(controlled.source));
-    controlled.settle(1, { entries: [card('1')], continuation: null });
-    await settle();
-    list.changed({ scope: 'copies', records: [], imports: [], position: '7' });
-    controlled.settle(2, { entries: [card('1')], continuation: null, current: false });
-    await settle();
-
-    controlled.settleObservation(1, 'delayed');
-    await settle();
-    expect(list.snapshot().freshness).toBe('delayed');
-    expect(list.snapshot().awaiting).toEqual(['7']);
-
-    // Checking again is explicit: it starts no write and reports unavailable instead of completion.
-    list.retry();
-    expect(list.snapshot().freshness).toBe('indexing');
-    expect(controlled.observations[1]?.positions).toEqual(['7']);
-    controlled.failObservation(2, 'The indexing status could not be read.');
-    await settle();
-    expect(list.snapshot().freshness).toBe('unavailable');
-
-    list.retry();
-    controlled.settleObservation(3, 'failed');
-    await settle();
-    expect(list.snapshot().freshness).toBe('failed');
-
-    list.retry();
-    controlled.settleObservation(4, 'incorporated');
-    await settle();
-    expect(list.snapshot().awaiting).toEqual(['7']);
-    expect(controlled.requests.at(-1)).toMatchObject({ required: ['7'] });
-    controlled.settle(controlled.requests.length, { entries: [card('1')] });
-    await settle();
-    expect(list.snapshot().awaiting).toEqual([]);
-    list.dispose();
-  });
-
-  it('retains the positions it awaits and requires them when its handle is restored', async () => {
-    const first = observedSource();
-    const list = createCardList(options(first.source));
-    first.settle(1, { entries: [card('1')], continuation: null });
-    await settle();
-    list.changed({ scope: 'copies', records: [], imports: [], position: '9' });
-    first.settle(2, { entries: [card('1')], continuation: null, current: false });
-    await settle();
-    expect(list.snapshot().awaiting).toEqual(['9']);
-    const retained = list.retain();
-    list.dispose();
-
-    // Reopening the list rechecks the requirement instead of presenting an apparently current
-    // result, and its own observation continues from the restored progress.
-    const next = observedSource();
-    const restored = createCardList(options(next.source, { restored: retained }));
-    expect(next.requests[0]).toMatchObject({ required: ['9'] });
-    expect(restored.snapshot().awaiting).toEqual(['9']);
-    expect(restored.snapshot().freshness).toBe('indexing');
-    expect(next.observations[0]?.positions).toEqual(['9']);
-    restored.dispose();
   });
 
   it('reacquires the enrichment of the window after a committed change', async () => {
@@ -952,7 +757,7 @@ describe('local committed changes and freshness', () => {
 
     // The change reacquires the window: the count read before the change never answers for the
     // fresh one.
-    list.changed({ scope: 'copies', records: [], imports: [], position: null });
+    list.changed({ scope: 'copies', records: [], imports: [] });
     controlled.settle(2, { entries: [card('1')], continuation: null });
     await settle();
     expect(reads).toHaveLength(2);
@@ -1265,24 +1070,6 @@ describe('review regressions', () => {
     },
   );
 
-  it('keeps every outstanding identity across notifications and retention', async () => {
-    const controlled = controlledSource();
-    const list = createCardList(options(controlled.source));
-    const positions = Array.from({ length: 101 }, (_, i) => `opaque-${i}`);
-    for (const position of positions)
-      list.changed({ scope: 'copies', records: [], imports: [], position });
-    expect(controlled.requests.at(-1)?.required).toEqual(positions);
-    const retained = list.retain();
-    list.dispose();
-    const next = controlledSource();
-    const reopened = createCardList(options(next.source, { restored: retained }));
-    expect(next.requests[0]?.required).toEqual(positions);
-    next.settle(1, { entries: [] });
-    await settle();
-    expect(reopened.snapshot().awaiting).toEqual([]);
-    reopened.dispose();
-  });
-
   it.each(['refine', 'refresh', 'change'] as const)(
     'drops obsolete first-page demand on %s but keeps replacement demand',
     async (action) => {
@@ -1291,7 +1078,7 @@ describe('review regressions', () => {
       list.demand({ entries: 100 });
       if (action === 'refine') list.refine('replacement');
       else if (action === 'refresh') list.refresh();
-      else list.changed({ scope: 'copies', records: [], imports: [], position: null });
+      else list.changed({ scope: 'copies', records: [], imports: [] });
       list.demand({ entries: 1 });
       controlled.settle(2, { entries: [card('2')], continuation: 'next' });
       controlled.settle(1, { entries: [card('1')], continuation: 'obsolete' });
@@ -1337,48 +1124,6 @@ describe('review regressions', () => {
     expect(list.actionContext().targets).toEqual([{ kind: 'card', cardId: '1' }]);
     expect(list.snapshot().selection.unavailable).toEqual(['card:1']);
     expect(list.snapshot().tools[0]?.available).toBe(false);
-    list.dispose();
-  });
-
-  it('rereads derived fragments on incorporation and fences pre-index responses', async () => {
-    const controlled = observedSource();
-    const reads: { resolve: (value: readonly unknown[]) => void; signal: AbortSignal }[] = [];
-    const list = createCardList(
-      options(controlled.source, {
-        fragments: {
-          ownership: {
-            read: (request) =>
-              new Promise((resolve) =>
-                reads.push({ resolve: resolve as never, signal: request.signal }),
-              ),
-          },
-        },
-      }),
-    );
-    const ownership = (owned: number) => [
-      { key: 'card:1', status: 'ready', values: { owned, locations: 1, intended: null } },
-    ];
-    controlled.settle(1, { entries: [card('1')] });
-    await settle();
-    reads[0]!.resolve(ownership(1));
-    await settle();
-    list.changed({ scope: 'copies', records: [], imports: [], position: '20' });
-    controlled.settle(2, { entries: [card('1')], current: false });
-    await settle();
-    controlled.settleObservation(1, 'incorporated');
-    await settle();
-    expect(list.snapshot().freshness).toBe('indexing');
-    expect(reads[1]!.signal.aborted).toBe(true);
-    controlled.settle(3, { entries: [card('1')], current: true });
-    await settle();
-    reads[2]!.resolve(ownership(2));
-    await settle();
-    reads[1]!.resolve(ownership(1));
-    await settle();
-    expect(list.snapshot().freshness).toBe('current');
-    expect(list.snapshot().entries[0]?.fragments.get('ownership')).toMatchObject({
-      values: { owned: 2 },
-    });
     list.dispose();
   });
 });

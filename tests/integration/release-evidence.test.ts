@@ -70,8 +70,6 @@ async function createRelease(options: ReleaseFixtureOptions = {}): Promise<strin
   const browserPage = await describeFile(root, 'browser/index.html', '<!doctype html>');
   const catalog = await describeFile(root, 'catalog/job.mjs', 'catalog job');
   const catalogDockerfile = await describeFile(root, 'catalog/Dockerfile', 'FROM scratch');
-  const indexing = await describeFile(root, 'indexing/job.mjs', 'indexing job');
-  const indexingDockerfile = await describeFile(root, 'indexing/Dockerfile', 'FROM scratch');
   const browserFiles: ArtifactFile[] = [browserEntry, browserPage];
   const recognition =
     options.recognition === true
@@ -92,7 +90,6 @@ async function createRelease(options: ReleaseFixtureOptions = {}): Promise<strin
           backend: { ...backend, entry: 'index.mjs' },
           browser: { directory: 'browser', files: browserFiles, settings: null },
           catalog: { ...catalog, dockerfile: catalogDockerfile },
-          indexing: { ...indexing, dockerfile: indexingDockerfile },
         },
       },
       null,
@@ -198,7 +195,6 @@ async function writeReleaseRecord(
     readonly version?: string;
     readonly environment?: string;
     /** Whether the captured parameters name the indexing image, as a deployment of this release does. */
-    readonly indexingImage?: boolean;
   },
 ): Promise<void> {
   const label = options.version ?? version;
@@ -214,14 +210,6 @@ async function writeReleaseRecord(
       ParameterKey: 'CatalogJobImageUri',
       ParameterValue: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-catalog@sha256:${'b'.repeat(64)}`,
     },
-    ...(options.indexingImage === false
-      ? []
-      : [
-          {
-            ParameterKey: 'IndexingJobImageUri',
-            ParameterValue: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-indexing@sha256:${'c'.repeat(64)}`,
-          },
-        ]),
   ];
   await write(root, 'release.json', `${JSON.stringify(parameters, null, 2)}\n`);
 }
@@ -253,7 +241,7 @@ describe('release acceptance evidence', () => {
     expect(evidence.workingTree).toBe('clean');
     expect(evidence.stages.sourceCompletion.status).toBe('recorded');
     // Both background jobs contribute their module and the Dockerfile that packages it.
-    expect(evidence.stages.sourceCompletion.verifiedFiles).toBe(7);
+    expect(evidence.stages.sourceCompletion.verifiedFiles).toBe(5);
     expect(evidence.stages.sourceCompletion.recognition).toBeNull();
     expect(evidence.stages.deployment.status).toBe('not-recorded');
     expect(evidence.stages.deployment.reason).toMatch(/authorization/);
@@ -275,16 +263,10 @@ describe('release acceptance evidence', () => {
     await expect(prepareReleaseEvidence({ outDir, repoRoot })).rejects.toThrow(
       /catalog\/job\.mjs does not match/,
     );
-
-    const indexing = await createRelease();
-    await write(indexing, 'indexing/job.mjs', 'tampered');
-    await expect(prepareReleaseEvidence({ outDir: indexing, repoRoot })).rejects.toThrow(
-      /indexing\/job\.mjs does not match/,
-    );
   });
 
-  it('verifies both background-job container definitions as release bytes', async () => {
-    for (const dockerfile of ['catalog/Dockerfile', 'indexing/Dockerfile'] as const) {
+  it('verifies the catalog-job container definition as release bytes', async () => {
+    for (const dockerfile of ['catalog/Dockerfile'] as const) {
       const changed = await createRelease();
       await write(
         changed,
@@ -298,9 +280,9 @@ describe('release acceptance evidence', () => {
     }
 
     const missing = await createRelease();
-    await rm(path.join(missing, 'indexing/Dockerfile'));
+    await rm(path.join(missing, 'catalog/Dockerfile'));
     await expect(prepareReleaseEvidence({ outDir: missing, repoRoot })).rejects.toThrow(
-      /indexing\/Dockerfile/,
+      /catalog\/Dockerfile/,
     );
   });
 
@@ -330,19 +312,11 @@ describe('release acceptance evidence', () => {
     expect(deployment.apiCodeVersion).toBe('object-version-3');
     expect(deployment.recognitionImageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
     expect(deployment.catalogJobImageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
-    expect(deployment.indexingJobImageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
 
     const foreign = await createRelease();
     await writeReleaseRecord(foreign, { version: '0.1.0-ffffffffffff' });
     await expect(prepareReleaseEvidence({ outDir: foreign, repoRoot })).rejects.toThrow(
       /does not name this release/,
-    );
-
-    // A deployment record that names no indexing image is not the release's deployed combination.
-    const incomplete = await createRelease();
-    await writeReleaseRecord(incomplete, { indexingImage: false });
-    await expect(prepareReleaseEvidence({ outDir: incomplete, repoRoot })).rejects.toThrow(
-      /names no IndexingJobImageUri/,
     );
   });
 

@@ -22,7 +22,6 @@ import { build } from 'esbuild';
 import { createPostgresApplication, type Application } from '../../src/application/backend.js';
 import type { PublicApplicationSettings } from '../../src/application/index.js';
 import { catalogSchemaSql } from '../../src/catalog/index.js';
-import { searchSchemaSql } from '../../src/search/index.js';
 import { usercardsSchemaSql } from '../../src/usercards/index.js';
 import {
   claimsFor,
@@ -132,9 +131,7 @@ export interface SystemJourney {
  * Application and the HTTP origin the browser deployment loads from.
  */
 export async function startSystemJourney(): Promise<SystemJourney> {
-  const database = await createTestDatabase(
-    `${catalogSchemaSql}\n\n${usercardsSchemaSql}\n\n${searchSchemaSql}`,
-  );
+  const database = await createTestDatabase(`${catalogSchemaSql}\n\n${usercardsSchemaSql}`);
   const calls: SystemJourneyCall[] = [];
   const lostResponses: string[] = [];
   /** Assembled once the origin it publishes to the browser is known; no request arrives before. */
@@ -150,8 +147,8 @@ export async function startSystemJourney(): Promise<SystemJourney> {
     configuration,
     identity: testIdentityVerifier(),
     resources: {
-      readSql: database.sql,
-      searchSql: database.sql,
+      catalogReadSql: database.sql,
+      userCardsReadSql: database.sql,
       writeSql: database.sql,
       catalogSynchronization: {
         sql: database.sql,
@@ -159,17 +156,11 @@ export async function startSystemJourney(): Promise<SystemJourney> {
           default_cards: { sourceVersion, records: systemCatalogRecords },
         }),
       },
-      searchIndexing: {
-        sql: database.sql,
-        catalogPublicationSql: database.sql,
-        userCardsPublicationSql: database.sql,
-      },
       deckSource: null,
     },
   });
   await assembled.synchronizeCatalog({ dataset: 'default_cards' });
   // Search answers from its own projection, so the published catalog is indexed before serving.
-  await assembled.indexSearch();
   serving = assembled;
   const settings = assembled.settings;
 
@@ -258,9 +249,6 @@ export async function startSystemJourney(): Promise<SystemJourney> {
       accountId,
       status: response.status,
     });
-    // Indexing is asynchronous background work; this journey makes each committed write visible
-    // before its next step, as the environment's indexing runtime does.
-    await application.indexSearch(accountId === null ? {} : { accounts: [accountId] });
     return response;
   }
 

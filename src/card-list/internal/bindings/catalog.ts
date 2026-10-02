@@ -23,7 +23,7 @@ import type {
   CardListFragmentReader,
   CardListSource,
 } from '../contract.js';
-import { isInvalidatedContinuation } from './search.js';
+import { isInvalidatedContinuation } from './read-failure.js';
 
 /** Prefix of a printing entry's key, which the images reader names its printing back from. */
 const printingKeyPrefix = 'printing:';
@@ -43,7 +43,7 @@ export function cardPrintingsSource(
   return {
     // A published catalog revision changes the printings a list holds; the notifications a
     // consumer forwards reacquire them.
-    affects: () => true,
+    affects: (change) => change.scope === 'catalog',
     async load(request) {
       let page: CardPrintingsPage;
       try {
@@ -62,7 +62,6 @@ export function cardPrintingsSource(
         entries: page.printings.map((printing) => printingEntry(card, printing)),
         continuation: page.continuation,
         // The catalog's published printings incorporate the revision the read observed.
-        current: true,
       };
     },
   };

@@ -649,37 +649,11 @@ export function createCardListView<Context>(
     section.setAttribute('aria-busy', snapshot.loading ? 'true' : 'false');
     moreButton.hidden = !snapshot.hasMore;
     moreButton.disabled = snapshot.loading;
-    // A delayed, failed or unavailable indexing status is explicit and recoverable: checking
-    // again starts no business write and never resets the presented content
-    // (docs/card-list.md#loading-and-recovery).
-    retryButton.hidden =
-      snapshot.error === null &&
-      snapshot.freshness !== 'delayed' &&
-      snapshot.freshness !== 'failed' &&
-      snapshot.freshness !== 'unavailable';
-    if (snapshot.error !== null) {
-      statusLine.textContent = snapshot.error;
-      statusLine.dataset.uiFreshness = snapshot.freshness;
-      return;
-    }
-    statusLine.dataset.uiFreshness = snapshot.freshness;
+    retryButton.hidden = snapshot.error === null;
     const parts: string[] = [];
-    // Freshness is presented independently of the number of entries: an empty result that still
-    // awaits known committed changes is updating, never a successful empty result
-    // (docs/card-list.md#loading-and-recovery).
-    if (snapshot.freshness === 'indexing') {
-      parts.push('Results are still being indexed.');
-    } else if (snapshot.freshness === 'delayed') {
-      parts.push('Results are still being indexed; this is taking longer than expected.');
-    } else if (snapshot.freshness === 'failed') {
-      parts.push('Indexing failed; retry to check the results again.');
-    } else if (snapshot.freshness === 'unavailable') {
-      parts.push('The indexing status is unavailable; retry to check again.');
-    } else if (snapshot.entries.length === 0) {
-      // An updating result without usable entries is a retryable read, so this state only shows
-      // while that read is pending or the result is a successful empty one.
-      parts.push(snapshot.loading ? 'Loading…' : 'No entries');
-    }
+    if (snapshot.error !== null) parts.push(snapshot.error);
+    else if (snapshot.loading) parts.push(snapshot.entries.length ? 'Refreshing…' : 'Loading…');
+    else if (snapshot.entries.length === 0) parts.push('No entries');
     if (snapshot.selection.unavailable.length > 0) {
       const unavailable = snapshot.selection.unavailable.length;
       parts.push(

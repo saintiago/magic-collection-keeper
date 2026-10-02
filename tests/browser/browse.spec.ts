@@ -1,3 +1,4 @@
+import { CATALOG_QUERY_LIMITS } from '../../src/catalog/index.js';
 /**
  * Browser journeys: the browsing pages (docs/user-interface.md#pages-and-navigation,
  * docs/user-interface.md#browsing-and-organization, docs/search.md#scryfall-compatibility,
@@ -21,8 +22,6 @@ import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 
-import { createSearchClient } from '../../src/application/index.js';
-import { createSearch, SEARCH_LIMITS, type SearchSqlRow } from '../../src/search/index.js';
 import type {
   UiBrowseCatalogRequest,
   UiBrowseControl,
@@ -30,7 +29,7 @@ import type {
   UiBrowseStart,
 } from './browse.harness.js';
 import type { PrintingRecord } from '../../src/catalog/index.js';
-import type { SearchEntry, SearchPage } from '../../src/search/index.js';
+import type { QueryEntryFixture, QueryPageFixture } from './query-fixtures.js';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const harnessPath = path.join(repoRoot, 'tests', 'browser', 'browse.harness.ts');
@@ -104,7 +103,7 @@ async function searchRequest(page: Page, index = 0): Promise<UiBrowseSearchReque
   return request;
 }
 
-async function settleSearch(page: Page, id: number, pageValue: SearchPage): Promise<void> {
+async function settleSearch(page: Page, id: number, pageValue: QueryPageFixture): Promise<void> {
   await page.evaluate(
     ({ id: requestId, value }) => {
       (
@@ -201,7 +200,7 @@ function cardEntry(
     readonly matchedName?: string | null;
     readonly quantity?: { readonly copies: number | null; readonly intended: number | null } | null;
   } = {},
-): SearchEntry {
+): QueryEntryFixture {
   return {
     entryKey: `card:${cardId}`,
     target: { kind: 'card', cardId },
@@ -216,7 +215,7 @@ function cardEntry(
 }
 
 /** One printing-level search entry of a named card. */
-function printingEntry(printingId: string, cardId: string, name: string): SearchEntry {
+function printingEntry(printingId: string, cardId: string, name: string): QueryEntryFixture {
   return {
     entryKey: `printing:${printingId}`,
     target: { kind: 'printing', printingId },
@@ -228,20 +227,13 @@ function printingEntry(printingId: string, cardId: string, name: string): Search
 
 /** One page the Search contract returns. */
 function searchPage(
-  entries: readonly SearchEntry[],
+  entries: readonly QueryEntryFixture[],
   options: { readonly totalCount?: number; readonly continuation?: string | null } = {},
-): SearchPage {
+): QueryPageFixture {
   return {
-    status: 'ready',
     entries,
     totalCount: options.totalCount ?? entries.length,
     continuation: options.continuation ?? null,
-    revisions: {
-      generation: 'browse-generation',
-      catalogRevision: 'browse-revision',
-      catalogPosition: '1',
-      privateRevision: null,
-    },
   };
 }
 
@@ -269,7 +261,10 @@ function printing(
 }
 
 /** Result pages of one hundred entries a journey settles page by page. */
-function resultPages(level: 'card' | 'printing', total: number): (offset: number) => SearchPage {
+function resultPages(
+  level: 'card' | 'printing',
+  total: number,
+): (offset: number) => QueryPageFixture {
   return (offset) =>
     searchPage(
       Array.from({ length: Math.min(50, total - offset) }, (_, index) => {
@@ -316,8 +311,8 @@ test('Home opens the catalog and the catalog presents its entries', async ({ pag
   const row = page.locator('[data-ui-entry="card:card-bolt"]');
   await expect(row).toContainText('Lightning Bolt');
   await expect(row.locator('[data-ui-matched-name]')).toHaveText(' (Blitzschlag)');
-  await expect(row.locator('[data-ui-copies]')).toHaveText(' Copies: 2');
-  await expect(row.locator('[data-ui-intended]')).toHaveText(' Intended: 4');
+  await expect(row.locator('[data-ui-fragment="ownership"]')).toContainText('Owned: 2');
+  await expect(row.locator('[data-ui-intended]')).toHaveCount(0);
   await expect(row.locator('[data-ui-open]')).toHaveAttribute('href', '#/cards/card-bolt');
 
   // Opening the entry presents its details without selecting it, and Back presents it again.
@@ -383,8 +378,8 @@ for (const level of ['card', 'printing'] as const) {
     ['at the old focus bound', '/'.repeat(boundaryLength)],
     ['past the old focus bound', '/'.repeat(boundaryLength + 1)],
     ['maximum accented and reserved', 'é/ ?%'.repeat(40)],
-    ['maximum encoding expansion', '界'.repeat(SEARCH_LIMITS.maxIdentifierLength)],
-    ['maximum supplementary Unicode', '🃏'.repeat(SEARCH_LIMITS.maxIdentifierLength / 2)],
+    ['maximum encoding expansion', '界'.repeat(CATALOG_QUERY_LIMITS.maxIdentifierLength)],
+    ['maximum supplementary Unicode', '🃏'.repeat(CATALOG_QUERY_LIMITS.maxIdentifierLength / 2)],
     ['whitespace only', ' '],
     ['mixed whitespace only', '\t\n\u00a0'],
     ['ordinary spaces', 'a b'],
@@ -392,41 +387,11 @@ for (const level of ['card', 'printing'] as const) {
   ] as const) {
     test(`encoded ${level} identities ${label} restore in Catalog and Home`, async ({ page }) => {
       const errors = await openBrowse(page, `#/catalog?level=${level}`);
-      // Exercise actual Search key construction and Application response validation, replacing
-      // only the SQL read. Browser navigation below receives the provider's own result unchanged.
-      const sql = {
-        query: async (): Promise<readonly SearchSqlRow[]> => [
-          {
-            row_kind: 'state',
-            required_incorporated: true,
-            row_position: 0,
-            generation: 'browse-generation',
-            catalog_revision: 'browse-revision',
-            catalog_position: '1',
-            private_revision: null,
-            bound_account: null,
-            total_count: 1,
-          },
-          {
-            row_kind: 'entry',
-            row_position: 1,
-            entry_id: identity,
-            card_id: identity,
-            card_name: 'Encoded result',
-            matched_name: null,
-            printing_id: level === 'printing' ? identity : null,
-            edition: level === 'printing' ? 'BLB' : null,
-            collector_number: level === 'printing' ? '1' : null,
-            language: level === 'printing' ? 'en' : null,
-            copies: null,
-            intended: null,
-          },
-        ],
-      };
-      const search = createSearch({ sql, withAccountScope: async (_account, work) => work(sql) });
-      const result = await createSearchClient(async () =>
-        search.execute({ resultLevel: level }),
-      ).execute({ resultLevel: level });
+      const result = searchPage([
+        level === 'card'
+          ? cardEntry(identity, { name: 'Encoded result' })
+          : printingEntry(identity, identity, 'Encoded result'),
+      ]);
       await settleSearch(page, (await searchRequest(page)).id, result);
 
       const link = page.locator('#catalog-results [data-ui-open]');
@@ -553,9 +518,9 @@ test('signing in again after a sign-out never reads the previous activity', asyn
   await page.getByRole('link', { name: /Lightning Bolt/ }).click();
   await expect(page.locator('#card-level')).toHaveText('card-bolt/-/-');
   await page.getByRole('link', { name: 'Home', exact: true }).click();
-  await expect(page.locator('[data-ui-entry="card:card-bolt"] [data-ui-copies]')).toHaveText(
-    ' Copies: 2',
-  );
+  await expect(
+    page.locator('[data-ui-entry="card:card-bolt"] [data-ui-fragment="ownership"]'),
+  ).toHaveText('Owned: 2 · Locations: 0');
   // Card details is presented again, so the transitions below happen away from browsing pages.
   await page.goBack();
   await expect(page.locator('#card-level')).toHaveText('card-bolt/-/-');
@@ -689,23 +654,20 @@ test('the structured controls build the query the URL and the search carry', asy
 
   await page.getByLabel('Search cards').fill('bolt');
   await page.getByLabel('Result level').selectOption('printing');
-  await page.getByLabel('Owned only').check();
   await page.getByLabel('Finish').selectOption('foil');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
 
   expect(page.url()).toContain('query=bolt');
   expect(page.url()).toContain('level=printing');
-  expect(page.url()).toContain('owned=1');
   expect(page.url()).toContain('finish=foil');
   await expect(page.getByLabel('Result level')).toHaveValue('printing');
-  await expect(page.getByLabel('Owned only')).toBeChecked();
   await expect(page.getByLabel('Finish')).toHaveValue('foil');
 
   const request = await searchRequest(page, 1);
   expect(request.request).toEqual({
     resultLevel: 'printing',
     query: 'bolt',
-    criteria: [{ kind: 'owned' }, { kind: 'finish', finish: 'foil' }],
+    criteria: [{ kind: 'finish', finish: 'foil' }],
     pageSize: 50,
   });
   await settleSearch(
@@ -776,7 +738,7 @@ test('an invalidated continuation restarts the result from its beginning', async
   const restart = await searchRequest(page, 2);
   expect(restart.request).toEqual({ resultLevel: 'card', query: 'bolt', pageSize: 50 });
   await expect(page.locator('[data-ui-entry="card:card-1"]')).toContainText('Bolt One');
-  await expect(page.locator('#catalog-results [data-ui-status]')).toHaveText('');
+  await expect(page.locator('#catalog-results [data-ui-status]')).toHaveText('Refreshing…');
 
   await settleSearch(page, restart.id, searchPage([cardEntry('card-2', { name: 'Bolt Two' })]));
 
@@ -827,7 +789,6 @@ test('Back and Forward restore the catalog query, its controls, focus and select
   );
   await page.getByLabel('Select Lightning Bolt').check();
   await page.getByLabel('Search cards').fill('draft');
-  await page.getByLabel('Owned only').check();
   await page.getByLabel('Finish').selectOption('foil');
   await page.getByLabel('Search cards').focus();
 
@@ -839,7 +800,6 @@ test('Back and Forward restore the catalog query, its controls, focus and select
   await expect(page.getByRole('heading', { name: 'Catalog and search' })).toBeVisible();
   await expect(page.getByLabel('Search cards')).toHaveValue('draft');
   await expect(page.getByLabel('Search cards')).toBeFocused();
-  await expect(page.getByLabel('Owned only')).toBeChecked();
   await expect(page.getByLabel('Finish')).toHaveValue('foil');
 
   // The restored page evaluates the query its URL names; the selection returns with its entries.
@@ -1082,14 +1042,12 @@ for (const attempted of [100, 150]) {
     }, attempted);
     await expect(page.locator('[data-ui-selection-count]')).toHaveText(`${attempted} selected`);
     await page.getByLabel('Search cards').fill('unsaved query');
-    await page.getByLabel('Owned only').check();
     await page.getByLabel('Finish').selectOption('foil');
     const opened = page.locator('[data-ui-open]').last();
     await opened.click();
     await expect(page.locator('#card-level')).toContainText('card-149/-/-');
     await page.goBack();
     await expect(page.getByLabel('Search cards')).toHaveValue('unsaved query');
-    await expect(page.getByLabel('Owned only')).toBeChecked();
     await expect(page.getByLabel('Finish')).toHaveValue('foil');
     for (let index = 0; index < 3; index += 1) {
       const request = await searchRequest(page, 3 + index);
@@ -1119,7 +1077,6 @@ test('an interrupted restoration keeps the edits made while its window loads', a
   await page.goBack();
   const interrupted = await searchRequest(page, 2);
   await page.getByLabel('Search cards').fill('draft');
-  await page.getByLabel('Owned only').check();
   await page.getByRole('link', { name: 'Home', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
   expect((await searchRequests(page))[2]?.aborted).toBe(true);
@@ -1137,7 +1094,6 @@ test('an interrupted restoration keeps the edits made while its window loads', a
   }
   await expect(page.locator('[data-ui-entry]')).toHaveCount(100);
   await expect(page.getByLabel('Search cards')).toHaveValue('draft');
-  await expect(page.getByLabel('Owned only')).toBeChecked();
   await expect(selected).toBeChecked();
   await expect(page.locator('[data-ui-selection-count]')).toHaveText('1 selected');
   expect(errors).toEqual([]);

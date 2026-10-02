@@ -854,6 +854,12 @@ export function createTagViewEditor(options: UiTagViewEditorOptions): UiTagViewE
       level.append(option);
     }
     level.value = readAddLevel(restoredAdd?.level) ?? levels[0] ?? 'card';
+    const updateQueryControl = () => {
+      query.disabled = level.value === 'copy';
+      if (query.disabled) query.value = '';
+    };
+    level.addEventListener('change', updateQueryControl);
+    updateQueryControl();
     const location = kindOf(read.kind) === 'location';
     addHeading.textContent = location ? 'Move copies into this location' : 'Add to this tag';
     addForm.append(controlLabel(document, 'Find', query), controlLabel(document, 'Level', level));

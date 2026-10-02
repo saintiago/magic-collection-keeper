@@ -153,12 +153,6 @@ export interface ImportReceipt {
   readonly sourceId: string;
   /** Explicit destination the recorded confirmation applied. */
   readonly destination: ImportDestination;
-  /**
-   * Durable publication position that made the recorded outcome visible. A recovered or replayed
-   * outcome reports the position its records were published at, not the account's current one
-   * (docs/user-cards.md#query-surface).
-   */
-  readonly publicationPosition: string;
   /** Copies an ownership destination created, ordered by copy identity; empty for a tag. */
   readonly copies: readonly PhysicalCopy[];
   /**

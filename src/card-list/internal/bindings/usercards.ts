@@ -4,7 +4,7 @@
  *
  * UserCards owns the account's private data changes: after a committed operation its browser
  * facade publishes a local invalidation naming the scope, the records and the pending imports the
- * change may have affected, and the publication position when indexing is affected. A list
+ * change may have affected. A list
  * subscribes to the account-scoped notifications and reacquires the content it presents through
  * its own source; a consumer never patches rows for a change.
  */
@@ -36,7 +36,6 @@ export function usercardsChanges(userCards: CardListUserCardsChanges): CardListC
           scope: change.scope,
           records: change.records.map((record) => recordIdentity(record)),
           imports: change.imports.map((importId) => String(importId)),
-          position: change.position,
         });
       });
     },

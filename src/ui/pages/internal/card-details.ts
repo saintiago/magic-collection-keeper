@@ -414,7 +414,12 @@ export function createCardDetailsPage(): UiPageDefinition {
       ): HTMLAnchorElement {
         const anchor = link(
           `collection-link-${level}`,
-          { page: 'collection', query: card?.name ?? '', level },
+          {
+            page: 'collection',
+            query: '',
+            level,
+            ...(card === null ? {} : { cardId: card.cardId }),
+          },
           level === 'printing'
             ? 'Search your collection for this card’s printings'
             : 'Search your collection for this card’s copies',

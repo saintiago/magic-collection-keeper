@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { UserCardsSqlTransactor, UserCardsSqlValue } from './executor.js';
-import { publishMutation } from './publication.js';
+import { advanceRevision } from './revision.js';
 import { storePrintingReferences } from './references.js';
 import {
   associationFromRow,
@@ -398,12 +398,10 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
             insert.parameters,
             'The tag could not be stored.',
           );
-          const publication = await publishMutation(statements, accountId, {
-            tags: [tag.tagId],
-          });
+          const committedRevision = await advanceRevision(statements, accountId);
           return {
-            privateRevision: publication.revision,
-            publicationPosition: publication.position,
+            privateRevision: committedRevision,
+
             tag: tagFromRow(rows[0]),
           };
         },
@@ -424,13 +422,11 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
           );
           const row = rows[0];
           if (row !== undefined) {
-            const publication = await publishMutation(statements, accountId, {
-              tags: [correction.tagId],
-            });
+            const committedRevision = await advanceRevision(statements, accountId);
             return {
               outcome: 'updated' as const,
-              privateRevision: publication.revision,
-              publicationPosition: publication.position,
+              privateRevision: committedRevision,
+
               tag: tagFromRow(row),
             };
           }
@@ -514,13 +510,11 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
           if (row === undefined) {
             return { outcome: 'conflict' as const };
           }
-          const publication = await publishMutation(statements, accountId, {
-            associations: [association.associationId],
-          });
+          const committedRevision = await advanceRevision(statements, accountId);
           return {
             outcome: 'inserted' as const,
-            privateRevision: publication.revision,
-            publicationPosition: publication.position,
+            privateRevision: committedRevision,
+
             association: associationFromRow(row),
           };
         },
@@ -553,13 +547,11 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
           );
           const row = rows[0];
           if (row !== undefined) {
-            const publication = await publishMutation(statements, accountId, {
-              associations: [correction.associationId],
-            });
+            const committedRevision = await advanceRevision(statements, accountId);
             return {
               outcome: 'updated' as const,
-              privateRevision: publication.revision,
-              publicationPosition: publication.position,
+              privateRevision: committedRevision,
+
               association: associationFromRow(row),
             };
           }
@@ -600,13 +592,11 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
             'The association could not be removed.',
           );
           if (rows[0] !== undefined) {
-            const publication = await publishMutation(statements, accountId, {
-              removedAssociations: [associationId],
-            });
+            const committedRevision = await advanceRevision(statements, accountId);
             return {
               outcome: 'removed' as const,
-              privateRevision: publication.revision,
-              publicationPosition: publication.position,
+              privateRevision: committedRevision,
+
               associationId,
             };
           }
@@ -651,21 +641,17 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
           }
           if (change.locationTagId === null) {
             const clear = clearLocationStatement(accountId, change.copyId);
-            const cleared = await readRows(
+            await readRows(
               statements,
               clear.statement,
               clear.parameters,
               'The copy location could not be cleared.',
             );
-            const removed = cleared[0]?.association_id;
-            const publication = await publishMutation(statements, accountId, {
-              copies: [change.copyId],
-              removedAssociations: typeof removed === 'string' ? [removed] : [],
-            });
+            const committedRevision = await advanceRevision(statements, accountId);
             return {
               outcome: 'moved' as const,
-              privateRevision: publication.revision,
-              publicationPosition: publication.position,
+              privateRevision: committedRevision,
+
               copy: copyFromRow(copyRow),
               location: null,
             };
@@ -682,14 +668,11 @@ export function createPostgresOrganizationStore(sql: UserCardsSqlTransactor): Or
             'The copy location could not be stored.',
           );
           const location = associationFromRow(locationRows[0]);
-          const publication = await publishMutation(statements, accountId, {
-            copies: [change.copyId],
-            associations: [location.associationId],
-          });
+          const committedRevision = await advanceRevision(statements, accountId);
           return {
             outcome: 'moved' as const,
-            privateRevision: publication.revision,
-            publicationPosition: publication.position,
+            privateRevision: committedRevision,
+
             copy: copyFromRow(copyRow),
             location,
           };

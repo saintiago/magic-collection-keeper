@@ -7,6 +7,7 @@ import { fingerprint } from './fingerprint.js';
 import type {
   ConfirmImportInput,
   ImportConfirmationResult,
+  ImportReceipt,
   ImportOperationRecoveryResult,
   ImportOperations,
   ImportServiceDependencies,
@@ -18,7 +19,7 @@ import {
   type ImportOperationId,
   type TrustedUserContext,
 } from './model.js';
-import type { ConfirmedImportEntry } from './store.js';
+import type { ConfirmedImportEntry, ImportReceiptData } from './store.js';
 
 const confirmImportRequestSchema = z.object({
   operationId: referenceSchema,
@@ -189,7 +190,7 @@ export function createImportConfirmation(
           );
         default:
           return {
-            ...outcome.receipt,
+            ...publicReceipt(outcome.receipt),
             replayed: outcome.replayed,
             privateRevision: outcome.privateRevision,
           };
@@ -205,7 +206,22 @@ export function createImportConfirmation(
         throw new UserCardsError('invalid-request', 'An operation identity is required.');
       }
       const receipt = await store.recover(accountId, parsed.data);
-      return receipt === null ? { outcome: 'absent' } : { outcome: 'recorded', receipt };
+      return receipt === null
+        ? { outcome: 'absent' }
+        : { outcome: 'recorded', receipt: publicReceipt(receipt) };
     },
+  };
+}
+
+/** Exposes the domain outcome while retaining legacy metadata only in stored replay evidence. */
+function publicReceipt(receipt: ImportReceiptData): ImportReceipt {
+  return {
+    operationId: receipt.operationId,
+    sessionId: receipt.sessionId,
+    sourceKind: receipt.sourceKind,
+    sourceId: receipt.sourceId,
+    destination: receipt.destination,
+    copies: receipt.copies,
+    associations: receipt.associations,
   };
 }

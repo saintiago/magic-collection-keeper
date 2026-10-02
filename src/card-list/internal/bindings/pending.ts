@@ -26,8 +26,8 @@ import type {
   CardListSourceRequest,
   CardListTarget,
 } from '../contract.js';
-import { cardListEntryKey } from './search.js';
-import { isInvalidatedContinuation } from './search.js';
+import { cardListEntryKey } from './query.js';
+import { isInvalidatedContinuation } from './read-failure.js';
 import { resolveCards, resolvePrintings } from './catalog.js';
 
 /** The pending-entry read a list binding consumes. */
@@ -123,7 +123,6 @@ export function pendingEntriesBinding(options: {
           entries: resolved.map((record) => pendingListEntry(record)),
           continuation: page.continuation,
           // The provider's own read is authoritative for the pending entries it returns.
-          current: true,
         };
       },
     },

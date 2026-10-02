@@ -14,7 +14,6 @@ import {
   createAuthenticatedRequest,
   createBrowserApplication,
   createCatalogClient,
-  createSearchClient,
   createUserCardsClient,
   inspectCanvasFrame,
   type PublicApplicationSettings,
@@ -335,87 +334,6 @@ describe('catalog client', () => {
   });
 });
 
-describe('search client', () => {
-  it('sends one query to the search route and keeps the page it read', async () => {
-    const payload = {
-      status: 'ready',
-      entries: [
-        {
-          entryKey: 'printing:printing-1',
-          target: { kind: 'printing', printingId: 'printing-1' },
-          card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: 'Blitzschlag' },
-          printing: {
-            printingId: 'printing-1',
-            edition: 'M11',
-            collectorNumber: '149',
-            language: 'en',
-          },
-          quantity: { copies: 2, intended: null },
-        },
-      ],
-      totalCount: 1,
-      continuation: 'cursor-1',
-      revisions: {
-        generation: 'generation-1',
-        catalogRevision: 'revision-1',
-        catalogPosition: '1',
-        privateRevision: null,
-      },
-    };
-    const { fetch, calls } = jsonFetch(payload);
-    const request = createAuthenticatedRequest({
-      baseUrl: 'https://api.test.keeper.example',
-      token: () => 'id-token-value',
-      fetch,
-    });
-
-    const page = await createSearchClient(request).execute({
-      resultLevel: 'printing',
-      query: 'bolt',
-      pageSize: 25,
-    });
-
-    expect(calls[0]?.url).toBe('https://api.test.keeper.example/api/search');
-    expect(calls[0]?.init.method).toBe('POST');
-    expect(calls[0]?.init.body).toBe('{"resultLevel":"printing","query":"bolt","pageSize":25}');
-    expect(page).toEqual(payload);
-  });
-
-  it('reports a response outside the declared page as unavailable', async () => {
-    const request = (payload: unknown) =>
-      createSearchClient(
-        createAuthenticatedRequest({
-          baseUrl: 'https://api.test.keeper.example',
-          token: () => 'id-token-value',
-          fetch: jsonFetch(payload).fetch,
-        }),
-      );
-
-    for (const payload of [
-      { entries: 'not-an-array' },
-      { entries: [], totalCount: 0, continuation: null, revisions: null },
-      {
-        entries: [
-          {
-            entryKey: 'card:card-1',
-            target: { kind: 'card', cardId: 'card-1' },
-            card: { cardId: 'card-1', name: 'Lightning Bolt', matchedName: null },
-            printing: null,
-            quantity: { copies: 'two', intended: null },
-          },
-        ],
-        totalCount: 1,
-        continuation: null,
-        revisions: { catalogRevision: 'revision-1', privateRevision: null },
-      },
-    ]) {
-      await expect(request(payload).execute({ resultLevel: 'card' })).rejects.toMatchObject({
-        code: 'unavailable',
-      });
-    }
-  });
-});
-
 describe('user cards client', () => {
   it('reads explicit copies through the private route and keeps the authorized records', async () => {
     const payload = {
@@ -457,7 +375,7 @@ describe('user cards client', () => {
   it('corrects one copy under the revision it read and keeps the committed record', async () => {
     const payload = {
       privateRevision: 'private-2',
-      publicationPosition: '2',
+
       copies: [
         {
           copyId: 'copy-1',
@@ -574,7 +492,7 @@ describe('user cards client', () => {
   it('renames a tag, changes an association and moves a copy’s location', async () => {
     const renamed = {
       privateRevision: 'private-2',
-      publicationPosition: '2',
+
       tag: { tagId: 'tag/1', kind: 'deck', label: 'Burn deck', system: false, revision: 2 },
     };
     const rename = jsonFetch(renamed);
@@ -600,7 +518,7 @@ describe('user cards client', () => {
 
     const changed = {
       privateRevision: 'private-3',
-      publicationPosition: '3',
+
       association: {
         associationId: 'association-1',
         tagId: 'tag-1',
@@ -636,7 +554,7 @@ describe('user cards client', () => {
 
     const moved = {
       privateRevision: 'private-4',
-      publicationPosition: '4',
+
       copy: {
         copyId: 'copy-1',
         printingId: 'printing-1',
@@ -801,7 +719,6 @@ describe('user cards client', () => {
       associations: [],
       replayed: true,
       privateRevision: 'private-4',
-      publicationPosition: '4',
     });
     const confirmationClient = createUserCardsClient(
       createAuthenticatedRequest({
@@ -1097,7 +1014,7 @@ describe('browser application', () => {
     expect(capabilities?.settings).toEqual(settings);
     expect(capabilities?.request).toBeTypeOf('function');
     expect(capabilities?.catalog.resolve).toBeTypeOf('function');
-    expect(capabilities?.search.execute).toBeTypeOf('function');
+    expect(capabilities?.catalog.query).toBeTypeOf('function');
     expect(capabilities?.userCards.account).toBeTypeOf('function');
     const accountId = application.identity.current()!.accountId;
     expect(capabilities?.userCards.account(accountId).readCopies).toBeTypeOf('function');
@@ -1119,67 +1036,6 @@ describe('browser application', () => {
     // (docs/architecture.md#composition-and-replacement).
     expect(capabilities?.capture.create).toBeTypeOf('function');
     expect(capabilities?.capture.createImportId()).toBeTypeOf('string');
-    // Application connects UserCards' committed positions to Search's progress tracker and hands
-    // the shell the tracker of the authenticated account alone (docs/application.md#interface).
-    expect(capabilities?.indexing(accountId).status()).toMatchObject({
-      accountId,
-      state: 'idle',
-    });
-    expect(() => capabilities?.indexing('cognito-someone-else')).toThrow(/authenticated account/);
-    expect(application.userInterface).toEqual({ constructed: true });
-  });
-
-  it('remembers commits made with no mounted list for the authenticated account lifetime', async () => {
-    const received: UserInterfaceCapabilities[] = [];
-    const progressSignals: AbortSignal[] = [];
-    const fetch: typeof globalThis.fetch = async (input, init) => {
-      if (String(input).endsWith('/api/search/progress')) {
-        progressSignals.push(init!.signal!);
-        return new Promise<Response>(() => {});
-      }
-      return new Response(
-        JSON.stringify({
-          privateRevision: '2',
-          publicationPosition: '20',
-          tag: { tagId: 'deck', kind: 'deck', label: 'Deck', system: false, revision: 1 },
-        }),
-        { headers: { 'content-type': 'application/json' } },
-      );
-    };
-    const app = createBrowserApplication({
-      settings: publicSettings(),
-      prompt: testPrompt(),
-      storage: signedInStorage(),
-      attemptStorage: null,
-      fetch,
-      createUserInterface: (value) => received.push(value),
-    });
-    const capabilities = received[0]!;
-    const id = app.identity.current()!.accountId;
-    const change = capabilities.userCards.account(id).createTag({ kind: 'deck', label: 'Deck' });
-    expect(await change.observe()).toMatchObject({ state: 'committed' });
-    const positions: (string | null)[] = [];
-    const unsubscribe = capabilities.cardList
-      .account(id)
-      .changes()
-      .subscribe((value) => positions.push(value.position));
-    expect(positions).toEqual(['20']);
-    unsubscribe();
-    // The same tracker is the observable status the shell presents: the committed position stays
-    // outstanding until Search reports it incorporated (docs/ui/navigation.md#indexing-notice).
-    const indexing = capabilities.indexing(id);
-    expect(indexing.status().state).toBe('indexing');
-    expect(indexing.status().outstanding).toEqual(['20']);
-    expect(progressSignals).toHaveLength(1);
-    expect(progressSignals[0]!.aborted).toBe(false);
-    app.endSession();
-    expect(progressSignals[0]!.aborted).toBe(true);
-    expect(() =>
-      capabilities.cardList
-        .account(id)
-        .changes()
-        .subscribe(() => {}),
-    ).toThrow();
   });
 
   it('ends the UserCards scope of the account it leaves', async () => {
@@ -1388,38 +1244,6 @@ describe('browser application', () => {
     await session.start();
     expect(opened).toBe(1);
     expect(states.length).toBe(observed);
-  });
-
-  it('reads Search through the entry point UserInterface received', async () => {
-    const { fetch, calls } = jsonFetch({
-      status: 'ready',
-      entries: [],
-      totalCount: 0,
-      continuation: null,
-      revisions: {
-        generation: 'generation-1',
-        catalogRevision: 'revision-1',
-        catalogPosition: '1',
-        privateRevision: null,
-      },
-    });
-    const received: UserInterfaceCapabilities[] = [];
-    createBrowserApplication({
-      settings: publicSettings(),
-      prompt: testPrompt(),
-      storage: signedInStorage(),
-      fetch,
-      createUserInterface: (capabilities) => {
-        received.push(capabilities);
-        return null;
-      },
-    });
-
-    const page = await received[0]?.search.execute({ resultLevel: 'card', pageSize: 25 });
-
-    expect(page?.totalCount).toBe(0);
-    expect(calls[0]?.url).toBe('https://api.test.keeper.example/api/search');
-    expect(calls[0]?.init.body).toBe('{"resultLevel":"card","pageSize":25}');
   });
 
   it('routes inference to the compute entry point and catalog reads to the API', async () => {

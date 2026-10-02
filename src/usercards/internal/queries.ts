@@ -501,7 +501,7 @@ function fragmentStatement(
              from usercards_current_query.association as candidate
             where candidate.account_id = :account_id and (${associationMatch})
          ) as matched_tags), '[]') as tag_ids,
-         case when :tag_id is null then null else (
+         case when cast(:tag_id as text) is null then null else (
            select coalesce(sum(candidate.quantity), 0)::int
              from usercards_current_query.association as candidate
             where candidate.account_id = :account_id and candidate.tag_id = :tag_id
@@ -518,7 +518,7 @@ union all
 select 'meta', 0, json_build_object(
   'revision', coalesce((select revision from usercards_current_query.account_state
                          where account_id = :account_id), 0),
-  'tag_available', (:tag_id is null or exists (
+  'tag_available', (cast(:tag_id as text) is null or exists (
     select 1 from usercards_current_query.tag
      where account_id = :account_id and tag_id = :tag_id)),
   'references_ready', not exists (

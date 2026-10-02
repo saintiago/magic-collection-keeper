@@ -142,23 +142,6 @@ export async function publishCatalog(
         fixture.publishedAt ?? '2026-09-26T20:00:00.000Z',
       ],
     );
-    // One completion marker per revision, as an atomic publication writes it
-    // (docs/catalog.md#query-surface).
-    await database.query(
-      `insert into catalog_private.publication
-         (revision_id, source_name, source_version, published_at, kind)
-       select $1, $2, $3, $4, 'revision'
-        where not exists (
-          select 1 from catalog_private.publication
-           where kind = 'revision' and revision_id = $1
-        )`,
-      [
-        fixture.revisionId,
-        fixture.sourceName ?? 'scryfall',
-        fixture.sourceVersion ?? '2026-09-26',
-        fixture.publishedAt ?? '2026-09-26T20:00:00.000Z',
-      ],
-    );
     await database.exec('commit');
   } catch (error) {
     await database.exec('rollback');

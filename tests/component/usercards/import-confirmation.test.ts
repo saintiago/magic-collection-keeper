@@ -292,18 +292,6 @@ describe('usercards import confirmation', () => {
     expect(await storedAssociations(alice.accountId)).toHaveLength(2);
 
     // Only the associations are published for this outcome; no copy record is.
-    const published = await database.query(
-      `select kind, count(*)::int as count
-         from usercards_private.publication
-        where account_id = $1 and kind <> 'revision'
-        group by kind
-        order by kind`,
-      [alice.accountId],
-    );
-    expect(published).toEqual([
-      { kind: 'association', count: 2 },
-      { kind: 'tag', count: 1 },
-    ]);
 
     // The recorded outcome identifies the associations the destination created.
     const recovered = await userCards.recoverImportOperation(alice, 'operation-deck');
@@ -315,7 +303,7 @@ describe('usercards import confirmation', () => {
         sourceKind: 'moxfield',
         sourceId: 'deck-1',
         destination: { kind: 'tag', tagId: deck.tagId },
-        publicationPosition: confirmed.publicationPosition,
+
         copies: [],
         associations: confirmed.associations,
       },
@@ -632,23 +620,11 @@ describe('usercards import confirmation', () => {
         sourceKind: 'moxfield',
         sourceId: 'deck-duplicates',
         destination: { kind: 'tag', tagId: deck.tagId },
-        publicationPosition: confirmed.publicationPosition,
+
         copies: [],
         associations: confirmed.associations,
       },
     });
-    const published = await database.query(
-      `select kind, count(*)::int as count
-         from usercards_private.publication
-        where account_id = $1 and kind <> 'revision'
-        group by kind
-        order by kind`,
-      [alice.accountId],
-    );
-    expect(published).toEqual([
-      { kind: 'association', count: 2 },
-      { kind: 'tag', count: 1 },
-    ]);
     expect(await countCopies(database, alice.accountId)).toBe(0);
   });
 
@@ -777,7 +753,7 @@ describe('usercards import confirmation', () => {
     });
   });
 
-  it('returns the publication position of the request an identical replay repeats', async () => {
+  it('preserves historical receipt evidence while returning only the replayed domain outcome', async () => {
     const deck = await createDeck();
     await stageDeck();
     const firstRequest = {
@@ -787,8 +763,12 @@ describe('usercards import confirmation', () => {
       entries: [{ entryId: 'line-1', expectedRevision: 1 }],
     };
     const first = await userCards.confirmImport(alice, firstRequest);
+    const evidence = await database.query(`select * from usercards_private.import_receipt
+      where operation_id = 'deck-position-first'`);
+    expect(evidence).toHaveLength(1);
+    expect(first).not.toHaveProperty('publicationPosition');
 
-    // A later import grows the association this outcome recorded, at a later position.
+    // A later import grows the association this outcome recorded.
     await userCards.stageImportEntries(alice, {
       sessionId: 'session-position-second',
       source: { kind: 'moxfield', id: 'deck-position-second' },
@@ -802,27 +782,29 @@ describe('usercards import confirmation', () => {
         },
       ],
     });
-    const grown = await userCards.confirmImport(alice, {
+    await userCards.confirmImport(alice, {
       destination: { kind: 'tag', tagId: deck.tagId },
       operationId: 'deck-position-second',
       sessionId: 'session-position-second',
       entries: [{ entryId: 'grow-line', expectedRevision: 1 }],
     });
-    expect(Number(grown.publicationPosition)).toBeGreaterThan(Number(first.publicationPosition));
 
-    // The replay repeats the earlier request, so it returns that recorded outcome, including the
-    // position it was published at, instead of a later operation's position.
+    // The replay returns the earlier recorded outcome rather than the later association state.
     const replay = await userCards.confirmImport(alice, {
       ...firstRequest,
       operationId: 'deck-position-replay',
     });
     expect(replay.replayed).toBe(true);
     expect(replay.associations).toEqual(first.associations);
-    expect(replay.publicationPosition).toBe(first.publicationPosition);
+    expect(
+      await database.query(`select * from usercards_private.import_receipt
+      where operation_id = 'deck-position-first'`),
+    ).toEqual(evidence);
+    expect(replay).not.toHaveProperty('publicationPosition');
+
     expect(await userCards.recoverImportOperation(alice, 'deck-position-replay')).toMatchObject({
       outcome: 'recorded',
       receipt: {
-        publicationPosition: first.publicationPosition,
         associations: first.associations,
       },
     });
@@ -1013,7 +995,7 @@ describe('usercards import confirmation', () => {
         sourceId: replay.sourceId,
         sourceKind: replay.sourceKind,
         destination: { kind: 'ownership' } as const,
-        publicationPosition: original.publicationPosition,
+
         copies: original.copies,
         associations: [],
       },
@@ -1585,7 +1567,7 @@ describe('usercards import confirmation', () => {
         sourceKind: confirmed.sourceKind,
         sourceId: confirmed.sourceId,
         destination: { kind: 'ownership' } as const,
-        publicationPosition: confirmed.publicationPosition,
+
         copies: confirmed.copies,
         associations: [],
       },

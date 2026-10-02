@@ -37,8 +37,6 @@ export interface MigrationLoadResult {
   readonly totalBatches: number;
   /** Batches this call applied; the remainder were already recorded identically. */
   readonly appliedBatches: number;
-  /** Durable publication position of the last query-visible batch; null when none published. */
-  readonly publicationPosition: string | null;
   /** Whether the call returned the completed outcome recorded before it. */
   readonly replayed: boolean;
 }

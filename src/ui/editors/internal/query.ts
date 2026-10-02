@@ -4,7 +4,7 @@
  *
  * A query editor owns the unsaved text expression and the criteria controls, keeps the typed
  * input distinct from the applied query, and submits explicit criteria to its page. Parsing and
- * normalization of the expression stay behind the list's Search binding; the editor presents the
+ * normalization of the expression stay behind the list's owner binding; the editor presents the
  * controls and forwards the intent, and it neither filters loaded cards nor evaluates a route.
  */
 
@@ -120,16 +120,11 @@ export function createCatalogQueryEditor(
   );
   level.id = 'catalog-level';
   level.value = options.applied.level;
-  const owned = document.createElement('input');
-  owned.type = 'checkbox';
-  owned.id = 'catalog-owned';
-  owned.checked = options.applied.owned;
   const finish = selectControl(document, finishOptions(), '');
   finish.id = 'catalog-finish';
   finish.value = options.applied.finish ?? '';
   const form = searchForm(document, input, [
     controlLabel(document, 'Result level', level),
-    controlLabel(document, 'Owned only', owned),
     controlLabel(document, 'Finish', finish),
   ]);
   form.addEventListener('submit', (event) => {
@@ -142,7 +137,7 @@ export function createCatalogQueryEditor(
     capture: () => ({
       query: input.value,
       level: level.value,
-      owned: owned.checked,
+      owned: false,
       finish: finish.value === '' ? null : finish.value,
     }),
     restore(draft) {
@@ -155,9 +150,6 @@ export function createCatalogQueryEditor(
       }
       if (typeof restored.level === 'string') {
         level.value = readUiCatalogLevel(restored.level);
-      }
-      if (typeof restored.owned === 'boolean') {
-        owned.checked = restored.owned;
       }
       if ('finish' in restored) {
         finish.value = readUiCatalogFinish(restored.finish) ?? '';
@@ -172,7 +164,7 @@ export function createCatalogQueryEditor(
     return {
       text: input.value.trim(),
       level: readUiCatalogLevel(level.value),
-      owned: owned.checked,
+      owned: false,
       finish: readUiCatalogFinish(finish.value),
     };
   }
@@ -192,8 +184,7 @@ export function createCollectionQueryEditor(
   options: UiCollectionQueryEditorOptions,
 ): UiQueryEditor<CardListCollectionQuery, UiCollectionQueryDraft> {
   const document = options.document;
-  const input = searchInput(document, 'collection-search');
-  input.value = options.applied.text;
+
   const level = selectControl(
     document,
     uiCollectionLevels.map((value) => ({
@@ -204,12 +195,11 @@ export function createCollectionQueryEditor(
   );
   level.id = 'collection-level';
   level.value = options.applied.level;
-  const form = searchForm(
-    document,
-    input,
-    [controlLabel(document, 'Level', level)],
-    'Search collection',
-  );
+  const form = document.createElement('form');
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.textContent = 'Apply';
+  form.append(controlLabel(document, 'Level', level), submit);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     options.onSubmit(criteria());
@@ -217,14 +207,11 @@ export function createCollectionQueryEditor(
   const editor: UiQueryEditor<CardListCollectionQuery, UiCollectionQueryDraft> = {
     element: form,
     criteria,
-    capture: () => ({ query: input.value, level: level.value }),
+    capture: () => ({ query: '', level: level.value }),
     restore(draft) {
       const restored = readDraft(draft);
       if (restored === null) {
         return;
-      }
-      if (typeof restored.query === 'string') {
-        input.value = restored.query;
       }
       if (typeof restored.level === 'string') {
         level.value = readUiCollectionLevel(restored.level);
@@ -235,7 +222,11 @@ export function createCollectionQueryEditor(
   return editor;
 
   function criteria(): CardListCollectionQuery {
-    return { text: input.value.trim(), level: readUiCollectionLevel(level.value) };
+    return {
+      text: '',
+      level: readUiCollectionLevel(level.value),
+      ...(options.applied.cardId === undefined ? {} : { cardId: options.applied.cardId }),
+    };
   }
 }
 

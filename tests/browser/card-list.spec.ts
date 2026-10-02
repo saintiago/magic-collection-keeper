@@ -193,30 +193,6 @@ async function fragmentRequests(page: Page): Promise<readonly UiCardListFragment
   );
 }
 
-async function observationRequests(
-  page: Page,
-): Promise<readonly import('./card-list.harness.js').UiCardListObservationRequest[]> {
-  return page.evaluate(() =>
-    (globalThis as unknown as GlobalControl).keeperCardListControl.observationRequests(),
-  );
-}
-
-async function settleObservation(
-  page: Page,
-  id: number,
-  state: 'incorporated' | 'delayed' | 'failed',
-): Promise<void> {
-  await page.evaluate(
-    (input) => {
-      (globalThis as unknown as GlobalControl).keeperCardListControl.settleObservation(
-        input.id,
-        input.state,
-      );
-    },
-    { id, state },
-  );
-}
-
 async function settleFragment(
   page: Page,
   id: number,
@@ -740,77 +716,6 @@ test('renders refreshed quantities and the consumer’s own content for the fres
   await expect(page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-custom-entry]')).toHaveText(
     'copies 7 intended 2',
   );
-});
-
-test('presents an updating empty result as indexing instead of a successful emptiness', async ({
-  page,
-}) => {
-  await openLists(page);
-  await install(page, 'a', { pageSize: 2, changes: true });
-  const first = await onlyRequest(page, 'a');
-  await settlePage(page, first.id, []);
-  const status = page.locator('#list-a [data-ui-status]');
-  await expect(status).toHaveText('No entries');
-
-  // A committed change reaches the list before the index holds its entry: the usable indexed
-  // result is empty, but it is awaiting indexing rather than a successful emptiness.
-  await page.evaluate(() => {
-    (globalThis as unknown as GlobalControl).keeperCardListControl.changed('a', {
-      scope: 'copies',
-      records: [],
-      imports: [],
-      position: '5',
-    });
-  });
-  const read = (await pageRequests(page)).at(-1)!;
-  expect(read).toMatchObject({ continuation: null });
-  await settlePage(page, read.id, [], null, { current: false });
-
-  await expect(status).toHaveAttribute('data-ui-freshness', 'indexing');
-  await expect(status).toHaveText('Results are still being indexed.');
-  await expect(status).not.toHaveText('No entries');
-});
-
-test('observes awaited indexing, exposes a delay and recovers it through retry', async ({
-  page,
-}) => {
-  await openLists(page);
-  await install(page, 'a', { pageSize: 2, changes: true, observations: true });
-  await settlePage(page, (await onlyRequest(page, 'a')).id, [card('1')]);
-
-  // A committed change the index has not incorporated is observed through the source's own
-  // bounded freshness capability instead of waiting for another user action.
-  await page.evaluate(() => {
-    (globalThis as unknown as GlobalControl).keeperCardListControl.changed('a', {
-      scope: 'copies',
-      records: [],
-      imports: [],
-      position: '5',
-    });
-  });
-  const read = (await pageRequests(page)).at(-1)!;
-  await settlePage(page, read.id, [card('1')], null, { current: false });
-  const observation = (await observationRequests(page)).at(-1)!;
-  expect(observation.positions).toEqual(['5']);
-
-  await settleObservation(page, observation.id, 'delayed');
-  const status = page.locator('#list-a [data-ui-status]');
-  await expect(status).toHaveAttribute('data-ui-freshness', 'delayed');
-  await expect(status).toHaveText(
-    'Results are still being indexed; this is taking longer than expected.',
-  );
-
-  // Checking again starts no write, observes the same positions and refreshes the generation once
-  // the provider established them.
-  await page.locator('#list-a [data-ui-retry]').click();
-  const retry = (await observationRequests(page)).at(-1)!;
-  expect(retry.positions).toEqual(['5']);
-  await settleObservation(page, retry.id, 'incorporated');
-  const refreshed = (await pageRequests(page)).at(-1)!;
-  expect(refreshed.required).toEqual(['5']);
-  await settlePage(page, refreshed.id, [card('1'), card('2')]);
-  await expect(status).toHaveAttribute('data-ui-freshness', 'current');
-  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(2);
 });
 
 test('exposes a selected identity the source replaced as unavailable until reselected', async ({
@@ -1549,7 +1454,6 @@ test('restores the retained window, selection and local focus from its own sourc
     position: { continuation: 'cursor-1', offset: 0 },
     selection: ['card:2'],
     selectedTargets: [],
-    awaiting: [],
     scrollTop: 0,
     focus: { control: 'select', key: 'card:2' },
   });
@@ -1677,7 +1581,7 @@ test('restarts an invalidated continuation and keeps the usable window and selec
   expect(restarted.id).not.toBe(continued.id);
   await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(2);
   await expect(page.locator('#list-a [data-ui-select="card:1"]')).toBeChecked();
-  await expect(page.locator('#list-a [data-ui-status]')).toHaveText('');
+  await expect(page.locator('#list-a [data-ui-status]')).toHaveText('Refreshing…');
   const requests = await pageRequests(page);
   expect(requests).toHaveLength(3);
   expect(requests[1]).toMatchObject({ id: continued.id, continuation: 'next', aborted: false });

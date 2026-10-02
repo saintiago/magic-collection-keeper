@@ -8,15 +8,15 @@
 
 export const applicationRoutes = {
   catalogResolve: '/api/catalog/resolve',
+  catalogQuery: '/api/catalog/query',
   catalogCardPrintings: '/api/catalog/cards/:cardId/printings',
   /** Preserved engine envelope: hydrate one candidate printing (docs/recognition.md#interface). */
   preservedCard: '/api/card',
-  /** New query model (`POST`) and the preserved lookup subset (`GET`) share one path. */
+  /** Preserved recognition lookup subset. */
   search: '/api/search',
-  /** Private counts of explicit references; it never changes a query's membership. */
-  searchCounts: '/api/search/counts',
-  /** Bounded observation of the account's committed positions awaiting indexing. */
-  searchProgress: '/api/search/progress',
+  userCardsQuery: '/api/collection/query',
+  userCardsFragments: '/api/collection/fragments',
+  userCardsPhysicalDetail: '/api/collection/copies/:copyId',
   copies: '/api/collection/copies',
   copiesRead: '/api/collection/copies/read',
   copyCorrections: '/api/collection/copies/:copyId/corrections',

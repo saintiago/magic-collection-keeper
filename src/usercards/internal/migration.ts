@@ -29,7 +29,7 @@ import {
   type PlannedAssociation,
 } from './migration-plan.js';
 import { type ImportEntry } from './model.js';
-import { publishMutation } from './publication.js';
+import { advanceRevision } from './revision.js';
 import {
   associationPayloadSql,
   associationsFromRows,
@@ -540,10 +540,8 @@ async function writeBatch(
   switch (batch.kind) {
     case 'tags': {
       await insertTags(statements, accountId, batch.tags);
-      const publication = await publishMutation(statements, accountId, {
-        tags: batch.tags.map((tag) => tag.tagId),
-      });
-      return publication.position;
+      const committedRevision = await advanceRevision(statements, accountId);
+      return committedRevision;
     }
     case 'copies': {
       const copies = batch.copies.map((copy) => ({
@@ -553,21 +551,17 @@ async function writeBatch(
         condition: copy.condition,
       }));
       const ownedTag = await ensureOwnedTag(statements, accountId);
-      const stored = await storeCopiesWithOwnedTag(statements, accountId, ownedTag.tagId, copies);
+      await storeCopiesWithOwnedTag(statements, accountId, ownedTag.tagId, copies);
       // Copy memberships are written before the copy publishes, so a published copy already
       // carries its location instead of publishing a locationless record first.
-      const memberships = await insertAssociations(statements, accountId, batch.memberships);
-      const publication = await publishMutation(statements, accountId, {
-        copies: copies.map((copy) => copy.copyId),
-        tags: ownedTag.created ? [ownedTag.tagId] : [],
-        associations: [...stored.ownedMemberships, ...memberships],
-      });
-      return publication.position;
+      await insertAssociations(statements, accountId, batch.memberships);
+      const committedRevision = await advanceRevision(statements, accountId);
+      return committedRevision;
     }
     case 'associations': {
-      const associations = await insertAssociations(statements, accountId, batch.associations);
-      const publication = await publishMutation(statements, accountId, { associations });
-      return publication.position;
+      await insertAssociations(statements, accountId, batch.associations);
+      const committedRevision = await advanceRevision(statements, accountId);
+      return committedRevision;
     }
     case 'sessions': {
       await insertSessions(statements, accountId, batch.sessions);

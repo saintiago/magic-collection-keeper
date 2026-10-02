@@ -1,3 +1,4 @@
+import { privatePage, fixtureResolution, type QueryEntryFixture } from './query-fixtures.js';
 /**
  * Browser-side harness of the collection pages (docs/user-interface.md#pages-and-navigation,
  * docs/user-interface.md#browsing-and-organization,
@@ -11,12 +12,9 @@
  * crossed the component contracts.
  */
 
-import { idleProgress } from './card-list-progress.js';
-
 import {
   ApplicationError,
   type ApplicationFailureCode,
-  type SearchClient,
   type UserInterfaceCapabilities,
 } from '../../src/application/index.js';
 import {
@@ -25,14 +23,14 @@ import {
 } from '../../src/usercards/browser.js';
 import type {
   CardPrintingsPage,
-  Catalog,
+  CatalogService,
   CatalogReference,
   CatalogResolution,
   ListCardPrintingsOptions,
   CardRecord,
   PrintingRecord,
 } from '../../src/catalog/index.js';
-import type { SearchPage, SearchRequestInput } from '../../src/search/index.js';
+import type { QueryPageFixture, QueryInputFixture } from './query-fixtures.js';
 import { createCardListBrowser } from '../../src/card-list/index.js';
 import type { CopyId, PhysicalCopy } from '../../src/usercards/index.js';
 import {
@@ -50,7 +48,7 @@ import { unusedCapture } from './unused-capture.js';
 /** One Search request the collection view issued. */
 export interface UiCollectionSearchRequest {
   readonly id: number;
-  readonly request: SearchRequestInput;
+  readonly request: QueryInputFixture;
   /** Whether closing the page withdrew the request before the journey settled it. */
   readonly aborted: boolean;
 }
@@ -93,7 +91,7 @@ export interface UiCollectionControl {
   /** Reports a verified sign-in of another account, as the deployment's authentication would. */
   signInAs(accountId: string): void;
   searchRequests(): readonly UiCollectionSearchRequest[];
-  settleSearch(id: number, page: SearchPage): void;
+  settleSearch(id: number, page: QueryPageFixture): void;
   failSearch(
     id: number,
     failure: { readonly code: ApplicationFailureCode; readonly message: string },
@@ -179,9 +177,11 @@ export function installCollectionHarness(
   let account: UiAccount | null = { accountId: 'alice', displayName: 'Alice' };
   const listeners = new Set<(account: UiAccount | null) => void>();
 
+  let fixtureEntries: readonly QueryEntryFixture[] = [];
+  let basics = false;
   const searches: { record: Omit<UiCollectionSearchRequest, 'aborted'>; isAborted(): boolean }[] =
     [];
-  const pendingSearches = new Map<number, Pending<SearchPage>>();
+  const pendingSearches = new Map<number, Pending<QueryPageFixture>>();
   const catalogResolves: UiCollectionCatalogRequest[] = [];
   const pendingCatalog = new Map<number, Pending<CatalogResolution>>();
   const printings: UiCollectionPrintingsRequest[] = [];
@@ -216,19 +216,14 @@ export function installCollectionHarness(
     },
     { endSession: () => log.push('session-ended') },
   );
-  const search: SearchClient = {
-    execute(input, signal) {
-      const id = next();
-      searches.push({ record: { id, request: input }, isAborted: () => signal?.aborted === true });
-      return new Promise<SearchPage>((resolve, reject) => {
-        pendingSearches.set(id, { resolve, reject });
-      });
-    },
-    counts: () => Promise.reject(new Error('The collection journeys read no private counts.')),
-    observe: () => Promise.reject(new Error('The collection journeys observe no progress.')),
-  };
-  const catalog: Catalog = {
+  const catalog: CatalogService = {
+    query: () => Promise.reject(new Error('Collection uses private queries.')),
+
     resolve(references) {
+      if (basics) {
+        if (references.every((ref) => ref.kind === 'card')) basics = false;
+        return Promise.resolve(fixtureResolution(fixtureEntries, references));
+      }
       const id = next();
       catalogResolves.push({ id, references: [...references] });
       return new Promise<CatalogResolution>((resolve, reject) => {
@@ -245,7 +240,38 @@ export function installCollectionHarness(
   };
   const scriptedUserCards: UserCardsBrowserClient = {
     ...unusedUserCardsClient,
+    query(input, signal) {
+      const id = next();
+      searches.push({ record: { id, request: input }, isAborted: () => signal?.aborted === true });
+      return new Promise<QueryPageFixture>((resolve, reject) => {
+        pendingSearches.set(id, { resolve, reject });
+      }).then(privatePage);
+    },
+
     readCopies(copyIds, signal) {
+      if (basics)
+        return Promise.resolve({
+          privateRevision: '1',
+          copies: new Map(
+            fixtureEntries.flatMap((entry) =>
+              entry.target.kind === 'copy' && entry.printing !== null
+                ? [
+                    [
+                      entry.target.copyId,
+                      {
+                        copyId: entry.target.copyId,
+                        printingId: entry.printing.printingId,
+                        finish: 'nonfoil' as const,
+                        condition: 'NM' as const,
+                        revision: 1,
+                      },
+                    ],
+                  ]
+                : [],
+            ),
+          ),
+          missing: [],
+        });
       const id = next();
       copyReads.push({
         record: { id, copyIds: [...copyIds] },
@@ -264,8 +290,7 @@ export function installCollectionHarness(
       corrections.push({ id, input: { ...input } });
       return new Promise((resolve, reject) => {
         pendingCorrections.set(id, {
-          resolve: (copies) =>
-            resolve({ privateRevision: 'private-2', publicationPosition: '2', copies }),
+          resolve: (copies) => resolve({ privateRevision: 'private-2', copies }),
           reject,
         });
       });
@@ -275,7 +300,7 @@ export function installCollectionHarness(
     client: scriptedUserCards,
     storage: browserAttemptStorage(),
   });
-  const cardList = createCardListBrowser({ progress: idleProgress, search, catalog, userCards });
+  const cardList = createCardListBrowser({ catalog, userCards });
   const capabilities: UserInterfaceCapabilities = {
     settings: {
       environment: 'test',
@@ -287,11 +312,9 @@ export function installCollectionHarness(
     identity,
     request,
     catalog,
-    search,
     userCards,
     cardList,
     capture: unusedCapture(userCards),
-    indexing: idleProgress,
   };
   const shell: UserInterface = createUserInterface({
     root,
@@ -365,7 +388,11 @@ export function installCollectionHarness(
     signInAs: (accountId) => report({ accountId, displayName: accountId }),
     searchRequests: () =>
       searches.map(({ record, isAborted }) => ({ ...record, aborted: isAborted() })),
-    settleSearch: (id, page) => settle(pendingSearches, id, page, 'search'),
+    settleSearch: (id, page) => {
+      fixtureEntries = page.entries;
+      basics = page.entries.length > 0;
+      settle(pendingSearches, id, page, 'query');
+    },
     failSearch: (id, failure) => fail(pendingSearches, id, failure, 'search'),
     catalogRequests: () => catalogResolves.map((entry) => ({ ...entry })),
     settleCatalog: (id, records) => settle(pendingCatalog, id, resolution(records), 'catalog'),

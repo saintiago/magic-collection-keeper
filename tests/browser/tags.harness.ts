@@ -1,3 +1,5 @@
+import { publicPage, privatePage, fragmentPage } from './query-fixtures.js';
+import type { CatalogQueryInput } from '../../src/catalog/index.js';
 /**
  * Browser-side harness of the organization pages (docs/user-interface.md#pages-and-navigation,
  * docs/user-interface.md#browsing-and-organization, docs/user-cards.md#records-and-associations,
@@ -11,12 +13,9 @@
  * contracts.
  */
 
-import { idleProgress } from './card-list-progress.js';
-
 import {
   ApplicationError,
   type ApplicationFailureCode,
-  type SearchClient,
   type UserInterfaceCapabilities,
 } from '../../src/application/index.js';
 import {
@@ -26,15 +25,15 @@ import {
 import type {
   CardPrintingsPage,
   CardRecord,
-  Catalog,
+  CatalogService,
   CatalogReference,
   CatalogResolution,
   ListCardPrintingsOptions,
   PrintingRecord,
 } from '../../src/catalog/index.js';
-import type { SearchPage, SearchRequestInput } from '../../src/search/index.js';
+import type { QueryPageFixture, QueryInputFixture } from './query-fixtures.js';
 import { createCardListBrowser } from '../../src/card-list/index.js';
-import type { SearchCount, SearchCountResult } from '../../src/search/index.js';
+import type { CountsFixture, CountsResultFixture } from './query-fixtures.js';
 import type {
   Association,
   AssociationChangeResult,
@@ -92,7 +91,7 @@ export interface UiTagsAssociationListRequest extends UiTagsListRequest {
 
 /** One add search request. */
 export interface UiTagsSearchRequest {
-  readonly request: SearchRequestInput;
+  readonly request: QueryInputFixture;
 }
 
 /** One private count request: the explicit references and the tag whose intent it reports. */
@@ -164,10 +163,10 @@ export interface UiTagsControl {
     id: number,
     result: { readonly copy: PhysicalCopy; readonly location: Association | null },
   ): void;
-  settleSearch(id: number, page: SearchPage): void;
-  settleCounts(id: number, counts: readonly (readonly [string, SearchCount])[]): void;
+  settleSearch(id: number, page: QueryPageFixture): void;
+  settleCounts(id: number, counts: readonly (readonly [string, CountsFixture])[]): void;
   /** Answers every following count read from this table, like the provider the page reads through. */
-  scriptCounts(counts: readonly (readonly [string, SearchCount])[] | null): void;
+  scriptCounts(counts: readonly (readonly [string, CountsFixture])[] | null): void;
   settleCatalog(
     id: number,
     records: {
@@ -232,7 +231,7 @@ export function installTagsHarness(
   const searchRequests: UiTagsRequest<UiTagsSearchRequest>[] = [];
   const countsRequests: UiTagsRequest<UiTagsCountsRequest>[] = [];
   /** Counts every following count read answers from, or null while the journey settles each one. */
-  let scriptedCounts: ReadonlyMap<string, SearchCount> | null = null;
+  let scriptedCounts: ReadonlyMap<string, CountsFixture> | null = null;
   const catalogRequests: UiTagsRequest<UiTagsCatalogRequest>[] = [];
   const printingsRequests: UiTagsRequest<UiTagsPrintingsRequest>[] = [];
 
@@ -287,7 +286,13 @@ export function installTagsHarness(
     },
     { endSession: () => log.push('session-ended') },
   );
-  const catalog: Catalog = {
+  const catalog: CatalogService = {
+    query(input: CatalogQueryInput) {
+      return (begin(searchRequests, { request: input }) as Promise<QueryPageFixture>).then(
+        publicPage,
+      );
+    },
+
     resolve(references) {
       return begin(catalogRequests, { references: [...references] }) as Promise<CatalogResolution>;
     },
@@ -298,11 +303,14 @@ export function installTagsHarness(
       }) as Promise<CardPrintingsPage>;
     },
   };
-  const search: SearchClient = {
-    execute(input, signal) {
-      return begin(searchRequests, { request: input }, signal) as Promise<SearchPage>;
+  const scriptedUserCards: UserCardsBrowserClient = {
+    ...unusedUserCardsClient,
+    query(input, signal) {
+      return (begin(searchRequests, { request: input }, signal) as Promise<QueryPageFixture>).then(
+        privatePage,
+      );
     },
-    counts(input, signal) {
+    async readFragments(input, signal) {
       const request: UiTagsCountsRequest = {
         references: [...input.references],
         tagId: input.tagId ?? null,
@@ -316,7 +324,7 @@ export function installTagsHarness(
             return signal?.aborted === true;
           },
         });
-        return Promise.resolve({
+        return fragmentPage(input, {
           privateRevision: 'private-1',
           counts: new Map(
             request.references.map((reference) => {
@@ -326,14 +334,12 @@ export function installTagsHarness(
           ),
         });
       }
-      return begin(countsRequests, request, signal) as Promise<SearchCountResult>;
+      return fragmentPage(
+        input,
+        await (begin(countsRequests, request, signal) as Promise<CountsResultFixture>),
+      );
     },
-    observe() {
-      return Promise.reject(new Error('The organization journeys observe no progress.'));
-    },
-  };
-  const scriptedUserCards: UserCardsBrowserClient = {
-    ...unusedUserCardsClient,
+
     readCopies(copyIds, signal) {
       return begin(readCopyRequests, [...copyIds], signal) as ReturnType<
         UserCardsBrowserClient['readCopies']
@@ -401,11 +407,9 @@ export function installTagsHarness(
     identity,
     request,
     catalog,
-    search,
     userCards,
-    cardList: createCardListBrowser({ progress: idleProgress, search, catalog, userCards }),
+    cardList: createCardListBrowser({ catalog, userCards }),
     capture: unusedCapture(userCards),
-    indexing: idleProgress,
   };
   const shell: UserInterface = createUserInterface({
     root,
