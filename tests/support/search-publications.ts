@@ -194,6 +194,8 @@ export interface UserCardsPublicationFixtureOptions {
   readonly changes?: readonly UserCardsChange[];
   /** Dropped history: a resume before this position fails like an expired one. */
   readonly expiredBelow?: string;
+  /** Deliver the first change page twice, as an at-least-once publication may. */
+  readonly repeatFirstChangePage?: boolean;
   /**
    * Accounts the fixture's register reports, in order; defaults to the fixture's own account,
    * which describes an account that has published private data.
@@ -227,6 +229,8 @@ export function createUserCardsPublicationFixture(
   let records = [...(options.records ?? [])];
   let changes = [...(options.changes ?? [])];
   let expiredBelow = options.expiredBelow ?? null;
+  let repeatedPage: readonly UserCardsChange[] | null = null;
+  let firstPageDelivered = false;
   let accounts = [...(options.accounts ?? [accountId])];
   const reads: string[] = [];
   const registerReads: string[] = [];
@@ -285,6 +289,11 @@ export function createUserCardsPublicationFixture(
           'This position is not part of the retained private publication history.',
         );
       }
+      if (repeatedPage !== null) {
+        const page = repeatedPage;
+        repeatedPage = null;
+        return { accountId, changes: page, position: lastPosition(page, request.position) };
+      }
       const anchors = [position, ...changes.map((change) => change.position)];
       if (!anchors.includes(request.position)) {
         throw new UserCardsError(
@@ -294,6 +303,10 @@ export function createUserCardsPublicationFixture(
       }
       const start = anchors.indexOf(request.position);
       const page = changes.slice(start, start + (request.pageSize ?? 500));
+      if (options.repeatFirstChangePage && !firstPageDelivered && page.length > 0) {
+        firstPageDelivered = true;
+        repeatedPage = page;
+      }
       return { accountId, changes: page, position: lastPosition(page, request.position) };
     },
   };

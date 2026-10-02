@@ -228,7 +228,13 @@ interface ChangeSource {
     sql: SearchSqlTransactor,
     budget: RunBudget,
   ): Promise<(ChangeCheckpoint & { readonly complete: boolean }) | null>;
-  discardSnapshot(sql: SearchSqlTransactor, budget: RunBudget): Promise<void>;
+  /** Clears only the source state this run observed; a concurrent boundary wins. */
+  discardSnapshot(
+    sql: SearchSqlTransactor,
+    budget: RunBudget,
+    expectedCheckpoint: ChangeCheckpoint | null,
+    expectedProgress: SnapshotProgress | null,
+  ): Promise<void>;
   /** Reads the changes the provider published after a position. */
   read(position: string): Promise<readonly PendingChange[]>;
   writeRecords(
@@ -250,6 +256,7 @@ interface RunBudget {
 interface SnapshotProgress {
   readonly continuation: string | null;
   readonly recordOffset: number;
+  readonly pageSize: number | null;
   readonly position: string;
   readonly revisionId: string | null;
 }
@@ -299,6 +306,17 @@ class StagingRequired extends Error {
   constructor() {
     super('The publication exceeds one bounded indexing transaction.');
     this.name = 'StagingRequired';
+  }
+}
+
+/** The exact staged snapshot boundary that became stale while it was being read. */
+class StaleSnapshot extends Error {
+  readonly progress: SnapshotProgress | null;
+
+  constructor(progress: SnapshotProgress | null, options?: ErrorOptions) {
+    super('The staged provider snapshot became stale.', options);
+    this.name = 'StaleSnapshot';
+    this.progress = progress;
   }
 }
 
@@ -418,7 +436,15 @@ export function createSearchIndexer(dependencies: SearchIndexerDependencies): Se
     return {
       generation,
       published:
-        target.queryable || (publish && (await publishGeneration(projection, target, accounts))),
+        target.queryable ||
+        (publish &&
+          (await publishGeneration(
+            projection,
+            target,
+            accounts,
+            catalogProgress,
+            accountProgress,
+          ))),
       rebuilt: started !== null,
       caughtUp,
       unresolvedReferences,
@@ -550,8 +576,8 @@ async function alignCatalog(
     readCheckpoint: (statements) => readCatalogCheckpoint(statements, target.generation),
     writeSnapshot: (projection, runBudget) =>
       writeCatalogSnapshot(catalog, projection, target, options, runBudget),
-    discardSnapshot: (projection, runBudget) =>
-      discardCatalogSnapshot(projection, target, runBudget),
+    discardSnapshot: (projection, runBudget, expectedCheckpoint, expectedProgress) =>
+      discardCatalogSnapshot(projection, target, runBudget, expectedCheckpoint, expectedProgress),
     read: (position) => readCatalogChanges(catalog, target.generation, position, options),
     writeRecords: (statements, changes) =>
       applyCatalogRecordChanges(
@@ -585,8 +611,15 @@ async function alignAccount(
     readCheckpoint: (statements) => readAccountCheckpoint(statements, target.generation, accountId),
     writeSnapshot: (projection, runBudget) =>
       writeAccountSnapshot(userCards, projection, target, accountId, options, runBudget),
-    discardSnapshot: (projection, runBudget) =>
-      discardAccountSnapshot(projection, target, accountId, runBudget),
+    discardSnapshot: (projection, runBudget, expectedCheckpoint, expectedProgress) =>
+      discardAccountSnapshot(
+        projection,
+        target,
+        accountId,
+        runBudget,
+        expectedCheckpoint,
+        expectedProgress,
+      ),
     read: (position) =>
       readAccountChanges(userCards, target.generation, accountId, position, options),
     writeRecords: (statements, changes) =>
@@ -626,8 +659,10 @@ async function alignSource(
   budget: RunBudget,
 ): Promise<ChangeCheckpoint & { readonly caughtUp: boolean }> {
   for (let attempt = 1; ; attempt += 1) {
+    let observedCheckpoint: ChangeCheckpoint | null = null;
     try {
       const existing = await source.readCheckpoint(sql);
+      observedCheckpoint = existing;
       const bootstrap = existing === null ? await bootstrapSource(sql, source, budget) : null;
       const checkpoint = existing ?? bootstrap;
       if (checkpoint === null) {
@@ -636,10 +671,16 @@ async function alignSource(
       if ('complete' in checkpoint && !checkpoint.complete) {
         return { ...checkpoint, caughtUp: false };
       }
+      observedCheckpoint = checkpoint;
       return await drainSource(sql, target, source, checkpoint, budget);
     } catch (cause) {
       if (cause instanceof StagingRequired && !target.queryable) {
-        await source.discardSnapshot(sql, budget);
+        try {
+          await source.discardSnapshot(sql, budget, observedCheckpoint, null);
+        } catch (discardCause) {
+          if (isAbandoned(discardCause, 'stale-checkpoint')) continue;
+          throw discardCause;
+        }
         continue;
       }
       if (isAbandoned(cause, 'unresolved-references')) {
@@ -657,7 +698,12 @@ async function alignSource(
         throw cause;
       }
       if (isStaleContinuation(cause) && !target.queryable) {
-        await source.discardSnapshot(sql, budget);
+        try {
+          await source.discardSnapshot(sql, budget, observedCheckpoint, null);
+        } catch (discardCause) {
+          if (isAbandoned(discardCause, 'stale-checkpoint')) continue;
+          throw discardCause;
+        }
         await bootstrapSource(sql, source, budget);
         continue;
       }
@@ -685,10 +731,10 @@ async function bootstrapSource(
     try {
       return await source.writeSnapshot(sql, budget);
     } catch (cause) {
-      if (!isStaleContinuation(cause) || attempt >= SEARCH_INDEXING_LIMITS.maxAttempts) {
+      if (!(cause instanceof StaleSnapshot) || attempt >= SEARCH_INDEXING_LIMITS.maxAttempts) {
         throw cause;
       }
-      await source.discardSnapshot(sql, budget);
+      await source.discardSnapshot(sql, budget, null, cause.progress);
     }
   }
 }
@@ -706,12 +752,24 @@ async function writeCatalogSnapshot(
     if (budget.remaining === 0 && progress !== null) {
       return { position: progress.position, revisionId: progress.revisionId, complete: false };
     }
-    const page = await catalog.readSnapshot({
-      pageSize: options.pageSize,
-      ...(progress?.continuation === null || progress === null
-        ? {}
-        : { continuation: progress.continuation }),
-    });
+    if (progress !== null && progress.recordOffset > 0 && progress.pageSize === null) {
+      throw new StaleSnapshot(progress);
+    }
+    const pageSize =
+      progress !== null && progress.recordOffset > 0
+        ? (progress.pageSize ?? options.pageSize)
+        : options.pageSize;
+    const page = await catalog
+      .readSnapshot({
+        pageSize,
+        ...(progress?.continuation === null || progress === null
+          ? {}
+          : { continuation: progress.continuation }),
+      })
+      .catch((cause: unknown) => {
+        if (isStaleContinuation(cause)) throw new StaleSnapshot(progress, { cause });
+        throw cause;
+      });
     const checkpoint = { position: page.position, revisionId: page.revision.revisionId };
     assertSnapshotBoundary(progress, checkpoint);
     if (budget.remaining === 0) return { ...checkpoint, complete: false };
@@ -721,12 +779,14 @@ async function writeCatalogSnapshot(
     }
     await writeTransaction(sql, target, async (statements) => {
       await assertSnapshotProgress(statements, generation, 'catalog', '', progress);
+      await assertCheckpoint(await readCatalogCheckpoint(statements, generation), null);
       if (progress === null) await clearCatalogProjection(statements, generation);
       await writeCatalogRecords(statements, generation, slice.records);
       if (!slice.pageComplete) {
         await saveSnapshotProgress(statements, generation, 'catalog', '', {
           continuation: progress?.continuation ?? null,
           recordOffset: slice.nextOffset,
+          pageSize,
           position: checkpoint.position,
           revisionId: checkpoint.revisionId,
         });
@@ -736,6 +796,7 @@ async function writeCatalogSnapshot(
         await saveSnapshotProgress(statements, generation, 'catalog', '', {
           continuation: page.continuation,
           recordOffset: 0,
+          pageSize: null,
           position: checkpoint.position,
           revisionId: checkpoint.revisionId,
         });
@@ -769,13 +830,25 @@ async function writeAccountSnapshot(
     if (budget.remaining === 0 && progress !== null) {
       return { position: progress.position, revisionId: null, complete: false };
     }
-    const page = await userCards.readSnapshot({
-      accountId,
-      pageSize: options.pageSize,
-      ...(progress?.continuation === null || progress === null
-        ? {}
-        : { continuation: progress.continuation }),
-    });
+    if (progress !== null && progress.recordOffset > 0 && progress.pageSize === null) {
+      throw new StaleSnapshot(progress);
+    }
+    const pageSize =
+      progress !== null && progress.recordOffset > 0
+        ? (progress.pageSize ?? options.pageSize)
+        : options.pageSize;
+    const page = await userCards
+      .readSnapshot({
+        accountId,
+        pageSize,
+        ...(progress?.continuation === null || progress === null
+          ? {}
+          : { continuation: progress.continuation }),
+      })
+      .catch((cause: unknown) => {
+        if (isStaleContinuation(cause)) throw new StaleSnapshot(progress, { cause });
+        throw cause;
+      });
     const checkpoint = { position: page.position, revisionId: null };
     assertSnapshotBoundary(progress, checkpoint);
     if (budget.remaining === 0) return { ...checkpoint, complete: false };
@@ -785,12 +858,14 @@ async function writeAccountSnapshot(
     }
     await writeTransaction(sql, target, async (statements) => {
       await assertSnapshotProgress(statements, generation, 'account', accountId, progress);
+      await assertCheckpoint(await readAccountCheckpoint(statements, generation, accountId), null);
       if (progress === null) await clearAccountProjection(statements, generation, accountId);
       await writeUserCardsRecords(statements, generation, accountId, slice.records);
       if (!slice.pageComplete) {
         await saveSnapshotProgress(statements, generation, 'account', accountId, {
           continuation: progress?.continuation ?? null,
           recordOffset: slice.nextOffset,
+          pageSize,
           position: checkpoint.position,
           revisionId: null,
         });
@@ -800,6 +875,7 @@ async function writeAccountSnapshot(
         await saveSnapshotProgress(statements, generation, 'account', accountId, {
           continuation: page.continuation,
           recordOffset: 0,
+          pageSize: null,
           position: checkpoint.position,
           revisionId: null,
         });
@@ -856,7 +932,7 @@ function assertSnapshotBoundary(
     progress !== null &&
     (progress.position !== checkpoint.position || progress.revisionId !== checkpoint.revisionId)
   ) {
-    throw new SearchError('stale-continuation', 'The staged provider snapshot became stale.');
+    throw new StaleSnapshot(progress);
   }
 }
 
@@ -868,7 +944,7 @@ async function readSnapshotProgress(
 ): Promise<SnapshotProgress | null> {
   const rows = await readRows(
     sql,
-    `select continuation, record_offset, source_position, revision_id
+    `select continuation, record_offset, page_size, source_position, revision_id
        from ${searchPrivateSchema}.snapshot_progress
       where generation_id = cast(:generation_id as bigint)
         and source = :source and account_id = :account_id`,
@@ -879,6 +955,12 @@ async function readSnapshotProgress(
     .object({
       continuation: z.string().nullable(),
       record_offset: z.number().int().min(0),
+      page_size: z
+        .number()
+        .int()
+        .min(SEARCH_INDEXING_LIMITS.minPageSize)
+        .max(SEARCH_INDEXING_LIMITS.maxPageSize)
+        .nullable(),
       source_position: positionSchema,
       revision_id: revisionSchema.nullable(),
     })
@@ -887,9 +969,29 @@ async function readSnapshotProgress(
   return {
     continuation: parsed.data.continuation,
     recordOffset: parsed.data.record_offset,
+    pageSize: parsed.data.page_size,
     position: parsed.data.source_position,
     revisionId: parsed.data.revision_id,
   };
+}
+
+function assertCheckpoint(
+  actual: ChangeCheckpoint | null,
+  expected: ChangeCheckpoint | null,
+): void {
+  if (!sameCheckpoint(actual, expected)) {
+    throw new AbandonedWrite(
+      'stale-checkpoint',
+      'Another run advanced this source boundary; this write is obsolete.',
+    );
+  }
+}
+
+function sameCheckpoint(
+  actual: ChangeCheckpoint | null,
+  expected: ChangeCheckpoint | null,
+): boolean {
+  return JSON.stringify(actual) === JSON.stringify(expected);
 }
 
 async function assertSnapshotProgress(
@@ -918,13 +1020,15 @@ async function saveSnapshotProgress(
   await statementsQuery(
     sql,
     `insert into ${searchPrivateSchema}.snapshot_progress (
-       generation_id, source, account_id, continuation, record_offset, source_position, revision_id
+       generation_id, source, account_id, continuation, record_offset, page_size,
+       source_position, revision_id
      ) values (
        cast(:generation_id as bigint), :source, :account_id, :continuation,
-       :record_offset, :source_position, :revision_id
+       :record_offset, :page_size, :source_position, :revision_id
      )
      on conflict (generation_id, source, account_id) do update set
        continuation = excluded.continuation, record_offset = excluded.record_offset,
+       page_size = excluded.page_size,
        source_position = excluded.source_position, revision_id = excluded.revision_id`,
     {
       generation_id: generation,
@@ -932,6 +1036,7 @@ async function saveSnapshotProgress(
       account_id: accountId,
       continuation: progress.continuation,
       record_offset: progress.recordOffset,
+      page_size: progress.pageSize,
       source_position: progress.position,
       revision_id: progress.revisionId,
     },
@@ -957,10 +1062,17 @@ async function discardCatalogSnapshot(
   sql: SearchSqlTransactor,
   target: GenerationTarget,
   budget: RunBudget,
+  expectedCheckpoint: ChangeCheckpoint | null,
+  expectedProgress: SnapshotProgress | null,
 ): Promise<void> {
   if (budget.remaining === 0)
     throw new SearchError('unavailable', 'The indexing run budget ended.');
   await writeTransaction(sql, target, async (statements) => {
+    await assertCheckpoint(
+      await readCatalogCheckpoint(statements, target.generation),
+      expectedCheckpoint,
+    );
+    await assertSnapshotProgress(statements, target.generation, 'catalog', '', expectedProgress);
     await clearCatalogProjection(statements, target.generation);
     await deleteSnapshotProgress(statements, target.generation, 'catalog', '');
     await statementsQuery(
@@ -984,10 +1096,23 @@ async function discardAccountSnapshot(
   target: GenerationTarget,
   accountId: string,
   budget: RunBudget,
+  expectedCheckpoint: ChangeCheckpoint | null,
+  expectedProgress: SnapshotProgress | null,
 ): Promise<void> {
   if (budget.remaining === 0)
     throw new SearchError('unavailable', 'The indexing run budget ended.');
   await writeTransaction(sql, target, async (statements) => {
+    await assertCheckpoint(
+      await readAccountCheckpoint(statements, target.generation, accountId),
+      expectedCheckpoint,
+    );
+    await assertSnapshotProgress(
+      statements,
+      target.generation,
+      'account',
+      accountId,
+      expectedProgress,
+    );
     await clearAccountProjection(statements, target.generation, accountId);
     await deleteSnapshotProgress(statements, target.generation, 'account', accountId);
     await statementsQuery(
@@ -1050,6 +1175,8 @@ async function applyChangeBatch(
   let records: RecordChange[] = [];
   let recordCount = 0;
   let bytes = 2;
+  let truncated = false;
+  const seenChanges = new Map<string, string>();
   publicationRead: for (;;) {
     const changes = await source.read(position);
     if (changes.length === 0) {
@@ -1063,6 +1190,21 @@ async function applyChangeBatch(
     const resumedAt = position;
     for (const change of changes) {
       position = change.position;
+      const fingerprint =
+        change.kind === 'marker'
+          ? `marker:${change.revisionId ?? ''}`
+          : `record:${JSON.stringify(change.payload)}`;
+      const seen = seenChanges.get(change.position);
+      if (seen !== undefined) {
+        if (seen !== fingerprint) {
+          throw new SearchError(
+            'unavailable',
+            'The provider changed the meaning of a repeated publication identity.',
+          );
+        }
+        continue;
+      }
+      seenChanges.set(change.position, fingerprint);
       if (change.kind === 'marker') {
         publications.push({ records, marker: change });
         records = [];
@@ -1074,7 +1216,10 @@ async function applyChangeBatch(
         recordCount >= SEARCH_INDEXING_LIMITS.maxBatchRecords ||
         bytes + changeBytes > SEARCH_INDEXING_LIMITS.maxBatchPayloadBytes
       ) {
-        if (publications.length > 0) break publicationRead;
+        if (publications.length > 0) {
+          truncated = true;
+          break publicationRead;
+        }
         throw new StagingRequired();
       }
       records.push(change);
@@ -1106,6 +1251,7 @@ async function applyChangeBatch(
         return { ...checkpoint, exhausted: false };
       }
     }
+    if (truncated) throw new StagingRequired();
     throw new AbandonedWrite(
       'unresolved-references',
       'A publication references a catalog fact the projection does not hold yet.',
@@ -1257,6 +1403,8 @@ async function publishGeneration(
   sql: SearchSqlTransactor,
   target: GenerationTarget,
   accounts: readonly string[],
+  catalogProgress: SearchCatalogProgress,
+  accountProgress: readonly SearchAccountProgress[],
 ): Promise<boolean> {
   return await sql.transaction(async (statements) => {
     await lockGeneration(statements, target);
@@ -1294,6 +1442,17 @@ async function publishGeneration(
         'The served projection advanced while its replacement was catching up.',
       );
     }
+    if (
+      !sameCheckpoint(await readCatalogCheckpoint(statements, target.generation), {
+        position: catalogProgress.position,
+        revisionId: catalogProgress.revisionId,
+      })
+    ) {
+      throw new AbandonedWrite(
+        'obsolete-generation',
+        'The replacement catalog boundary changed before publication.',
+      );
+    }
     const indexedAccounts = await readCheckpointAccounts(statements, target.generation);
     const scopedAccounts = new Set(accounts);
     if (
@@ -1303,6 +1462,33 @@ async function publishGeneration(
       throw new AbandonedWrite(
         'obsolete-generation',
         'The replacement gained an account outside this run’s catch-up scope.',
+      );
+    }
+    for (const progress of accountProgress) {
+      if (
+        !sameCheckpoint(
+          await readAccountCheckpoint(statements, target.generation, progress.accountId),
+          { position: progress.position, revisionId: null },
+        )
+      ) {
+        throw new AbandonedWrite(
+          'obsolete-generation',
+          'A replacement account boundary changed before publication.',
+        );
+      }
+    }
+    const staging = await readRows(
+      statements,
+      `select source, account_id
+         from ${searchPrivateSchema}.snapshot_progress
+        where generation_id = cast(:generation_id as bigint)
+        limit 1`,
+      { generation_id: target.generation },
+    );
+    if (staging.length !== 0) {
+      throw new AbandonedWrite(
+        'obsolete-generation',
+        'The replacement still has incomplete snapshot staging.',
       );
     }
     if ((await countUnresolvedReferences(statements, target.generation)) !== 0) {

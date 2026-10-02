@@ -6,7 +6,7 @@
  * running environment; the default keeps Application testable without one.
  */
 
-import type { ApplicationFailureCode } from './failures.js';
+import { isApplicationFailureCode, type ApplicationFailureCode } from './failures.js';
 
 export interface DiagnosticEvent {
   /** Stable operation identity, for example `search.execute` or `catalog.synchronize`. */
@@ -56,10 +56,12 @@ export function backgroundFailureDiagnostic(
   for (let depth = 0; depth < 8 && isRecord(current); depth += 1) {
     const name = safeDiagnosticValue(current['name']);
     const code = safeDiagnosticValue(current['code']);
-    if (classification === undefined && name !== undefined && !internalErrorNames.has(name)) {
-      classification = name;
-    } else if (classification === undefined && name === undefined && code !== undefined) {
-      classification = code;
+    if (classification === undefined) {
+      if (name !== undefined && !internalErrorNames.has(name)) {
+        classification = name;
+      } else if (code !== undefined && !isApplicationFailureCode(code)) {
+        classification = code;
+      }
     }
     const metadata = isRecord(current['$metadata']) ? current['$metadata'] : null;
     correlationId ??=

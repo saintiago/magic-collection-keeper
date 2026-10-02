@@ -811,6 +811,24 @@ describe('background failure diagnostics', () => {
     expect(JSON.stringify(diagnostic)).not.toContain('secret');
     expect(JSON.stringify(diagnostic)).not.toContain('select');
   });
+
+  it('uses a safe provider code when an Error has only a generic name', () => {
+    const diagnostic = backgroundFailureDiagnostic(
+      'search-indexing',
+      Object.assign(new Error('private response'), { code: 'ECONNRESET' }),
+    );
+
+    expect(diagnostic).toEqual({
+      stage: 'search-indexing',
+      providerErrorClassification: 'ECONNRESET',
+    });
+    expect(
+      backgroundFailureDiagnostic(
+        'search-indexing',
+        Object.assign(new Error('private response'), { code: 'unavailable' }),
+      ),
+    ).toEqual({ stage: 'search-indexing' });
+  });
 });
 
 describe('deployment-owned SDK clients', () => {
