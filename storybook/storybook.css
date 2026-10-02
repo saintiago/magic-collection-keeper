@@ -352,10 +352,6 @@ p {
   animation: rf-panel-enter var(--rf-state-motion) both;
 }
 
-.design-grid > article.design-notices {
-  animation: none;
-}
-
 .design-grid > article::after {
   content: '';
   position: absolute;
@@ -601,6 +597,22 @@ p {
   box-shadow: inset 4px 0 var(--rf-accent);
 }
 
+/* The entire selectable label gives feedback, not only its small native input. */
+.selection-option,
+.card-example {
+  cursor: pointer;
+  outline: 1px solid transparent;
+  outline-offset: 2px;
+  transition: outline-color var(--rf-control-motion);
+}
+
+.selection-option:hover,
+.selection-option:focus-within,
+.card-example:hover,
+.card-example:focus-within {
+  outline-color: var(--rf-accent);
+}
+
 [data-ui-basic] {
   display: inline-flex;
   flex-wrap: wrap;
@@ -629,6 +641,12 @@ p {
 #storybook-root .ui-notices {
   gap: var(--rf-space-2);
   max-inline-size: min(28rem, calc(100vw - 2rem));
+}
+
+/* Persistent gallery examples reserve space instead of covering neighboring controls. */
+#storybook-root .design-notices .ui-notices {
+  position: static;
+  max-inline-size: none;
 }
 
 #storybook-root .ui-notice {

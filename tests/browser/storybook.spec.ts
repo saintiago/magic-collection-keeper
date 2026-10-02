@@ -372,20 +372,63 @@ test('reflows the Reality Fracture preset and retains static feedback with reduc
   await expect(page.getByLabel('Select Lightning Bolt')).not.toBeChecked();
 });
 
-test('keeps card selection clickable after gallery animations settle', async ({ page }) => {
-  await page.setViewportSize({ width: 360, height: 760 });
-  await openStorybook(page);
-  await page.getByRole('button', { name: 'Design language' }).click();
-  await page
-    .locator('.design-grid > article')
-    .first()
-    .evaluate(async (article) => {
-      await Promise.all(article.getAnimations().map((animation) => animation.finished));
-    });
+for (const viewport of [
+  { width: 360, height: 760 },
+  { width: 1440, height: 1000 },
+]) {
+  for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+    test(`keeps gallery controls reachable with notices at ${viewport.width}px and ${reducedMotion} motion`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.emulateMedia({ reducedMotion });
+      await openStorybook(page);
+      await page.getByRole('button', { name: 'Design language' }).click();
+      await page.locator('.design-grid').evaluate(async (grid) => {
+        await Promise.all(
+          grid
+            .getAnimations({ subtree: true })
+            .filter((animation) => animation.effect?.getTiming().iterations !== Infinity)
+            .map((animation) => animation.finished),
+        );
+      });
 
-  await page.getByLabel('Select Lightning Bolt').uncheck();
-  await expect(page.getByLabel('Select Lightning Bolt')).not.toBeChecked();
-});
+      await page.getByLabel('Select Lightning Bolt').uncheck();
+      await expect(page.getByLabel('Select Lightning Bolt')).not.toBeChecked();
+      await page.evaluate(() =>
+        window.scrollTo({
+          top: document.documentElement.scrollHeight,
+          behavior: 'instant',
+        }),
+      );
+      const notices = page.locator('[data-ui-notice]');
+      await expect(notices).toHaveCount(2);
+      const open = page.getByRole('button', { name: 'Open confirmation' });
+      await expect(open).toBeInViewport();
+      await open.click({ timeout: 5_000 });
+      await expect(page.getByRole('dialog')).toBeVisible();
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(page.locator('#design-dialog-status')).toHaveText(
+        'Kept the local example entry.',
+      );
+      await expect(open).toBeFocused();
+      await open.click();
+      await page.getByRole('button', { name: 'Discard entry', exact: true }).click();
+      await expect(page.locator('#design-dialog-status')).toHaveText(
+        'Discarded the local example entry.',
+      );
+      await expect(open).toBeFocused();
+      await expect(notices).toHaveCount(2);
+
+      await page.getByRole('button', { name: 'Try again' }).click();
+      await expect(page.locator('[data-ui-notice="design-error"]')).toContainText(
+        'Retry completed in the local example.',
+      );
+      await notices.first().getByRole('button', { name: 'Dismiss' }).click();
+      await expect(notices).toHaveCount(1);
+    });
+  }
+}
 
 test('disposes a pending gallery action when leaving the design-language tab', async ({ page }) => {
   await openStorybook(page);
