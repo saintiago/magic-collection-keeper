@@ -112,3 +112,9 @@ Replacing a module requires changing its construction only. Its consumers keep t
 receive the same state, intent and lifecycle behavior. Verify each module through its public
 contract, then exercise the composed browser journeys described in [Testing](../testing.md).
 Test list and capture behavior at their own boundaries; UI tests verify their presentation.
+
+## Local design workspace
+
+The [local design storybook](storybook.md) reuses these presentation modules in a separate local
+composition with mocked providers. It owns the design-language page and manually held presentation
+states; its tools and keyboard controls are not application runtime behavior.

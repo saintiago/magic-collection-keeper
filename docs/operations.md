@@ -73,3 +73,13 @@ Record unresolved provider, physical-device and collection-reconciliation checks
 the concrete production actions and recovery procedure before cutover; preparation does not imply
 authorization to mutate owner data or delete the previous environment. Record source completion,
 deployment and production acceptance separately.
+
+## Local design workspace
+
+Provide `npm run storybook` to start the [design storybook](ui/storybook.md) from the WSL checkout,
+bound to localhost and accessible in the owner's browser. Support rapid updates when shared UI code
+or styles change. Startup requires no deployed configuration, authentication, database or API.
+
+Use a separate entry point and output from production packaging. Do not include workspace pages,
+mocks, fixtures, stepping controls or development dependencies in deployable browser/backend/job
+artifacts. Starting or updating this local workspace does not deploy anything.

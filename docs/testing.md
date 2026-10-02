@@ -292,3 +292,15 @@ cold and warm runs. Keep benchmarks separate from deterministic correctness test
 
 Once the relevant risks are covered, stop. Additional test frameworks, large fixtures, repeated full
 suite runs and tests that restate implementation or documentation require a concrete justification.
+
+## Local design storybook
+
+Verify the [storybook](ui/storybook.md) in the browser with the actual shared UI. Exercise an action
+that remains loading without a Space press, then advances exactly one visible stage per press,
+including partial content and a held transient state. Check initial loading, normal text editing and
+that a held Space does not skip stages. Cover representative successful and failed mock outcomes.
+
+Verify both workspace parts run without login, credentials, database access or external service
+requests, and that mock changes are reflected locally. Check production artifacts exclude workspace
+code, fixtures and stepping behavior. These checks establish presentation and isolation; they do not
+measure performance or prove live-service behavior.
