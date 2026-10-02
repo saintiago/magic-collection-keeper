@@ -239,6 +239,19 @@ create table if not exists ${usercardsPrivateSchema}.account_state (
   expired_below bigint not null default 0 check (expired_below >= 0)
 );
 
+-- UserCards keeps the stable playable-card relationship needed to group its printing-specific
+-- facts without joining Catalog during a private read. Current writes record this derived
+-- reference with the domain record; compatible preparation fills it for older records through
+-- Catalog's resolver. It is deliberately separate from receipts, provenance and source archives.
+create table if not exists ${usercardsPrivateSchema}.printing_reference (
+  printing_id text primary key check (length(printing_id) between 1 and ${identifierLength}),
+  card_id text not null check (length(card_id) between 1 and ${identifierLength}),
+  prepared_at timestamptz not null default now()
+);
+
+create index if not exists printing_reference_card_index
+  on ${usercardsPrivateSchema}.printing_reference (card_id, printing_id);
+
 create table if not exists ${usercardsPrivateSchema}.copy (
   copy_id text primary key check (length(copy_id) between 1 and ${identifierLength}),
   account_id text not null check (length(account_id) between 1 and ${identifierLength}),
@@ -252,6 +265,9 @@ create table if not exists ${usercardsPrivateSchema}.copy (
 
 create index if not exists copy_account_identity_index
   on ${usercardsPrivateSchema}.copy (account_id, copy_id);
+
+create index if not exists copy_account_printing_index
+  on ${usercardsPrivateSchema}.copy (account_id, printing_id, copy_id);
 
 create table if not exists ${usercardsPrivateSchema}.tag (
   tag_id text primary key check (length(tag_id) between 1 and ${identifierLength}),
@@ -296,6 +312,9 @@ create index if not exists association_copy_index
 
 create index if not exists association_tag_index
   on ${usercardsPrivateSchema}.association (account_id, tag_id);
+
+create index if not exists association_target_index
+  on ${usercardsPrivateSchema}.association (account_id, target_level, target_id);
 
 create table if not exists ${usercardsPrivateSchema}.import_session (
   session_id text not null check (length(session_id) between 1 and ${identifierLength}),
@@ -614,6 +633,19 @@ export function usercardsReaderGrants(readerRole: string): string {
   return [
     `grant usage on schema ${usercardsQuerySchema} to "${readerRole}";`,
     `grant select on ${relations.join(', ')} to "${readerRole}";`,
+  ].join('\n');
+}
+
+/**
+ * Grants the provider-owned current query capability read-only access to exactly the authoritative
+ * relations it evaluates. Import state, receipts, provenance, archives and all mutations remain
+ * unavailable; the capability itself owns trusted account scoping.
+ */
+export function usercardsQueryGrants(role: string): string {
+  assertRole(role);
+  return [
+    `grant usage on schema ${usercardsPrivateSchema} to "${role}";`,
+    `grant select on ${usercardsPrivateSchema}.account_state, ${usercardsPrivateSchema}.printing_reference, ${usercardsPrivateSchema}.copy, ${usercardsPrivateSchema}.tag, ${usercardsPrivateSchema}.association to "${role}";`,
   ].join('\n');
 }
 
