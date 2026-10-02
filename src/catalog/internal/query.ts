@@ -195,7 +195,8 @@ interface QueryStatement {
   readonly parameters: Readonly<Record<string, CatalogSqlValue>>;
 }
 
-type NameScope =
+/** Candidate mode asks whether an alias contributes to a successful branch. */
+type NameMatchMode =
   | { readonly kind: 'all' }
   | { readonly kind: 'canonical' }
   | { readonly kind: 'candidate'; readonly name: string };
@@ -273,19 +274,19 @@ order by row_kind desc, row_position`;
 function filterSqls(
   filters: readonly CatalogFilter[],
   context: SqlContext,
-  nameScope: NameScope = { kind: 'all' },
+  nameMode: NameMatchMode = { kind: 'all' },
 ): string {
   if (filters.length === 0) return 'true';
   if (context.printing !== null) {
-    return boundFiltersSql(filters, context, context.printing, nameScope);
+    return boundFiltersSql(filters, context, context.printing, nameMode);
   }
-  const parts = [boundFiltersSql(filters, context, null, nameScope)];
+  const parts = [boundFiltersSql(filters, context, null, nameMode)];
   if (filters.some(filterUsesPrinting)) {
     const printing = context.alias('related_printing');
     parts.push(
       `exists (select 1 from catalog.printings as ${printing}` +
         ` where ${printing}.card_id = ${context.card}.card_id` +
-        ` and ${boundFiltersSql(filters, context, printing, nameScope)})`,
+        ` and ${boundFiltersSql(filters, context, printing, nameMode)})`,
     );
   }
   return `(${parts.join(' or ')})`;
@@ -307,30 +308,48 @@ function boundFiltersSql(
   filters: readonly CatalogFilter[],
   context: SqlContext,
   printing: string | null,
-  nameScope: NameScope,
+  nameMode: NameMatchMode,
 ): string {
-  return `(${filters
-    .map((filter) => boundFilterSql(filter, context, printing, nameScope))
-    .join(' and ')})`;
+  return boundFilterSql({ kind: 'and', operands: filters }, context, printing, nameMode);
 }
 
 function boundFilterSql(
   filter: CatalogFilter,
   context: SqlContext,
   printing: string | null,
-  nameScope: NameScope,
+  nameMode: NameMatchMode,
+  negated = false,
 ): string {
   switch (filter.kind) {
-    case 'criterion':
-      return criterionSql(filter.criterion, context, printing, nameScope);
+    case 'criterion': {
+      if (nameMode.kind === 'candidate' && (negated || filter.criterion.kind !== 'name')) {
+        return 'false';
+      }
+      // Negative predicates always retain the full alias scope used for membership.
+      const match = criterionSql(
+        filter.criterion,
+        context,
+        printing,
+        negated ? { kind: 'all' } : nameMode,
+      );
+      return negated ? `not (${match})` : match;
+    }
     case 'not':
-      return `not (${boundFilterSql(filter.operand, context, printing, nameScope)})`;
+      return boundFilterSql(filter.operand, context, printing, nameMode, !negated);
     case 'or':
-      return `(${filter.operands
-        .map((part) => boundFilterSql(part, context, printing, nameScope))
-        .join(' or ')})`;
-    case 'and':
-      return boundFiltersSql(filter.operands, context, printing, nameScope);
+    case 'and': {
+      const conjunction = (filter.kind === 'and') !== negated;
+      const parts = filter.operands.map((part) =>
+        boundFilterSql(part, context, printing, nameMode, negated),
+      );
+      if (nameMode.kind === 'candidate' && conjunction) {
+        // One contributing term is enough, but every sibling must actually match
+        // with all aliases and the same printing binding.
+        const membership = boundFilterSql(filter, context, printing, { kind: 'all' }, negated);
+        return `(${membership} and (${parts.join(' or ')}))`;
+      }
+      return `(${parts.join(conjunction ? ' and ' : ' or ')})`;
+    }
   }
 }
 
@@ -338,15 +357,15 @@ function criterionSql(
   criterion: CatalogCriterion,
   context: SqlContext,
   printing: string | null,
-  nameScope: NameScope,
+  nameMode: NameMatchMode,
 ): string {
   switch (criterion.kind) {
     case 'name': {
       const value = context.bind(criterion.text);
       const canonical = `strpos(lower(${context.card}.name), ${value}) > 0`;
-      if (nameScope.kind === 'canonical') return canonical;
-      if (nameScope.kind === 'candidate') {
-        return `(${canonical} or strpos(lower(${nameScope.name}), ${value}) > 0)`;
+      if (nameMode.kind === 'canonical') return canonical;
+      if (nameMode.kind === 'candidate') {
+        return `(not (${canonical}) and strpos(lower(${nameMode.name}), ${value}) > 0)`;
       }
       const name = context.alias('name_alias');
       return (
@@ -411,6 +430,7 @@ function colorSql(
 
 function matchedNameSql(filters: readonly CatalogFilter[], context: SqlContext): string {
   if (!filters.some((filter) => filterUsesPositiveName(filter))) return 'null::text';
+  // Prefer a successful branch needing no positive alias match; negations still use all names.
   const canonical = filterSqls(filters, context, { kind: 'canonical' });
   const name = context.alias('matched_name');
   const translated = filterSqls(filters, context, { kind: 'candidate', name: `${name}.name` });

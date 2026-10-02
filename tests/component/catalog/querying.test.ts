@@ -176,6 +176,63 @@ describe('catalog public queries', () => {
     });
   });
 
+  it.each(['card', 'printing'] as const)(
+    'attributes translated names to successful Boolean branches at %s level',
+    async (resultLevel) => {
+      const records = [
+        { id: 'ring-de', language: 'de', translatedName: 'Sonnenring', set: 'lea' },
+        { id: 'ring-fr', language: 'fr', translatedName: 'Anneau solaire', set: '4ed' },
+      ].map((translation) =>
+        printing({
+          ...translation,
+          cardId: 'ring',
+          name: 'Sol Ring',
+          colors: [],
+          type: 'Artifact',
+          manaValue: 1,
+        }),
+      );
+      await createCatalogSynchronizer({
+        sql: database.sql,
+        snapshots: createSnapshotSource({
+          cards: { sourceVersion: 'translated', records },
+        }),
+      }).synchronize({ dataset: 'cards' });
+
+      const cases = [
+        { query: 'sonnenring ring', matchedName: 'Sonnenring' },
+        { query: 'sonnenring solaire', matchedName: 'Anneau solaire' },
+        { query: 'solaire sonnenring', matchedName: 'Anneau solaire' },
+        { query: 'sonnenring or (sol -anneau)', matchedName: 'Sonnenring' },
+        { query: 'sonnenring or (anneau set:missing)', matchedName: 'Sonnenring' },
+        { query: 'sonnenring or (anneau set:lea lang:fr)', matchedName: 'Sonnenring' },
+        { query: '-(-sonnenring or -solaire)', matchedName: 'Anneau solaire' },
+        { query: '-(-sonnenring -solaire)', matchedName: 'Anneau solaire' },
+        { query: 'sonnenring or (sol -absent)', matchedName: null },
+        { query: '-absent', matchedName: null },
+      ];
+      for (const { query, matchedName } of cases) {
+        const page = await catalog.query({ resultLevel, query });
+        expect(page.entries, query).toHaveLength(resultLevel === 'card' ? 1 : 2);
+        expect(
+          page.entries.map((entry) => entry.card.matchedName),
+          query,
+        ).toEqual(resultLevel === 'card' ? [matchedName] : [matchedName, matchedName]);
+      }
+
+      const bound = await catalog.query({
+        resultLevel,
+        query: 'sonnenring or (anneau lang:fr)',
+      });
+      expect(bound.entries.map((entry) => entry.card.matchedName)).toEqual(
+        resultLevel === 'card' ? ['Anneau solaire'] : ['Sonnenring', 'Anneau solaire'],
+      );
+      expect((await catalog.query({ resultLevel, query: 'sonnenring -anneau' })).entries).toEqual(
+        [],
+      );
+    },
+  );
+
   it('groups cards before ordering and revision-bound pagination', async () => {
     const first = await catalog.query({ resultLevel: 'card', pageSize: 1 });
     expect(first.totalCount).toBe(3);
