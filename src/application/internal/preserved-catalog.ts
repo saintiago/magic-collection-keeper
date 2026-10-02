@@ -17,7 +17,7 @@ import {
   type CardRecord,
   type Catalog,
   type PrintingRecord,
-} from '../../catalog/index.js';
+} from '../../catalog/contract.js';
 
 import { ApplicationError } from './failures.js';
 

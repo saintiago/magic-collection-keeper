@@ -1,11 +1,9 @@
 # Rebuild infrastructure
 
-The [CDK deployment design](../docs/deployment.md) is the target stack composition, with
-[separate GitHub Actions deployment workflows](../docs/ci-cd.md). This document describes the
-current two-template implementation and its transitional operating procedures. CI and automatic
-deployment remain disabled until that design is implemented and activated. The current environment
-is considered test; production promotion is manual. Data migration, resource moves and deletion
-remain separately explicit actions; no scheduled indexing is required.
+The [CDK deployment design](../docs/deployment.md) is implemented under `infra/cdk/`. GitHub Actions
+orchestration remains separate work ([CI/CD](../docs/ci-cd.md)); local synthesis never deploys. The
+current environment is test and has not been moved merely because these templates exist. Live
+resource moves, data migration, Catalog synchronization and deletion remain explicit operations.
 
 ## Stacks and ownership
 
@@ -13,10 +11,19 @@ Deploy in `us-east-1` with CloudFormation. Retain the existing Cognito pool and 
 Use one app client for this deployment. Follow the [data architecture](../docs/data-architecture.md)
 and [operations](../docs/operations.md).
 
-| Stack             | Owns                                                                                                                                                                                                                                                    |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `foundation.json` | Isolated VPC/database subnets, Aurora PostgreSQL Serverless v2 with Data API, encrypted storage and backups, private browser/source/artifact buckets, immutable Catalog/Recognition ECR repositories, owner-specific database secrets, logs and alarms. |
-| `service.json`    | Cognito app client, JWT-authorized HTTP API, interactive Node.js Lambda, Recognition container Lambda, finite Catalog Fargate task and private-browser CloudFront delivery.                                                                             |
+| Stack                   | Owns                                                                                                     |
+| ----------------------- | -------------------------------------------------------------------------------------------------------- |
+| `FoundationStack`       | VPC/database networking, Aurora, owner secrets, shared artifact bucket, alarm topic and database alarms. |
+| `GatewayStack`          | Retained-pool app client, HTTP API/default stage, JWT authorizer, CORS and API alarms.                   |
+| `WebStack`              | Private versioned browser bucket, CloudFront distribution and bucket policy.                             |
+| `CatalogServingStack`   | Catalog Lambda artifact, role, log, alarm, public JWT routes and IAM-authenticated service routes.       |
+| `UserCardsStack`        | UserCards Lambda artifact, owner credentials, Catalog service permission, routes, log and alarm.         |
+| `RecognitionStack`      | Recognition repository/image Lambda, provider permissions, routes, logs and alarm.                       |
+| `CatalogIngestionStack` | Catalog repository, versioned source bucket and finite Fargate task, cluster, roles and logs.            |
+
+`foundation.json` and `service.json` remain source definitions for the first, no-op legacy
+adoption. The CDK app synthesizes that two-stack shape with `layout=legacy`, or the seven independent
+units with `layout=target`. They are migration modes, not alternatives to operate indefinitely.
 
 Catalog and UserCards use separate schemas and owner read/write roles in one cluster. Each query
 implementation accesses only its owner's records. Credentials are injected into provider factories;
@@ -29,11 +36,65 @@ owner and require no asynchronous Search job.
 
 ## Environment inputs
 
-Validate environment names, PostgreSQL identifiers and immutable artifact identities before template
-execution. Foundation inputs cover database name/version, backup retention, Serverless capacity,
-auto-pause, owner roles and notification destination. Service inputs cover retained user-pool ID,
-foundation exports, API artifact key/object version, Recognition/Catalog image digests and permitted
-Recognition model settings. Credentials are secret references, never template values or browser settings.
+Instantiate the CDK app once per environment. `Environment` is fixed by CDK context; PostgreSQL and
+capacity settings remain explicit Foundation parameters. Gateway receives the retained user-pool ID
+and browser origin. Catalog-serving and UserCards each receive their own artifact key/object version;
+Recognition and Catalog ingestion receive digest-pinned image URIs. Credentials are secret
+references, never template values or browser settings.
+
+Validation may omit a release and leaves artifact parameters required. Deployment synthesis reads
+the captured immutable combination and uses its values as parameter defaults:
+
+```sh
+npm run synth -- --context environment=test --context layout=target \
+  --context release=artifacts/release.json --output .turbo/cdk-release.out
+```
+
+The release record must belong to the selected environment and pin both images by digest. Synthesis
+does not publish or rebuild any artifact.
+
+`release.json` is a schema-1 environment record. Every component owns its provenance and immutable
+identity, so an unchanged component can keep an older revision:
+
+```json
+{
+  "schema": 1,
+  "environment": "test",
+  "components": {
+    "catalogServing": {
+      "revision": "<40-character revision>",
+      "version": "<artifact version>",
+      "manifest": "manifest.json",
+      "codeKey": "releases/<artifact version>/catalog-serving.zip",
+      "codeVersion": "<S3 object version>"
+    },
+    "userCards": {
+      "revision": "<40-character revision>",
+      "version": "<artifact version>",
+      "manifest": "provenance/usercards-manifest.json",
+      "codeKey": "releases/<artifact version>/usercards.zip",
+      "codeVersion": "<S3 object version>"
+    },
+    "recognition": {
+      "revision": "<40-character revision>",
+      "version": "<artifact version>",
+      "manifest": "recognition/manifest.json",
+      "imageUri": "<repository>@sha256:<digest>"
+    },
+    "catalogIngestion": {
+      "revision": "<40-character revision>",
+      "version": "<artifact version>",
+      "manifest": "manifest.json",
+      "imageUri": "<repository>@sha256:<digest>"
+    }
+  }
+}
+```
+
+Manifest paths are relative to the release directory. Copy the manifest from a retained older
+release into `provenance/` when that component remains deployed. `npm run release:evidence` verifies
+each referenced manifest is clean, matches that component's revision/version and records the
+serving artifact digest; it separately requires object versions and digest-pinned image URIs.
 
 Capture actual stack outputs and parameters; do not guess generated physical names. Read/write roles
 are separate for each owner. Runtime workloads never use the master credential.
@@ -43,12 +104,13 @@ are separate for each owner. Runtime workloads never use the master credential.
 Build from a clean committed revision and locked dependencies. Preserve the complete release directory
 for rollback, including manifests and immutable artifact identities.
 
-| Artifact                                          | Destination                                                                        |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Browser bundle and prepared recognition assets    | Versioned private browser bucket, delivered by CloudFront.                         |
-| Interactive API zip                               | Versioned artifact bucket at `releases/<version>/api.zip`; pin its object version. |
-| Finite Catalog job and Dockerfile                 | Catalog ECR repository; pin `@sha256:` digest.                                     |
-| Recognition container context and source download | Recognition ECR repository; pin digest and retained manifest.                      |
+| Artifact                                          | Destination                                                                          |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Browser bundle and prepared recognition assets    | Versioned private browser bucket, delivered by CloudFront.                           |
+| Catalog-serving zip                               | Artifact bucket at `releases/<version>/catalog-serving.zip`; pin its object version. |
+| UserCards zip                                     | Artifact bucket at `releases/<version>/usercards.zip`; pin its object version.       |
+| Finite Catalog ingestion job and Dockerfile       | Catalog ECR repository; pin `@sha256:` digest.                                       |
+| Recognition container context and source download | Recognition ECR repository; pin digest and retained manifest.                        |
 
 ```sh
 npm ci
@@ -58,17 +120,17 @@ npm run package:recognition -- --out artifacts
 npm run release:evidence -- --out artifacts
 ```
 
-Recognition preparation precedes browser packaging. Publish API bytes to the captured artifact bucket,
-push images to the repositories named by foundation outputs, and record their digests. Obtain browser
-`config.json` from captured service outputs, with only public settings:
+Recognition preparation precedes browser packaging. Publish serving zips to the captured Foundation
+artifact bucket, push images to the repositories named by their owning stack outputs, and record
+their digests. Obtain browser `config.json` from captured Gateway/Web outputs, with only public settings:
 
 ```sh
 npm run package -- --from-outputs infra/service-outputs.json --environment test
 ```
 
-The browser receives API/authentication coordinates and supported public settings, never database
-credentials. Retain source revision, artifact digests, API object version and deployed parameters in
-the release record. Packaging and publication do not execute a stack update.
+The browser receives Gateway authentication coordinates and supported public settings, never database
+credentials. Retain each component's source revision, artifact digest/object version and deployed
+parameters in the environment record. Packaging and publication do not execute a stack update.
 
 ## Recognition packaging
 
@@ -79,8 +141,7 @@ themselves (docs/operations.md#recognition-packaging, docs/recognition.md#engine
 upstream revision, the model, catalog, OCR and title-name digests, the browser runtime and asset
 digests, the revision and the corresponding-source download — so a deployed combination can be
 inspected and restored. No matching policy, threshold or preprocessing step changes here, and the
-model-provider settings and credentials stay with the deployed function (`RecognitionFunction` of
-`infra/service.json`), never with the image.
+model-provider settings and credentials stay with `RecognitionStack`, never with the image.
 
 Preparation is an explicit build step. It fetches only public, frozen bytes through the retained
 preparation scripts; it is never part of publishing a revision and never runs inside the packaged
@@ -104,16 +165,16 @@ npm run prepare:recognition -- --python .recognition-build/runtime/bin/python \
 npm run package -- --out artifacts
 npm run package:recognition -- --out artifacts
 
-# 3. Build and push the image, then read the digest the service stack pins.
+# 3. Build and push the image, then read the digest RecognitionStack pins.
 docker build -t <recognition-repository>:<version> artifacts/recognition
 docker push <recognition-repository>:<version>
 aws ecr describe-images --region us-east-1 --repository-name <recognition-repository-name> \
   --image-ids imageTag=<version> --query 'imageDetails[0].imageDigest' --output text
 ```
 
-The foundation stack creates the two image repositories, so a push or a digest read names them
-through their outputs (`infra/outputs.json`): `CatalogRepositoryName` and `RecognitionRepositoryName`. CloudFormation generates the physical names, so none of these is
-`keeper-<environment>-<job>`.
+CatalogIngestionStack and RecognitionStack create their respective image repositories, so a push or
+digest read names them through captured `CatalogRepositoryName` or `RecognitionRepositoryName`.
+CloudFormation generates the physical names; never guess them.
 
 `npm run package:recognition` verifies every pinned manifest and hash before it writes anything: the
 retained baseline digests of the engine sources it ships, the model, catalog, OCR and title-name
@@ -158,68 +219,92 @@ restorable inputs.
 ## Create
 
 Creation requires explicit authorization for the concrete environment and inspected change sets.
-Validate templates, create the foundation change set, inspect resource actions and execute it first.
-Capture its outputs. Bootstrap the owners' schemas/roles through their supplied bootstrap contracts,
-using the temporary master credential only for this operation; verify owner isolation. Publish pinned
-artifacts, create/inspect/execute the service change set importing that foundation, and capture its
-outputs and deployed parameters. Publish the browser with public settings and invalidate CloudFront.
+Image repositories are established first, before either consuming runtime exists:
+
+1. Synthesize the repository-only stage:
+
+   ```sh
+   npm run synth -- --context environment=test --context layout=target \
+     --context stage=image-repositories --output .turbo/cdk-repositories.out
+   ```
+
+2. Create and inspect change sets only for `keeper-test-recognition` and
+   `keeper-test-catalog-ingestion` from that assembly. Execute them and capture
+   `RecognitionRepositoryName` and `CatalogRepositoryName`. These templates contain only the
+   owning ECR repository and its outputs; do not deploy the other synthesized stacks from this
+   stage.
+3. Build and push Recognition and Catalog-ingestion images to those captured repositories, resolve
+   both digests, and create `artifacts/release.json` with the component provenance above.
+4. Synthesize the complete target:
+
+   ```sh
+   npm run synth -- --context environment=test --context layout=target \
+     --context stage=complete --context release=artifacts/release.json \
+     --output .turbo/cdk-release.out
+   ```
+
+   Create Foundation, Web, Gateway, Catalog serving and UserCards in dependency order, capturing
+   provider outputs before planning consumers. Update the two repository stacks from the complete
+   assembly to add their consuming runtimes. Inspect that `RecognitionRepository` and
+   `CatalogRepository` keep the same logical and physical IDs and have no replacement action; the
+   repository definitions are identical in both stages.
+
+Bootstrap owner schemas/roles through their supplied contracts, using the temporary master
+credential only for bootstrap, and verify isolation. Publish serving artifacts before supplying
+their object versions. Publish the browser from captured Gateway and Web outputs and invalidate
+CloudFront.
 
 Use the AWS CLI's `cloudformation create-change-set`, `describe-change-set`, `execute-change-set` and
 stack waiters with the intended stack name, template and explicit parameter file. Inspection must
 precede execution. Never interpolate secrets into command arguments or print their values.
 
-A new isolated test environment uses synthetic data. A deployment to an existing environment preserves
-its authoritative data and identity. Importing the Catalog or owner collection is separate work.
+A new isolated test environment uses synthetic data. A deployment to an existing environment
+preserves authoritative data and identity. Importing Catalog or an owner collection is separate.
 
 ## Update
 
-Inspect the current stack/resource identities and release record before preparing replacements. Build
-and publish only changed artifacts; preserve unchanged artifact identities. Inspect compatible schema
-upgrades and grants through owner bootstrap before switching reads. Data-preserving upgrades must be
-repeat-safe and retain receipts, provenance and exact migration archives.
+Inspect the current stack/resource identities and environment record before preparing replacements.
+Build and publish only changed artifacts; keep unchanged object versions/digests in parameters.
+Deploy one intended stack, never `cdk deploy --all`. A compatible schema upgrade precedes the owner
+runtime that uses it and remains compatible with the previous runtime for rollback.
 
-For this architecture correction, plan removal of obsolete derived Search resources independently
-from authoritative schemas. Do not replace the cluster, retained Cognito pool, source archives or
-collection records. Source removal alone authorizes no live deletion. The inspected deployment plan
-must distinguish removable derived resources, retained rollback artifacts and authoritative state.
-Keep existing scheduling disabled throughout transition; do not re-enable the obsolete worker.
+### Existing test-environment migration
 
-An existing two-stack installation cannot apply either final template first. Before changing the
-service stack, prepare an **additive foundation bridge** from the foundation template currently
-returned by `cloudformation get-template` (not from an assumed repository revision):
+This ticket prepares but does not execute the live move. Use the actual deployed templates and
+parameters captured with `get-template` and `describe-stacks`; repository templates alone are not
+evidence of live state.
 
-1. Keep every deployed resource and output unchanged, including the exports still imported by the
-   deployed service: `database-reader-secret-arn`, `search-indexing-secret-arn`,
-   `search-query-secret-arn`, `catalog-publication-secret-arn`,
-   `usercards-publication-secret-arn` and `indexing-repository-arn`, each under its existing
-   `keeper-${Environment}-` name.
-2. Copy the `CatalogReaderRoleName` and `UserCardsReaderRoleName` parameter definitions,
-   `CatalogReaderSecret` and `UserCardsReaderSecret` resources, and
-   `DatabaseCatalogReaderSecretArn` and `DatabaseUserCardsReaderSecretArn` outputs from the final
-   `foundation.json` into that deployed template. Preserve all deployed parameter definitions and
-   values. Validate it and require its inspected foundation
-   change set to contain only those additive reader-secret resources and outputs: no replacement,
-   modification or removal of an existing resource.
-3. Execute that bridge and capture its outputs. Then create and inspect the final `service.json`
-   change set; it may switch to `catalog-reader-secret-arn` and `usercards-reader-secret-arn`
-   because both now exist. Execute and verify that service before preparing foundation cleanup.
-4. Keep the bridge foundation deployed for the required rollback window: the previous service
-   still imports the six legacy exports. Removing them prevents service rollback. Only after that
-   obligation ends, and with separate authorization for the concrete removals, inspect and execute
-   the final `foundation.json` change set. Its cleanup may remove obsolete definitions but must not
-   replace authoritative or retained resources.
+1. **Capture and protect.** Record both stack templates, parameters, outputs, logical/physical IDs,
+   termination/deletion protection, current artifact identities and a restorable database snapshot.
+   Confirm no stack update or Catalog task is running.
+2. **Adopt without splitting.** Synthesize `layout=legacy` for the same environment and compare its
+   parameters, resources, policies and outputs to the captured templates. Resolve every difference
+   explicitly. Import/adopt it only when the inspected change set is a no-op; do not accept a
+   replacement, deletion or physical-name change as an adoption shortcut.
+3. **Prepare target artifacts.** Package and publish the two Lambda zips independently, push both
+   images by digest, preserve the current browser bytes, and synthesize `layout=target`. Validate all
+   seven templates. This step starts no task and changes no stack.
+4. **Refactor retained resources.** Use CloudFormation stack refactoring/resource moves in small,
+   separately reviewed operations: browser bucket to Web; source bucket and Catalog repository to
+   Catalog ingestion; Recognition repository to Recognition; then the service resources to Gateway,
+   Web, Recognition and Catalog ingestion. Move only resources supported by the refactor plan and
+   preserve each logical/physical identity, policy and export required by still-deployed consumers.
+5. **Introduce serving stacks additively.** Deploy Catalog serving with its own artifact and Catalog
+   reader only. Verify JWT public reads and its IAM service route. Deploy UserCards with UserCards
+   read/write credentials and the signed Catalog adapter; verify it has no Catalog secret. Keep the
+   combined legacy Lambda/routes available until both boundaries pass synthetic live checks.
+6. **Switch routes, then remove legacy compute.** Move browser-facing route ownership to the new
+   component integrations without changing paths or authentication. Verify already-open browser
+   sessions and mixed versions. Only then remove the legacy integration/function/role/log/alarm.
+7. **Finalize Foundation.** Move no authoritative database, owner secret, alarm destination or
+   shared artifact bucket. Remove old exports only after no deployed or rollback template imports
+   them. Capture the resulting seven-stack environment record and retain the pre-split templates and
+   parameters through the rollback window.
 
-If any bridge or final change set differs from that order or action boundary, stop rather than
-trying the other final stack first. Retention policies preserve selected physical resources after an
-authorized removal; they do not make a still-imported CloudFormation export removable.
-
-Inspect foundation/service change sets before execution. Preserve previous artifact identities and
-compatible rollback behavior, capture deployed parameters after success, publish changed browser
-assets and invalidate CloudFront. Verify the actual deployed combination, not merely stack completion.
-
-Cluster replacement, database renaming and incompatible storage changes require an explicit migration
-and recovery procedure. They are outside this correction. Do not rerun completed owner migration or
-Catalog import to populate query metadata.
+Stop if a refactor plan proposes replacement of Aurora, Cognito identity, a retained bucket,
+repository or secret; if an export remains imported; or if route/auth/IAM verification differs from
+the plan. Retention policy is recovery protection, not permission to remove an imported resource.
+Collection migration and Catalog synchronization never run as part of this procedure.
 
 ## Background jobs
 
@@ -235,15 +320,24 @@ A process exit alone does not establish successful synchronization. Preserve evi
 
 ## Deletion and rollback
 
-Release rollback restores pinned API/image identities and retained browser bytes; it does not replay
-imports or rewrite owner data. CloudFormation performs failed-update rollback; investigate interrupted
-rollback before using `continue-update-rollback`.
+Component rollback restores only that stack's previous template, configuration and immutable
+artifact: Catalog-serving/UserCards object key and version, Recognition/Catalog-ingestion image
+digest, or retained Web bytes. Verify the component boundary and its contract consumers after the
+rollback. Do not start Catalog ingestion, replay imports or rewrite owner data. CloudFormation handles
+failed-update rollback; investigate an interruption before using `continue-update-rollback`.
 
-Environment deletion is separately authorized: remove the service stack before its imported foundation.
-Verify backup/restore sources first, explicitly remove database deletion protection only when authorized,
-and retain the final cluster snapshot, source/artifact/browser buckets, image repositories and owner
-secrets. Delete retained resources only after their recovery obligation ends. Never infer deletion
-permission from an obsolete source definition.
+During the split migration, rollback reverses only the completed stage: restore the prior route
+integration before removing a new serving stack; reverse a supported stack refactor with the
+captured pre/post templates and identifiers; or restore the adopted two-stack templates while their
+exports and artifacts remain. Never attempt rollback by creating replacement storage. If a reverse
+resource move is unsupported or the old stack can no longer import an export, stop and recover from
+the captured CloudFormation state rather than improvising.
+
+Environment deletion is separately authorized. Remove consumer/component stacks before Gateway and
+Foundation, verify backup/restore sources first, and remove database deletion protection only with
+explicit authorization. Retain the final cluster snapshot, source/artifact/browser buckets, image
+repositories and owner secrets until their recovery obligations end. An obsolete source definition
+does not authorize deletion.
 
 ## Data retention
 
@@ -277,6 +371,7 @@ Local template/package checks prove definitions and reproducible bytes, not live
 ```sh
 npm run lint:infrastructure
 npm run test:integration -- infrastructure-templates
+npm run test:integration -- cdk-stacks
 npm run test:integration -- packaging
 npm run test:integration -- recognition-packaging
 ```
@@ -290,7 +385,8 @@ Before declaring an authorized deployment complete, verify:
   and writes. Recognition endpoints retain their documented authentication and source download.
 - Database subnets remain isolated, Data API is enabled and deletion protection remains on.
 - IAM grants each workload only its required secrets/storage. Recognition cannot use the Data API;
-  Catalog cannot mutate UserCards; owner read roles cannot write or access the other owner's relations.
+  Catalog-serving has only its reader secret; UserCards has only its reader/writer secrets and signed
+  Catalog service access; owner roles cannot access the other owner's relations.
 - Synthetic-account queries enforce isolation and complete grouping before pagination. A committed
   edit is visible through new authoritative reads and refreshed browser fragments with no worker.
 - Pending records remain restricted to import reads, current collection/tag counts remain exact and
@@ -304,10 +400,10 @@ embed private collection records or credentials in repository tests or release e
 
 ## Runtime environment
 
-Application binds each owner client to its read/write capability. Runtime inputs contain environment,
-authentication/API coordinates, owner database/secret references, source snapshot location and optional
-Recognition provider settings. Owner connections can target different clusters without consumer changes.
-No indexing accounts/rebuild controls, Search credentials or indexing-progress endpoints remain.
+Application packages separate Catalog-serving, UserCards, Web and Catalog-ingestion entry points.
+Catalog-serving binds only Catalog's reader. UserCards binds its reader/writer and reaches Catalog's
+public contract through a SigV4-authenticated service adapter; it receives no Catalog credential.
+Catalog ingestion alone binds the writer and snapshot source. Recognition retains its Python entry.
 
 The interactive request timeout stays below the Lambda timeout, which stays below the gateway limit.
 Unknown write outcomes retain recoverable operation identity. Recognition cold-start timeout is a

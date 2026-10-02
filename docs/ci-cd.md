@@ -86,9 +86,10 @@ the target layout defined in [deployment composition](deployment.md#source-layou
 | `.github/workflows/**`, planner/mapping or deployment scripts                | Validate orchestration and re-plan affected stacks; a workflow edit alone does not force resource updates.                 |
 | `tests/**`, `storybook/**`, documentation and validation-only configuration  | Run CI; no deployment unless the file is an actual production build/synthesis input.                                       |
 
-For the current combined Application entry points and packaging command, use their actual broad
-dependency graph until the split is implemented. Do not claim independent Catalog/UserCards
-deployment while they still share one Lambda artifact.
+The packaging manifest records separate Catalog-serving and UserCards Lambda zips, plus Web and
+Catalog-ingestion artifacts. Use each entry point's actual dependency graph; a shared source change
+selects every artifact whose bundle imports it, while an unchanged artifact retains its deployed
+object key and version.
 
 Use source imports and explicit non-code package inputs together. Account for removed/renamed files
 and previous input graphs, so removing a production dependency still selects the affected artifact.

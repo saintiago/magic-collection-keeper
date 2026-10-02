@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { finishes } from '../../catalog/index.js';
+import { finishes } from '../../catalog/contract.js';
 import type { UserCardsSqlRow } from './executor.js';
 import {
   USERCARDS_LIMITS,

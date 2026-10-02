@@ -65,14 +65,23 @@ async function createRelease(options: ReleaseFixtureOptions = {}): Promise<strin
   workspaces.push(root);
   const sourceRevision = options.revision ?? revision;
   const label = `0.1.0-${sourceRevision.slice(0, 12)}`;
-  const backend = await describeFile(root, 'backend/api.zip', 'backend package');
+  const catalogServing = await describeFile(
+    root,
+    'catalog-serving/api.zip',
+    'catalog serving package',
+  );
+  const userCards = await describeFile(root, 'usercards/api.zip', 'usercards package');
   const browserEntry = await describeFile(root, 'browser/app.js', 'browser bundle');
   const browserPage = await describeFile(root, 'browser/index.html', '<!doctype html>');
-  const catalog = await describeFile(root, 'catalog/job.mjs', 'catalog job');
-  const catalogDockerfile = await describeFile(root, 'catalog/Dockerfile', 'FROM scratch');
+  const catalog = await describeFile(root, 'catalog-ingestion/job.mjs', 'catalog job');
+  const catalogDockerfile = await describeFile(
+    root,
+    'catalog-ingestion/Dockerfile',
+    'FROM scratch',
+  );
   const browserFiles: ArtifactFile[] = [browserEntry, browserPage];
   const recognition =
-    options.recognition === true
+    options.recognition === true || options.deployment === true
       ? await createRecognitionFixture(root, browserFiles, options, label)
       : null;
   await write(
@@ -80,16 +89,17 @@ async function createRelease(options: ReleaseFixtureOptions = {}): Promise<strin
     'manifest.json',
     `${JSON.stringify(
       {
-        schema: 1,
+        schema: 2,
         revision: sourceRevision,
         workingTree: options.workingTree ?? 'clean',
         version: label,
         node: process.version,
         platform: 'linux-x64',
         artifacts: {
-          backend: { ...backend, entry: 'index.mjs' },
+          catalogServing: { ...catalogServing, entry: 'index.mjs' },
+          userCards: { ...userCards, entry: 'index.mjs' },
           browser: { directory: 'browser', files: browserFiles, settings: null },
-          catalog: { ...catalog, dockerfile: catalogDockerfile },
+          catalogIngestion: { ...catalog, dockerfile: catalogDockerfile },
         },
       },
       null,
@@ -192,26 +202,56 @@ async function createRecognitionFixture(
 async function writeReleaseRecord(
   root: string,
   options: {
-    readonly version?: string;
     readonly environment?: string;
-    /** Whether the captured parameters name the indexing image, as a deployment of this release does. */
+    readonly catalogServing?: ComponentSource;
+    readonly userCards?: ComponentSource;
+    readonly recognition?: ComponentSource;
+    readonly catalogIngestion?: ComponentSource;
   },
 ): Promise<void> {
-  const label = options.version ?? version;
-  const parameters = [
-    { ParameterKey: 'Environment', ParameterValue: options.environment ?? 'test' },
-    { ParameterKey: 'ApiCodeKey', ParameterValue: `releases/${label}/api.zip` },
-    { ParameterKey: 'ApiCodeVersion', ParameterValue: 'object-version-3' },
-    {
-      ParameterKey: 'RecognitionImageUri',
-      ParameterValue: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-recognition@sha256:${'a'.repeat(64)}`,
-    },
-    {
-      ParameterKey: 'CatalogJobImageUri',
-      ParameterValue: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-catalog@sha256:${'b'.repeat(64)}`,
-    },
-  ];
-  await write(root, 'release.json', `${JSON.stringify(parameters, null, 2)}\n`);
+  const packaging = { revision, version, manifest: 'manifest.json' };
+  const recognition = { revision, version, manifest: 'recognition/manifest.json' };
+  const catalogServing = options.catalogServing ?? packaging;
+  const userCards = options.userCards ?? packaging;
+  const catalogIngestion = options.catalogIngestion ?? packaging;
+  await write(
+    root,
+    'release.json',
+    `${JSON.stringify(
+      {
+        schema: 1,
+        environment: options.environment ?? 'test',
+        components: {
+          catalogServing: {
+            ...catalogServing,
+            codeKey: `releases/${catalogServing.version}/catalog-serving.zip`,
+            codeVersion: 'object-version-3',
+          },
+          userCards: {
+            ...userCards,
+            codeKey: `releases/${userCards.version}/usercards.zip`,
+            codeVersion: 'object-version-4',
+          },
+          recognition: {
+            ...(options.recognition ?? recognition),
+            imageUri: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-recognition@sha256:${'a'.repeat(64)}`,
+          },
+          catalogIngestion: {
+            ...catalogIngestion,
+            imageUri: `928374651098.dkr.ecr.us-east-1.amazonaws.com/keeper-test-catalog@sha256:${'b'.repeat(64)}`,
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+interface ComponentSource {
+  readonly revision: string;
+  readonly version: string;
+  readonly manifest: string;
 }
 
 function markdownLinks(markdown: string): readonly string[] {
@@ -240,8 +280,8 @@ describe('release acceptance evidence', () => {
     expect(evidence.version).toBe(version);
     expect(evidence.workingTree).toBe('clean');
     expect(evidence.stages.sourceCompletion.status).toBe('recorded');
-    // Both background jobs contribute their module and the Dockerfile that packages it.
-    expect(evidence.stages.sourceCompletion.verifiedFiles).toBe(5);
+    // Two serving zips, browser files, and the ingestion module/Dockerfile are independent bytes.
+    expect(evidence.stages.sourceCompletion.verifiedFiles).toBe(6);
     expect(evidence.stages.sourceCompletion.recognition).toBeNull();
     expect(evidence.stages.deployment.status).toBe('not-recorded');
     expect(evidence.stages.deployment.reason).toMatch(/authorization/);
@@ -258,15 +298,15 @@ describe('release acceptance evidence', () => {
 
   it('refuses recorded bytes that changed since packaging', async () => {
     const outDir = await createRelease();
-    await write(outDir, 'catalog/job.mjs', 'tampered');
+    await write(outDir, 'catalog-ingestion/job.mjs', 'tampered');
 
     await expect(prepareReleaseEvidence({ outDir, repoRoot })).rejects.toThrow(
-      /catalog\/job\.mjs does not match/,
+      /catalog-ingestion\/job\.mjs does not match/,
     );
   });
 
   it('verifies the catalog-job container definition as release bytes', async () => {
-    for (const dockerfile of ['catalog/Dockerfile'] as const) {
+    for (const dockerfile of ['catalog-ingestion/Dockerfile'] as const) {
       const changed = await createRelease();
       await write(
         changed,
@@ -280,9 +320,9 @@ describe('release acceptance evidence', () => {
     }
 
     const missing = await createRelease();
-    await rm(path.join(missing, 'catalog/Dockerfile'));
+    await rm(path.join(missing, 'catalog-ingestion/Dockerfile'));
     await expect(prepareReleaseEvidence({ outDir: missing, repoRoot })).rejects.toThrow(
-      /catalog\/Dockerfile/,
+      /catalog-ingestion\/Dockerfile/,
     );
   });
 
@@ -298,7 +338,7 @@ describe('release acceptance evidence', () => {
     );
   });
 
-  it('records a deployment only from a release record that names this release', async () => {
+  it('records a deployment only from verified component provenance', async () => {
     const outDir = await createRelease({ deployment: true });
 
     const { evidence } = await prepareReleaseEvidence({ outDir, repoRoot });
@@ -308,16 +348,66 @@ describe('release acceptance evidence', () => {
     expect(deployment.reason).toBeNull();
     expect(deployment.release?.file).toBe('release.json');
     expect(deployment.environment).toBe('test');
-    expect(deployment.apiCodeKey).toBe(`releases/${version}/api.zip`);
-    expect(deployment.apiCodeVersion).toBe('object-version-3');
-    expect(deployment.recognitionImageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
-    expect(deployment.catalogJobImageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
+    expect(deployment.components?.catalogServing).toMatchObject({
+      revision,
+      version,
+      codeKey: `releases/${version}/catalog-serving.zip`,
+      codeVersion: 'object-version-3',
+    });
+    expect(deployment.components?.userCards.codeKey).toBe(`releases/${version}/usercards.zip`);
+    expect(deployment.components?.userCards.codeVersion).toBe('object-version-4');
+    expect(deployment.components?.recognition.imageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
+    expect(deployment.components?.catalogIngestion.imageUri).toMatch(/@sha256:[0-9a-f]{64}$/);
+  });
 
-    const foreign = await createRelease();
-    await writeReleaseRecord(foreign, { version: '0.1.0-ffffffffffff' });
-    await expect(prepareReleaseEvidence({ outDir: foreign, repoRoot })).rejects.toThrow(
-      /does not name this release/,
+  it('records mixed component versions and the previous rollback combination', async () => {
+    const outDir = await createRelease({ deployment: true });
+    const previousRevision = 'f'.repeat(40);
+    const previousVersion = `0.1.0-${previousRevision.slice(0, 12)}`;
+    const currentManifest = JSON.parse(
+      await readFile(path.join(outDir, 'manifest.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    const previousManifest = {
+      ...currentManifest,
+      revision: previousRevision,
+      version: previousVersion,
+    };
+    await write(
+      outDir,
+      'provenance/previous-manifest.json',
+      `${JSON.stringify(previousManifest, null, 2)}\n`,
     );
+    const previous = {
+      revision: previousRevision,
+      version: previousVersion,
+      manifest: 'provenance/previous-manifest.json',
+    };
+    await writeReleaseRecord(outDir, { userCards: previous });
+
+    const candidate = await prepareReleaseEvidence({ outDir, repoRoot });
+    expect(candidate.evidence.stages.deployment.components?.catalogServing.revision).toBe(revision);
+    expect(candidate.evidence.stages.deployment.components?.userCards).toMatchObject({
+      revision: previous.revision,
+      version: previous.version,
+      manifest: { file: previous.manifest },
+    });
+
+    await writeReleaseRecord(outDir, {
+      catalogServing: previous,
+      userCards: previous,
+      catalogIngestion: previous,
+    });
+    const rolledBack = await prepareReleaseEvidence({ outDir, repoRoot });
+    expect(rolledBack.evidence.stages.deployment.components?.catalogServing).toMatchObject({
+      revision: previous.revision,
+      version: previous.version,
+      manifest: { file: previous.manifest },
+    });
+    expect(rolledBack.evidence.stages.deployment.components?.userCards).toMatchObject({
+      revision: previous.revision,
+      version: previous.version,
+      manifest: { file: previous.manifest },
+    });
   });
 
   it('verifies the recognition context and the source download it carries', async () => {

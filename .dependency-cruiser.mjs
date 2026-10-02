@@ -4,8 +4,9 @@
  * under src/<component> (docs/architecture.md); other components import those modules rather than
  * the component's internals. Application serves a browser and a backend runtime, so its browser-safe
  * contract is src/application/index.ts and its backend compositions are src/application/backend.ts,
- * the packaged deployment composition src/application/deployment.ts and the packaged finite job
- * entry point src/application/catalog-job.ts. UserInterface's
+ * the packaged deployment composition src/application/deployment.ts and independent production
+ * entry points under src/application/entrypoints/. The Web entry point is the composition root
+ * allowed to select UserInterface's browser deployment. UserInterface's
  * browser entry points are src/ui/index.ts and the deployment composition src/ui/deployment.ts.
  * UserCards publishes its browser operation facade and constraints through
  * src/usercards/browser.ts, while its backend contracts stay in
@@ -36,10 +37,10 @@ const componentEntries = {
   application: ['index', 'backend', 'deployment'],
   'card-list': ['index'],
   capture: ['index'],
-  catalog: ['index', 'browser'],
+  catalog: ['index', 'browser', 'contract', 'serving'],
   recognition: ['index'],
   ui: ['index', 'deployment'],
-  usercards: ['index', 'browser'],
+  usercards: ['index', 'browser', 'contract', 'serving'],
 };
 
 const publicInterfaceRules = components.map((component) => ({
@@ -72,7 +73,10 @@ const providers = {
 const directionRules = components.map((component) => ({
   name: `allowed-providers-of-${component}`,
   severity: 'error',
-  from: { path: `^src/${component}/` },
+  from: {
+    path: `^src/${component}/`,
+    ...(component === 'application' ? { pathNot: '^src/application/entrypoints/web\\.ts$' } : {}),
+  },
   to: {
     path: `^src/(${components.filter((target) => target !== component && !providers[component].includes(target)).join('|')})/`,
   },

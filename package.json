@@ -11,6 +11,8 @@
     "migration:export": "esbuild scripts/migration/export-cli.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=.turbo/migration/export.mjs --log-level=warning && node .turbo/migration/export.mjs",
     "migration:prepare": "esbuild scripts/migration/cli.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=.turbo/migration/prepare.mjs --log-level=warning && node .turbo/migration/prepare.mjs",
     "build": "node -e \"require('node:fs').rmSync('build', { recursive: true, force: true })\" && tsc --project tsconfig.build.json",
+    "cdk": "cdk",
+    "synth": "cdk synth --quiet --no-path-metadata --no-version-reporting",
     "package": "esbuild scripts/package-artifacts.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=.turbo/packaging/package-artifacts.mjs --log-level=warning && node .turbo/packaging/package-artifacts.mjs",
     "prepare:recognition": "esbuild scripts/prepare-recognition.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=.turbo/packaging/prepare-recognition.mjs --log-level=warning && node .turbo/packaging/prepare-recognition.mjs",
     "package:recognition": "esbuild scripts/package-recognition.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=.turbo/packaging/package-recognition.mjs --log-level=warning && node .turbo/packaging/package-recognition.mjs",
@@ -20,7 +22,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint . --cache --cache-location .turbo/eslint/.eslintcache --cache-strategy content",
     "lint:fix": "eslint . --fix",
-    "lint:infrastructure": "node scripts/lint-infrastructure.ts",
+    "lint:infrastructure": "npm run synth -- --context environment=test --context layout=legacy --output .turbo/cdk-legacy.out && npm run synth -- --context environment=test --context layout=target --output .turbo/cdk.out && npm run synth -- --context environment=test --context layout=target --context stage=image-repositories --output .turbo/cdk-repositories.out && node scripts/lint-infrastructure.ts",
     "typecheck": "tsc --noEmit",
     "boundaries": "depcruise src",
     "test": "vitest run",
@@ -39,6 +41,9 @@
     "@playwright/test": "^1.63.0",
     "@types/node": "^24.13.4",
     "@types/pg": "^8.23.1",
+    "aws-cdk": "^2.1144.0",
+    "aws-cdk-lib": "^2.272.0",
+    "constructs": "^10.8.1",
     "dependency-cruiser": "^18.4.0",
     "embedded-postgres": "^18.4.0-beta.17",
     "esbuild": "^0.28.2",
@@ -48,6 +53,7 @@
     "onnxruntime-web": "1.29.0",
     "pg": "^8.23.0",
     "prettier": "^3.9.9",
+    "tsx": "^4.23.15",
     "turbo": "2.11.3",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.1",
@@ -56,6 +62,10 @@
   "dependencies": {
     "@aws-sdk/client-rds-data": "^3.1141.0",
     "@aws-sdk/client-s3": "^3.1141.0",
+    "@aws-sdk/credential-provider-node": "^3.972.84",
+    "@smithy/hash-node": "^4.5.2",
+    "@smithy/protocol-http": "^5.6.2",
+    "@smithy/signature-v4": "^5.7.4",
     "zod": "^4.6.5"
   }
 }

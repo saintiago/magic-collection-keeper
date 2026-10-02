@@ -15,7 +15,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
-import { finishes } from '../../catalog/index.js';
+import { finishes } from '../../catalog/contract.js';
 import { UserCardsError } from './errors.js';
 import {
   USERCARDS_LIMITS,

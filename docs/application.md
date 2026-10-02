@@ -79,8 +79,10 @@ Use explicit construction functions. Configuration identifies environment, resou
 and enabled capabilities. Validate it before accepting work and expose only public settings to the
 browser. Keep development, test and production identities and storage separate.
 
-Interactive backend components can share a deployment without sharing internal modules or mutable
-request state. Per-request identity, cancellation and diagnostics remain isolated. Release temporary
+Production uses separate Catalog-serving and UserCards compositions. Catalog-serving receives only
+Catalog's reader; UserCards receives only its reader/writer and a SigV4-authenticated Catalog service
+adapter. The retained combined constructor remains a test/compatibility composition, not a packaged
+runtime. Per-request identity, cancellation and diagnostics remain isolated. Release temporary
 resources when work completes; retain reusable clients only when safe between requests.
 
 Diagnostics identify the operation and failure without logging credentials, images or private

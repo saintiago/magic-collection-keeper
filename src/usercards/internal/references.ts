@@ -1,4 +1,8 @@
-import { CATALOG_LIMITS, type CatalogResolver, type PrintingRecord } from '../../catalog/index.js';
+import {
+  CATALOG_LIMITS,
+  type CatalogResolver,
+  type PrintingRecord,
+} from '../../catalog/contract.js';
 import { resolveCatalog } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';

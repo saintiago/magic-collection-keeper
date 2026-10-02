@@ -2,8 +2,8 @@
  * Packaging of the deployable artifacts (docs/operations.md#packaging-and-deployment).
  *
  * One command builds the artifacts an explicit deployment needs from the committed sources and the
- * locked dependencies: the interactive backend package (one zip the API Lambda runs), the
- * browser bundle (the static files CloudFront delivers) and the finite Catalog job.
+ * locked dependencies: independent Catalog-serving and UserCards Lambda zips, the browser bundle
+ * (the static files CloudFront delivers) and the finite Catalog ingestion job.
  * Nothing environment-specific is baked into a build: the public browser settings of one
  * environment are written as `browser/config.json` when the deployment supplies the stack's
  * captured outputs, and no secret, resource ARN or credential reference ever reaches the browser
@@ -21,7 +21,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { build } from 'esbuild';
+import { build, type BuildOptions } from 'esbuild';
 import JSZip from 'jszip';
 
 import { resolvePublicSettings, type PublicApplicationSettings } from '../src/application/index.js';
@@ -47,7 +47,7 @@ const nodeTarget = 'node24';
 const defaultRegion = 'us-east-1';
 
 export interface ArtifactManifest {
-  readonly schema: 1;
+  readonly schema: 2;
   /** Source revision the artifacts were built from. */
   readonly revision: string;
   /** Whether that revision was the whole working tree (`clean`) or carried uncommitted changes. */
@@ -57,7 +57,8 @@ export interface ArtifactManifest {
   readonly node: string;
   readonly platform: string;
   readonly artifacts: {
-    readonly backend: ArtifactFile & { readonly entry: string };
+    readonly catalogServing: ArtifactFile & { readonly entry: string };
+    readonly userCards: ArtifactFile & { readonly entry: string };
     readonly browser: {
       readonly directory: string;
       readonly files: readonly ArtifactFile[];
@@ -68,7 +69,7 @@ export interface ArtifactManifest {
      * deployment builds the image from this Dockerfile, so the evidence has to verify it too
      * (docs/release-checklist.md#source-completion).
      */
-    readonly catalog: ArtifactFile & { readonly dockerfile: ArtifactFile };
+    readonly catalogIngestion: ArtifactFile & { readonly dockerfile: ArtifactFile };
   };
 }
 
@@ -108,9 +109,10 @@ export async function packageArtifacts(
   const ownedPaths = [
     ...new Set(
       [
-        artifactLayout.backendArchive,
+        artifactLayout.catalogServingArchive,
+        artifactLayout.userCardsArchive,
         artifactLayout.browserDirectory,
-        artifactLayout.catalogEntry,
+        artifactLayout.catalogIngestionEntry,
         artifactLayout.manifest,
       ].map((file) => file.split('/')[0] ?? file),
     ),
@@ -120,12 +122,12 @@ export async function packageArtifacts(
   }
   await mkdir(outDir, { recursive: true });
 
-  await buildBackend(root, outDir);
+  await buildServingArtifacts(root, outDir);
   await buildBrowser(root, outDir, publicSettings);
   await buildCatalog(root, outDir);
 
   const manifest: ArtifactManifest = {
-    schema: 1,
+    schema: 2,
     revision,
     workingTree: readWorkingTree(root),
     // A Docker tag accepts word characters, periods and hyphens, so the release label joins the
@@ -134,8 +136,12 @@ export async function packageArtifacts(
     node: process.version,
     platform: `${process.platform}-${process.arch}`,
     artifacts: {
-      backend: {
-        ...(await describeFile(outDir, artifactLayout.backendArchive)),
+      catalogServing: {
+        ...(await describeFile(outDir, artifactLayout.catalogServingArchive)),
+        entry: 'index.mjs',
+      },
+      userCards: {
+        ...(await describeFile(outDir, artifactLayout.userCardsArchive)),
         entry: 'index.mjs',
       },
       browser: {
@@ -146,9 +152,9 @@ export async function packageArtifacts(
             ? null
             : await describeFile(outDir, artifactLayout.browserSettings),
       },
-      catalog: {
-        ...(await describeFile(outDir, artifactLayout.catalogEntry)),
-        dockerfile: await describeFile(outDir, artifactLayout.catalogDockerfile),
+      catalogIngestion: {
+        ...(await describeFile(outDir, artifactLayout.catalogIngestionEntry)),
+        dockerfile: await describeFile(outDir, artifactLayout.catalogIngestionDockerfile),
       },
     },
   };
@@ -157,12 +163,35 @@ export async function packageArtifacts(
   return { manifest, manifestPath };
 }
 
-async function buildBackend(root: string, outDir: string): Promise<void> {
-  const entry = path.join(outDir, artifactLayout.backendEntry);
-  await bundle(root, path.join(root, 'src', 'application', 'lambda.ts'), entry, 'node');
-  const source = await readFile(entry);
-  const archive = await zipArchive({ 'index.mjs': source });
-  await writeFile(path.join(outDir, artifactLayout.backendArchive), archive);
+async function buildServingArtifacts(root: string, outDir: string): Promise<void> {
+  for (const artifact of [
+    {
+      source: 'catalog-serving.ts',
+      entry: artifactLayout.catalogServingEntry,
+      archive: artifactLayout.catalogServingArchive,
+    },
+    {
+      source: 'usercards.ts',
+      entry: artifactLayout.userCardsEntry,
+      archive: artifactLayout.userCardsArchive,
+    },
+  ] as const) {
+    const entry = path.join(outDir, artifact.entry);
+    await build(backendBundleOptions(root, artifact.source, entry));
+    const source = await readFile(entry);
+    await writeFile(path.join(outDir, artifact.archive), await zipArchive({ 'index.mjs': source }));
+  }
+}
+
+/** The exact production options for one independently packaged backend entry point. */
+export function backendBundleOptions(
+  root: string,
+  source: 'catalog-serving.ts' | 'usercards.ts' | 'catalog-ingestion.ts',
+  outfile: string,
+): BuildOptions {
+  return bundleOptions(root, outfile, 'node', {
+    entryPoints: [path.join(root, 'src', 'application', 'entrypoints', source)],
+  });
 }
 
 async function buildBrowser(
@@ -170,7 +199,7 @@ async function buildBrowser(
   outDir: string,
   publicSettings: PublicApplicationSettings | null,
 ): Promise<void> {
-  const entry = path.join(root, 'src', 'ui', 'deployment.ts');
+  const entry = path.join(root, 'src', 'application', 'entrypoints', 'web.ts');
   const specifier = `./${path.relative(root, entry).split(path.sep).join('/')}`;
   const boot = [
     `import { createBrowserDeployment } from ${JSON.stringify(specifier)};`,
@@ -211,27 +240,18 @@ async function buildBrowser(
 }
 
 async function buildCatalog(root: string, outDir: string): Promise<void> {
-  await bundle(
-    root,
-    path.join(root, 'src', 'application', 'catalog-job.ts'),
-    path.join(outDir, artifactLayout.catalogEntry),
-    'node',
+  await build(
+    backendBundleOptions(
+      root,
+      'catalog-ingestion.ts',
+      path.join(outDir, artifactLayout.catalogIngestionEntry),
+    ),
   );
-  await writeFile(path.join(outDir, artifactLayout.catalogDockerfile), catalogDockerfile(), 'utf8');
-}
-
-/**
- * One bundle of a committed entry and every dependency it reaches, so the artifact does not depend
- * on a runtime's own version of a dependency. The Lambda and container runtimes only supply
- * Node.js.
- */
-async function bundle(
-  root: string,
-  entry: string,
-  outfile: string,
-  platform: 'node' | 'browser',
-): Promise<void> {
-  await build(bundleOptions(root, outfile, platform, { entryPoints: [entry] }));
+  await writeFile(
+    path.join(outDir, artifactLayout.catalogIngestionDockerfile),
+    catalogDockerfile(),
+    'utf8',
+  );
 }
 
 /** One bundle of the browser boot code the page loads; the same options, from generated source. */
@@ -353,9 +373,8 @@ function readOutDir(options: PackageArtifactsOptions): string {
 }
 
 /**
- * Projects the captured service-stack outputs onto the public browser settings
- * (infra/service.json#Outputs). Only outputs that are public settings are read; a stack output
- * that is not a setting is ignored instead of published.
+ * Projects captured Gateway/Recognition outputs onto public browser settings. Only outputs that are
+ * public settings are read; any other stack output is ignored instead of published.
  */
 export function publicSettingsFromStackOutputs(
   outputs: unknown,
@@ -366,7 +385,7 @@ export function publicSettingsFromStackOutputs(
   const apiBaseUrl = captured['ApiBaseUrl'];
   const computeBaseUrl = captured['RecognitionBaseUrl'] ?? apiBaseUrl;
   if (apiBaseUrl === undefined) {
-    throw new Error('The captured service-stack outputs name no ApiBaseUrl.');
+    throw new Error('The captured deployment outputs name no ApiBaseUrl.');
   }
   return resolvePublicSettings({
     environment,
@@ -480,9 +499,10 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
   });
   const destination = path.relative(repoRoot, packaged.manifestPath) || packaged.manifestPath;
   console.log(
-    `Packaged ${packaged.manifest.artifacts.backend.file}, ` +
+    `Packaged ${packaged.manifest.artifacts.catalogServing.file}, ` +
+      `${packaged.manifest.artifacts.userCards.file}, ` +
       `${packaged.manifest.artifacts.browser.directory}/ and ` +
-      `${packaged.manifest.artifacts.catalog.file} for revision ` +
+      `${packaged.manifest.artifacts.catalogIngestion.file} for revision ` +
       `${packaged.manifest.revision.slice(0, 12)} into ${destination}.`,
   );
 }

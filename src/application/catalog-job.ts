@@ -8,15 +8,12 @@
  * only the Catalog writer credential; it never constructs the interactive request boundary.
  */
 
+/** @deprecated Use the independently packaged Catalog ingestion entry point. */
 import { pathToFileURL } from 'node:url';
 
-import { runCatalogJob } from './deployment.js';
+import { main } from './entrypoints/catalog-ingestion.js';
 
-/** Runs one synchronization and reports the process outcome: 0 published, 1 nothing published. */
-export async function main(): Promise<number> {
-  const outcome = await runCatalogJob({ environment: process.env });
-  return outcome.ok ? 0 : 1;
-}
+export { main };
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.exitCode = await main();

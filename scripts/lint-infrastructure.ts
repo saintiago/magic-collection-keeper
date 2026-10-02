@@ -6,11 +6,12 @@ import { fileURLToPath } from 'node:url';
 /**
  * Validates the rebuild's CloudFormation templates (docs/operations.md#infrastructure).
  *
- * Every template directly under infra/ is linted with the cfn-lint version pinned in
- * infra/requirements-lint.txt, provisioned once into the ignored `.infrastructure-python`
- * environment. The check establishes template validity only: the configured identity and network
- * boundaries and an applicable change plan are inspected against a deployed environment, and
- * infra/README.md records those steps.
+ * The two migration-source templates, both CDK layouts and the repository bootstrap stage are
+ * linted with the cfn-lint
+ * version pinned in infra/requirements-lint.txt, provisioned once into the ignored
+ * `.infrastructure-python` environment. The check establishes template validity only: configured
+ * identity and network boundaries and an applicable change plan are inspected against a deployed
+ * environment, and infra/README.md records those steps.
  */
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -50,15 +51,31 @@ function pinnedVersion(): string {
   return version;
 }
 
-/** The templates to validate: every JSON file directly inside infra/. */
+/** The templates to validate: migration sources, both layouts and repository bootstrap. */
 function templates(): readonly string[] {
   const files = readdirSync(infraRoot)
     .filter((name) => name.endsWith('.json') && !CAPTURES.has(name))
-    .sort();
+    .map((name) => path.join('infra', name));
+  for (const directory of [
+    '.turbo/cdk-legacy.out',
+    '.turbo/cdk.out',
+    '.turbo/cdk-repositories.out',
+  ]) {
+    const absolute = path.join(root, directory);
+    if (!existsSync(absolute)) {
+      fail(`The synthesized infrastructure directory is missing (${directory}).`);
+    }
+    files.push(
+      ...readdirSync(absolute)
+        .filter((name) => name.endsWith('.template.json'))
+        .map((name) => path.join(directory, name)),
+    );
+  }
+  files.sort();
   if (files.length === 0) {
     fail('infra/ holds no CloudFormation template to validate.');
   }
-  return files.map((name) => path.join('infra', name));
+  return files;
 }
 
 function requireBaselineVersion(executable: string): void {

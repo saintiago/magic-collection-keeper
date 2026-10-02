@@ -1,4 +1,4 @@
-import type { Finish, PrintingId } from '../../catalog/index.js';
+import type { Finish, PrintingId } from '../../catalog/contract.js';
 import type { MigrationReadback } from './migration-contract.js';
 import type { MigrationBatch } from './migration-plan.js';
 import type {

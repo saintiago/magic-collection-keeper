@@ -1,6 +1,6 @@
 /** UserCards-owned storage and account-scoped read views. Every private view enforces the transaction account before exposing records. Query readers receive only the owner query surface; mutations and pending reads remain behind their own contracts. */
 
-import { finishes } from '../../catalog/index.js';
+import { finishes } from '../../catalog/contract.js';
 import {
   USERCARDS_LIMITS,
   associationLevelsByTagKind,

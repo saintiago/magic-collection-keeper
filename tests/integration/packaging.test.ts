@@ -3,7 +3,7 @@
  * (docs/operations.md#packaging-and-deployment, docs/application.md#configuration-and-lifecycle).
  *
  * The command that builds the deployable artifacts runs for real: the same revision is packaged
- * twice and the bytes are compared, the interactive package is loaded the way the API Lambda loads
+ * twice and the bytes are compared, both serving packages are loaded the way their Lambdas load
  * it, the two finite jobs are executed the way their tasks run them and the browser artifact is
  * held to the public settings rule. Publishing, live identity and deployed authorization stay
  * separate evidence (infra/README.md#verification).
@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import JSZip from 'jszip';
+import { build, type Plugin } from 'esbuild';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { ConfigurationError } from '../../src/application/index.js';
@@ -25,6 +26,7 @@ import {
   artifactLayout,
   packageArtifacts,
   publicSettingsFromStackOutputs,
+  backendBundleOptions,
   type ArtifactManifest,
 } from '../../scripts/package-artifacts.js';
 import { readRevision } from '../../scripts/packaging-support.js';
@@ -63,28 +65,32 @@ describe('packaging the deployable artifacts', () => {
 
   afterAll(async () => {
     await rm(workspace, { recursive: true, force: true });
-  });
+  }, 30_000);
 
   it('records the source revision, version and digest of every artifact', async () => {
-    expect(manifest.schema).toBe(1);
+    expect(manifest.schema).toBe(2);
     expect(manifest.revision).toBe(readRevision(repoRoot));
     expect(manifest.workingTree).toMatch(/^(clean|dirty)$/);
     // The label names artifacts and the published catalog image, so it stays a valid Docker tag.
     expect(manifest.version).toBe(`0.1.0-${manifest.revision.slice(0, 12)}`);
     expect(manifest.version).toMatch(/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/);
-    expect(manifest.artifacts.backend.file).toBe(artifactLayout.backendArchive);
+    expect(manifest.artifacts.catalogServing.file).toBe(artifactLayout.catalogServingArchive);
+    expect(manifest.artifacts.userCards.file).toBe(artifactLayout.userCardsArchive);
     expect(manifest.artifacts.browser.directory).toBe(artifactLayout.browserDirectory);
-    expect(manifest.artifacts.catalog.dockerfile.file).toBe(artifactLayout.catalogDockerfile);
+    expect(manifest.artifacts.catalogIngestion.dockerfile.file).toBe(
+      artifactLayout.catalogIngestionDockerfile,
+    );
     expect(manifest.artifacts.browser.settings?.file).toBe(artifactLayout.browserSettings);
 
     const recorded = [
-      manifest.artifacts.backend,
+      manifest.artifacts.catalogServing,
+      manifest.artifacts.userCards,
       ...manifest.artifacts.browser.files,
       ...(manifest.artifacts.browser.settings === null
         ? []
         : [manifest.artifacts.browser.settings]),
-      manifest.artifacts.catalog,
-      manifest.artifacts.catalog.dockerfile,
+      manifest.artifacts.catalogIngestion,
+      manifest.artifacts.catalogIngestion.dockerfile,
     ];
     expect(recorded.length).toBeGreaterThanOrEqual(5);
     for (const artifact of recorded) {
@@ -102,55 +108,106 @@ describe('packaging the deployable artifacts', () => {
     });
 
     expect(rebuilt.manifest).toEqual(manifest);
-    for (const artifact of [manifest.artifacts.backend, manifest.artifacts.catalog]) {
+    for (const artifact of [
+      manifest.artifacts.catalogServing,
+      manifest.artifacts.userCards,
+      manifest.artifacts.catalogIngestion,
+    ]) {
       const first = await readFile(path.join(outDir, artifact.file));
       const second = await readFile(path.join(workspace, 'rebuild', artifact.file));
       expect(second.equals(first)).toBe(true);
     }
   }, 120_000);
 
-  it('packages the interactive runtime the API Lambda loads', async () => {
-    const archive = await JSZip.loadAsync(
-      await readFile(path.join(outDir, artifactLayout.backendArchive)),
-    );
-    expect(Object.keys(archive.files)).toEqual(['index.mjs']);
-    const entry = await archive.file('index.mjs')?.async('nodebuffer');
-    expect(entry).toBeDefined();
-    const extracted = path.join(workspace, 'backend-index.mjs');
-    await writeFile(extracted, entry ?? Buffer.alloc(0));
-    const loaded = (await import(pathToFileURL(extracted).href)) as { readonly handler?: unknown };
-    expect(typeof loaded.handler).toBe('function');
-    // Invoked without this environment's variables, the packaged entry fails closed instead of
-    // reaching an unconfigured resource.
-    const handler = loaded.handler as (event: unknown) => Promise<{
-      readonly statusCode: number;
-      readonly body: string;
-    }>;
-    const response = await handler({
-      rawPath: '/api/card',
-      requestContext: { http: { method: 'GET', path: '/api/card' } },
-    });
-    expect(response.statusCode).toBe(503);
-    expect(response.body).not.toContain('KEEPER_');
-
-    // The package carries every dependency, so the deployed function does not depend on the
-    // runtime's own SDK version.
-    const source = await readFile(extracted, 'utf8');
-    expect(source).not.toContain('from "@aws-sdk/');
-    expect(source).not.toContain('from "zod"');
-
-    // The stack's handler names the module and export the loaded package carries.
-    const service = JSON.parse(
-      await readFile(path.join(repoRoot, 'infra', 'service.json'), 'utf8'),
-    ) as {
-      readonly Resources: {
-        readonly ApiFunction: { readonly Properties: { readonly Handler: string } };
+  it('packages independent Catalog-serving and UserCards runtimes', async () => {
+    for (const [name, archivePath, route] of [
+      ['catalog-serving', artifactLayout.catalogServingArchive, '/api/card'],
+      ['usercards', artifactLayout.userCardsArchive, '/api/collection/query'],
+    ] as const) {
+      const archive = await JSZip.loadAsync(await readFile(path.join(outDir, archivePath)));
+      expect(Object.keys(archive.files), name).toEqual(['index.mjs']);
+      const entry = await archive.file('index.mjs')?.async('nodebuffer');
+      expect(entry, name).toBeDefined();
+      const extracted = path.join(workspace, `${name}-index.mjs`);
+      await writeFile(extracted, entry ?? Buffer.alloc(0));
+      const loaded = (await import(pathToFileURL(extracted).href)) as {
+        readonly handler?: unknown;
       };
-    };
-    const [module, exported] = service.Resources.ApiFunction.Properties.Handler.split('.');
-    expect(module).toBe(manifest.artifacts.backend.entry.replace(/\.[^.]+$/, ''));
-    expect(exported).toBe('handler');
+      expect(typeof loaded.handler, name).toBe('function');
+      const handler = loaded.handler as (event: unknown) => Promise<{
+        readonly statusCode: number;
+        readonly body: string;
+      }>;
+      const response = await handler({
+        rawPath: route,
+        requestContext: { http: { method: 'POST', path: route } },
+      });
+      expect(response.statusCode, name).toBe(503);
+      expect(response.body, name).not.toContain('KEEPER_');
+      const source = await readFile(extracted, 'utf8');
+      expect(source, name).not.toContain('from "@aws-sdk/');
+      expect(source, name).not.toContain('from "zod"');
+    }
+    expect(manifest.artifacts.catalogServing.entry).toBe('index.mjs');
+    expect(manifest.artifacts.userCards.entry).toBe('index.mjs');
   }, 120_000);
+
+  it('keeps provider storage internals out of the unrelated backend artifacts', async () => {
+    for (const isolation of [
+      {
+        consumer: 'usercards.ts' as const,
+        owner: 'catalog-ingestion.ts' as const,
+        providerStorage: path.join(repoRoot, 'src/catalog/internal/schema.ts'),
+      },
+      {
+        consumer: 'catalog-serving.ts' as const,
+        owner: 'usercards.ts' as const,
+        providerStorage: path.join(repoRoot, 'src/usercards/internal/schema.ts'),
+      },
+      {
+        consumer: 'catalog-ingestion.ts' as const,
+        owner: 'usercards.ts' as const,
+        providerStorage: path.join(repoRoot, 'src/usercards/internal/schema.ts'),
+      },
+    ]) {
+      const baseline = await build({
+        ...backendBundleOptions(repoRoot, isolation.consumer, 'isolated.mjs'),
+        write: false,
+        metafile: true,
+      });
+      const mutation: Plugin = {
+        name: 'provider-storage-mutation',
+        setup(builder) {
+          builder.onLoad({ filter: /[/\\]schema\.ts$/ }, async (args) => {
+            if (path.resolve(args.path) !== isolation.providerStorage) return null;
+            return {
+              contents: (await readFile(args.path, 'utf8')).replace(
+                'create schema if not exists',
+                '-- provider-storage-mutation\ncreate schema if not exists',
+              ),
+              loader: 'ts',
+            };
+          });
+        },
+      };
+      const changedProvider = await build({
+        ...backendBundleOptions(repoRoot, isolation.consumer, 'isolated.mjs'),
+        write: false,
+        plugins: [mutation],
+      });
+      // The SQL comment must affect the owner artifact, or byte equality proves nothing.
+      const ownerOptions = backendBundleOptions(repoRoot, isolation.owner, 'owner.mjs');
+      const owner = await build({ ...ownerOptions, write: false });
+      const changedOwner = await build({ ...ownerOptions, write: false, plugins: [mutation] });
+      expect(changedOwner.outputFiles[0]?.contents).not.toEqual(owner.outputFiles[0]?.contents);
+      const providerInput = path
+        .relative(repoRoot, isolation.providerStorage)
+        .split(path.sep)
+        .join('/');
+      expect(baseline.metafile?.inputs).not.toHaveProperty(providerInput);
+      expect(changedProvider.outputFiles[0]?.contents).toEqual(baseline.outputFiles[0]?.contents);
+    }
+  }, 30_000);
 
   it('publishes only the public browser settings with the browser artifact', async () => {
     const settings = JSON.parse(
@@ -218,7 +275,10 @@ describe('packaging the deployable artifacts', () => {
   }, 120_000);
 
   it('packages the catalog job with its digest-pinned image definition', async () => {
-    const dockerfile = await readFile(path.join(outDir, artifactLayout.catalogDockerfile), 'utf8');
+    const dockerfile = await readFile(
+      path.join(outDir, artifactLayout.catalogIngestionDockerfile),
+      'utf8',
+    );
     expect(dockerfile).toContain('ARG NODE_BASE_IMAGE');
     expect(dockerfile).toContain('FROM ${NODE_BASE_IMAGE}');
     expect(dockerfile).toContain('COPY job.mjs ./job.mjs');
@@ -226,7 +286,7 @@ describe('packaging the deployable artifacts', () => {
   });
 
   it('runs the packaged job and reports its outcome without a configuration', async () => {
-    const job = path.join(outDir, artifactLayout.catalogEntry);
+    const job = path.join(outDir, artifactLayout.catalogIngestionEntry);
     const result = await execFileAsync(process.execPath, [job], {
       env: { PATH: process.env['PATH'] ?? '' },
     }).catch((error: unknown) => error as { readonly code?: number; readonly stdout?: string });

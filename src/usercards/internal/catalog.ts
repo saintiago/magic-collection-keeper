@@ -7,7 +7,7 @@ import {
   type CardRecord,
   type Finish,
   type PrintingRecord,
-} from '../../catalog/index.js';
+} from '../../catalog/contract.js';
 import { UserCardsError } from './errors.js';
 
 /** A catalog read failure is a temporary failure, never a missing reference. */

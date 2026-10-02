@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { type Finish } from '../../catalog/index.js';
+import { type Finish } from '../../catalog/contract.js';
 import { pendingFinish, resolvePrintings } from './catalog.js';
 import { accountIdFrom } from './context.js';
 import { UserCardsError } from './errors.js';

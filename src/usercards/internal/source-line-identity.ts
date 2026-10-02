@@ -9,7 +9,7 @@
 
 import { createHash } from 'node:crypto';
 
-import type { Finish } from '../../catalog/index.js';
+import type { Finish } from '../../catalog/contract.js';
 
 /** What one parsed source line published, beside its quantity and review state. */
 export interface PublishedSourceLine {

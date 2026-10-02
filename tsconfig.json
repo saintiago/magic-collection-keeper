@@ -21,6 +21,7 @@
   },
   "include": [
     "src/**/*.ts",
+    "infra/cdk/**/*.ts",
     "scripts/**/*.ts",
     "storybook/**/*.ts",
     "tests/**/*.ts",

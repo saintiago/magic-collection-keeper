@@ -2,7 +2,8 @@
  * Application backend entry point (docs/application.md#interface,
  * docs/application.md#configuration-and-lifecycle).
  *
- * The backend entry points are the interactive transport and the finite Catalog job.
+ * The backend contract supports the serving transports and finite Catalog job. Production selects
+ * separate Catalog-serving and UserCards entry points under ./entrypoints/.
  * Application receives Catalog and UserCards through their public contracts, derives trusted
  * user context from verified authentication, and maps component failures to transport outcomes.
  * Recognition has its own compute entry point; inference never runs in the interactive transport,
