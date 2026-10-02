@@ -31,8 +31,7 @@ jobs:
         env:
           STATE_BUCKET: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
         run: |
-          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json || true
-          if [[ -n '${{ inputs.promote_from }}' ]]; then aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.promote_from }}/current.json" .turbo/ci/source.json; fi
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json
           aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/foundation.json" .turbo/ci/parameters.json
           cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
           npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out

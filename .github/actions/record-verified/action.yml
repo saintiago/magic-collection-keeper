@@ -45,11 +45,13 @@ runs:
         template_sha="$(sha256sum "$RECORD_TEMPLATE" | cut -d' ' -f1)"
         configuration_sha="$(jq -cSj . "$RECORD_PARAMETERS" | sha256sum | cut -d' ' -f1)"
         environment_configuration_sha="$(jq -cSj . "$RECORD_ENVIRONMENT_PARAMETERS" | sha256sum | cut -d' ' -f1)"
+        artifact_sha="$(jq -cSj . "$RECORD_ARTIFACT" | sha256sum | cut -d' ' -f1)"
         checked_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         if [[ -f .turbo/ci/source.json ]]; then
           RECORD_REVISION="$(jq -r --arg unit "$RECORD_UNIT" '.components[$unit].sourceRevision' .turbo/ci/source.json)"
         fi
-        record_prefix="environments/$RECORD_ENVIRONMENT/deployments/$RECORD_UNIT/$RECORD_REVISION-$template_sha"
+        record_id="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-${GITHUB_JOB:-job}"
+        record_prefix="environments/$RECORD_ENVIRONMENT/deployments/$RECORD_UNIT/$RECORD_REVISION-$template_sha-$configuration_sha-$environment_configuration_sha-$artifact_sha-$record_id"
         template_uri="s3://$STATE_BUCKET/$record_prefix/template.json"
         configuration_uri="s3://$STATE_BUCKET/$record_prefix/parameters.json"
         evidence_uri="s3://$STATE_BUCKET/$record_prefix/evidence.txt"

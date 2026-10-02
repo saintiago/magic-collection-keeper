@@ -82,7 +82,7 @@ jobs:
           STATE_BUCKET: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
         run: |
           mkdir -p .turbo/ci
-          aws s3 cp "s3://$STATE_BUCKET/environments/test/current.json" .turbo/ci/current.json || true
+          aws s3 cp "s3://$STATE_BUCKET/environments/test/current.json" .turbo/ci/current.json
           aws s3 cp "s3://$STATE_BUCKET/environments/test/parameters/" .turbo/ci/environment-parameters/ --recursive
       - name: Select candidate stacks
         id: plan
@@ -105,6 +105,7 @@ jobs:
     needs: plan
     if: github.event_name == 'push' && vars.DEPLOYMENT_ENABLED == 'true' && needs.plan.outputs.foundation == 'true'
     uses: ./.github/workflows/deploy-foundation.yml
+    permissions: { contents: read, id-token: write }
     with:
       environment: test
       revision: ${{ github.sha }}
@@ -114,6 +115,7 @@ jobs:
     needs: [plan, foundation]
     if: ${{ !cancelled() && github.event_name == 'push' && vars.DEPLOYMENT_ENABLED == 'true' && needs.plan.outputs.gateway == 'true' && (needs.foundation.result == 'success' || needs.foundation.result == 'skipped') }}
     uses: ./.github/workflows/deploy-gateway.yml
+    permissions: { contents: read, id-token: write }
     with:
       environment: test
       revision: ${{ github.sha }}
@@ -123,6 +125,7 @@ jobs:
     needs: [plan, foundation, gateway]
     if: ${{ !cancelled() && github.event_name == 'push' && vars.DEPLOYMENT_ENABLED == 'true' && needs.plan.outputs.web == 'true' && !contains(needs.*.result, 'failure') }}
     uses: ./.github/workflows/deploy-web.yml
+    permissions: { contents: read, id-token: write }
     with:
       environment: test
       revision: ${{ github.sha }}
@@ -132,6 +135,7 @@ jobs:
     needs: [plan, foundation, gateway, web]
     if: ${{ !cancelled() && github.event_name == 'push' && vars.DEPLOYMENT_ENABLED == 'true' && needs.plan.outputs.catalog_serving == 'true' && !contains(needs.*.result, 'failure') }}
     uses: ./.github/workflows/deploy-catalog-serving.yml
+    permissions: { contents: read, id-token: write }
     with:
       environment: test
       revision: ${{ github.sha }}
@@ -141,6 +145,7 @@ jobs:
     needs: [plan, foundation, gateway, catalog-serving]
     if: ${{ !cancelled() && github.event_name == 'push' && vars.DEPLOYMENT_ENABLED == 'true' && needs.plan.outputs.usercards == 'true' && !contains(needs.*.result, 'failure') }}
     uses: ./.github/workflows/deploy-usercards.yml
+    permissions: { contents: read, id-token: write }
     with:
       environment: test
       revision: ${{ github.sha }}
@@ -150,6 +155,7 @@ jobs:
     needs: [plan, foundation, gateway, usercards]
     if: ${{ !cancelled() && github.event_name == 'push' && vars.DEPLOYMENT_ENABLED == 'true' && needs.plan.outputs.recognition == 'true' && !contains(needs.*.result, 'failure') }}
     uses: ./.github/workflows/deploy-recognition.yml
+    permissions: { contents: read, id-token: write }
     with:
       environment: test
       revision: ${{ github.sha }}
@@ -159,6 +165,7 @@ jobs:
     needs: [plan, foundation, recognition]
     if: ${{ !cancelled() && github.event_name == 'push' && vars.DEPLOYMENT_ENABLED == 'true' && needs.plan.outputs.catalog_ingestion == 'true' && !contains(needs.*.result, 'failure') }}
     uses: ./.github/workflows/deploy-catalog-ingestion.yml
+    permissions: { contents: read, id-token: write }
     with:
       environment: test
       revision: ${{ github.sha }}
@@ -176,6 +183,7 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -189,6 +197,14 @@ jobs:
           STATE_BUCKET: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
         run: |
           mkdir -p .turbo/ci
-          aws s3 cp "s3://$STATE_BUCKET/environments/test/current.json" .turbo/ci/current.json || true
+          aws s3 cp "s3://$STATE_BUCKET/environments/test/current.json" .turbo/ci/current.json
           npm run ci:record -- finalize --record .turbo/ci/current.json --environment test --revision "$GITHUB_SHA" --out .turbo/ci/final.json
+          release_key="environments/test/releases/$GITHUB_SHA.json"
+          if ! aws s3api put-object --bucket "$STATE_BUCKET" --key "$release_key" --body .turbo/ci/final.json --content-type application/json --if-none-match '*'; then
+            aws s3 cp "s3://$STATE_BUCKET/$release_key" .turbo/ci/existing-release.json
+            jq -S 'del(.updatedAt)' .turbo/ci/final.json > .turbo/ci/final-identity.json
+            jq -S 'del(.updatedAt)' .turbo/ci/existing-release.json > .turbo/ci/existing-identity.json
+            cmp .turbo/ci/final-identity.json .turbo/ci/existing-identity.json
+            cp .turbo/ci/existing-release.json .turbo/ci/final.json
+          fi
           aws s3 cp .turbo/ci/final.json "s3://$STATE_BUCKET/environments/test/current.json"

@@ -130,6 +130,12 @@ previous restorable version. A deployment failure must not overwrite its last ve
 record the actual attempted state for recovery. The environment record describes the resulting
 combination, including components still running older revisions.
 
+Finalization publishes that combination under the immutable
+`environments/<environment>/releases/<revision>.json` key before updating `current.json`. Production
+planning downloads the selected test release once and passes that pinned snapshot to every
+component job. Activated deployments require every state-record read to succeed; a missing or
+unreadable record is an activation error and must never be replaced with an inferred empty state.
+
 CloudFormation updates use the intended stack only, with explicit dependencies handled by the
 planner. Avoid a blanket `cdk deploy --all`. A selected stack update may be a no-op; publishing a
 candidate artifact does not imply that it must replace the deployed version.

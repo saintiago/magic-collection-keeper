@@ -6,6 +6,8 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
+import { assertFreshRevision, readDeploymentRecord } from './deployment-record.js';
+
 const execFileAsync = promisify(execFile);
 
 interface StackDescription {
@@ -13,6 +15,20 @@ interface StackDescription {
     readonly StackStatus?: string;
     readonly Parameters?: readonly { readonly ParameterKey?: string }[];
   }[];
+}
+
+interface Template {
+  readonly Parameters?: Readonly<Record<string, { readonly Default?: unknown }>>;
+  readonly Resources?: Readonly<
+    Record<
+      string,
+      {
+        readonly Type?: string;
+        readonly DeletionPolicy?: string;
+        readonly UpdateReplacePolicy?: string;
+      }
+    >
+  >;
 }
 
 interface ChangeSetDescription {
@@ -23,6 +39,7 @@ interface ChangeSetDescription {
     readonly ResourceChange?: {
       readonly Action?: string;
       readonly LogicalResourceId?: string;
+      readonly ResourceType?: string;
       readonly Replacement?: string;
     };
   }[];
@@ -56,15 +73,13 @@ export async function deployStack(command: CommandLine): Promise<'deployed' | 'n
   const supplied = readParameters(
     JSON.parse(await readFile(command.parameters, 'utf8')) as unknown,
   );
-  const parameterArguments = (described.Parameters ?? []).flatMap(({ ParameterKey }) => {
-    if (ParameterKey === undefined) return [];
-    const replacement = supplied[ParameterKey];
-    return [
-      replacement === undefined
-        ? `ParameterKey=${ParameterKey},UsePreviousValue=true`
-        : `ParameterKey=${ParameterKey},ParameterValue=${replacement}`,
-    ];
-  });
+  const template = readTemplate(JSON.parse(await readFile(command.template, 'utf8')) as unknown);
+  const previousParameters = new Set(
+    (described.Parameters ?? []).flatMap(({ ParameterKey }) =>
+      ParameterKey === undefined ? [] : [ParameterKey],
+    ),
+  );
+  const parameterArguments = buildParameterArguments(template, supplied, previousParameters);
   const changeSet = `ci-${randomUUID()}`;
   await aws([
     'cloudformation',
@@ -81,8 +96,7 @@ export async function deployStack(command: CommandLine): Promise<'deployed' | 'n
     `file://${command.template}`,
     '--capabilities',
     'CAPABILITY_NAMED_IAM',
-    '--parameters',
-    ...parameterArguments,
+    ...(parameterArguments.length === 0 ? [] : ['--parameters', ...parameterArguments]),
     '--region',
     command.region,
   ]);
@@ -121,11 +135,7 @@ export async function deployStack(command: CommandLine): Promise<'deployed' | 'n
   if (changes.length === 0)
     throw new Error('CloudFormation returned an empty executable change set.');
   const protectedReplacement = changes.find(({ ResourceChange: resource }) => {
-    const logicalId = resource?.LogicalResourceId ?? '';
-    return (
-      (resource?.Action === 'Remove' || resource?.Replacement === 'True') &&
-      protectedLogicalIds.has(logicalId)
-    );
+    return resource !== undefined && isDestructiveProtectedChange(resource, template);
   });
   if (protectedReplacement !== undefined) {
     throw new Error(
@@ -152,6 +162,32 @@ export async function deployStack(command: CommandLine): Promise<'deployed' | 'n
     command.region,
   ]);
   return 'deployed';
+}
+
+export function buildParameterArguments(
+  template: Template,
+  supplied: Readonly<Record<string, string>>,
+  previous: ReadonlySet<string>,
+): readonly string[] {
+  const desired = template.Parameters ?? {};
+  const unknown = Object.keys(supplied).filter((name) => desired[name] === undefined);
+  if (unknown.length > 0) {
+    throw new Error(`Parameters are not present in the desired template: ${unknown.join(', ')}.`);
+  }
+  return Object.entries(desired).flatMap(([name, definition]) => {
+    const value = supplied[name];
+    if (value !== undefined) return [`ParameterKey=${name},ParameterValue=${value}`];
+    if (previous.has(name)) return [`ParameterKey=${name},UsePreviousValue=true`];
+    if (definition.Default !== undefined) return [];
+    throw new Error(`Required parameter ${name} has no supplied or previous value.`);
+  });
+}
+
+function readTemplate(value: unknown): Template {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('The desired CloudFormation template must be an object.');
+  }
+  return value as Template;
 }
 
 function readParameters(value: unknown): Readonly<Record<string, string>> {
@@ -202,38 +238,49 @@ function readCommandLine(argv: readonly string[]): CommandLine {
 }
 
 async function rejectStaleRevision(recordFile: string, revision: string): Promise<void> {
-  if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error('The deployment revision is invalid.');
-  try {
-    const record = JSON.parse(await readFile(recordFile, 'utf8')) as {
-      readonly revision?: unknown;
-    };
-    const deployed = record.revision;
-    if (deployed === '0000000000000000000000000000000000000000') return;
-    if (typeof deployed !== 'string' || !/^[0-9a-f]{40}$/.test(deployed)) {
-      throw new Error('The current deployment record has no valid revision.');
-    }
+  const record = readDeploymentRecord(JSON.parse(await readFile(recordFile, 'utf8')) as unknown);
+  await assertFreshRevision(record, revision, async (deployed, candidate) => {
     try {
-      await execFileAsync('git', ['merge-base', '--is-ancestor', deployed, revision]);
+      await execFileAsync('git', ['merge-base', '--is-ancestor', deployed, candidate]);
+      return true;
     } catch {
-      throw new Error(`Refusing stale revision ${revision}; ${deployed} is already deployed.`);
+      return false;
     }
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw cause;
-  }
+  });
 }
 
-const protectedLogicalIds = new Set([
-  'DatabaseCluster',
-  'UserPool',
-  'ArtifactBucket',
-  'BrowserBucket',
-  'SnapshotBucket',
-  'CatalogRepository',
-  'RecognitionRepository',
-  'CatalogDatabaseSecret',
-  'UserCardsDatabaseSecret',
+const protectedResourceTypes = new Set([
+  'AWS::Cognito::UserPool',
+  'AWS::Cognito::UserPoolClient',
+  'AWS::ECR::Repository',
+  'AWS::RDS::DBCluster',
+  'AWS::S3::Bucket',
+  'AWS::SecretsManager::Secret',
 ]);
+
+export function isDestructiveProtectedChange(
+  resource: NonNullable<NonNullable<ChangeSetDescription['Changes']>[number]['ResourceChange']>,
+  template: Template,
+): boolean {
+  if (
+    resource.Action !== 'Remove' &&
+    (resource.Action !== 'Modify' || resource.Replacement === 'False')
+  )
+    return false;
+  const logicalId = resource.LogicalResourceId ?? '';
+  const resourceType = resource.ResourceType;
+  if (resourceType !== undefined && protectedResourceTypes.has(resourceType)) return true;
+  const definition = template.Resources?.[logicalId];
+  return (
+    definition !== undefined &&
+    (protectedResourceTypes.has(definition.Type ?? '') ||
+      definition.DeletionPolicy === 'Retain' ||
+      definition.DeletionPolicy === 'RetainExceptOnCreate' ||
+      definition.DeletionPolicy === 'Snapshot' ||
+      definition.UpdateReplacePolicy === 'Retain' ||
+      definition.UpdateReplacePolicy === 'Snapshot')
+  );
+}
 
 function required(values: ReadonlyMap<string, string>, flag: string): string {
   const value = values.get(flag);

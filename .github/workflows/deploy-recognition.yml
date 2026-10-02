@@ -29,7 +29,7 @@ jobs:
       - name: Prepare state and stack
         env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
         run: |
-          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json || true
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json
           aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/recognition.json" .turbo/ci/parameters.json
           cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
           repository="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-recognition --query "Stacks[0].Outputs[?OutputKey=='RecognitionRepositoryUri'].OutputValue | [0]" --output text)"
@@ -59,16 +59,18 @@ jobs:
           STATE_BUCKET: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
           PROMOTE_FROM: ${{ inputs.promote_from }}
         run: |
-          aws s3 cp "s3://$STATE_BUCKET/environments/$PROMOTE_FROM/current.json" .turbo/ci/source.json
+          test -s .turbo/ci/source.json
           source_uri="$(jq -r '.components.recognition.artifact.values.imageUri' .turbo/ci/source.json)"
           source_path="${source_uri%%@*}"
           source_digest="${source_uri##*@}"
-          source_repository="${source_path#*/}"
           target_repository="$(cat .turbo/ci/repository)"
           version="$(jq -r '.components.recognition.artifact.values.version' .turbo/ci/source.json)"
           manifest_sha="$(jq -r '.components.recognition.artifact.values.manifestSha256' .turbo/ci/source.json)"
-          aws ecr batch-get-image --repository-name "$source_repository" --image-ids imageDigest="$source_digest" --query 'images[0].imageManifest' --output text > .turbo/ci/image-manifest.json
-          digest="$(aws ecr put-image --repository-name "${target_repository#*/}" --image-tag "$version" --image-manifest file://.turbo/ci/image-manifest.json --query 'image.imageId.imageDigest' --output text)"
+          for registry in "${source_path%%/*}" "${target_repository%%/*}"; do aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"; done
+          docker pull "$source_uri"
+          docker tag "$source_uri" "$target_repository:$version"
+          docker push "$target_repository:$version"
+          digest="$(aws ecr describe-images --repository-name "${target_repository#*/}" --image-ids imageTag="$version" --query 'imageDetails[0].imageDigest' --output text)"
           test "$digest" = "$source_digest"
           image_uri="$target_repository@$digest"
           jq -n --arg imageUri "$image_uri" --arg digest "$digest" --arg version "$version" --arg manifestSha256 "$manifest_sha" '{kind:"image",values:{imageUri:$imageUri,digest:$digest,version:$version,manifestSha256:$manifestSha256}}' > .turbo/ci/artifact.json
@@ -90,7 +92,7 @@ jobs:
           pool="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue | [0]" --output text)"
           client="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue | [0]" --output text)"
           expiry="$(( $(date +%s) + 300 ))"
-          jq -n --arg iss "https://cognito-idp.us-east-1.amazonaws.com/$pool" --arg aud "$client" --argjson exp "$expiry" '{version:"2.0",rawPath:"/api/recognition/source",requestContext:{http:{method:"GET",path:"/api/recognition/source"},authorizer:{jwt:{claims:{sub:"ci-verification",iss:$iss,aud:$aud,exp:$exp,token_use:"id"}}}}}' > .turbo/ci/request.json
+          jq -n --arg iss "https://cognito-idp.us-east-1.amazonaws.com/$pool" --arg aud "$client" --argjson exp "$expiry" '{version:"2.0",routeKey:"GET /api/recognition/source",rawPath:"/api/recognition/source",requestContext:{http:{method:"GET",path:"/api/recognition/source"},authorizer:{jwt:{claims:{sub:"ci-verification",iss:$iss,aud:$aud,exp:$exp,token_use:"id"}}}}}' > .turbo/ci/request.json
           aws lambda invoke --function-name "$function_name" --payload fileb://.turbo/ci/request.json .turbo/ci/response.json > .turbo/ci/invoke.json
           test "$(jq -r '.FunctionError // empty' .turbo/ci/invoke.json)" = ""
           test "$(jq -r '.statusCode == 200' .turbo/ci/response.json)" = true

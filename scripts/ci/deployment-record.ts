@@ -135,6 +135,26 @@ export function finalizeDeploymentRecord(
   return { ...record, revision, updatedAt };
 }
 
+/** Rejects a revision that would move either the finalized baseline or a verified component back. */
+export async function assertFreshRevision(
+  record: DeploymentRecord,
+  revision: string,
+  isAncestor: (deployed: string, candidate: string) => Promise<boolean>,
+): Promise<void> {
+  assertRevision(revision);
+  const deployedRevisions = new Set([
+    record.revision,
+    ...Object.values(record.components).map((component) => component.sourceRevision),
+  ]);
+  deployedRevisions.delete('0000000000000000000000000000000000000000');
+  for (const deployed of deployedRevisions) {
+    assertRevision(deployed);
+    if (!(await isAncestor(deployed, revision))) {
+      throw new Error(`Refusing stale revision ${revision}; ${deployed} is already deployed.`);
+    }
+  }
+}
+
 export function emptyDeploymentRecord(
   environment: DeploymentRecord['environment'],
 ): DeploymentRecord {

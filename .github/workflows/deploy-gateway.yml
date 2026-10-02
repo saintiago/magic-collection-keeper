@@ -30,8 +30,7 @@ jobs:
       - name: Prepare stack
         env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
         run: |
-          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json || true
-          if [[ -n '${{ inputs.promote_from }}' ]]; then aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.promote_from }}/current.json" .turbo/ci/source.json; fi
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json
           aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/gateway.json" .turbo/ci/parameters.json
           cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
           npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out
@@ -41,9 +40,14 @@ jobs:
       - name: Verify gateway boundary
         run: |
           base_url="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='ApiBaseUrl'].OutputValue | [0]" --output text)"
-          code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --request OPTIONS "$base_url/api/search")"
-          [[ "$code" =~ ^2 ]]
-          printf 'Unauthenticated API preflight returned %s.\n' "$code" > .turbo/ci/evidence.txt
+          origin="$(jq -r .BrowserOrigin .turbo/ci/environment-parameters.json)"
+          curl --silent --show-error --dump-header .turbo/ci/headers.txt --output /dev/null \
+            --request OPTIONS --header "Origin: $origin" \
+            --header 'Access-Control-Request-Method: GET' "$base_url/api/search"
+          grep -Eiq '^HTTP/[^ ]+ 20[04]' .turbo/ci/headers.txt
+          grep -Eiq "^access-control-allow-origin: $origin\r?$" .turbo/ci/headers.txt
+          grep -Eiq '^access-control-allow-methods: .*GET' .turbo/ci/headers.txt
+          printf 'Browser-origin GET preflight returned the configured CORS headers.\n' > .turbo/ci/evidence.txt
       - uses: ./.github/actions/record-verified
         with:
           environment: ${{ inputs.environment }}

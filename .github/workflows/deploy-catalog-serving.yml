@@ -29,7 +29,7 @@ jobs:
           PROMOTE_FROM: ${{ inputs.promote_from }}
         run: |
           set -euo pipefail
-          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json || true
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json
           aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/catalog-serving.json" .turbo/ci/parameters.json
           cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
           bucket="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-foundation --query "Stacks[0].Outputs[?OutputKey=='ArtifactsBucketName'].OutputValue | [0]" --output text)"
@@ -41,7 +41,7 @@ jobs:
             sha="$(jq -r .artifacts.catalogServing.sha256 .turbo/release/manifest.json)"
             manifest_sha="$(sha256sum .turbo/release/manifest.json | cut -d' ' -f1)"
           else
-            aws s3 cp "s3://$STATE_BUCKET/environments/$PROMOTE_FROM/current.json" .turbo/ci/source.json
+            test -s .turbo/ci/source.json
             source_bucket="$(jq -r '.components["catalog-serving"].artifact.values.bucket' .turbo/ci/source.json)"
             key="$(jq -r '.components["catalog-serving"].artifact.values.key' .turbo/ci/source.json)"
             source_version="$(jq -r '.components["catalog-serving"].artifact.values.objectVersion' .turbo/ci/source.json)"

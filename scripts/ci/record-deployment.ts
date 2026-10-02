@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 import { readFile, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 
 import {
-  emptyDeploymentRecord,
+  assertFreshRevision,
   finalizeDeploymentRecord,
   recordVerifiedComponent,
   readDeploymentRecord,
@@ -14,11 +16,13 @@ import {
   deploymentUnits,
 } from './deployment-record.js';
 
+const execFileAsync = promisify(execFile);
+
 export async function recordDeployment(argv: readonly string[]): Promise<void> {
   const command = argv[0];
   const values = readFlags(argv.slice(1));
   const output = required(values, '--out');
-  const record = await readOrCreateRecord(
+  const record = await readRequiredRecord(
     required(values, '--record'),
     requiredEnvironment(values, '--environment'),
   );
@@ -32,35 +36,33 @@ export async function recordDeployment(argv: readonly string[]): Promise<void> {
     return;
   }
   if (command === 'finalize') {
+    const revision = required(values, '--revision');
+    await assertFreshRevision(record, revision, async (deployed, candidate) => {
+      try {
+        await execFileAsync('git', ['merge-base', '--is-ancestor', deployed, candidate]);
+        return true;
+      } catch {
+        return false;
+      }
+    });
     await writeRecord(
       output,
-      finalizeDeploymentRecord(
-        record,
-        required(values, '--revision'),
-        values.get('--at') ?? new Date().toISOString(),
-      ),
+      finalizeDeploymentRecord(record, revision, values.get('--at') ?? new Date().toISOString()),
     );
     return;
   }
   throw new Error('Use record-deployment verified or record-deployment finalize.');
 }
 
-async function readOrCreateRecord(
+async function readRequiredRecord(
   file: string,
   environment: DeploymentRecord['environment'],
 ): Promise<DeploymentRecord> {
-  try {
-    const record = readDeploymentRecord(JSON.parse(await readFile(file, 'utf8')) as unknown);
-    if (record.environment !== environment) {
-      throw new Error(
-        `The deployment record belongs to ${record.environment}, not ${environment}.`,
-      );
-    }
-    return record;
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
-    return emptyDeploymentRecord(environment);
+  const record = readDeploymentRecord(JSON.parse(await readFile(file, 'utf8')) as unknown);
+  if (record.environment !== environment) {
+    throw new Error(`The deployment record belongs to ${record.environment}, not ${environment}.`);
   }
+  return record;
 }
 
 function assertVerifiedComponent(component: ComponentDeploymentRecord): void {

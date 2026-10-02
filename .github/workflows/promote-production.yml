@@ -30,7 +30,7 @@ jobs:
       catalog_ingestion: ${{ steps.plan.outputs.catalog_ingestion }}
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ inputs.revision }}' }
+        with: { ref: '${{ inputs.revision }}', fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
       - run: npm ci
@@ -41,53 +41,65 @@ jobs:
         run: |
           [[ '${{ inputs.revision }}' =~ ^[0-9a-f]{40}$ ]]
           mkdir -p .turbo/ci
-          aws s3 cp "s3://$STATE_BUCKET/environments/test/current.json" .turbo/ci/test.json
+          aws s3 cp "s3://$STATE_BUCKET/environments/test/releases/${{ inputs.revision }}.json" .turbo/ci/source.json
           aws s3 cp "s3://$STATE_BUCKET/environments/production/current.json" .turbo/ci/production.json
           aws s3 cp "s3://$STATE_BUCKET/environments/production/parameters/" .turbo/ci/production-parameters/ --recursive
-          npm run ci:promotion-plan -- .turbo/ci/test.json .turbo/ci/production.json '${{ inputs.revision }}' .turbo/ci/plan.json .turbo/ci/production-parameters "$GITHUB_OUTPUT"
+          npm run ci:promotion-plan -- .turbo/ci/source.json .turbo/ci/production.json '${{ inputs.revision }}' .turbo/ci/plan.json .turbo/ci/production-parameters "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
-        with: { name: deployment-plan, path: .turbo/ci/plan.json, if-no-files-found: error }
+        with:
+          name: deployment-plan
+          path: |
+            .turbo/ci/plan.json
+            .turbo/ci/source.json
+          if-no-files-found: error
 
   foundation:
     needs: plan
     if: needs.plan.outputs.foundation == 'true'
     uses: ./.github/workflows/deploy-foundation.yml
+    permissions: { contents: read, id-token: write }
     with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
     secrets: inherit
   gateway:
     needs: [plan, foundation]
     if: ${{ !cancelled() && needs.plan.outputs.gateway == 'true' && (needs.foundation.result == 'success' || needs.foundation.result == 'skipped') }}
     uses: ./.github/workflows/deploy-gateway.yml
+    permissions: { contents: read, id-token: write }
     with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
     secrets: inherit
   web:
     needs: [plan, foundation, gateway]
     if: ${{ !cancelled() && needs.plan.outputs.web == 'true' && !contains(needs.*.result, 'failure') }}
     uses: ./.github/workflows/deploy-web.yml
+    permissions: { contents: read, id-token: write }
     with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
     secrets: inherit
   catalog-serving:
     needs: [plan, foundation, gateway, web]
     if: ${{ !cancelled() && needs.plan.outputs.catalog_serving == 'true' && !contains(needs.*.result, 'failure') }}
     uses: ./.github/workflows/deploy-catalog-serving.yml
+    permissions: { contents: read, id-token: write }
     with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
     secrets: inherit
   usercards:
     needs: [plan, foundation, gateway, catalog-serving]
     if: ${{ !cancelled() && needs.plan.outputs.usercards == 'true' && !contains(needs.*.result, 'failure') }}
     uses: ./.github/workflows/deploy-usercards.yml
+    permissions: { contents: read, id-token: write }
     with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
     secrets: inherit
   recognition:
     needs: [plan, foundation, gateway, usercards]
     if: ${{ !cancelled() && needs.plan.outputs.recognition == 'true' && !contains(needs.*.result, 'failure') }}
     uses: ./.github/workflows/deploy-recognition.yml
+    permissions: { contents: read, id-token: write }
     with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
     secrets: inherit
   catalog-ingestion:
     needs: [plan, foundation, recognition]
     if: ${{ !cancelled() && needs.plan.outputs.catalog_ingestion == 'true' && !contains(needs.*.result, 'failure') }}
     uses: ./.github/workflows/deploy-catalog-ingestion.yml
+    permissions: { contents: read, id-token: write }
     with: { environment: production, revision: '${{ inputs.revision }}', promote_from: test }
     secrets: inherit
 
@@ -100,7 +112,7 @@ jobs:
     permissions: { contents: read, id-token: write }
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ inputs.revision }}' }
+        with: { ref: '${{ inputs.revision }}', fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
       - run: npm ci
@@ -111,4 +123,12 @@ jobs:
           mkdir -p .turbo/ci
           aws s3 cp "s3://$STATE_BUCKET/environments/production/current.json" .turbo/ci/current.json
           npm run ci:record -- finalize --record .turbo/ci/current.json --environment production --revision '${{ inputs.revision }}' --out .turbo/ci/final.json
+          release_key="environments/production/releases/${{ inputs.revision }}.json"
+          if ! aws s3api put-object --bucket "$STATE_BUCKET" --key "$release_key" --body .turbo/ci/final.json --content-type application/json --if-none-match '*'; then
+            aws s3 cp "s3://$STATE_BUCKET/$release_key" .turbo/ci/existing-release.json
+            jq -S 'del(.updatedAt)' .turbo/ci/final.json > .turbo/ci/final-identity.json
+            jq -S 'del(.updatedAt)' .turbo/ci/existing-release.json > .turbo/ci/existing-identity.json
+            cmp .turbo/ci/final-identity.json .turbo/ci/existing-identity.json
+            cp .turbo/ci/existing-release.json .turbo/ci/final.json
+          fi
           aws s3 cp .turbo/ci/final.json "s3://$STATE_BUCKET/environments/production/current.json"

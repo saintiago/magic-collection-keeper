@@ -114,6 +114,11 @@
         "src/recognition/browser/**",
         "src/recognition/baseline.json",
         "src/recognition/browser-runtime.json",
+        "src/recognition/python/requirements-converter.txt",
+        "src/recognition/python/requirements-visual.txt",
+        "src/recognition/python/scripts/browser_assets.py",
+        "src/recognition/python/scripts/convert_ocr.py",
+        "src/recognition/python/scripts/prepare.py",
         "scripts/prepare-recognition.ts",
         "scripts/recognition-manifests.ts"
       ],
@@ -125,7 +130,7 @@
     },
     {
       "paths": ["scripts/package-artifacts.ts", "scripts/packaging-support.ts"],
-      "stacks": ["web", "catalog-serving", "usercards", "catalog-ingestion"]
+      "stacks": ["web", "catalog-serving", "usercards", "recognition", "catalog-ingestion"]
     },
     {
       "paths": [

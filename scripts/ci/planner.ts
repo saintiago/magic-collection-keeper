@@ -161,6 +161,8 @@ export async function collectProductionInputs(
         path.join(root, 'src/application/entrypoints/catalog-ingestion.ts'),
       ),
     ],
+    ['recognition', bundleOptions(root, 'node', path.join(root, 'scripts/package-recognition.ts'))],
+    ['web', bundleOptions(root, 'node', path.join(root, 'scripts/prepare-recognition.ts'))],
   ];
   const results = await Promise.all(
     entries.map(async ([unit, options]) => {
@@ -171,7 +173,24 @@ export async function collectProductionInputs(
       return [unit, inputs.filter((file) => !file.startsWith('node_modules/')).sort()] as const;
     }),
   );
-  return Object.fromEntries(results);
+  const collected: Partial<Record<DeploymentUnit, Set<string>>> = {};
+  for (const [unit, inputs] of results) {
+    const unitInputs = collected[unit] ?? new Set<string>();
+    for (const input of inputs) unitInputs.add(input);
+    collected[unit] = unitInputs;
+  }
+  for (const input of [
+    'src/recognition/python/requirements-converter.txt',
+    'src/recognition/python/requirements-visual.txt',
+    'src/recognition/python/scripts/browser_assets.py',
+    'src/recognition/python/scripts/convert_ocr.py',
+    'src/recognition/python/scripts/prepare.py',
+  ]) {
+    (collected.web ??= new Set()).add(input);
+  }
+  return Object.fromEntries(
+    Object.entries(collected).map(([unit, inputs]) => [unit, [...inputs].sort()]),
+  );
 }
 
 export function matches(pattern: string, file: string): boolean {
