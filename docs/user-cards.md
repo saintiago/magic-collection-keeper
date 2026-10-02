@@ -9,24 +9,24 @@ quantity, confirmation and account-isolation rules for all changes.
 
 - Provide UserInterface editors with private reads and operations for editing copies, tags,
   associations and imports. Provide CardList with pending lists, private fragments and operation
-  availability. Provide Capture with staging and candidate attachment. Return affected records or
+  availability and complete collection/tag queries. Provide Capture with staging and candidate attachment. Return affected records or
   operation outcomes; no consumer reconstructs an import's authoritative state.
-- Provide Search with authorized snapshots and durable changes for searchable private facts.
 - Use Catalog to resolve card/printing references and validate physical-printing attributes.
 - Receive trusted user context from Application. Scope every referenced private record and operation
   to that user, including reads and retries.
 
 ### Provided operations
 
-| Capability                        | Input                                                                                         | Result                                                                          |
-| --------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Read private records              | Trusted user context and record references or a bounded pending-list query.                   | Authorized records, revisions and continuation where applicable.                |
-| Edit copies, tags or associations | Trusted context, explicit change and expected revision for existing records.                  | Committed affected records and their revisions, or a conflict.                  |
-| Stage or review imports           | Trusted context, session/entry identity, candidates or reviewed values and expected revision. | Updated pending state; no ownership change.                                     |
-| Confirm imports                   | Trusted context, operation ID, explicit destination/change and reviewed entry revisions.      | Receipt identifying the resulting associations or copies and committed outcome. |
-| Recover an operation              | Trusted context and operation ID.                                                             | Recorded outcome or explicit absence; never another user's result.              |
-| Load a migration plan             | Trusted offline plan, exact source digest and explicit target account.                        | Durable batch progress, final publication position and repeat-safe outcome.     |
-| Read migration readback           | Trusted context and the account's recorded migration.                                         | Authoritative private records, system ownership identities and archive digest.  |
+| Capability                        | Input                                                                                         | Result                                                                                        |
+| --------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Read private records and lists    | Trusted context, typed references or owner-local list criteria and continuation.              | Authorized records/entries, quantities, revision and continuation.                            |
+| Read private fragments            | Trusted context and bounded card/printing/copy references, with optional tag context.         | Current keyed ownership, tags, intended quantities and location counts, or explicit failures. |
+| Edit copies, tags or associations | Trusted context, explicit change and expected revision for existing records.                  | Committed affected records and their revisions, or a conflict.                                |
+| Stage or review imports           | Trusted context, session/entry identity, candidates or reviewed values and expected revision. | Updated pending state; no ownership change.                                                   |
+| Confirm imports                   | Trusted context, operation ID, explicit destination/change and reviewed entry revisions.      | Receipt identifying the resulting associations or copies and committed outcome.               |
+| Recover an operation              | Trusted context and operation ID.                                                             | Recorded outcome or explicit absence; never another user's result.                            |
+| Load a migration plan             | Trusted offline plan, exact source digest and explicit target account.                        | Durable batch progress and repeat-safe outcome.                                               |
+| Read migration readback           | Trusted context and the account's recorded migration.                                         | Authoritative private records, system ownership identities and archive digest.                |
 
 Import confirmation carries an operation ID scoped to the account. Replaying identical input returns
 its recorded outcome; reuse with different input fails. Other edits use record identity and revision
@@ -36,30 +36,23 @@ mutation is reported as success.
 
 ### Query surface
 
-Publish copies, tags and associations through an authorized, versioned data interface. Copy records contain
-copy ID, printing ID, finish, condition and derived ownership/location membership. Association rows
-contain association ID, tag ID, target level, target ID and optional intended quantity. Copy-targeted
-associations have no quantity. Pending entries are available only through import reads, excluded
-from ordinary query results and ownership totals according to the
-[import lifecycle](#import-and-capture-state). Consumers do not add their own pending-entry filters.
+Provide current collection/tag queries and batched private fragments through the focused
+[queries module](usercards/queries.md). Own membership, grouping, quantity meaning, ordering and
+pagination. Results carry typed references and private context; public basic information is resolved
+independently by CardList through Catalog's contract. Query criteria/ordering contain private facts
+and explicit identities only. Public card attributes are not private list filters.
 
-Provide a consistent, paginated snapshot per account and a resumable change position. Changes carry
-account, stable change identity, account-scoped revision and explicit upserts/removals. A logical
-mutation's publication is complete, including coupled ownership/location changes. Snapshot and change
-handoff leaves no gap; expired positions require a new snapshot. Foreign or missing authorization
-fails closed. Trusted indexing access is granted separately from an end-user's read access.
-Also publish the register of accounts that hold published data — identities only, paginated in a
-stable order — so a trusted indexing run covers every account whose changes it has to apply without
-an operator naming each account and without reading private tables.
-Snapshot pages also identify the account's completed mutation positions within retained publication
-history that the snapshot incorporates. This metadata is bounded by the provider's retention window;
-position identities are opaque and numeric order alone never establishes account membership.
+End-user reads require trusted account context. Scope records, continuation, revisions and cache keys
+to that account. A fresh read after a committed write includes the change. There is no asynchronous
+index incorporation or consumer-facing publication token. Compatible replacement preserves query,
+visibility, quantity, revision and failure semantics; consumers receive no SQL or private tables.
 
-Commit the authoritative change and durable publication atomically. Search consumes this contract
-and owns its resulting projection; it has no access to private tables or SQL views. Source replacement
-preserves publication semantics rather than a database layout. Query-visible mutations return their
-publication position with their committed outcome, including recovery of that outcome. Operations
-affecting only pending review need not publish ordinary searchable ownership data.
+Use Catalog's resolution contract when recording a printing-specific identity or upgrading existing
+records: retain the stable playable card reference needed for local grouping alongside the printing
+reference. Do not persist copied names/rules/images or resolve catalog attributes during private
+membership evaluation. Corrections and confirmations record the relevant identity relationships
+atomically with the domain change. Existing source archives and operation receipts retain their exact
+historical contents.
 
 ### Browser operation lifecycle
 
@@ -76,8 +69,7 @@ writes into blind automatic retries or introduce a general persistent offline co
 unrecoverable outcome stays explicit until authoritative reads or user reconciliation resolve it.
 
 Expose local committed-change invalidations to CardList: affected record/import/tag references and
-the scope whose membership or quantities may have changed and its publication position when indexing
-is affected. An invalidation requests a read; it is
+the scope whose membership or quantities may have changed. An invalidation requests a read; it is
 not a second copy of authoritative data. A lost response emits no speculative committed event.
 Recovered commits produce the same invalidation as acknowledged commits. Subscribers may coalesce
 or repeat hints safely. No cross-device push or distributed event infrastructure is required.
@@ -92,18 +84,18 @@ The public facade assembles focused operations. These are internal units, not se
 components. Public request/result types are independent of the concrete stores. Operations validate
 intent and interpret outcomes; stores own SQL, locking, atomic changes and persistence failures.
 
-| Unit                      | Owns                                                                                                  | State and write boundary                                                                                                                                                |
-| ------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Copies                    | Creation and correction of physical records; physical attribute validation.                           | Copy and owned membership change atomically.                                                                                                                            |
-| Organization              | Tags, association targets and intended quantities; physical location moves.                           | Association changes retain identity; a location move atomically replaces the previous membership.                                                                       |
-| Pending reads             | Bounded session and entry reads, ordering and revision-bound continuation.                            | No ownership writes; reject a read assembled from inconsistent revisions.                                                                                               |
-| Staging                   | Manual entry admission, capture sequence and source-line reconciliation.                              | Session, entries, candidates and admission receipts change under the session lock.                                                                                      |
-| Review                    | Explicit corrections, late candidate attachment and discard.                                          | Revision checks preserve user edits; late evidence cannot rewrite reviewed fields.                                                                                      |
-| Confirmation and recovery | Validate reviewed entries and explicit destination, recognize replay and report the recorded outcome. | One transaction applies destination changes, retains source evidence, closes entries and records the receipt; only an ownership action creates copies and acquisitions. |
-| Source conversion         | Fetch and parse supported source formats into staging input.                                          | Provider data is input to staging; never writes owned copies directly.                                                                                                  |
-| Query publication         | Account-scoped snapshots and durable searchable changes.                                              | Authoritative changes and publication commit together; private storage remains inaccessible to consumers.                                                               |
-| Migration loading         | Apply a verified offline plan through provider-owned records and retain its source archive.           | One batch and its progress receipt commit together; query-visible batches publish normally.                                                                             |
-| Client operations         | Account-scoped attempt handles, recovery and local committed-change signals.                          | Retain only client attempt context; authoritative writes and receipts remain behind server operations.                                                                  |
+| Unit                            | Owns                                                                                                  | State and write boundary                                                                                                                                                |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Copies                          | Creation and correction of physical records; physical attribute validation.                           | Copy and owned membership change atomically.                                                                                                                            |
+| Organization                    | Tags, association targets and intended quantities; physical location moves.                           | Association changes retain identity; a location move atomically replaces the previous membership.                                                                       |
+| Pending reads                   | Bounded session and entry reads, ordering and revision-bound continuation.                            | No ownership writes; reject a read assembled from inconsistent revisions.                                                                                               |
+| Staging                         | Manual entry admission, capture sequence and source-line reconciliation.                              | Session, entries, candidates and admission receipts change under the session lock.                                                                                      |
+| Review                          | Explicit corrections, late candidate attachment and discard.                                          | Revision checks preserve user edits; late evidence cannot rewrite reviewed fields.                                                                                      |
+| Confirmation and recovery       | Validate reviewed entries and explicit destination, recognize replay and report the recorded outcome. | One transaction applies destination changes, retains source evidence, closes entries and records the receipt; only an ownership action creates copies and acquisitions. |
+| Source conversion               | Fetch and parse supported source formats into staging input.                                          | Provider data is input to staging; never writes owned copies directly.                                                                                                  |
+| [Queries](usercards/queries.md) | Account-scoped lists, exact grouping/quantities and batched private fragments.                        | Read current authoritative storage; evaluate complete membership before pagination, with no cross-owner SQL or pending leakage.                                         |
+| Migration loading               | Apply a verified offline plan through provider-owned records and retain its source archive.           | One batch and its progress receipt commit together; new reads observe committed batches immediately.                                                                    |
+| Client operations               | Account-scoped attempt handles, recovery and local committed-change signals.                          | Retain only client attempt context; authoritative writes and receipts remain behind server operations.                                                                  |
 
 The import service composes pending reads, staging, review and confirmation. Its persistence layer has
 the same divisions. Shared session access owns session locks, revision reads/advances and bounded entry
@@ -142,7 +134,7 @@ Transaction boundaries stay intact when these units are reorganized.
 
 ## Records and associations
 
-Each physical copy has a stable ID, one printing reference and its physical attributes. Corrections
+Each physical copy has a stable ID, a printing reference with its stable card identity, and its physical attributes. Corrections
 retain its identity. Unknown condition stays explicit until supplied; a suggestion cannot establish
 physical condition.
 

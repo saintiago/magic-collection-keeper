@@ -16,13 +16,14 @@ architecture. Another source revision needs its mapping checked before conversio
 
 - The offline utility in `scripts/migration/` owns legacy interpretation and conversion evidence.
   It consumes local files and emits local files. It imports only public component contracts.
-- Catalog supplies a snapshot of target printing identities, languages, finishes and paper support.
+- Catalog supplies a revision-consistent, bounded export through its public printing query/read
+  contract: target printing identities, languages, finishes and paper support.
   Conversion does not substitute another printing or call Scryfall to guess one.
 - UserCards owns any future target loader, transactional writes, ownership memberships, provenance,
   import lifecycle and durable migration replay records. The utility must not write private tables
   or reproduce those responsibilities through a sequence of ordinary client commands.
-- Search receives normal UserCards publications and builds its projection. Reconciliation first
-  reads authoritative UserCards state; indexed search is verified separately after catch-up.
+- Reconciliation reads authoritative UserCards state through its public contract. Verify deployed
+  collection/tag lists and current ownership fragments separately through the same owner contracts.
 
 The utility produces a plan, not a new service component or a production import endpoint. Its
 `prepared` result means conversion found no known blockers. It does not certify a consistent backup,
@@ -137,10 +138,10 @@ Before any owner-data migration:
    and verify it can be read. Keep the original backup alongside the normalized export.
 2. Prepare against the intended target Catalog; resolve every blocker explicitly. Build a
    UserCards-owned loader for this plan format before attempting target writes. The loader must
-   retain legacy evidence durably, create system ownership, publish normal changes and record
+   retain legacy evidence durably, create system ownership and record
    completed batches transactionally. Each batch commits its records, replay receipt and any
-   query-visible publication together. A retry skips completed identical batches and resumes at
-   the first missing batch; it must never duplicate ownership or publish a partial batch. The
+   query-visible state together. A retry skips completed identical batches and resumes at
+   the first missing batch; it must never duplicate ownership or expose a partial batch. The
    loader refuses a nonempty target account and conflicting input for a recorded migration.
    Repeating a completed identical plan returns its recorded outcome. Calling `createCopies`
    repeatedly does not provide that guarantee. Stable proposed IDs alone do not make writes
@@ -151,8 +152,9 @@ Before any owner-data migration:
    from its user-tag arrays and supply their owned copy IDs separately. Extra, missing or changed
    records fail even when aggregate counts match. Verify provenance accessibility, replay
    protection and normal account isolation through the loader's contract tests.
-4. Let Search catch up and verify ownership/search visibility, pending imports' restricted
-   visibility, locations and representative collection workflows in the deployed service.
+4. Verify current ownership fragments, collection/tag membership, pending imports' restricted
+   visibility, locations and representative collection workflows in the deployed service. No
+   separate indexing job is needed.
 5. For cutover, obtain approval for the concrete target and reconciliation report. Stop legacy
    writes and create the final consistent snapshot, including every change since rehearsal.
    Re-run conversion and reconciliation before enabling target writes. Do not run both systems

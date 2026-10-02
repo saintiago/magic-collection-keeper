@@ -22,7 +22,7 @@ isolated from the existing application; retain the existing Cognito user pool an
 app client. Use least-privilege roles, private database networking and secret references.
 
 Document create/update, rollback and data-retention procedures together with operating-cost
-assumptions. Catalog synchronization and background Search indexing run as finite, resumable tasks.
+assumptions. Catalog synchronization runs as a finite task; ordinary queries read their owning storage directly.
 Infrastructure preparation does not authorize resource creation, deletion or provisioned/periodic
 warm compute.
 
@@ -37,7 +37,7 @@ and restored. Keep public browser settings separate from secrets and redact sens
 
 Provide explicit deployment and rollback commands with documented environment inputs. Preserve
 authenticated account context through database operations and expose finite catalog synchronization
-and Search indexing as separate jobs. Verify packages locally, then validate changed live boundaries
+as a separate job. Verify packages locally, then validate changed live boundaries
 in an isolated environment. Do not add health/readiness endpoints without a concrete requirement.
 
 ## Browser and API connectivity
@@ -45,7 +45,7 @@ in an isolated environment. Do not add health/readiness endpoints without a conc
 The deployed browser must reach the API from its own origin. CORS preflight requests return a
 successful response without authentication; actual operations retain their documented authentication.
 Verify this boundary through a browser workflow that loads and changes synthetic collection data,
-including the resulting indexed list. Direct API calls alone do not establish browser connectivity.
+including the resulting current list and private fragments. Direct API calls alone do not establish browser connectivity.
 
 ## Recognition packaging
 

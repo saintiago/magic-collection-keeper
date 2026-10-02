@@ -33,11 +33,10 @@ on both sides that agree with each other but differ from the implementation.
 Contract and workflow describe what a test proves, not additional test layers. Keep cross-component
 scenarios in integration or system tests according to their scope.
 
-For publication contracts, verify each provider's snapshots and changes against its real writes.
-Test Search with supplied publication fixtures and its own real projection storage, then exercise
-actual publication-to-indexing integration. Include same-printing/copy filtering, duplicate
-associations, account isolation and continuation invalidation. Changing a provider's private tables
-or database implementation must not require Search changes.
+Verify each owner's query contract against its real storage and writes. Exercise CardList with
+actual provider outputs: source membership remains unchanged by enrichment, and current private
+fragments follow acknowledged or recovered commits without a background worker. Replacing an
+owner's private tables or database deployment must not require consumer changes.
 
 For supported Scryfall syntax, keep compatibility cases over a fixed catalog fixture. Verify that
 text expressions and equivalent UI criteria select the same entries, preserve supported operator
@@ -52,7 +51,6 @@ authorization, cancellation and retry behavior where the interface promises them
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Catalog       | Card-to-printing resolution, complete basic information and reads independent of live provider requests.                                                                                                               |
 | UserCards     | Stable copy identities; deck membership distinct from physical location and ownership; intended quantities independent of owned counts; card/printing refinement; import confirmation applies an explicit destination. |
-| Search        | Mixed catalog and private filters, ordering and pagination over the complete result, without duplicate counts or another user's entries. Use real database queries.                                                    |
 | UserInterface | Replaceable screen modules, accessible presentation, retained drafts, opaque history and correct intent routing.                                                                                                       |
 | CardList      | Basic information before optional fragments, independent failure/recovery, bounded loading, stable selection and restoration.                                                                                          |
 | Capture       | Frame-correlated admission, bounded device work, authoritative staging outcomes and feedback.                                                                                                                          |
@@ -75,15 +73,18 @@ scenarios at the smallest useful scope; they are not a requirement to rerun ever
 
 Verify exact card/printing resolution, multilingual names, allowed finishes, missing members in
 batch responses and unavailable lookup errors. Reads must succeed without a live provider.
-Exercise publication and grants on real PostgreSQL; consumers must not read private tables or views.
+Exercise public queries and grants on real PostgreSQL; consumers must not read private tables or views.
 Use small deterministic snapshots: malformed/interrupted ingestion preserves the previous revision,
 retries do not duplicate identities, and concurrent readers see a coherent revision. Verify complete
-bulk publication, removals and gap-free snapshot/change handoff.
+atomic revision publication, removals and revision-bound query continuation. Removed provider
+printings leave current query membership while historical resolution and printing-to-card mapping
+remain available. Cover a refresh removing a printing before private reference preparation; subsequent
+provider-contract resolution and repeat-safe backfill must preserve the saved records.
 
 ### UserCards
 
 - **Copies and authorization:** use two synthetic accounts and real PostgreSQL to cover foreign
-  references, missing context, publication authorization, storage grants and connection reuse. Verify
+  references, missing context, read authorization, storage grants and connection reuse. Verify
   identity-preserving printing/finish/condition corrections, rollback and revision conflicts.
 - **Tags and associations:** verify rename invariance, card/printing intended quantities, counts of
   distinct copies, specificity changes and atomic location moves, including concurrent moves.
@@ -99,7 +100,7 @@ bulk publication, removals and gap-free snapshot/change handoff.
   Count created copies and verify recorded receipts and permanent source replay protection.
   Accept a deck from names and quantities with no printing or owned copies: verify deck associations
   and zero ownership changes. Cover optional printing specificity, explicit ownership acquisition,
-  destination changes under a reused operation identity, publication and rollback for each outcome.
+  destination changes under a reused operation identity, current reads and rollback for each outcome.
 - **Source imports:** cover each supported format with representative fixtures, invalid rows,
   unresolved identities, repeated sources, changed quantities, duplicate lines and partial parsing
   failure. Verify provenance and require review before ownership changes.
@@ -107,40 +108,32 @@ bulk publication, removals and gap-free snapshot/change handoff.
   lists and each applies its explicit destination. Retry, reopen and reconciliation within one
   import preserve its identity and do not duplicate its acquisitions. Cover lost responses and
   reload for pasted lists, Moxfield and reviewed Wizards sources.
-- **Publication:** a write and its durable change record commit or roll back together. Cover complete
-  confirmation/location changes, account-scoped revisions, deletion, repeated delivery and snapshot
-  handoff. Pending-only state is absent from ordinary searchable records. Recovered commits return
-  the original publication position.
+- **Current queries:** complete confirmation/location changes, account-scoped revisions and deletion
+  are immediately observable through new authoritative reads. Pending-only state is absent from
+  ordinary lists and ownership fragments. Recovery returns the recorded domain outcome without
+  another write.
 
-### Search
+### Owner queries and direct refresh
 
-Use fixed public/private fixtures for supported syntax and equivalent UI criteria. Cover supported
-quoting, comparisons, combinations and negation, and explicit rejection of unsupported expressions.
-Do not infer support for an operator merely because it exists in Scryfall.
+Catalog query cases cover the supported syntax and equivalent structured criteria over fixed
+fixtures, translated names, same-printing predicates, duplicate matches, stable tie breakers,
+grouping before pagination and revision-bound continuation. Unsupported expressions fail explicitly.
 
-Use real PostgreSQL for same-printing/copy predicates, multiple matching associations, translated
-names, stable tie breakers, grouping before pagination, absent account context and changes between
-pages. Verify a changed query, account or indexed generation invalidates continuation; another account's
-writes must not. Inspect query
-plans when assessing performance; do not replace correctness assertions with timing thresholds.
+UserCards query cases use real PostgreSQL and two accounts. Verify collection/tag membership at
+card/printing/copy levels, direct versus derived associations, exact owned/intended/location counts,
+planned decks without ownership, pending exclusion, same-copy predicates and complete grouping/order
+before pagination. Changed request/account/revision invalidates continuation; another account's
+writes do not. Zero and successful absence remain distinct from unavailable reads.
 
-Exercise projection bootstrap, incremental updates, duplicate/obsolete delivery, crash before and
-after checkpoint commit, expired source positions, deletion and rebuild while reads continue. Check
-that incomplete changes or unresolved references cannot be published as a complete indexed revision.
-Prove storage isolation: the query/indexing implementation cannot read provider-owned SQL relations.
+After real commits and recovered outcomes, verify new authoritative list/fragment reads contain the
+saved state with no worker or projection. Interrupt compatible reference upgrades and repeat them;
+all existing identities, receipts, archives, intended quantities and ownership must remain exact.
+Inspect query plans when assessing performance; timing thresholds do not replace correctness.
 
-Exercise a snapshot and an atomic publication spanning multiple transaction and run budgets.
-Use an executor that rejects oversized transactions to prove the bound, and verify bounded batch
-writes rather than a remote write per record. Interrupt before and after a staging commit, resume
-from persisted state, and expire a snapshot continuation during staging. Check exact final records,
-source progress and account isolation, with the previous generation queryable and unchanged until
-publication. An unfinished successful pass reports remaining work; no partial snapshot or publication
-may establish incorporation. Use provider contracts and representative multi-page fixtures.
-
-Use controlled indexing progress to separate committed writes from visible search results. Cover a
-required publication position, an updating result with and without usable data, bounded wait timeout,
-failure and recovery. A delayed projection must not imply an empty collection or failed domain write.
-Test account-scoped browser progress with several commits, page departure and account replacement.
+CardList integration verifies public membership with private enrichment and private membership with
+batched public basics. Enrichment never changes membership, order, grouping or page boundaries.
+Refresh affected private sources/fragments after commit, retain usable content while pending and
+report failed refresh independently of save success. Fence late results across query/account changes.
 
 ### Recognition
 
@@ -186,10 +179,9 @@ supplied capabilities. Module documents define replacement evidence. Focus brows
 
 - **Navigation/Pages:** direct links, reload, nested Back, opaque retention, child lifetime and
   account changes. Test late factory results and interrupted restoration without decoding child state.
-- **Indexing notice:** exercise the [toast contract](ui/navigation.md#indexing-notice) with supplied
-  progress. Check cross-page persistence, combined pending changes, spinner/text, completion removal,
-  delayed/failed state, status retry, keyboard access and account cleanup. UI never polls or resubmits
-  a write to drive this notice.
+- **Error notices:** exercise the [notice contract](ui/navigation.md#error-notices): clear text and
+  red indicator, dismiss/recovery controls, keyboard access, account cleanup and accurate wording
+  for unknown write outcomes. A refresh failure must not imply a failed save.
 - **CardViews:** safe and accessible rendering, partial/empty/failed states, viewport demand,
   bounded DOM, input mapping and focus/scroll application. No backend is needed to test a renderer.
 - **Editors:** exact target context, unsaved drafts during submission or refresh, conflict feedback,
@@ -230,8 +222,8 @@ Test the PostgreSQL composition separately with real storage. Supply a replaceme
 factory and verify that UI access and disposal still use its contract.
 
 Run the same provider behavior assertions against a proposed replacement. A substitute that merely
-returns canned values proves a consumer seam, not provider equivalence. Verify snapshot/change
-continuity, publication authorization, revision consistency and account scoping against real storage.
+returns canned values proves a consumer seam, not provider equivalence. Verify current-query
+behavior, read authorization, revision consistency and account scoping against real storage.
 Boundary fixtures must reject private imports, forbidden dependency directions, cycles and
 backend imports from browser presentation code, including type-only dependencies.
 

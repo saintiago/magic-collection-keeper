@@ -34,7 +34,10 @@ Actual owner-data migration remains outside the rebuild queue.
 - [KAN-16: Package the preserved recognition engines and regression harness](https://malton-family.atlassian.net/browse/KAN-16)
 - [KAN-17: Expose the Recognition lifecycle and candidate contract](https://malton-family.atlassian.net/browse/KAN-17)
 
-## Search
+## Historical Search work
+
+These delivered tasks are superseded by direct provider queries in the
+[data architecture](../data-architecture.md). They do not define current requirements.
 
 - [KAN-14: Implement the Scryfall-compatible local query subset](https://malton-family.atlassian.net/browse/KAN-14)
 - [KAN-15: Implement mixed Search, grouping and stable pagination](https://malton-family.atlassian.net/browse/KAN-15)

@@ -11,8 +11,8 @@ Provide a presentation model independent of a DOM, page, transport or storage im
 
 Provide [UserInterface](ui/architecture.md) with independently constructed list instances. A list
 description identifies an activity: query results, a set/tag/collection, a typed detail target, an
-import's pending entries or recent cards. Query criteria use [Search](search.md)'s public vocabulary;
-private references use [UserCards](user-cards.md)'s contracts. Descriptions contain intent, not fetched
+import's pending entries or recent cards. Public queries use [Catalog](catalog.md)'s vocabulary;
+private queries/references use [UserCards](user-cards.md)'s contracts. Descriptions contain intent, not fetched
 rows, cache choices or continuation tokens. Import identity remains the identity of the same list
 when reopened; two imports with identical contents remain separate.
 
@@ -40,8 +40,8 @@ private record the detail level presents. A source whose read is already authori
 record reports it as current; a target the provider does not publish is the entry's explicit
 absence, never a failed read.
 
-Snapshots also expose whether results are waiting for known committed changes to be indexed. This
-state is distinct from fetching a page, an empty result and a failed read.
+Snapshots expose source and independent fragment loading/refreshing states. A failed refresh is
+distinct from an empty result and cannot change a previously committed operation into failure.
 
 Also provide account-local recent-activity access: record an explicitly opened typed target and
 construct its recent-list source. Application supplies the same account-scoped source to interested
@@ -50,11 +50,11 @@ only local browsing history and does not create a saved business card list.
 
 ### Required interfaces and source bindings
 
-- [Search](search.md) supplies complete query membership, ordering, grouping, continuation and counts.
-  Its freshness contract reports indexed positions and incorporation of known committed changes.
-- [Catalog](catalog.md) supplies batched basic information, printing choices and image references.
-- [UserCards](user-cards.md) supplies pending-entry lists, tags, operation availability and private
-  data changes. Pending visibility, intended quantities and ownership remain provider decisions.
+- [Catalog](catalog.md) supplies complete public query membership, ordering/grouping/continuation,
+  batched basic information, printing choices and image references.
+- [UserCards](user-cards.md) supplies complete private collection/tag membership and quantities,
+  pending-entry lists, current ownership/tag/quantity fragments, private details and operation
+  availability. Each provider enforces its own visibility and continuation rules.
 - [Application](application.md) supplies account-scoped clients and lifecycle. No authenticated
   client or concrete provider is constructed by a list.
 
@@ -70,9 +70,16 @@ contracts describe loading and interaction; they neither redefine search semanti
 shared import-workflow contract. Tool availability is advisory provider information; invoking a tool
 still uses its provider's current validation. A list supplies action context, not mutation execution.
 
-When a UserCards notification supplies a publication position, query-source bindings pass it to
-Search and use its bounded freshness observation. Pending-import and direct-record sources continue
-using their authoritative reads. Pages and renderers do not poll Search or synthesize updated rows.
+Bindings choose one membership owner from the description and pass its supported query unchanged.
+Public criteria are not applied to private lists and private criteria are not applied to public lists.
+A binding never filters or groups a partially loaded page to emulate deferred combined queries.
+Private references are enriched through bounded public-information lookups; public entries acquire
+current private marks independently. Neither enrichment direction changes source membership/order.
+
+UserCards committed invalidations trigger affected private source/fragment reads. Read current
+provider data directly; no indexing position or observation is involved. Pages and renderers do not
+poll, patch rows or synthesize updated quantities. Coalesce repeated hints without losing later
+commits and fence late reads by generation/account.
 
 ## Internal design
 
@@ -112,11 +119,11 @@ active window, replace a newer edit or leak private values into another account.
 change notifications mark affected data stale; reacquire it through its source. Recheck on opening
 or explicit refresh as well. No real-time cross-device delivery is promised.
 
-Keep usable results labelled as updating until the source incorporates the required publication
-position. Observe progress through the supplied capability, then refresh the relevant generation.
-Delayed or failed indexing is explicit and recoverable; it cannot trigger another business write or
-clear the view into a successful empty result. Changes arriving during the wait extend the required
-progress without losing selection or overwriting drafts.
+After a save, refresh affected private membership and fragments through their provider. Keep usable
+content labelled as refreshing until replacement arrives. A later invalidation supersedes or extends
+in-flight work without losing selection, overwriting drafts or accepting an obsolete result. A read
+failure is retryable independently and never resubmits a mutation. Public membership stays stable
+when only ownership/tags/quantities change.
 
 ## Selection and restoration
 

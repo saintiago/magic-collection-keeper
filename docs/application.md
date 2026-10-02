@@ -7,15 +7,15 @@ entry points and runtime lifecycle. Business decisions stay with their owning co
 
 ## Interface
 
-- Construct Catalog, UserCards, Search, Recognition, CardList and Capture through their public contracts; supply
+- Construct Catalog, UserCards, Recognition, CardList and Capture through their public contracts; supply
   UserInterface with the capabilities and public configuration it needs.
 - Accept authenticated requests, validate their transport input and dispatch to the owning
   component. Derive user identity from verified authentication context, never a supplied owner ID.
-- Supply Search and UserCards with trusted user context. Their contracts enforce private access.
+- Supply UserCards with trusted user context for private queries and operations.
 - Expose catalog synchronization as a separate job entry point. Recognition has its own compute
   entry point; both use the same configuration and authentication principles.
-- Expose Search indexing as resumable background work with trusted access to Catalog and UserCards
-  publication capabilities. Query entry points use only Search's read storage.
+- Dispatch public queries to Catalog and private queries/fragments to UserCards. Query routes
+  preserve provider errors and pagination; transport does not evaluate or combine membership.
 - Translate component results and failures into consistent transport responses without exposing
   storage details, credentials or provider exceptions.
 
@@ -29,9 +29,10 @@ The supplied UserCards account lookup accepts only the current authenticated acc
 also applies when a retained Capture factory constructs staging, before acquiring device or inference
 resources. Account departure releases existing scopes; signing in again permits a fresh scope.
 
-Connect UserCards' committed-change positions to Search's browser indexing-progress capability.
-Supply its account-scoped observable status to the UI shell and its freshness capability to CardList.
-This wiring forwards published values; Search owns progress decisions and polling/wait behavior.
+Supply CardList with Catalog public query/resolution and UserCards private query/fragment clients.
+Forward UserCards local invalidations within the account lifetime. There is no Search constructor,
+indexing job/configuration, publication-reader credential or browser indexing-status capability.
+UI receives list loading and operation outcomes through its existing provider interfaces.
 
 ### Construction and request boundary
 
@@ -58,8 +59,8 @@ from a lost response. The owning component's operation receipt determines its co
 | Browser composition    | Authenticated access, supplied browser factories and account-scoped lifetimes.  | Presentation, list loading, capture and domain operation policy. |
 
 Deployment wiring supplies separate storage roles for each owner and purpose. Query credentials read
-only their owner's data; mutation and indexing credentials write only their owner's data. Source
-publication uses supplied public capabilities rather than cross-owner SQL access. A TypeScript query
+only their owner's data; mutation credentials write only their owner's data. Public lookup and
+private query clients use provider-owned capabilities rather than cross-owner SQL access. A TypeScript query
 method alone does not enforce database permissions.
 
 The runtime receives ready component implementations. Its settings do not require database or bucket

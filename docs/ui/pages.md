@@ -25,12 +25,17 @@ Do not infer selected targets from visible rows. Compose retained handles withou
 | Page           | Composition and route context                                                                            |
 | -------------- | -------------------------------------------------------------------------------------------------------- |
 | Home           | Recent-card list and navigation to collection, search and import.                                        |
-| Catalog/search | Query controls, set context and results list.                                                            |
+| Catalog/search | Public query controls, set context and results list.                                                     |
 | Collection     | Owned-card/copy list, filters and explicit-selection edit tools.                                         |
 | Tags           | Tag metadata and create/rename controls; opening a tag leads to its own page.                            |
 | Tag view       | Tag identity, its card list and the applicable organization editors.                                     |
 | Card details   | Typed card/printing/copy target, detail presentation and related printings/copies lists.                 |
 | Import         | Import identity, source/manual controls, pending list, review/confirmation editors and capture controls. |
+
+Catalog browsing selects a public source; collection and tag pages select a private source. Query
+controls expose that source's supported filters/order. Public results can show ownership/tags as
+independent fragments, but an owned-only/public-color combination is deferred. Pages do not
+post-filter loaded entries or assemble another membership query.
 
 Each page is a small factory with a mounted lifetime. Shared composition is extracted only when it
 has the same responsibility. An import screen does not implement source parsing, capture admission,
