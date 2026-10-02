@@ -100,6 +100,23 @@ their checkpoints atomically, or publish a staged complete generation. Keep a co
 between public and private facts: retain unresolved references for later indexing rather than dropping
 them and advancing an apparently complete result. Rebuilds preserve the previous usable generation.
 
+### Bounded indexing and recovery
+
+Bound transactions by record count and encoded payload size. Write projected records in bounded
+set-based batches; a full source snapshot or large publication must not require one remote request
+per record or one transaction for the entire source. Run budgets cover bootstrap and catch-up alike.
+
+Build large snapshots and publications in a non-queryable replacement generation. Commit each
+staged batch together with its durable resume state. Retain opaque snapshot continuation, source
+revision/position and build phase without interpreting the continuation. An interrupted or
+budget-limited pass resumes committed staging; a failed batch advances no resume state. A stale
+snapshot discards its incomplete staging and starts again from a consistent snapshot.
+
+Staging progress is distinct from incorporated publication evidence. Publish only after complete
+source boundaries, catch-up and reference validation. Keep the previous complete generation usable
+throughout; never expose staged pages or commit half an atomic publication into a queryable
+projection. Oversized incremental publications use the same staged-generation path.
+
 ## Query evaluation
 
 ### Scryfall compatibility

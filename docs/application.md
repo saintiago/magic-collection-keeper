@@ -83,5 +83,8 @@ request state. Per-request identity, cancellation and diagnostics remain isolate
 resources when work completes; retain reusable clients only when safe between requests.
 
 Diagnostics identify the operation and failure without logging credentials, images or private
-collection contents. A transport timeout does not establish whether a write committed; return or
+collection contents. Background job failures also report the failing stage and sanitized provider
+error classification/correlation identity when available; a generic unavailable outcome alone is
+insufficient for diagnosis. Do not log raw exception messages, response bodies, SQL or bound values.
+A transport timeout does not establish whether a write committed; return or
 recover the operation's recorded outcome before retrying it.

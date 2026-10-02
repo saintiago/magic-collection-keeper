@@ -129,6 +129,14 @@ after checkpoint commit, expired source positions, deletion and rebuild while re
 that incomplete changes or unresolved references cannot be published as a complete indexed revision.
 Prove storage isolation: the query/indexing implementation cannot read provider-owned SQL relations.
 
+Exercise a snapshot and an atomic publication spanning multiple transaction and run budgets.
+Use an executor that rejects oversized transactions to prove the bound, and verify bounded batch
+writes rather than a remote write per record. Interrupt before and after a staging commit, resume
+from persisted state, and expire a snapshot continuation during staging. Check exact final records,
+source progress and account isolation, with the previous generation queryable and unchanged until
+publication. An unfinished successful pass reports remaining work; no partial snapshot or publication
+may establish incorporation. Use provider contracts and representative multi-page fixtures.
+
 Use controlled indexing progress to separate committed writes from visible search results. Cover a
 required publication position, an updating result with and without usable data, bounded wait timeout,
 failure and recovery. A delayed projection must not imply an empty collection or failed domain write.
@@ -147,7 +155,9 @@ and source-package hashes and notices separately from live inference and physica
 Exercise actual HTTP boundaries with missing, invalid, expired and wrong-audience identity, two
 accounts, malformed input and unavailable providers. Invalid identity must not reach private
 operations. Supply alternative providers to verify composition and lifecycle behavior; check that
-public settings and diagnostic failures contain no secrets or private record contents.
+public settings and diagnostic failures contain no secrets or private record contents. Background
+job failure checks also require a safe stage and provider error classification/correlation identity
+when available; raw exception text, SQL, response bodies and bound values must not appear.
 
 ### CardList
 
