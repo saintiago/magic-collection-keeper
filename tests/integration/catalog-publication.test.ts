@@ -4,8 +4,7 @@
  * appends the changes of its records and the revision that completes them, retrying an already
  * published snapshot appends nothing, a trusted indexing role reads the publication contract and
  * cannot mutate the catalog or read other private tables, an end-user read role cannot read the
- * private stream, and removal meaning reaches a consumer as an explicit change with a stable
- * identity and no record.
+ * private stream, and retained historical facts remain available to transitional consumers.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -189,32 +188,25 @@ describe('catalog publication stream', () => {
     }
   });
 
-  it('delivers a published removal with its stable identity and no record', async () => {
+  it('retains a provider-removed printing for transitional consumers', async () => {
     await synchronizer([bolt, boltSpanish], 'snapshot-1').synchronize({ dataset: 'cards' });
     const before = await publication().readSnapshot({ pageSize: 10 });
 
-    // Catalog synchronization retains the records a provider stops publishing, so it publishes no
-    // removals; the stream still carries removal meaning for a replacement or a maintenance path
-    // that retires a record, and this is how it reaches a consumer.
-    await database.query(
-      `insert into catalog_private.publication
-         (revision_id, source_name, source_version, published_at, kind, record_identity,
-          removed, record)
-       values ($1, 'scryfall', 'snapshot-2', now(), 'printing', $2, true, null)`,
-      ['revision-retired', 'printing-bolt-es'],
-    );
+    const revision = await synchronizer([bolt], 'snapshot-2').synchronize({ dataset: 'cards' });
 
     const page = await publication().readChanges({ position: before.position, pageSize: 10 });
-    expect(page.changes).toHaveLength(1);
-    const removal = page.changes[0];
-    expect(removal).toMatchObject({
-      kind: 'printing',
-      revisionId: 'revision-retired',
-      reference: { kind: 'printing', printingId: 'printing-bolt-es' },
-      removed: true,
-      record: null,
-    });
-    expect(removal?.position).toMatch(/^[1-9][0-9]*$/);
+    expect(page.changes).toEqual([
+      expect.objectContaining({
+        kind: 'revision',
+        revision: expect.objectContaining({ revisionId: revision.revisionId }),
+      }),
+    ]);
+    const snapshot = await publication().readSnapshot({ pageSize: 10 });
+    expect(
+      snapshot.records.some(
+        (record) => record.kind === 'printing' && record.printing.printingId === 'printing-bolt-es',
+      ),
+    ).toBe(true);
   });
 
   it('reads a large change page in position order with the completion marker last', async () => {

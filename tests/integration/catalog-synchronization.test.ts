@@ -232,7 +232,7 @@ describe('catalog synchronization publication', () => {
               (select count(*)::int from catalog.card_names) as names,
               (select count(*)::int from catalog.printings) as printings`,
     );
-    expect(counts[0]).toEqual({ cards: 2, names: 2, printings: 3 });
+    expect(counts[0]).toEqual({ cards: 2, names: 2, printings: 2 });
     const volume = await catalog.resolve([{ kind: 'card', cardId: 'oracle-bolt' }]);
     expect(volume.cards.get('oracle-bolt')?.rulesText).toBe('Rewritten rules text.');
   });

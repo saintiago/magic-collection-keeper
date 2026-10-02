@@ -136,6 +136,9 @@ describe('catalog query surface', () => {
       for (const relation of Object.values(CATALOG_QUERY_SURFACE.relations)) {
         await database.query(`select * from ${relation.name}`);
       }
+      for (const relation of ['cards', 'card_names', 'printings']) {
+        await database.query(`select * from catalog_resolution.${relation}`);
+      }
       await expect(database.query('select card_id from catalog_private.card')).rejects.toThrow(
         /permission denied/,
       );

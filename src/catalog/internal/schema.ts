@@ -1,22 +1,21 @@
 /**
- * Catalog's own published read relations (docs/catalog.md#query-surface).
+ * Catalog's own published read relations (docs/catalog.md#public-query-semantics).
  *
- * Private tables live in `catalog_private`; the read service reads only the views in `catalog` and
- * never the base tables. Another component builds its own searchable data from the publication
- * contract instead of reading these views, so they stay an internal implementation choice. The
- * declaration below is the relation contract those views satisfy: relation names, columns and their
- * meaning. `tests/integration/catalog-query-surface.test.ts` verifies the views against it, so a
- * replacement storage maps its data to exactly these relations and passes the same tests.
+ * Private tables live in `catalog_private`; the read service reads only provider-owned views and
+ * never the base tables. Current query membership and historical resolution are separate views so
+ * a provider removal cannot strand a saved reference. The declaration below describes the current
+ * query relations; consumers receive typed records rather than this storage layout.
  */
 
 import { CATALOG_LIMITS } from './model.js';
 
 export const catalogQuerySchema = 'catalog';
 export const catalogPrivateSchema = 'catalog_private';
+const catalogResolutionSchema = 'catalog_resolution';
 
 const identifierLength = CATALOG_LIMITS.maxIdentifierLength;
 
-/** Column types as Search consumes them, not the storage's internal representation. */
+/** Column types of the current query relations, not the storage's internal representation. */
 export type CatalogColumnType = 'text' | 'text-array' | 'boolean' | 'numeric' | 'timestamp';
 
 export interface CatalogRelationColumn {
@@ -226,6 +225,7 @@ export const CATALOG_QUERY_SURFACE: CatalogQuerySurface = {
 export const catalogSchemaSql = `
 create schema if not exists ${catalogPrivateSchema};
 create schema if not exists ${catalogQuerySchema};
+create schema if not exists ${catalogResolutionSchema};
 
 create table if not exists ${catalogPrivateSchema}.revision (
   singleton boolean not null default true primary key check (singleton),
@@ -243,16 +243,30 @@ create table if not exists ${catalogPrivateSchema}.card (
   colors text[] not null,
   color_identity text[] not null,
   mana_value numeric check (mana_value is null or mana_value >= 0),
+  current boolean not null default true,
+  candidate boolean not null default false,
   check (colors <@ array['W', 'U', 'B', 'R', 'G']::text[] and cardinality(colors) <= 5),
   check (color_identity <@ array['W', 'U', 'B', 'R', 'G']::text[] and cardinality(color_identity) <= 5)
 );
+
+alter table ${catalogPrivateSchema}.card
+  add column if not exists current boolean not null default true;
+alter table ${catalogPrivateSchema}.card
+  add column if not exists candidate boolean not null default false;
 
 create table if not exists ${catalogPrivateSchema}.card_name (
   card_id text not null references ${catalogPrivateSchema}.card (card_id) on delete cascade,
   language text not null check (length(language) between 1 and 20),
   name text not null check (length(name) between 1 and 300),
+  current boolean not null default true,
+  candidate boolean not null default false,
   primary key (card_id, language, name)
 );
+
+alter table ${catalogPrivateSchema}.card_name
+  add column if not exists current boolean not null default true;
+alter table ${catalogPrivateSchema}.card_name
+  add column if not exists candidate boolean not null default false;
 
 create index if not exists card_name_lower_name_index
   on ${catalogPrivateSchema}.card_name (lower(name));
@@ -269,11 +283,18 @@ create table if not exists ${catalogPrivateSchema}.printing (
   image_normal text,
   image_large text,
   image_art_crop text,
+  current boolean not null default true,
+  candidate boolean not null default false,
   constraint printing_finishes_check check (
     finishes <@ array['nonfoil', 'foil', 'etched']::text[]
     and (not physical or cardinality(finishes) >= 1)
   )
 );
+
+alter table ${catalogPrivateSchema}.printing
+  add column if not exists current boolean not null default true;
+alter table ${catalogPrivateSchema}.printing
+  add column if not exists candidate boolean not null default false;
 
 -- Upgrade storage created by the previous schema, whose finish constraint rejected every empty
 -- list. Existing records and publication history stay in place while the constraint is replaced.
@@ -289,8 +310,13 @@ create index if not exists printing_card_order_index
   on ${catalogPrivateSchema}.printing (card_id, edition, collector_number, language, printing_id);
 create index if not exists printing_identity_index
   on ${catalogPrivateSchema}.printing (edition, collector_number, language);
+create index if not exists current_card_name_lower_name_index
+  on ${catalogPrivateSchema}.card_name (lower(name)) where current;
+create index if not exists current_printing_card_order_index
+  on ${catalogPrivateSchema}.printing (card_id, edition, collector_number, language, printing_id)
+  where current;
 
--- The durable publication stream (docs/catalog.md#query-surface). One publication writes the
+-- The transitional durable publication stream. One publication writes the
 -- changes of its candidate records, then the revision that completes them, in the same
 -- transaction. Positions only grow, so a consumer resumes from any delivered position; the
 -- revision records the authoritative published revision, and record rows carry the stable identity
@@ -317,13 +343,31 @@ create unique index if not exists publication_revision_index
 
 create or replace view ${catalogQuerySchema}.cards as
   select card_id, name, rules_text, type_line, colors, color_identity, mana_value
-  from ${catalogPrivateSchema}.card;
+  from ${catalogPrivateSchema}.card
+  where current;
 
 create or replace view ${catalogQuerySchema}.card_names as
   select card_id, language, name
-  from ${catalogPrivateSchema}.card_name;
+  from ${catalogPrivateSchema}.card_name
+  where current;
 
 create or replace view ${catalogQuerySchema}.printings as
+  select printing_id, card_id, edition, collector_number, language, finishes, physical,
+         image_small, image_normal, image_large, image_art_crop
+  from ${catalogPrivateSchema}.printing
+  where current;
+
+-- Historical records stay available to the provider-owned resolver while current public queries
+-- use the three views above. These views are storage details, not consumer query contracts.
+create or replace view ${catalogResolutionSchema}.cards as
+  select card_id, name, rules_text, type_line, colors, color_identity, mana_value
+  from ${catalogPrivateSchema}.card;
+
+create or replace view ${catalogResolutionSchema}.card_names as
+  select card_id, language, name
+  from ${catalogPrivateSchema}.card_name;
+
+create or replace view ${catalogResolutionSchema}.printings as
   select printing_id, card_id, edition, collector_number, language, finishes, physical,
          image_small, image_normal, image_large, image_art_crop
   from ${catalogPrivateSchema}.printing;
@@ -333,28 +377,34 @@ create or replace view ${catalogQuerySchema}.published_revision as
   from ${catalogPrivateSchema}.revision;
 
 revoke all on schema ${catalogPrivateSchema} from public;
+revoke all on schema ${catalogResolutionSchema} from public;
 `.trim();
 
 const readerRolePattern = /^[a-z_][a-z0-9_]{0,62}$/;
 
 /**
- * Grants a consumer role read access to the published views and nothing else. The catalog schema
- * owner applies this after `catalogSchemaSql`; base tables stay unreachable for the reader.
+ * Grants the Catalog read service access to current-query and historical-resolution views. The
+ * schema owner applies this after `catalogSchemaSql`; base tables stay unreachable for the reader.
  */
 export function catalogReaderGrants(readerRole: string): string {
   assertRole(readerRole);
-  const relations = Object.values(CATALOG_QUERY_SURFACE.relations).map((relation) => relation.name);
+  const relations = [
+    ...Object.values(CATALOG_QUERY_SURFACE.relations).map((relation) => relation.name),
+    `${catalogResolutionSchema}.cards`,
+    `${catalogResolutionSchema}.card_names`,
+    `${catalogResolutionSchema}.printings`,
+  ];
   return [
     `grant usage on schema ${catalogQuerySchema} to "${readerRole}";`,
+    `grant usage on schema ${catalogResolutionSchema} to "${readerRole}";`,
     `grant select on ${relations.join(', ')} to "${readerRole}";`,
   ].join('\n');
 }
 
 /**
- * Grants trusted indexing access to the publication contract: the published records and the
+ * Grants trusted indexing access to the publication contract: retained resolution records and the
  * durable change stream, and no mutation. Application supplies this credential to an indexing
- * runtime separately from an end-user read role (docs/data-architecture.md#access-and-deployment);
- * the read service never needs it and never reaches the private schema.
+ * runtime separately from an end-user read role (docs/data-architecture.md#access-and-deployment).
  */
 export function catalogPublicationGrants(role: string): string {
   return [

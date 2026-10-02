@@ -1,11 +1,12 @@
 /**
- * Catalog query publication (docs/catalog.md#query-surface).
+ * Transitional Catalog query publication retained for consumers awaiting replacement.
  *
  * Search consumes this provider-owned contract instead of reading SQL: a consistent, paginated
  * snapshot of the published revision with the change position it was read at, and the durable
- * changes published after a position. One publication writes its records' changes, its revision
- * and its position in one transaction, so a consumer observes a revision completely or not at all
- * and resuming from any delivered position leaves no gap between the snapshot and the changes.
+ * changes published after a position. Its records include retained historical facts so saved
+ * private references remain projectable after provider removal. One publication writes its
+ * records' changes, its revision and its position in one transaction, so a consumer observes a
+ * revision completely or not at all and resuming from any delivered position leaves no gap.
  * Positions older than the retained publication history expire explicitly and require a new
  * snapshot instead of skipping changes silently.
  */
@@ -138,7 +139,7 @@ export interface CatalogChangesPage {
   readonly position: CatalogChangePosition;
 }
 
-/** The snapshot and change contract Search reads (docs/catalog.md#query-surface). */
+/** The transitional snapshot and change contract consumed by Search. */
 export interface CatalogPublication {
   readSnapshot(request?: CatalogSnapshotRequest): Promise<CatalogSnapshotPage>;
   readChanges(request: CatalogChangesRequest): Promise<CatalogChangesPage>;
@@ -215,16 +216,16 @@ const snapshotPageStatement = `with page as (
   select '1'::text as kind_rank, card_id as record_key, 'card'::text as record_kind,
          to_jsonb(entry)::text as payload
   from (select card_id, name, rules_text, type_line, colors, color_identity, mana_value
-        from catalog.cards) as entry
+        from catalog_resolution.cards) as entry
   union all
   select '2'::text, jsonb_build_array(card_id, language, name)::text, 'card-name'::text,
          to_jsonb(entry)::text
-  from (select card_id, language, name from catalog.card_names) as entry
+  from (select card_id, language, name from catalog_resolution.card_names) as entry
   union all
   select '3'::text, printing_id, 'printing'::text, to_jsonb(entry)::text
   from (select printing_id, card_id, edition, collector_number, language, finishes, physical,
                image_small, image_normal, image_large, image_art_crop
-        from catalog.printings) as entry
+        from catalog_resolution.printings) as entry
 )
 select 'revision' as row_kind,
        0 as row_position,

@@ -5,9 +5,10 @@
  * failed or interrupted ingestion leaves the previous revision and its records exactly as they
  * were, and readers observe either the complete previous revision or the complete candidate one.
  * The same transaction appends the durable publication stream the query publication serves: one
- * change per record this revision inserted or changed, then the revision that completes them, then
- * the retention of older publications. Records the provider no longer publishes keep their
- * published row and are not published as removals: existing references stay resolvable.
+ * change per record this revision inserted, changed or restored, then the revision that completes
+ * them and the retention of older publications. Removed records keep their stored facts for
+ * historical resolution and transitional consumers; current Catalog queries use separate
+ * membership flags.
  */
 
 import { CatalogError } from './errors.js';
@@ -78,9 +79,9 @@ const cardWriteStatement = `with candidate as (
 ),
 changed as (
   insert into catalog_private.card as stored (
-    card_id, name, rules_text, type_line, colors, color_identity, mana_value
+    card_id, name, rules_text, type_line, colors, color_identity, mana_value, current, candidate
   )
-  select card_id, name, rules_text, type_line, colors, color_identity, mana_value
+  select card_id, name, rules_text, type_line, colors, color_identity, mana_value, true, true
   from candidate
   on conflict (card_id) do update set
     name = excluded.name,
@@ -88,8 +89,11 @@ changed as (
     type_line = excluded.type_line,
     colors = excluded.colors,
     color_identity = excluded.color_identity,
-    mana_value = excluded.mana_value
-  where (stored.name, stored.rules_text, stored.type_line, stored.colors, stored.color_identity,
+    mana_value = excluded.mana_value,
+    current = true,
+    candidate = true
+  where not stored.current
+     or (stored.name, stored.rules_text, stored.type_line, stored.colors, stored.color_identity,
          stored.mana_value)
      is distinct from
         (excluded.name, excluded.rules_text, excluded.type_line, excluded.colors,
@@ -113,10 +117,11 @@ const nameWriteStatement = `with candidate as (
   )
 ),
 changed as (
-  insert into catalog_private.card_name (card_id, language, name)
-  select card_id, language, name
+  insert into catalog_private.card_name (card_id, language, name, current, candidate)
+  select card_id, language, name, true, true
   from candidate
-  on conflict do nothing
+  on conflict (card_id, language, name) do update set current = true, candidate = true
+  where not catalog_private.card_name.current
   returning card_id, language, name
 )
 insert into catalog_private.publication (
@@ -150,10 +155,10 @@ const printingWriteStatement = `with candidate as (
 changed as (
   insert into catalog_private.printing as stored (
     printing_id, card_id, edition, collector_number, language, finishes, physical,
-    image_small, image_normal, image_large, image_art_crop
+    image_small, image_normal, image_large, image_art_crop, current, candidate
   )
   select printing_id, card_id, edition, collector_number, language, finishes, physical,
-         image_small, image_normal, image_large, image_art_crop
+         image_small, image_normal, image_large, image_art_crop, true, true
   from candidate
   on conflict (printing_id) do update set
     card_id = excluded.card_id,
@@ -165,8 +170,11 @@ changed as (
     image_small = excluded.image_small,
     image_normal = excluded.image_normal,
     image_large = excluded.image_large,
-    image_art_crop = excluded.image_art_crop
-  where (stored.card_id, stored.edition, stored.collector_number, stored.language, stored.finishes,
+    image_art_crop = excluded.image_art_crop,
+    current = true,
+    candidate = true
+  where not stored.current
+     or (stored.card_id, stored.edition, stored.collector_number, stored.language, stored.finishes,
          stored.physical, stored.image_small, stored.image_normal, stored.image_large,
          stored.image_art_crop)
      is distinct from
@@ -183,6 +191,48 @@ insert into catalog_private.publication (
          'printing', published_record.printing_id, false, to_jsonb(published_record)
   from changed as published_record
   on conflict (revision_id, kind, record_identity) do update set record = excluded.record`;
+
+/** Marks unchanged records as members of the candidate without publishing a redundant change. */
+const cardMarkStatement = `update catalog_private.card as stored
+set candidate = true
+from jsonb_to_recordset(cast(:card_batch as jsonb)) as entry(card_id text)
+where stored.card_id = entry.card_id and not stored.candidate`;
+
+const nameMarkStatement = `update catalog_private.card_name as stored
+set candidate = true
+from jsonb_to_recordset(cast(:name_batch as jsonb)) as entry(
+  card_id text, language text, name text
+)
+where stored.card_id = entry.card_id
+  and stored.language = entry.language
+  and stored.name = entry.name
+  and not stored.candidate`;
+
+const printingMarkStatement = `update catalog_private.printing as stored
+set candidate = true
+from jsonb_to_recordset(cast(:printing_batch as jsonb)) as entry(printing_id text)
+where stored.printing_id = entry.printing_id and not stored.candidate`;
+
+/** A provider-stable printing identity may never move to another playable identity. */
+const printingRelationshipConflictStatement = `select stored.printing_id
+from catalog_private.printing as stored
+join jsonb_to_recordset(cast(:printing_batch as jsonb)) as entry(
+  printing_id text, card_id text
+) on entry.printing_id = stored.printing_id
+where entry.card_id <> stored.card_id
+limit 1`;
+
+const resetCandidateStatements = [
+  `update catalog_private.card set candidate = false where candidate`,
+  `update catalog_private.card_name set candidate = false where candidate`,
+  `update catalog_private.printing set candidate = false where candidate`,
+] as const;
+
+const finishMembershipStatements = [
+  `update catalog_private.card set current = candidate`,
+  `update catalog_private.card_name set current = candidate`,
+  `update catalog_private.printing set current = candidate`,
+] as const;
 
 /**
  * The revision that completes the candidate. It is written after every record change of the
@@ -237,9 +287,14 @@ export async function publishCandidate(
       return { revision: published, published: false };
     }
 
+    for (const statement of resetCandidateStatements) {
+      await statements.query(statement);
+    }
+
     let buffered: SerializedRecord[] = [];
     let batched = 0;
     let bytes = 0;
+    const printingCards = new Map<string, string>();
     const revision = {
       revision_id: candidate.revisionId,
       source_name: candidate.sourceName,
@@ -258,16 +313,36 @@ export async function publishCandidate(
       // Cards precede the names and printings that reference them, and one batch never exceeds the
       // declared transport bounds (see serializeRecord).
       await statements.query(cardWriteStatement, { card_batch: rows.cards, ...revision });
+      await statements.query(cardMarkStatement, { card_batch: rows.cards });
       await statements.query(nameWriteStatement, { name_batch: rows.names, ...revision });
+      await statements.query(nameMarkStatement, { name_batch: rows.names });
+      const conflicts = await statements.query(printingRelationshipConflictStatement, {
+        printing_batch: rows.printings,
+      });
+      if (conflicts.length > 0) {
+        throw new CatalogError(
+          'unavailable',
+          `The ${candidate.sourceName} snapshot changes a printing’s playable identity.`,
+        );
+      }
       await statements.query(printingWriteStatement, {
         printing_batch: rows.printings,
         ...revision,
       });
+      await statements.query(printingMarkStatement, { printing_batch: rows.printings });
     };
 
     let ingested = 0;
     for await (const record of records) {
       const serialized = serializeRecord(record);
+      const knownCard = printingCards.get(serialized.printingId);
+      if (knownCard !== undefined && knownCard !== serialized.cardId) {
+        throw new CatalogError(
+          'unavailable',
+          `The ${candidate.sourceName} snapshot assigns one printing identity to several cards.`,
+        );
+      }
+      printingCards.set(serialized.printingId, serialized.cardId);
       if (
         buffered.length > 0 &&
         (batched >= CATALOG_SYNCHRONIZATION_LIMITS.maxRecordsPerStatement ||
@@ -295,6 +370,9 @@ export async function publishCandidate(
       );
     }
     await flush();
+    for (const statement of finishMembershipStatements) {
+      await statements.query(statement);
+    }
     // The revision that completes the candidate is the last position of this publication: the
     // snapshot reports it, and a consumer that applied it holds every record the revision changed.
     await statements.query(revisionChangeStatement, revision);

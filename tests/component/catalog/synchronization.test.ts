@@ -377,7 +377,7 @@ describe('catalog synchronization', () => {
     expect(listed.printings).toEqual([printing]);
   });
 
-  it('republishes changed records and keeps identities the provider stopped publishing', async () => {
+  it('removes dropped identities from current membership but keeps them resolvable', async () => {
     await synchronizer(
       createSnapshotSource({
         cards: { sourceVersion: 'snapshot-1', records: [lightningBolt, delverOfSecrets] },
@@ -409,7 +409,40 @@ describe('catalog synchronization', () => {
               (select count(*)::int from catalog.card_names) as names,
               (select count(*)::int from catalog.printings) as printings`,
     );
-    expect(counts[0]).toEqual({ cards: 3, names: 5, printings: 3 });
+    expect(counts[0]).toEqual({ cards: 2, names: 2, printings: 2 });
+    const historical = await database.query(
+      `select (select count(*)::int from catalog_resolution.cards) as cards,
+              (select count(*)::int from catalog_resolution.card_names) as names,
+              (select count(*)::int from catalog_resolution.printings) as printings`,
+    );
+    expect(historical[0]).toEqual({ cards: 3, names: 5, printings: 3 });
+  });
+
+  it('rejects a refresh that moves a stable printing to another card identity', async () => {
+    const first = await synchronizer(
+      createSnapshotSource({
+        cards: { sourceVersion: 'snapshot-1', records: [lightningBolt] },
+      }),
+    ).synchronize({ dataset: 'cards' });
+
+    const error = await captureCatalogError(
+      synchronizer(
+        createSnapshotSource({
+          cards: {
+            sourceVersion: 'snapshot-2',
+            records: [{ ...lightningBolt, oracle_id: 'oracle-different-card' }],
+          },
+        }),
+      ).synchronize({ dataset: 'cards' }),
+    );
+
+    expect(error.code).toBe('unavailable');
+    expect(error.message).toContain('playable identity');
+    expect(await publishedRevision()).toEqual(first);
+    const printing = (
+      await catalog().resolve([{ kind: 'printing', printingId: lightningBolt.id }])
+    ).printings.get(lightningBolt.id);
+    expect(printing?.cardId).toBe(lightningBolt.oracle_id);
   });
 
   it('publishes reversible printings under the identity and attributes their faces publish', async () => {
@@ -647,8 +680,11 @@ describe('catalog synchronization', () => {
       createSnapshotSource({ cards: { sourceVersion: 'snapshot-2', records } }),
     ).synchronize({ dataset: 'cards' });
     expect(recovered.sourceVersion).toBe('snapshot-2');
-    const retried = await database.query('select count(*)::int as cards from catalog.cards');
-    expect(retried[0]).toEqual({ cards: 301 });
+    const retried = await database.query(
+      `select (select count(*)::int from catalog.cards) as current_cards,
+              (select count(*)::int from catalog_resolution.cards) as resolved_cards`,
+    );
+    expect(retried[0]).toEqual({ current_cards: 300, resolved_cards: 301 });
   });
 
   it('keeps published reads working when the source transfer fails mid-snapshot', async () => {

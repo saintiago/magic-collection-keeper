@@ -37,13 +37,17 @@ function providerCard(options: {
   readonly edition: string;
   readonly collectorNumber: string;
   readonly finishes?: readonly string[];
+  readonly cardId?: string;
+  readonly name?: string;
 }): Record<string, unknown> {
   const finishes = options.finishes ?? ['nonfoil'];
+  const cardId = options.cardId ?? boltCardId;
+  const name = options.name ?? 'Lightning Bolt';
   return {
     object: 'card',
     id: options.printingId,
-    oracle_id: boltCardId,
-    name: 'Lightning Bolt',
+    oracle_id: cardId,
+    name,
     lang: 'en',
     set: options.edition,
     collector_number: options.collectorNumber,
@@ -52,7 +56,10 @@ function providerCard(options: {
     foil: finishes.includes('foil'),
     etched: finishes.includes('etched'),
     digital: false,
-    oracle_text: 'Lightning Bolt deals 3 damage to any target.',
+    oracle_text:
+      name === 'Lightning Bolt'
+        ? 'Lightning Bolt deals 3 damage to any target.'
+        : `${name} has its test rules.`,
     type_line: 'Instant',
     colors: ['R'],
     color_identity: ['R'],
@@ -72,6 +79,14 @@ const staRecord = providerCard({
   edition: 'sta',
   collectorNumber: '109',
   finishes: ['etched'],
+});
+
+const counterspellRecord = providerCard({
+  printingId: 'printing-mh2-267-en',
+  cardId: 'oracle-counterspell',
+  name: 'Counterspell',
+  edition: 'mh2',
+  collectorNumber: '267',
 });
 
 describe('search indexing over real publications', () => {
@@ -188,6 +203,60 @@ describe('search indexing over real publications', () => {
 
     expect(await copiesOf(alice)).toHaveLength(3);
     expect(await copiesOf(bob)).toHaveLength(1);
+  });
+
+  it('keeps saved references projectable after provider removals and during bootstrap', async () => {
+    await publishCatalog([m11Record, staRecord, counterspellRecord], 'snapshot-1');
+    await database.userCards.createCopies(alice, {
+      printingId: m11PrintingId,
+      finish: 'nonfoil',
+      condition: null,
+      quantity: 1,
+    });
+    await database.indexer.index({ accounts: [alice.accountId] });
+
+    // Removing one printing while its card remains current must not strand the saved copy.
+    await publishCatalog([staRecord, counterspellRecord], 'snapshot-2');
+    const printingRemoval = await database.indexer.index({ accounts: [alice.accountId] });
+    expect(printingRemoval).toMatchObject({
+      published: true,
+      caughtUp: true,
+      unresolvedReferences: 0,
+    });
+    expect(await copiesOf(alice)).toHaveLength(1);
+    expect(
+      await database.query('select printing_id from catalog.printings order by printing_id'),
+    ).toEqual([{ printing_id: 'printing-mh2-267-en' }, { printing_id: staPrintingId }]);
+
+    // Removing the whole card has the same compatibility requirement.
+    await publishCatalog([counterspellRecord], 'snapshot-3');
+    const cardRemoval = await database.indexer.index({ accounts: [alice.accountId] });
+    expect(cardRemoval).toMatchObject({
+      published: true,
+      caughtUp: true,
+      unresolvedReferences: 0,
+    });
+    expect(await copiesOf(alice)).toHaveLength(1);
+    expect(await database.query('select card_id from catalog.cards')).toEqual([
+      { card_id: 'oracle-counterspell' },
+    ]);
+
+    // A replacement generation bootstraps from retained Catalog facts as well.
+    const rebuilt = await database.indexer.index({ accounts: [alice.accountId], rebuild: true });
+    expect(rebuilt).toMatchObject({
+      published: true,
+      rebuilt: true,
+      caughtUp: true,
+      unresolvedReferences: 0,
+    });
+    expect(await copiesOf(alice)).toHaveLength(1);
+    expect(
+      await database.query('select printing_id from search.printings order by printing_id'),
+    ).toEqual([
+      { printing_id: 'printing-m11-149-en' },
+      { printing_id: 'printing-mh2-267-en' },
+      { printing_id: 'printing-sta-109-en' },
+    ]);
   });
 
   it('drops an association the account removed from its published records', async () => {
