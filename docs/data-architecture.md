@@ -88,6 +88,9 @@ Compatible storage upgrades preserve all current copy/tag/association identities
 operation and migration receipts, provenance, quantities, account identity and exact source archives.
 Resolve missing stable card references through the supplied reference contract in bounded work;
 repeating the upgrade must not create copies, replay imports or rewrite source evidence.
+Run reference preparation through an explicit owner-controlled upgrade step before enabling the new
+read capability. Ordinary query/fragment requests use read-only access and never trigger backfills,
+metadata writes or another provider call. Keep preparation resumable separately from read lifetimes.
 
 Remove obsolete Search projection storage, indexing/publication workers, credentials, transport,
 configuration, progress state and dependent tests. Retain authoritative Catalog revision publication,

@@ -14,6 +14,12 @@ context and transport. Consumers provide intent and explicit references, never S
 [Catalog](../catalog.md) supplies reference resolution at recording/upgrade boundaries; it supplies
 public display information separately from query membership.
 
+Construct the query/fragment capability with account-scoped read-only storage. It requires neither a
+transactional writer nor a reference resolver. Reference preparation belongs to a separately invoked
+parent-owned compatible upgrade capability, which uses the supplied resolver before those reads are
+enabled. Query and fragment calls never start preparation, write metadata or require another provider
+to be available. Incomplete preparation returns explicit unavailability, never a hidden write.
+
 | Capability             | Input                                                                                                                                    | Result                                                                                                                                                       |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Query collection/tag   | Trusted account, collection or tag scope, card/printing/copy result level, supported private criteria/order, page size and continuation. | Stable entry keys, typed targets, direct/derived quantity context, account revision and continuation or end.                                                 |
