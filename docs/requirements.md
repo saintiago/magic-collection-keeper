@@ -50,6 +50,11 @@ Evidence is the repository review and verified Jira descriptions, not a claim of
 | OPS-001          | Operations: reproducible artifacts, explicit deployment/rollback procedures and release evidence. No mandatory health/readiness endpoints.                                           | Accepted / queued                        |
 | DELIVERY-NEW-001 | Operations, Rebuild delivery policy: CI and automatic deployment stay disabled; validation runs through repository commands and deployments are explicit.                            | Policy recorded; workspace checks queued |
 
+Direct Catalog queries and authoritative UserCards list/fragment reads supersede the separate Search
+projection. Combined public/private filtering is deferred. The [data architecture](data-architecture.md),
+[Catalog](catalog.md) and [UserCards queries](usercards/queries.md) own this approved correction;
+implementation and deployment evidence remain separate.
+
 These refinements were approved after comparing the Jira descriptions with repository documentation.
 Their owning sections and the testing architecture define the behavior and verification; Jira adds
 no further acceptance criteria.

@@ -13,8 +13,6 @@ operations have separate owners.
 - Present and control [CardList](../card-list.md) instances. Pass a list description, user intent and
   viewport observations; consume observable presentation snapshots and opaque retained state.
 - Present [Capture](../capture.md) state and forward start, stop and retry commands.
-- Observe [Search](../search.md#freshness)'s account-scoped indexing status for the shell notice.
-  This capability exposes progress only; list queries remain behind CardList.
 - Edit through [UserCards](../user-cards.md)'s public reads, commands and recoverable operation handles.
   Use [Catalog](../catalog.md) lookup for editor options. Providers own validation and committed state.
 - Each module below owns its public interface. Constructors receive narrow capabilities; neither
@@ -104,9 +102,6 @@ Use dedicated pages for navigable activities; reserve dialogs for brief confirma
 auxiliary actions. Support keyboard and touch, clear loading/error states, focus restoration and
 safe rendering of external text. Keep owned, intended and physical-location counts visibly distinct.
 Never label parsing, recognition or an unresolved write as confirmed ownership.
-
-Navigation owns the floating [indexing notice](navigation.md#indexing-notice). It remains visible
-across page changes while saved changes are being incorporated, independently of local form feedback.
 
 Use the same floating presentation for [error notices](navigation.md#error-notices), with red styling
 and a clear message. Field and row validation remains next to the affected input.

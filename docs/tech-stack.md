@@ -64,10 +64,9 @@ small; introduce a dependency when it reduces total implementation and maintenan
 
 Deploy in `us-east-1`.
 
-Follow the [data architecture](data-architecture.md) for storage ownership. Catalog, UserCards and
-Search initially use separate private schemas and roles in the same Aurora deployment. Search owns
-its projection tables and indexes. Node.js background indexing work consumes provider publication
-capabilities in bounded, resumable batches; its writer role is separate from the query role.
+Follow the [data architecture](data-architecture.md) for storage ownership. Catalog and UserCards
+initially use separate private schemas and owner read/write roles in one Aurora cluster. Each queries
+its own authoritative storage. There is no Search projection or background indexing workload.
 
 | Area                       | Technology                                                                            |
 | -------------------------- | ------------------------------------------------------------------------------------- |
@@ -76,7 +75,6 @@ capabilities in bounded, resumable batches; its writer role is separate from the
 | Authentication             | Amazon Cognito; existing user pool with a separate app client for the rebuild.        |
 | Application compute        | AWS Lambda with Node.js; container Lambda for Python recognition.                     |
 | Catalog synchronization    | Amazon ECS standalone tasks on AWS Fargate.                                           |
-| Search indexing            | Amazon ECS standalone tasks on AWS Fargate; resumable batches over the publications.  |
 | Relational storage         | Amazon Aurora PostgreSQL Serverless v2, accessed by the API through the RDS Data API. |
 | Source snapshots           | Private Amazon S3 data bucket.                                                        |
 | Container images           | Amazon ECR.                                                                           |

@@ -19,8 +19,10 @@ operation presentation and navigation/close intent. Expose retain, restore and d
 operation handles remain provider-owned.
 
 Query editors receive the current CardList description and its change-intent capability. Keep typed
-input separate from the applied query, submit explicit criteria and present query errors. Search
-parsing and normalization remain behind that capability; an editor does not filter loaded cards.
+input separate from the applied query, submit explicit criteria and present query errors. Show only
+the selected source's supported criteria and ordering. Parsing and normalization remain behind the
+supplied provider capability; an editor does not filter loaded cards or combine public and private
+criteria.
 
 ## Internal design
 

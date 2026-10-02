@@ -68,7 +68,7 @@ All documents in `docs/` are relevant to the rebuild.
 - [Capture](docs/capture.md)
 - [Catalog](docs/catalog.md)
 - [UserCards](docs/user-cards.md)
-- [Search](docs/search.md)
+- [UserCards queries](docs/usercards/queries.md)
 - [Recognition](docs/recognition.md)
 - [Tech stack](docs/tech-stack.md)
 - [Testing architecture](docs/testing.md)

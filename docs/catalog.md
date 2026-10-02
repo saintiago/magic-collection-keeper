@@ -3,96 +3,91 @@
 ## Responsibility
 
 Own public card identities, printings, their relationships and a complete database of basic card
-information. Keep provider synchronization independent of interactive reads.
+information. Own public search, reference resolution and printing selection. Keep provider
+synchronization independent of interactive reads.
 
 ## Interface
 
-- Provide CardList, UserInterface editors and UserCards with card and printing lookup, including batched resolution,
-  language, available finishes and physical-printing eligibility.
-- Provide Search with consistent snapshots and durable changes for public card facts through the
-  publication contract below. Consumers build their own searchable storage from those facts.
-- Provide Recognition with canonical identity and printing resolution. Recognition's model-specific
-  inference dataset remains its own versioned asset.
-- Accept synchronization requests from Application and report the published data revision or a
-  failure. External provider formats remain inside this boundary.
+- Provide CardList with public card/printing queries and batched basic information/image references.
+- Provide UserInterface editors and UserCards with lookup, including language, supported finishes,
+  physical-printing eligibility and stable printing-to-card relationships.
+- Provide Recognition with canonical identity and printing resolution. Its model-specific inference
+  dataset remains its own versioned asset.
+- Accept synchronization requests from Application and report the published revision or failure.
+  External provider formats remain inside this boundary.
 
 ### Provided operations
 
-| Operation                  | Input                                                                                          | Result                                                                              |
-| -------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Resolve cards or printings | A bounded set of typed references.                                                             | Basic records keyed by reference, explicit missing references and catalog revision. |
-| List a card's printings    | Card ID and continuation.                                                                      | Bounded printing records and continuation for that card.                            |
-| Synchronize                | Source configuration supplied at construction; an invocation identifies the requested refresh. | Published revision or failure, preserving the previous revision on failure.         |
+| Operation                  | Input                                                                                 | Result                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Query cards or printings   | Public criteria, result level, ordering, bounded page size and optional continuation. | Stable typed entries, basic information, revision and continuation or explicit end. |
+| Resolve cards or printings | A bounded set of typed references.                                                    | Basic records keyed by reference, explicit missing references and catalog revision. |
+| List a card's printings    | Card ID and continuation.                                                             | Bounded printing records and continuation for that card.                            |
+| Find a printing            | Card identity and optional edition, collector number and language.                    | First matching printing and its card from one revision, or explicit absence.        |
+| Synchronize                | Source configuration supplied at construction and requested refresh.                  | Published revision or failure, preserving the previous revision on failure.         |
 
-A printing record includes its card ID, edition, collector number, language, finishes, physical
-eligibility and image references. A card record includes canonical and translated names, rules
-text, type information, colors, color identity and mana value. Missing fields remain explicit. Resolution preserves
-requested identities; an unavailable lookup is not a successful missing result.
+A printing record includes card ID, edition, collector number, language, finishes, physical
+eligibility and image references. A card record includes canonical/translated names, rules text,
+types, colors, color identity and mana value. Missing fields remain explicit. Resolution preserves
+requested identities; unavailable lookup is not successful absence.
+
+Query contracts expose no SQL, private tables, connections or presentation types. They include no
+private ownership/tag criteria. Invalid criteria, missing records, unsupported expressions, stale
+continuation and temporary failure are distinct outcomes; only successful evaluation returns an
+empty result. Consumers needing reference resolution depend on the narrower CatalogResolver.
+
+### Public query semantics
+
+Support the defined Scryfall-compatible subset: names, rules text, colors, color identity, types,
+mana value, set, language and finish. Text and equivalent structured criteria use one query model.
+Preserve supported operators, comparisons, combination and negation. Explicitly reject unsupported
+operators/combinations, identifying the expression; never silently ignore or forward them upstream.
+
+Resolve translated names to their playable identity and preserve the matched display name. Printing
+criteria must match the same related printing. Multiple matching names/printings must not duplicate
+a card entry. Queries can return card or printing entries; quantities/ownership are not public facts.
+
+Evaluate complete membership and grouping before deterministic ordering and pagination. Include an
+identity tie breaker. Continuation is opaque and bound to normalized criteria, ordering, result level
+and published revision. Changed criteria or revision require restarting an obsolete sequence.
 
 ### Printing selection
 
-The published `findCatalogPrinting` operation accepts a card identity and optional edition, collector
-number and language constraints. Constraints match case-insensitively; unspecified fields do not
-narrow the match. Return the first match in printing-list order and its card from the same revision,
-or explicit absence after the complete list. A changed revision or failed/incomplete read is a
-failure, never absence. This lookup can use any supplied implementation of the public Catalog contract.
-Consumers that only resolve identities depend on the narrower `CatalogResolver` capability.
-
-### Query surface
-
-Publish card, name and printing records through a versioned data interface. Card and printing IDs
-are stable and unique; names preserve their associated identity. Records include the basic attributes
-above and printing-to-card relationships. The contract exposes no SQL, tables or database connections.
-
-Provide a consistent, paginated snapshot of one published revision and a resumable change position.
-Changes carry stable identity, revision and upsert/removal meaning. Publication of a bulk revision is
-complete and atomic from the consumer's perspective. Repeated reads preserve meaning; an expired
-position explicitly requires a new snapshot. Snapshot and change handoff must leave no gap. Snapshot
-pages also identify the completed revisions within retained publication history that the snapshot
-incorporates; this metadata is bounded by the provider's retention window. Revision identities are
-opaque to consumers.
-
-Durably record publication with the authoritative revision. Search can rebuild independently and
-continue after interrupted delivery. A replacement preserves these records and lifecycle guarantees,
-regardless of storage technology. Internal views remain private implementation choices.
+The published findCatalogPrinting operation matches optional constraints case-insensitively;
+unspecified fields do not narrow the match. Return the first match in printing-list order and its
+card from the same revision, or absence after the complete list. Changed revision or failed/incomplete
+read is failure, never absence. This policy works with any public-contract implementation.
 
 ## Internal design
 
-| Unit              | Owns                                                                                |
-| ----------------- | ----------------------------------------------------------------------------------- |
-| Read service      | Bounded reference resolution, printing lists and revision-bound continuation.       |
-| Printing lookup   | Matching edition, collector number and language within one card identity.           |
-| Read storage      | Local queries and record decoding against the published revision.                   |
-| Synchronization   | Source acquisition, normalization, candidate validation and atomic publication.     |
-| Query publication | Consistent snapshots, durable revision publication, change positions and retention. |
+| Unit             | Owns                                                                                     |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| Query model      | Supported text syntax, structured criteria and normalization.                            |
+| Query evaluation | Owner-local membership, grouping, ordering and result construction.                      |
+| Read service     | Bounded resolution, printing lists, continuation and failure semantics.                  |
+| Printing lookup  | Selection within one card identity.                                                      |
+| Read storage     | Local query execution, ordinary indexes and record decoding at the published revision.   |
+| Synchronization  | Source acquisition, normalization, candidate validation and atomic revision publication. |
 
-The read service and synchronization have separate construction and execution lifecycles. Interactive
-reads never start synchronization. Selection policy operates on the public read contract, so a storage
-replacement does not duplicate it. Synchronization owns provider-specific parsing and candidate data;
-only a validated complete revision becomes readable.
+Read and synchronization lifetimes are separate. Interactive reads never start synchronization or
+build a second copy of the data. Query evaluation stays behind the public facade and uses only this
+component's storage. Selection policy uses the public read contract. A replacement preserves query,
+identity, ordering, continuation and revision behavior rather than a database layout.
 
 ## Identities and information
 
-Keep playable identity separate from printing identity. Preserve stable provider identifiers and
-translated names. A lookup for a specific printing must not silently substitute another edition,
-language or card. Missing and unavailable information are explicit outcomes.
+Keep playable and printing identities separate and stable. A printing belongs to one card; preserve
+that relationship during synchronization. Do not substitute a similar language or printing when a
+reference is unavailable. Batch basic-information lookup; no live provider request is needed.
 
-Basic records contain the attributes needed to identify, render and filter cards without a live
-provider request. Image references are separate from image loading. Physical eligibility and finish
-options are printing facts; ownership is not catalog data. A nonphysical printing may have no
-physical finishes: preserve an empty finish list without inventing `nonfoil` or rejecting the bulk
-revision. A physical printing must have at least one supported finish.
-
-Verify this case through lookup and publication contracts and a cooperating search projection.
-Reject a physical printing with no supported finish without changing the published revision.
-Compatible storage updates preserve existing records and publication history.
+Images are independent references. Preserve nonphysical printings with an empty finish list without
+inventing nonfoil or rejecting the bulk revision. Physical printings require a supported finish.
+Verify through resolution and public queries; rejecting an invalid candidate preserves the published
+revision. Compatible storage upgrades preserve existing records and revision history.
 
 ## Synchronization
 
-Ingest bulk source data into a candidate revision, validate identities and relationships, then
-publish a consistent queryable revision. A failed refresh leaves the last valid revision available.
-Retain references needed by existing records when provider data disappears or changes.
-
-Keep source version and freshness visible. Public lookups and filtered reads are bounded and
-support batch access. Synchronization owns provider limits and recovery; provider outages do not
-turn successful local reads into failures.
+Fetch and normalize a complete provider snapshot as separate finite background work. Validate
+identities, printing relationships and physical eligibility before publication. Candidate data stays
+unreadable until the entire revision is valid and atomically published. Failure preserves the prior
+complete revision. Synchronization has an independent finite lifetime and never mutates private records.

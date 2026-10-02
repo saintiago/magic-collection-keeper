@@ -2,117 +2,109 @@
 
 ## Storage ownership
 
-Separate authoritative records from rebuildable search data. Each component owns its schema,
-storage access and migrations. Sharing a database deployment does not grant cross-component access.
+Two components own authoritative data and the queries over it. Each owns its schema, storage
+access, ordinary database indexes and compatible storage upgrades.
 
-| Owner     | Stored data                                                                                          | Authority                                             |
-| --------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Catalog   | Cards, names, printings, catalog revisions and publication state.                                    | Public card facts.                                    |
-| UserCards | Copies, tags, associations, imports, receipts, provenance and publication state.                     | Private user records and committed changes.           |
-| Search    | Searchable catalog facts, account-scoped copy/association facts, indexes and processing checkpoints. | Derived query results at a declared indexed revision. |
+| Owner     | Stored data                                                                                 | Queries                                                                         |
+| --------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Catalog   | Cards, names, printings and atomically published catalog revisions.                         | Public card/printing search, reference resolution and printing selection.       |
+| UserCards | Copies, tags, associations, imports, provenance, operation receipts and migration archives. | Account-scoped collection/tag lists, private records, ownership and quantities. |
 
-Search owns a separate logical database. Initially, use private schemas/tables in the same Aurora
-PostgreSQL deployment. Search queries its own data; it does not join Catalog or UserCards tables or
-views. SQL schemas, indexes and connections remain implementation details of their owner.
+Initially use separate schemas and access roles in one Aurora PostgreSQL cluster. Sharing the
+cluster grants no cross-owner SQL access. Queries execute within their owner's storage and public
+contract. There is no separately stored Search projection or synchronization job.
 
-The [Catalog publication contract](catalog.md#query-surface) and
-[UserCards publication contract](user-cards.md#query-surface) own the facts made available to Search.
-[Search](search.md) owns their projection and query semantics. This document owns the storage
-composition and synchronization strategy, not a shared domain model or shared event schema.
+Catalog stores shared public facts once. UserCards stores private facts and the stable card/printing
+references required for its local queries; it does not duplicate names, rules text or images.
+[Catalog](catalog.md) and [UserCards](user-cards.md) own query meaning and pagination.
+[CardList](card-list.md) owns acquisition, enrichment and browser caching.
 
-## Asynchronous synchronization
+## Reads and writes
 
-```mermaid
-flowchart LR
-    Catalog -->|Snapshot and durable changes| Indexing[Search indexing]
-    UserCards -->|Snapshot and durable changes| Indexing
-    Indexing --> SearchData[Search-owned data]
-    SearchData --> Queries[Search queries]
-    Queries --> CardList
-```
+A successful write commits to its owner's storage. A new authoritative read after that commit
+reflects it; no indexing pass, queue or browser observation is required to make saved data queryable.
+Coupled domain changes and their receipt commit atomically. An uncertain response is resolved through
+the recorded operation outcome, never by treating a delayed read as permission for another write.
 
-A successful domain write commits to its owner's storage. Search visibility follows when indexing
-applies the corresponding publication. Process incremental changes continuously through background
-work; an ordinary edit does not require a full reindex. Indexing is part of Search and is independent
-of browser requests and open pages. Activation starts finite background tasks — the deployment may
-do that on a schedule — and each pass stays bounded and resumable, so an unfinished or failed run is
-continued by a later start instead of being skipped.
+Catalog synchronization builds and validates a candidate revision before publishing it atomically.
+Interactive reads continue using the previous complete revision until then; they never fetch or
+import external provider data. Ordinary UserCards edits do not start Catalog synchronization.
 
-Use a transactional outbox in each authoritative relational store: commit the domain change and its
-durable publication together. The provider exposes committed publications through its own interface.
-Consumers do not read its outbox table. This publication is distinct from best-effort browser
-invalidation hints, which cannot maintain a durable search database.
+Owner reads return bounded pages, stable identities and explicit continuation. Membership, grouping,
+counts and ordering are evaluated over the complete owner-local result before pagination. A changed
+query or relevant data revision invalidates the continuation explicitly. Request batch bounds do not
+limit total collection size, quantities or logical selection.
 
-Delivery may repeat or resume after interruption. Search applies published identities/revisions
-idempotently, rejects obsolete updates and persists its checkpoint with the corresponding projection
-change. Deletes are published explicitly. A failed batch cannot advance a checkpoint past unapplied
-changes. Publish each logically atomic change completely so queries cannot observe half a confirmation
-or location move. Domain writes remain available when indexing is delayed.
+## List composition
 
-## Bootstrap and rebuild
+A list's description chooses one membership owner:
 
-Each provider supplies a consistent, bounded snapshot with a position from which changes can be
-resumed without a gap. Catalog scope is a published catalog revision; private scope is an account.
-Keep revisions and progress separate for each source and private account. No global ordering across
-independent providers is required.
+- Public name/color/type/set/language/finish queries use Catalog.
+- Collection, deck, wishlist, location and other private tag queries use UserCards.
+- Pending imports use the dedicated UserCards import read contract.
 
-Search builds a replacement generation, catches up changes and validates it before making it
-queryable. Continue serving the previous complete generation during rebuild. Initial indexing with
-no usable generation is unavailable/updating, never a successful empty collection. An expired change
-position requires a new snapshot; partial rebuilds and silent skipped changes are not valid recovery.
+Private list entries carry typed identity and quantity context; CardList resolves their public basic
+information in bounded batches. Public lists acquire current ownership, tags and quantities as
+independent UserCards fragments for displayed references. Enrichment cannot add, remove, reorder or
+regroup source entries. A missing optional fragment is distinct from zero or an empty successful read.
 
-The index is disposable; authoritative records, receipts and provenance are not. Rebuilding Search
-never creates copies, replays ownership commands or changes import state.
+Queries combining public catalog attributes with private membership are deferred. No component
+emulates them by post-filtering a fetched page, fetching an entire collection, making cross-owner SQL
+joins or storing duplicate catalog attributes. Each owner's query contract rejects unsupported
+criteria; controls expose the capabilities of the selected source.
 
-## Freshness and user-visible behavior
+## Refresh and consistency
 
-Saving and indexing are separate outcomes. A committed operation remains successful while its change
-awaits indexing. Direct record and pending-import reads continue through UserCards; query-based lists
-reflect the last completely indexed state.
+UserCards emits account-scoped local invalidations after acknowledged or recovered commits.
+CardList invalidates affected private sources/fragments and reacquires them. Public list membership
+stays unchanged when only private enrichment changes. Keep usable content labelled as refreshing
+while reads are pending; a failed refresh remains a read failure, never a failed save or empty result.
+Account changes fence late responses and release private cache/subscription state.
 
-[Search's freshness contract](search.md#freshness) exposes indexing progress relative to a known
-committed change. CardList uses that contract to present an updating list and reacquire results when
-ready. Existing usable results can remain visible while updating. An index delay must not become a
-failed save, another write attempt or an apparent empty result. UI does not insert speculative rows
-to imitate search membership. Pagination and counts refer to the returned index generation.
+Continuation and counts describe the source revision returned by their owner. Public basics and
+private fragments have independent lifetimes; no common distributed snapshot is promised. Opening
+or explicitly refreshing a list rechecks its data. No cross-device push guarantee is selected.
+There is no indexing-progress token, wait capability or indexing notice.
 
-No numeric indexing-delay guarantee is selected. Measure normal lag, catch-up after interruption
-and bulk-import lag before setting an operational target.
+## Access and independent replacement
 
-## Access and deployment
+Use separate owner read/write capabilities and database roles. Components never receive another
+owner's private tables or unrestricted connection. End-user identity is verified for every private
+read/write and enforced at storage as well as the public interface. Foreign references disclose no
+record contents or existence. Pending-import visibility remains enforced by its owning read contract.
 
-Use separate component storage roles. Search's query role can read its projection only; its indexing
-role can maintain that projection. Neither receives authority to query or write another component's
-tables. Application assembles trusted publication access and job entry points. An indexing worker's
-service access is separate from end-user query authorization.
+Interfaces expose queries, typed records, revisions, continuation and failures rather than SQL or
+schema names. Replacement implementations preserve these behaviors and require no consumer edits.
+Direct reads do not permit consumers to reconstruct provider membership or authorization rules.
 
-Account identity is part of every private publication, projection key and query context. Enforce it
-at the Search storage boundary as well as its public interface. Indexing is not an authorization
-cache: validate access on every query. Propagate deletions and never publish pending-import records
-into ordinary searchable ownership data.
+A dedicated UserCards cluster is a later operational choice for independent scaling, restoration
+or workload isolation. A separate database inside the same cluster still shares cluster resources.
+No shared connection, join or transaction is required by the contracts, so moving an owner changes
+composition and resource bindings only. Introduce separate capacity after measuring the need.
+
+## Existing data and removal
+
+Compatible storage upgrades preserve all current copy/tag/association identities, import state,
+operation and migration receipts, provenance, quantities, account identity and exact source archives.
+Resolve missing stable card references through the supplied reference contract in bounded work;
+repeating the upgrade must not create copies, replay imports or rewrite source evidence.
+
+Remove obsolete Search projection storage, indexing/publication workers, credentials, transport,
+configuration, progress state and dependent tests. Retain authoritative Catalog revision publication,
+domain receipts/replay evidence and local committed-change invalidations. No durable outbox or
+cross-owner change stream is required solely for direct queries.
+
+Implementation and deployment are separate. Existing deployed resources/data are not deleted by
+source cleanup. An explicit deployment plan must identify obsolete derived resources and preserve
+backups and authoritative storage before any narrowly authorized removal.
 
 ## Scale
 
-Keep shared card facts once per search storage partition; private copies reference their card and
-printing identities. Avoid duplicating names, rules text and images for every user's copy. Preserve
-copy-level attributes and associations needed for correct filters; aggregates cannot replace those
-facts when a query requires individual identities.
+Use ordinary owner-local database indexes and bounded queries. Private access is account-scoped;
+private grouping retains exact copy identities and keeps intended quantities distinct from physical
+counts. Avoid per-row provider requests and duplicated public facts per account.
 
-Index private access by account and the supported query patterns. Ordinary collection queries and
-private publication checkpoints stay account-scoped. Changes by one account must not invalidate
-another account's continuation. Load and update bounded batches without imposing a total collection
-or quantity limit.
-
-Account-based sharding is a growth path behind the storage interface. Many accounts can share a
-shard, with shared catalog facts available locally for combined queries. Introduce sharding or read
-replicas based on measured capacity needs; neither changes the public component contracts.
-
-Use 100,000 accounts with 10,000 copies each (one billion copies) as a scale evaluation scenario,
-not a capacity claim or product ceiling. Include association/index storage, concurrent searches,
-bulk imports, indexing backlog and rebuild time. Registered-user count alone does not size compute.
-
-## Pattern references
-
-- [Materialized read models](https://learn.microsoft.com/en-us/azure/architecture/patterns/materialized-view): derived, rebuildable query data.
-- [Transactional outbox](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html): durable publication coupled to a committed write.
-- [Sharding](https://learn.microsoft.com/en-us/azure/architecture/patterns/sharding): account-based distribution behind storage access.
+The 100,000-account / 10,000-copy scenario is a capacity evaluation, not a capacity claim or product
+ceiling. Measure query plans, storage, write/read concurrency, import load and database contention.
+Account-based sharding and read replicas are possible behind the owner interfaces when evidence
+justifies them. A separate Search copy is not required by account count alone.

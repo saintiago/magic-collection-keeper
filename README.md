@@ -1,25 +1,11 @@
 # Magic Collection Keeper
 
-This repository contains the approved rebuild design and the workspace harness the rebuild is built
-on. The previous application implementation has been removed. Product components from
-docs/architecture.md are rebuilt task by task: Catalog already provides its read contract, its
-atomic bulk synchronization and its durable snapshot/change publication with their contract tests, and
-UserCards provides physical-copy storage, tags, associations and physical locations with their
-account-scoped read surface and its durable snapshot/change publication; Search provides its
-normalized query model, the supported Scryfall
-subset, the request and continuation contract and its evaluation over both published query
-surfaces, plus its rebuildable projection and the resumable background indexing that maintains it
-from the provider publications; Recognition provides its session lifecycle, its catalog-validated candidate readings and
-the execution bounds around the preserved engines; Application assembles those components behind
-validated configuration and authenticated transports, CardList provides the headless list
-presentation model its bindings, window, enrichment, selection, restoration and recent activity
-are built on, Capture provides the headless camera session its device, scheduling, admission and
-staging coordination are built on, and UserInterface provides the shell and the dedicated pages,
-with Home's recent card activity, the catalog/search browser and the collection and card-details
-views built over the Search, Catalog and UserCards contracts Application supplies.
+Architecture and requirements are indexed in [AGENTS.md](AGENTS.md). The
+[task index](docs/tasks/inventory.md) groups delivery work; Jira Rank owns execution order.
 
-Start with AGENTS.md for the documentation index and engineering principles.
-The task index is in docs/tasks/inventory.md. Jira Rank holds execution order.
+The approved design uses direct Catalog public queries and authoritative UserCards private queries,
+composed asynchronously by CardList. Combined public/private filtering is deferred. Documentation
+defines the target architecture; source delivery and deployment are separate evidence.
 
 ## Workspace preparation
 
@@ -80,8 +66,7 @@ Nexus uses the same commands for preparation and validation (nexus.project.json)
 
 `npm run package` builds the artifacts an explicit deployment publishes into the ignored
 `artifacts/` directory: the interactive API package the Lambda runs, the browser bundle CloudFront
-delivers, and the finite catalog and background indexing jobs with the Dockerfile that packages
-each. The manifest beside them records the source revision, the version label and the digest of
+delivers, and the finite catalog job with its Dockerfile. The manifest beside them records the source revision, the version label and the digest of
 every artifact, so a rebuilt revision produces the same bytes and a released combination can be
 inspected and restored. The browser artifact carries no environment-specific file; the deployment
 publishes `config.json` from the service stack's public outputs
@@ -105,184 +90,3 @@ engine identity and the complete corresponding-source download of the checkout �
 assembles the recognition image context and records its manifest beside the other artifacts. The
 prepared bytes stay out of git and the checks never need them; preparation, the built image,
 measurement and rollback are recorded in `infra/README.md#recognition-packaging`.
-
-Synchronization is the finite catalog job of the deployed stack (docs/tech-stack.md#aws-stack): the
-configured source streams one provider snapshot from the private data bucket, and Catalog upserts it
-into a candidate revision through one transaction before making it visible. Application supplies
-the snapshot source and the transaction-capable RDS Data API executor; resource definitions,
-packaging and deployment stay with the deployment tasks listed in docs/tasks/inventory.md. The
-component and integration checks exercise the same statements, provider limits, rollback and
-published relations that the deployed job uses.
-The AWS stack itself is defined in `infra/`: the foundation template creates the isolated network,
-the Aurora cluster behind the RDS Data API, the private buckets, the image repositories and the
-database secrets, and the service template adds the app client of the retained user pool, the
-JWT-authorized HTTP API, both compute runtimes, the finite catalog task definition and the
-CloudFront delivery. `infra/README.md` records create/update/rollback, data retention, cost
-assumptions and the checks that require a deployed environment.
-
-UserCards owns the account's physical copies and their organization: each copy keeps one stable
-identity, one Catalog printing reference, its finish and condition, its system-owned membership and
-at most one physical location, and a corrected or moved copy keeps that identity while its revision
-advances. Application supplies the transaction-capable executor and the Catalog contract, so a copy,
-an association or a location move is only stored once its references resolve, and each change
-commits atomically behind the revision the caller read. Tags keep stable identities with editable
-labels; card and printing associations carry the intended quantity, while copy membership identifies
-one physical copy and carries none. Copies, tags, associations and the private-data revision follow
-the account the trusted read is scoped to, and the component's own views filter on the account bound
-to the connection inside a read transaction and return nothing without that scope. Every
-query-visible mutation also publishes its records durably: the account-scoped snapshot/change
-contract another component consumes carries each change's stable identity, upsert or removal
-meaning and account-scoped revision, the mutation reports its publication position and a recovered
-outcome reports the position its copies were published at. UserCards also owns the pending imports
-behind that surface: a capture observation or parsed source line is staged once
-(consecutive accepted capture identities collapse into one entry, unresolved readings advance
-nothing), review quotes the entry revision and keeps late recognition alternatives beside the
-reviewed values, and confirmation under an account-scoped operation identity creates the individual
-copies with their provenance or returns the recorded outcome, so a repeated import adds nothing.
-Pending entries have no published relation and never change ownership; source-format parsing and the
-UI remain with their own tasks.
-
-Search evaluates one normalized query in a single read-only statement over its own projection:
-membership filters, the requested grouping and translated name resolution run over the complete
-result before ordering with a stable identity tie-breaker and the page boundary, and the same
-snapshot returns the exact total count and the indexed generation, catalog revision and account
-position. It reads no provider relation: Search's published projection is the only query surface,
-private rows answer only inside the account scope Application binds, and a missing scope fails
-instead of answering from rows the scope never published. A result reports whether it has
-incorporated a required committed publication position or published catalog revision; an index that
-has not caught up answers with the last usable indexed result as updating — never as an empty
-collection or a failed write — and the observation capability waits a bounded, cancellable time for
-incorporation without creating indexing work. A continuation resumes only the same criteria,
-ordering, user and indexed state; anything else is a stale continuation that restarts the result.
-The account-scoped progress capability tracks known committed positions for the shell's indexing
-notice, reporting delayed or unavailable instead of completion (docs/search.md#freshness).
-
-Search also owns its rebuildable projection and the background indexing that maintains it
-(docs/search.md#internal-design, docs/data-architecture.md#asynchronous-synchronization). Indexing
-consumes the Catalog and UserCards snapshot/change publications and maintains Search's own schema —
-the shared catalog facts, each account's copies, tags and associations, and the checkpoint of every
-source it applied — without reading or writing a provider's relations, and Application exposes one
-bounded, resumable run through its Search indexing job entry point with credentials separate from
-its query read. A batch applies whole publications in the order they were published, commits their
-rows together with the checkpoint they describe, and resumes there, so repeated or already-applied
-delivery changes nothing and a failed batch advances neither. A generation is bootstrapped from
-consistent snapshots and caught up through the durable streams; a replacement generation is built
-beside the published one and becomes queryable only once every source in its scope is caught up and
-no reference to a catalog fact is unresolved, so reads continue over the complete previous
-generation during a rebuild. An expired change position is never resumed or skipped: the run
-rebuilds from fresh snapshots instead, and an obsolete snapshot page restarts the snapshot rather
-than mixing revisions. The private projection is account-scoped at its storage boundary: its
-published views are read-only for Search's query role, private rows answer only inside the account
-bound to the read, and the projection tables themselves stay unreachable.
-
-Recognition prepares a session for its enabled engines on demand, runs one capture attempt at a time
-per session and releases that session's local work on disposal (docs/recognition.md#interface).
-Requests, capture/attempt identities and frame bounds are validated before inference. A reading
-carries catalog-validated candidates in engine order, an editable suggestion that always belongs to
-that set and stays distinguishable from engine-supported printing evidence, provisional state,
-disagreement, engine versions and timings, and never ownership or physical condition. Later readings
-of the hybrid comparison keep the attempt identity; cancellation suppresses later output; no-card,
-multiple-card and ambiguous geometry stay unknown; and invalid input, busy, cancelled and
-unavailable outcomes remain distinct. The component composes the preserved browser ONNX and Python
-visual/OCR engines behind that pipeline — including the hybrid early/later comparison and the
-independent identity session call limit — while Application supplies the authenticated transport,
-so their matching policies stay unchanged.
-
-Application validates one environment's configuration before serving, constructs Catalog, UserCards,
-Search and the finite catalog job through their public contracts and derives trusted user context
-from verified Cognito claims only: a private operation never runs anonymously, an unverifiable
-identity is rejected instead of downgraded, and a caller-supplied owner field is ignored. The
-interactive transport serves the documented component operations, answers the preserved recognition
-engines' catalog-hydration envelopes from the published Catalog, maps validation, unauthorized,
-missing, conflict, stale-continuation, busy and unavailable outcomes to distinct failures without
-exposing storage details or credentials, and reports a deadline as an unknown outcome whose
-replayable operation names the receipt to recover. Catalog synchronization stays a separate job
-entry point, Search indexing separate resumable background work over the provider publications, and
-recognition inference a separate compute runtime reached through the authenticated
-client; the browser composition supplies UserInterface with the public settings, the authenticated
-transport, the Catalog, Search and private-copy contracts and the Recognition contract over the
-preserved engines (docs/application.md#interface, docs/application.md#configuration-and-lifecycle).
-
-UserInterface presents the collection behind one shell (docs/user-interface.md#interface,
-docs/user-interface.md#pages-and-navigation): the URL identifies the dedicated view, including the
-three card specificity levels, so a reload or a direct entry presents the same page; Back returns to
-the entry it left and restores its query, selection, scroll and focus from bounded account-isolated
-state that serializes no view content; closing a view aborts its work and detaches its container, so
-a late result cannot replace the new view; and a changed account clears that private presentation
-state, ends the authenticated session so outstanding responses are rejected and releases the device
-resources. A page implementation supplies one page's content and the tools its lists present.
-The CardList component turns one described activity into a bounded, asynchronous working set and
-publishes immutable snapshots of it (docs/card-list.md#interface): a source read carries the query
-context, the page size, the continuation, the committed positions it must have incorporated and a
-cancellation signal, and only the request the user still waits for may replace the window, while a
-refresh keeps the usable entries presented. Its own bindings translate Search queries, a card's
-published printings, a tag's associations, an import's pending entries and the account's recent
-activity into that protocol; a committed local change marks affected content stale and reacquires
-it through its source until the reported publication position is incorporated, which the list
-observes through Search's own bounded freshness capability instead of polling. Application selects
-the implementation and supplies the pages one capability with the factory, the provider bindings
-and the account lifecycle, so no page or view names the component's own wiring.
-The rendered window and every fragment batch are bounded. Paging keeps selected targets and their
-tool availability separately, so selection cannot hide later results. Other enrichment retires when
-an entry leaves the window, and changed entries retire reads that can no longer answer for them.
-Basic information renders with the entries; images, ownership, tags and tool availability are
-separate fragments that load and fail independently, and a failed fragment stays distinguishable
-from an empty answer.
-Equivalent copies group for convenient selection without losing their individual copies, and the
-card tools invoke the owning component's operation for the explicit selection and report its
-outcome, with a lost response reported as unknown until the recorded outcome is recovered. The
-browsing pages build on that (docs/user-interface.md#browsing-and-organization): Home presents the
-account's bounded recent card activity — the cards it opened while browsing, kept only for the
-presented account — and the catalog/search page evaluates the text expression and the result-level,
-owned-only and finish controls its URL carries as one Search query
-(docs/search.md#scryfall-compatibility), so a reload or a shared link presents the same result; the
-entries show their basic information and quantities, printing images load and retry as their own
-fragment, an unsupported expression stays a distinct reported failure, and opening an entry records
-it and presents its card details. Both pages hand the opaque state their list retained back through
-CardList's own restore contract, so the list decides how to re-acquire the window it held. The
-collection views build on the same boundaries (docs/user-interface.md#browsing-and-organization):
-the collection presents the account's owned cards, printings or physical copies — the level and
-text expression its URL names — with the physical-copy and intended counts the query evaluated kept
-distinct, individually selectable copies group by printing for the bulk changes that act on their
-explicit selected identities, and each entry opens the card, printing or copy details it names. The
-card-details page presents the published catalog information of the named level and corrects one
-physical copy's printing and language, finish and condition under the revision it read: a conflict
-or a failed edit keeps the unsaved change for review and retry. After a lost response, the outcome
-stays unknown while the current copy is read for review and revision-guarded retry; matching
-attributes cannot establish commitment. A saved outcome is presented only once the change reports
-it committed. The Capture component owns one live camera session behind the Import page's controls
-(docs/capture.md#interface): it opens the device the deployment grants, samples frames with a
-stability gate, admits only a frame the runtime reports as holding one card with a usable identity
-and stages that observation in the account's pending imports through UserCards. The provider
-suppresses a repeated observation, an unresolved reading receives no success cue while a later
-comparison may still resolve the same capture, late alternatives are attached beside the reviewed
-values, an outcome whose response was lost stays recoverable through the capture identity that owns
-it, and stopping or leaving the view releases the camera and the Recognition session. The page
-presents the session's status, provisional evidence and identified feedback and forwards start,
-stop and retry; Application selects the implementation and supplies the composed capability.
-The remaining dedicated pages and source-import UI build on that in their own tasks.
-
-Integration tests that need PostgreSQL run it in-process through PGlite, PostgreSQL compiled to
-WebAssembly, so a fresh checkout proves view, constraint, privilege and revision behaviour without
-a database service; the cases that need two writers at once start a local PostgreSQL server
-(docs/testing.md). Deployed statements reach Aurora PostgreSQL through the executor Application
-supplies.
-
-Each component from docs/architecture.md owns src/<component>/index.ts as its provider-owned public
-entry point; cross-component imports use that module, and `.dependency-cruiser.mjs` fails the
-boundaries check for anything else, including imports it cannot resolve.
-tests/integration/boundaries.test.ts proves that an internal import and an unresolved import are
-reported. Tests follow the scopes in docs/testing.md: tests/component, tests/integration,
-tests/browser for browser journeys, src/recognition/python/tests for the preserved Python
-recognition tests, tests/recognition for the preserved browser recognition regressions, and
-tests/unit and tests/system once their first tests exist.
-
-The complete previous implementation is preserved separately at
-E:/projects/magic-keeper-old, revision 128c903ff109868acc854f0ff239c8c0f925d803.
-
-Collection migration is required before cutover. Local owner data and existing AWS resources
-are preserved; no data migration, resource deletion or deployment is performed by this reset.
-
-Local runtime files are archived outside the repo at E:/projects/magic-keeper-local-backup.
-The recognition engines and their regressions are recovered from magic-keeper-old into
-src/recognition (KAN-16); their digests are recorded in src/recognition/baseline.json.

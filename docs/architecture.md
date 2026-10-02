@@ -4,16 +4,15 @@
 
 Each component owns its state and decisions and exposes a public contract.
 
-| Component     | Responsibility                                                                            |
-| ------------- | ----------------------------------------------------------------------------------------- |
-| Application   | Configuration, authentication integration, component assembly and application lifecycle.  |
-| UserInterface | Navigation, page composition, accessible rendering, drafts and user input.                |
-| CardList      | Asynchronous list contents, enrichment, selection, working windows and restoration.       |
-| Capture       | Camera lifecycle, frame admission, recognition/staging coordination and attempt feedback. |
-| Catalog       | Public cards, printings, their relationships and the complete basic-information database. |
-| UserCards     | Physical copies, tags, associations, import state and the rules for changing user data.   |
-| Search        | Derived search storage, asynchronous indexing, matching, ordering and pagination.         |
-| Recognition   | Interpretation of card images and candidate matches.                                      |
+| Component     | Responsibility                                                                             |
+| ------------- | ------------------------------------------------------------------------------------------ |
+| Application   | Configuration, authentication integration, component assembly and application lifecycle.   |
+| UserInterface | Navigation, page composition, accessible rendering, drafts and user input.                 |
+| CardList      | Asynchronous list contents, enrichment, selection, working windows and restoration.        |
+| Capture       | Camera lifecycle, frame admission, recognition/staging coordination and attempt feedback.  |
+| Catalog       | Public identities/basic information, public search and atomic catalog synchronization.     |
+| UserCards     | Private copies/tags/imports, current private queries and the rules for changing user data. |
+| Recognition   | Interpretation of card images and candidate matches.                                       |
 
 These boundaries do not imply separate deployments. Components use provider-owned contracts;
 data access and changes remain subject to the owning component's rules.
@@ -30,14 +29,10 @@ flowchart LR
     UI -->|Drafts and explicit commands| UserCards
     UI -->|Editor options| Catalog
     UI -->|Capture controls| Capture
-    UI -->|Indexing status only| Search
-    CardList --> Search
     CardList --> Catalog
     CardList --> UserCards
     Capture --> Recognition
     Capture --> UserCards
-    Search -->|Snapshots and durable changes| Catalog
-    Search -->|Snapshots and durable changes| UserCards
     Recognition -->|Validate candidates and resolve printings| Catalog
     UserCards -->|Card and printing references| Catalog
 ```
@@ -48,17 +43,19 @@ dependency; they do not require additional services or AWS resources. UserCards 
 operation lifecycle as well as authoritative server operations. Business rules remain authoritative
 on the backend, including when a different UI or client is used.
 
-Search combines public card criteria with private associations, such as cards of a particular color
-that the user owns. It evaluates membership and ordering across the complete result before
-pagination. Catalog and UserCards remain authoritative for their data.
+Catalog owns public card/printing search. UserCards owns collection/tag membership, quantities and
+current private reads. Each owner evaluates complete membership, grouping and ordering before
+pagination. CardList acquires one owner's list and independently loads public basics and private
+fragments. Displaying ownership on a catalog result does not change its membership.
 
-Search maintains its own database of searchable facts supplied through provider-owned snapshot and
-change contracts. Indexing is asynchronous: saved changes appear in query results after incorporation.
-The [data architecture](data-architecture.md) owns storage separation, reliable synchronization,
-rebuild and scaling. Initial deployment can use separate private schemas in one PostgreSQL cluster.
+Queries mixing public catalog attributes with private membership are deferred. No consumer simulates
+them by filtering loaded pages or querying another owner's tables. The [data architecture](data-architecture.md)
+owns storage composition, read consistency, compatible upgrades and scaling. Initially use separate
+private schemas/roles in one PostgreSQL cluster, with no copied Search database or indexing job.
+A new authoritative read after a committed change includes it without waiting for background work.
 
-Backend entry points validate user identity for authenticated access. Private queries and changes
-are authorized against trusted user context, including requests made through Search.
+Backend entry points validate identity for authenticated access. Private reads and changes use
+trusted account context and remain authorized at both public and storage boundaries.
 
 ## Composition and replacement
 
@@ -69,27 +66,26 @@ A constructor accepting a SQL client is a storage seam, not proof that the compo
 
 Allowed source dependencies are:
 
-| Consumer      | Provider contracts                                                                               |
-| ------------- | ------------------------------------------------------------------------------------------------ |
-| Application   | Catalog, UserCards, Search, Recognition, CardList, Capture                                       |
-| UserInterface | Application's browser access; CardList, Capture, Catalog, UserCards; Search indexing status only |
-| CardList      | Catalog, UserCards and Search; supplied account scope                                            |
-| Capture       | Recognition and UserCards; supplied account scope                                                |
-| Recognition   | Catalog resolution                                                                               |
-| UserCards     | Catalog resolution                                                                               |
-| Search        | Catalog and UserCards snapshot/change publications                                               |
-| Catalog       | None of the other components                                                                     |
+| Consumer      | Provider contracts                                                              |
+| ------------- | ------------------------------------------------------------------------------- |
+| Application   | Catalog, UserCards, Recognition, CardList, Capture                              |
+| UserInterface | Application's browser access; CardList, Capture, Catalog, UserCards             |
+| CardList      | Catalog queries/resolution, UserCards queries/fragments; supplied account scope |
+| Capture       | Recognition and UserCards; supplied account scope                               |
+| Recognition   | Catalog resolution                                                              |
+| UserCards     | Catalog resolution                                                              |
+| Catalog       | None of the other components                                                    |
 
 Application receives the UI factory from the browser entry point. Account scope/access is supplied
 as data or a narrow capability; browser components do not import Application's composition. UI code cannot import backend
 composition. Cross-component imports use public entry points, including types; dependency cycles are
 rejected. Consumers use the narrow capability they need rather than recreating a provider's contract.
 
-Replacement is checked at two boundaries: supplying a different implementation to a consumer, and
-running the provider's behavioral contract tests against that implementation. Replacing Catalog or
-UserCards preserves published facts, revisions, snapshot/change continuity and account isolation.
-Search's projection storage is independent of their databases. Replacing Search preserves query,
-pagination and freshness semantics without requiring its consumers to know its storage layout.
+Replacement is checked at two boundaries: supplying an alternative implementation to a consumer,
+and running the provider's behavioral contract cases against it. Providers preserve identity,
+query/quantity meaning, ordering, revision/continuation, failure and authorization guarantees.
+No shared SQL schema, join or connection is part of a consumer contract. Moving UserCards to a
+separate database cluster changes composition and resource bindings without consumer edits.
 
 Internal units remain within their component and share its lifecycle. Their decomposition identifies
 policy, state ownership and atomic changes; it does not introduce new services or network calls.
@@ -169,11 +165,11 @@ behavior that screens consume. They are not UI implementation helpers.
 ### Browse and restore
 
 Navigation mounts a page. The page describes its activity and composes card views. CardList chooses
-how to acquire the contents, using Search for queries, UserCards for pending entries and its own
-account-local recent-activity source. Basic information arrives with resolved entries; independent
-fragments follow on demand. A card view renders snapshots and reports viewport and user intent.
+how to acquire contents from Catalog public queries, UserCards private/pending queries or its
+account-local recent-activity source. It resolves public basics in batches for private references;
+resolved entries carry basic information, with independent fragments following on demand. A card view renders snapshots and reports viewport and user intent.
 
-Search owns complete membership, grouping and ordering; CardList owns the loaded window and
+The source owner defines complete membership, grouping and ordering; CardList owns the loaded window and
 selection; CardViews owns physical rendering. Navigation retains opaque page handles, pages retain
 opaque child handles, and CardList owns logical restoration. None reconstructs another owner's
 state. Multiple lists retain independent context even when they describe the same cards.
@@ -182,16 +178,13 @@ state. Multiple lists retain independent context even when they describe the sam
 
 A card view returns explicit selected-target context. An editor collects a draft and invokes the
 UserCards client capability. UserCards owns operation identity, recovery and the committed outcome.
-It publishes local change invalidations after known commits. CardList consumes these and reacquires
-affected contents or fragments. Query-visible changes carry their publication position, allowing
-CardList to await Search incorporation before treating refreshed results as caught up. Pages do not
-patch rows, recalculate quantities or retry pagination. Local invalidation requests presentation
-refresh; durable provider publication independently maintains the search database.
-
-Application forwards committed positions to Search's browser progress capability. Navigation's shell
-presents its account-scoped status as a floating indexing notice across page changes. The notice
-reports indexing progress separately from the editor's saved outcome; it disappears on incorporation
-and exposes delayed/failed status without retrying the write.
+It publishes local invalidations after acknowledged or recovered commits. CardList consumes them,
+marks affected private sources/fragments stale and reacquires current authoritative data. Public
+membership remains unchanged when only private enrichment changes. Keep usable content while
+refreshing, with explicit read failures and no speculative membership patches. Pages do not
+recalculate quantities, retry pagination, poll a backend or interpret another owner's revisions.
+A committed save remains successful even if a subsequent refresh fails. There is no indexing wait
+or global indexing notice; ordinary list/fragment loading and error presentation remain separate.
 
 ### Capture and review
 
