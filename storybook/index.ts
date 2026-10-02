@@ -9,11 +9,14 @@ import type {
 } from '../src/capture/index.js';
 import {
   createUserInterface,
+  createCardViews,
+  createCaptureControls,
   type UiAccount,
   type UiIdentity,
   type UserInterface,
 } from '../src/ui/index.js';
 import { mountDesignLanguage } from './design-language.js';
+import { createLocalEditors } from './editors.js';
 import { createLocalProviders } from './fixtures.js';
 import { ManualProgression, type StorybookStage } from './progression.js';
 
@@ -151,7 +154,22 @@ function mountApp(): void {
   const appRoot = document.createElement('div');
   appRoot.className = 'mocked-app';
   workspace.replaceChildren(appRoot);
-  application = createUserInterface({ root: appRoot, capabilities, identity, device });
+  const cardViews = createCardViews();
+  application = createUserInterface({
+    root: appRoot,
+    capabilities,
+    identity,
+    device,
+    modules: {
+      cardViews,
+      editors: createLocalEditors(
+        cardViews,
+        providers.copyActions.account('local-owner'),
+        progression,
+      ),
+      captureControls: createCaptureControls,
+    },
+  });
 }
 
 function disposeApp(): void {

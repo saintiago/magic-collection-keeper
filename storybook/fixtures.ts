@@ -97,6 +97,8 @@ export interface LocalProviders {
   readonly cardList: CardListBrowser;
   readonly catalog: CatalogService;
   readonly userCards: UserCardsOperations;
+  /** Immediate copy dependencies for editor-owned action gates. */
+  readonly copyActions: UserCardsOperations;
 }
 
 export function createLocalProviders(progression: ManualProgression): LocalProviders {
@@ -198,6 +200,21 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
     },
   };
 
+  const correctLocalCopy = (input: Parameters<UserCardsBrowserClient['correctCopy']>[0]) => {
+    const previous = copies.get(input.copyId);
+    if (previous === undefined) throw new Error('The local copy no longer exists.');
+    const copy: PhysicalCopy = {
+      copyId: previous.copyId,
+      printingId: input.printingId,
+      finish: input.finish,
+      condition: input.condition,
+      revision: previous.revision + 1,
+    };
+    copies.set(copy.copyId, copy);
+    privateRevision += 1;
+    return { privateRevision: String(privateRevision), copies: [copy] };
+  };
+
   const client: UserCardsBrowserClient = {
     query(input, signal) {
       return progression.wait(
@@ -239,24 +256,7 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
       };
     },
     correctCopy(input, signal) {
-      return progression.wait(
-        'Saving copy changes',
-        () => {
-          const previous = copies.get(input.copyId);
-          if (previous === undefined) throw new Error('The local copy no longer exists.');
-          const copy: PhysicalCopy = {
-            copyId: previous.copyId,
-            printingId: input.printingId,
-            finish: input.finish,
-            condition: input.condition,
-            revision: previous.revision + 1,
-          };
-          copies.set(copy.copyId, copy);
-          privateRevision += 1;
-          return { privateRevision: String(privateRevision), copies: [copy] };
-        },
-        signal,
-      );
+      return progression.wait('Saving copy changes', () => correctLocalCopy(input), signal);
     },
     listTags(_options, signal) {
       return tagsRead(
@@ -441,7 +441,9 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
         'Loading pending imports',
         () => ({
           privateRevision: String(privateRevision),
-          sessions: sessions.map((session) => refreshSession(session, entries)),
+          sessions: sessions
+            .map((session) => refreshSession(session, entries))
+            .filter((session) => session.pendingEntries > 0),
           continuation: null,
         }),
         signal,
@@ -456,7 +458,9 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
           return {
             privateRevision: String(privateRevision),
             session: refreshSession(session, entries),
-            entries: entries.filter((entry) => entry.sessionId === input.sessionId),
+            entries: entries.filter(
+              (entry) => entry.sessionId === input.sessionId && entry.state === 'pending',
+            ),
             continuation: null,
           };
         },
@@ -778,6 +782,10 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
     },
     storage: null,
   });
+  const copyActions = createUserCardsOperations({
+    client: { ...client, correctCopy: async (input) => correctLocalCopy(input) },
+    storage: null,
+  });
   // CardList's visible sources own their gates; dependent record resolution is immediate.
   const cardList = createLocalCardList(
     {
@@ -786,12 +794,20 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
         account: (accountId) => ({
           ...userCards.account(accountId),
           readCopies: client.readCopies,
+          subscribe(listener) {
+            const normal = userCards.account(accountId).subscribe(listener);
+            const bulk = copyActions.account(accountId).subscribe(listener);
+            return () => {
+              normal();
+              bulk();
+            };
+          },
         }),
       },
     },
     progression,
   );
-  return { catalog, userCards, cardList };
+  return { catalog, userCards, cardList, copyActions };
 }
 
 /** Identical reads within one view share its pending completion, including repeated refreshes. */

@@ -376,3 +376,137 @@ test('presents capture completion after recovery and stop/start', async ({ page 
   await advance(page);
   await expect(page.locator('#import-camera-status')).toContainText('Accepted Lightning Bolt');
 });
+
+async function stageTwoCards(page: Page): Promise<void> {
+  await openStorybook(page, '#/import');
+  await advance(page);
+  await advance(page);
+  await page.getByLabel('Card lines').fill('1 Lightning Bolt\n1 Counterspell');
+  await page.getByRole('button', { name: 'Add source to review' }).click();
+  await advance(page);
+  await expect(page.locator('#import-source-status')).toContainText('2');
+  await advance(page);
+  await advance(page);
+  await expect(page.locator('#import-pending-list [data-ui-select]')).toHaveCount(2);
+}
+
+for (const action of ['confirm', 'discard'] as const) {
+  test(`removes only the ${action}ed entry from pending review, including after reopening`, async ({
+    page,
+  }) => {
+    await stageTwoCards(page);
+    const sessionId = await page.locator('#import-session').inputValue();
+    if (action === 'confirm') {
+      await page.getByLabel('Select Lightning Bolt (M11 149)').check();
+      await page.getByRole('button', { name: 'Confirm selected' }).click();
+    } else {
+      await page.locator('[id^="import-review-discard-"]').first().click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Discard entry' }).click();
+    }
+    await advance(page);
+    await advance(page);
+    await expect(page.locator('#import-pending-list')).not.toContainText('Lightning Bolt');
+    await expect(page.locator('#import-pending-list')).toContainText('Counterspell');
+    await expect(page.locator('#import-pending-list [data-ui-select]')).toHaveCount(1);
+    await page.getByRole('link', { name: 'Home', exact: true }).click();
+    await page.getByRole('link', { name: 'Import', exact: true }).click();
+    await advance(page);
+    await advance(page);
+    await expect(page.locator('#import-pending-list')).not.toContainText('Lightning Bolt');
+    await expect(page.locator('#import-pending-list')).toContainText('Counterspell');
+    await page.locator('[id^="import-review-discard-"]').click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Discard entry' }).click();
+    await advance(page);
+    await page.getByRole('link', { name: 'Home', exact: true }).click();
+    await page.getByRole('link', { name: 'Import', exact: true }).click();
+    await advance(page);
+    await expect(page.locator(`#import-session option[value="${sessionId}"]`)).toHaveCount(0);
+    await expect(page.locator('#import-pending-list [data-ui-select]')).toHaveCount(0);
+  });
+}
+
+test('completes a multi-copy edit with one press and holds the next edit independently', async ({
+  page,
+}) => {
+  await stageTwoCards(page);
+  for (const checkbox of await page.locator('#import-pending-list [data-ui-select]').all())
+    await checkbox.check();
+  await page.getByRole('button', { name: 'Confirm selected' }).click();
+  await advance(page);
+  await page.evaluate(() => {
+    location.hash = '/collection?level=copy';
+  });
+  await expect(page.locator('#stage-status')).toContainText('Loading collection results');
+  await advance(page);
+  await expect(page.locator('[data-ui-select]')).toHaveCount(3);
+  for (const checkbox of await page.locator('[data-ui-select]').all()) await checkbox.check();
+  await advance(page); // The independent selection-tools fragment.
+  await page.getByLabel('Condition to apply').selectOption('NM');
+  await page.getByRole('button', { name: 'Apply condition' }).click();
+  await expect(page.locator('#collection-changes-status')).toHaveText('Applying…');
+  await advance(page);
+  await expect(page.locator('#collection-changes-status')).toHaveText('Saved 3 copies.');
+  await expect(page.locator('#stage-status')).toContainText('Loading collection results');
+  await advance(page);
+  await expect(page.locator('[data-ui-select]')).toHaveCount(3);
+  await expect(page.locator('#stage-status')).toContainText('Loading copy tools');
+  await advance(page);
+  // Repeating the editor action must create a fresh held completion.
+  await page.getByLabel('Condition to apply').selectOption('LP');
+  await page.getByRole('button', { name: 'Apply condition' }).click();
+  await expect(page.locator('#collection-changes-status')).toHaveText('Applying…');
+  await advance(page);
+  await expect(page.locator('#collection-changes-status')).toHaveText('Saved 3 copies.');
+});
+
+test('moves a copy through its prerequisite read in one visible action', async ({ page }) => {
+  await openStorybook(page, '#/tags/tag-binder');
+  await advance(page);
+  await advance(page);
+  await advance(page);
+  await page.locator('#tag-add-level').selectOption('copy');
+  await page.locator('#tag-add-submit').click();
+  await advance(page);
+  await advance(page);
+  await page.locator('#tag-add-results [data-ui-select]').check();
+  await page.getByRole('button', { name: 'Add to this tag', exact: true }).click();
+  await expect(page.locator('#tag-add-status')).toHaveText('Adding to the tag…');
+  await advance(page);
+  await expect(page.locator('#tag-add-status')).not.toHaveText('Adding to the tag…');
+  await expect(page.locator('#tag-add-status')).toHaveAttribute(
+    'data-ui-outcome-status',
+    'committed',
+  );
+});
+
+test('holds single-copy edits, failure and retry without losing independent editor loads', async ({
+  page,
+}) => {
+  await openStorybook(page, '#/collection?level=copy');
+  await advance(page);
+  await advance(page);
+  await page.locator('[data-ui-select]').check();
+  await advance(page);
+  await page.getByLabel('Condition to apply').selectOption('NM');
+  await page.getByRole('button', { name: 'Apply condition' }).click();
+  await expect(page.locator('#collection-changes-status')).toHaveText('Applying…');
+  await page.locator('#fail-next-stage').check();
+  await advance(page);
+  await expect(page.locator('#collection-changes-status')).toContainText('could not be read');
+  await page.getByRole('button', { name: 'Apply condition' }).click();
+  await expect(page.locator('#collection-changes-status')).toHaveText('Applying…');
+  await advance(page);
+  await expect(page.locator('#collection-changes-status')).toHaveText('Saved 1 copy.');
+  await page.evaluate(() => {
+    location.hash = '/cards/lightning-bolt/m11-149/copy-bolt-1';
+  });
+  await expect(page.locator('#stage-status')).toContainText('Loading card details');
+  await advance(page);
+  await expect(page.locator('#copy-condition-choice')).toHaveValue('NM');
+  await advance(page); // Published printing choices are independently visible.
+  await page.getByRole('button', { name: 'Reload copy', exact: true }).click();
+  await expect(page.locator('#copy-status')).toHaveText('Reloading…');
+  await expect(page.locator('#stage-status')).toContainText('Loading physical copies');
+  await advance(page);
+  await expect(page.locator('#copy-status')).toHaveText('Reloaded the copy.');
+});
