@@ -1,6 +1,7 @@
 # Magic Collection Keeper
 
-Architecture and requirements are indexed in [AGENTS.md](AGENTS.md). The
+Architecture and requirements are indexed in [AGENTS.md](AGENTS.md).
+[Product requirements](docs/requirements/README.md) define user categories and journeys. The
 [task index](docs/tasks/inventory.md) groups delivery work; Jira Rank owns execution order.
 
 The approved design uses direct Catalog public queries and authoritative UserCards private queries,

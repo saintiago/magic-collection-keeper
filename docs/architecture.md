@@ -2,6 +2,8 @@
 
 ## Components
 
+**ARCH-001**
+
 Each component owns its state and decisions and exposes a public contract.
 
 | Component     | Responsibility                                                                             |
@@ -22,6 +24,8 @@ interfaces. Replacement must preserve the provided contract's data, errors, auth
 ordering and lifecycle guarantees, not merely its method names.
 
 ## Relationships
+
+**ARCH-002**
 
 ```mermaid
 flowchart LR
@@ -59,6 +63,8 @@ trusted account context and remain authorized at both public and storage boundar
 
 ## Composition and replacement
 
+**ARCH-003**
+
 The composition root selects implementations and supplies their public contracts. Request handling,
 page logic and business operations do not construct their dependencies. Default PostgreSQL and browser
 wiring are separate from the behavior they assemble; an alternative replaces that wiring entry only.
@@ -94,6 +100,8 @@ the operations and technology documents.
 
 ## Card model
 
+**ARCH-004**
+
 | Level         | Meaning                                                                                                               | Owner     |
 | ------------- | --------------------------------------------------------------------------------------------------------------------- | --------- |
 | Card          | Playable identity, independent of a printing.                                                                         | Catalog   |
@@ -112,6 +120,8 @@ this database; provider synchronization runs independently of user queries. Basi
 be resolved in batches without waiting for live external-provider requests.
 
 ## Tags and associations
+
+**ARCH-005**
 
 UserCards owns two distinct concepts:
 
@@ -143,6 +153,8 @@ Acquisition provenance and operation history have their own representations in U
 
 ## Import
 
+**ARCH-006**
+
 UserCards owns transient and saved import state, including unresolved candidates, review decisions,
 pending quantities and client-side operation recovery. Recognition supplies evidence; Capture admits
 eligible attempts into pending review. UserInterface presents capture and review on the Import page.
@@ -157,12 +169,16 @@ contracts. Recognition output alone does not establish ownership.
 
 ## Browser composition and flows
 
+**ARCH-007**
+
 [UserInterface](ui/architecture.md) has five modules: Navigation, Pages, CardViews, Editors and
 CaptureControls. Its parent architecture owns their composition; each module document owns its
 interface and responsibility. [CardList](card-list.md) and [Capture](capture.md) own the headless
 behavior that screens consume. They are not UI implementation helpers.
 
 ### Browse and restore
+
+**ARCH-008**
 
 Navigation mounts a page. The page describes its activity and composes card views. CardList chooses
 how to acquire contents from Catalog public queries, UserCards private/pending queries or its
@@ -176,6 +192,8 @@ state. Multiple lists retain independent context even when they describe the sam
 
 ### Edit and refresh
 
+**ARCH-009**
+
 A card view returns explicit selected-target context. An editor collects a draft and invokes the
 UserCards client capability. UserCards owns operation identity, recovery and the committed outcome.
 It publishes local invalidations after acknowledged or recovered commits. CardList consumes them,
@@ -188,6 +206,8 @@ or global indexing notice; ordinary list/fragment loading and error presentation
 
 ### Capture and review
 
+**ARCH-010**
+
 The Import page binds capture controls to one Capture session and a pending CardList to the same
 UserCards import identity. Capture owns camera work and requires affirmative geometry plus usable
 identity evidence from Recognition before staging through UserCards. Only recorded acceptance
@@ -195,6 +215,8 @@ produces a success cue. UserCards protects reviewed fields from later readings. 
 review and confirmation commands; confirmation outcomes invalidate affected pending and destination reads.
 
 ### Runtime boundaries
+
+**ARCH-011**
 
 Browser composition supplies account-scoped component instances. Account replacement disposes their
 private mounted work, subscriptions and retained state before binding the new account. A submitted
