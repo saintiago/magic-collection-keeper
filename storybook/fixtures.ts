@@ -226,7 +226,15 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
     readFragments(input, signal) {
       return progression.wait(
         'Loading ownership and tags',
-        () => fragments(input.references, copies, associations, mutableTags, privateRevision),
+        () =>
+          fragments(
+            input.references,
+            copies,
+            associations,
+            mutableTags,
+            privateRevision,
+            input.tagId,
+          ),
         signal,
       );
     },
@@ -928,12 +936,18 @@ function privateQuery(
   tags: readonly Tag[],
   privateRevision: number,
 ): UserCardsQueryPage {
+  const scopeTagId = input.scope.kind === 'tag' ? input.scope.tagId : null;
   const targets = privateTargets(input.resultLevel, copies, associations).filter((target) => {
     const related = associations.filter((item) => associationMatches(target, item, copies));
     const owned = copiesFor(target, copies);
     if (input.scope.kind === 'collection' && owned.length === 0) return false;
-    const scopeTagId = input.scope.kind === 'tag' ? input.scope.tagId : null;
-    if (scopeTagId !== null && !related.some((item) => item.tagId === scopeTagId)) return false;
+    if (
+      scopeTagId !== null &&
+      !related.some(
+        (item) => item.tagId === scopeTagId && associationContributes(target, item, copies),
+      )
+    )
+      return false;
     return (input.criteria ?? []).every((criterion) => {
       switch (criterion.kind) {
         case 'identity':
@@ -962,7 +976,7 @@ function privateQuery(
     });
   });
   const result = targets.map((target) => {
-    const related = associations.filter((item) => associationMatches(target, item, copies));
+    const related = associations.filter((item) => associationContributes(target, item, copies));
     const locationTags = related.filter(
       (item) => tags.find((tag) => tag.tagId === item.tagId)?.kind === 'location',
     );
@@ -970,7 +984,10 @@ function privateQuery(
       entryKey: referenceKey(target),
       target,
       ownedCopyCount: copiesFor(target, copies).length,
-      intendedQuantity: intendedQuantity(related),
+      intendedQuantity:
+        scopeTagId !== null
+          ? intendedQuantity(related.filter((item) => item.tagId === scopeTagId))
+          : null,
       physicalLocationCount: new Set(locationTags.map((item) => item.tagId)).size,
       directAssociationCount: related.length,
       derivedAssociationCount: 0,
@@ -1058,6 +1075,17 @@ function associationMatches(
   return sameHierarchy(target, reference, copies);
 }
 
+function associationContributes(
+  target: UserCardsReference,
+  association: Association,
+  copies: ReadonlyMap<string, PhysicalCopy>,
+): boolean {
+  // Aggregation broadens identity; unlike tag criteria, it cannot narrow an association.
+  if (association.targetLevel === 'card' && target.kind !== 'card') return false;
+  if (association.targetLevel === 'printing' && target.kind === 'copy') return false;
+  return associationMatches(target, association, copies);
+}
+
 function copiesFor(
   target: UserCardsReference,
   copies: ReadonlyMap<string, PhysicalCopy>,
@@ -1080,6 +1108,7 @@ function fragments(
   associations: readonly Association[],
   tags: readonly Tag[],
   privateRevision: number,
+  tagId: string | undefined,
 ): UserCardsFragmentsResult {
   const result = new Map<
     string,
@@ -1087,7 +1116,7 @@ function fragments(
   >();
   for (const reference of references) {
     const key = referenceKey(reference);
-    const related = associations.filter((item) => associationMatches(reference, item, copies));
+    const related = associations.filter((item) => associationContributes(reference, item, copies));
     result.set(key, {
       reference,
       ownedCopyCount: copiesFor(reference, copies).length,
@@ -1097,7 +1126,10 @@ function fragments(
           .filter((item) => tags.find((tag) => tag.tagId === item.tagId)?.kind === 'location')
           .map((item) => item.tagId),
       ).size,
-      intendedQuantity: intendedQuantity(related),
+      intendedQuantity:
+        tagId === undefined
+          ? null
+          : (intendedQuantity(related.filter((item) => item.tagId === tagId)) ?? 0),
     });
   }
   return { privateRevision: String(privateRevision), fragments: result, missing: [] };

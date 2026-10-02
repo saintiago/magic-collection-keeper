@@ -62,6 +62,40 @@ async function advance(page: Page): Promise<void> {
   await expect(page.locator('#stage-status')).not.toHaveText(previous ?? '');
 }
 
+for (const tag of [
+  { label: 'Wishlist', intended: 0 },
+  { label: 'Friday deck', intended: 4 },
+]) {
+  test(`shows tag-specific card and printing intentions in the ${tag.label} picker`, async ({
+    page,
+  }) => {
+    await openStorybook(page, '#/tags');
+    await advance(page);
+    await advance(page);
+    await page.getByRole('link', { name: tag.label, exact: true }).click();
+    await advance(page);
+    await advance(page);
+    if (tag.intended > 0) {
+      await expect(page.locator('#stage-status')).toContainText('Loading ownership and tags');
+      await advance(page);
+    }
+    await expect(page.locator('#stage-status')).toHaveText('No stage is waiting.');
+
+    const results = page.locator('#tag-add-results');
+    for (const level of ['card', 'printing']) {
+      await page.locator('#tag-add-query').fill('Lightning Bolt');
+      await page.locator('#tag-add-level').selectOption(level);
+      await page.locator('#tag-add-submit').click();
+      await advance(page);
+      await expect(results.getByText('Lightning Bolt', { exact: true })).toBeVisible();
+      await advance(page);
+      await expect(results.locator('[data-ui-intended]')).toHaveText(
+        ` Intended: ${level === 'card' ? tag.intended : 0}`,
+      );
+    }
+  });
+}
+
 test('holds initial, partial, transient and failed states until one Space press each', async ({
   page,
 }) => {
