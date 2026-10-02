@@ -64,6 +64,7 @@ All documents in `docs/` are relevant to the rebuild.
 - [Data architecture](docs/data-architecture.md)
 - [Application](docs/application.md)
 - [UserInterface](docs/ui/architecture.md)
+- [Local design storybook](docs/ui/storybook.md)
 - [CardList](docs/card-list.md)
 - [Capture](docs/capture.md)
 - [Catalog](docs/catalog.md)
