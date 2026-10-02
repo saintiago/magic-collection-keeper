@@ -82,4 +82,8 @@ its own authoritative storage. There is no Search projection or background index
 | Access and secrets         | AWS IAM workload roles and AWS Secrets Manager.                                       |
 | Database networking        | Private VPC subnets.                                                                  |
 | Observability              | Amazon CloudWatch logs, metrics and alarms.                                           |
-| Infrastructure definitions | AWS CloudFormation.                                                                   |
+| Infrastructure definitions | TypeScript AWS CDK v2, synthesizing CloudFormation.                                   |
+
+The [deployment design](deployment.md) owns the target CDK stack composition; [CI/CD](ci-cd.md)
+owns GitHub Actions triggers, validation and selective deployment. The current handwritten
+CloudFormation templates remain in place until migration.

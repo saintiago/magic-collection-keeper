@@ -2,9 +2,13 @@
 
 ## Rebuild delivery policy
 
-GitHub Actions CI and automatic deployment remain disabled during the rebuild. Pushes, pull requests
-and merges do not deploy the service. Nexus runs the repository's committed preparation and
-validation commands (README.md). A passing task check is not deployed verification.
+GitHub Actions CI and automatic deployment are currently disabled. The agreed target is
+[separate CDK deployment units](deployment.md) and [GitHub Actions CI/CD](ci-cd.md): validate PRs
+and merges to `main`, automatically deploy changed units to the current test environment, and
+manually promote verified artifacts to production. Implementation and activation are subsequent work.
+Until then, pushes, pull requests and merges do not deploy the service. Nexus runs the repository's
+committed preparation and validation commands (README.md). A passing task check is not deployed
+verification.
 
 Nexus Lens review is required for merges to main during Nexus execution. The required check is
 `Nexus Lens review`, published by the configured Nexus Lens GitHub App. This review gate is enabled
@@ -12,12 +16,13 @@ independently of GitHub Actions CI and automatic deployment.
 
 Builds and deployment preparation remain part of development. Execute deployments explicitly against
 the intended environment; production cutover and collection migration require the owner's concrete
-authorization. Existing production resources and collection data remain intact. Introducing CI/CD
-later requires a separate decision.
+authorization. Existing production resources and collection data remain intact. The CI/CD target is agreed; its activation follows the documented environment and promotion boundaries.
 
 ## Infrastructure
 
-Define the AWS stack in CloudFormation using validated environment parameters. New resources are
+Define the target AWS stacks in TypeScript CDK v2, synthesizing CloudFormation with validated
+environment configuration ([deployment design](deployment.md)). The existing templates remain the
+transitional implementation. New resources are
 isolated from the existing application; retain the existing Cognito user pool and create a separate
 app client. Use least-privilege roles, private database networking and secret references.
 
