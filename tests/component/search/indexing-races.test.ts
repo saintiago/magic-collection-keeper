@@ -452,6 +452,118 @@ describe('search indexing over overlapping runs', () => {
     ).toEqual([{ record_offset: 400 }]);
   });
 
+  it.for(['catalog', 'account'] as const)(
+    'rejects an incremental %s batch assembled before a concurrent source reset',
+    async (source, context) => {
+      if (unavailable !== '') {
+        context.skip(`A real PostgreSQL server is unavailable: ${unavailable}`);
+        return;
+      }
+      if (first === undefined || second === undefined) {
+        throw new Error('The two-connection harness was not opened.');
+      }
+      alice.replaceSnapshot({ position: '4', records: [binderTag] });
+      await indexerOn(first).index({ accounts: [accountId] });
+      // Finish both snapshots but leave the replacement waiting for its catch-up pass.
+      const building = await indexerOn(first).index({ rebuild: true, maxBatches: 1 });
+      expect(building).toMatchObject({ published: false, caughtUp: false });
+      const addedTag: UserCardsPublishedRecord = {
+        kind: 'tag',
+        tag: { tagId: 'tag-new', kind: 'location', label: 'New', system: false },
+      };
+      if (source === 'catalog') {
+        catalog.publish(
+          {
+            kind: 'card',
+            position: '11',
+            revisionId: 'revision-2',
+            reference: { kind: 'card', cardId: 'oracle-filler-0' },
+            removed: false,
+            record: fillerCard(0),
+          },
+          catalogRevisionChange('12', 'revision-2'),
+        );
+      } else {
+        alice.publish(
+          {
+            kind: 'tag',
+            position: '5',
+            accountId,
+            revision: '2',
+            reference: { kind: 'tag', tagId: 'tag-new' },
+            removed: false,
+            record: addedTag,
+          },
+          accountRevisionChange('6', '2'),
+        );
+      }
+      // Hold the end-of-stream read after assembling the complete incremental publication,
+      // before its write transaction takes the generation lock.
+      const pause = createPause();
+      const delayed = indexerOn(second, {
+        ...(source === 'catalog'
+          ? { catalog: pausingCatalog(catalog.publication, '12', pause) }
+          : { userCards: pausingUserCards(alice.publication, '6', pause) }),
+      }).index();
+      await pause.reached;
+      try {
+        if (source === 'catalog') {
+          catalog.replaceSnapshot({
+            revision: revision('revision-2'),
+            position: '12',
+            records: [boltCard('Lightning Bolt'), boltName, m11Printing, fillerCard(0)],
+          });
+          catalog.dropHistoryBefore('12');
+        } else {
+          alice.replaceSnapshot({ position: '6', records: [binderTag, addedTag] });
+          alice.dropHistoryBefore('6');
+        }
+        // Spend the reset run's budget deleting the old projection and checkpoint, leaving
+        // no snapshot progress row that could independently fence the delayed batch.
+        const reset = await indexerOn(first).index({ maxBatches: 1 });
+        expect(reset).toMatchObject({
+          generation: building.generation,
+          published: false,
+          caughtUp: false,
+        });
+        expect(
+          await first.query(
+            `select position from search_private.${source}_checkpoint
+              where generation_id = $1::bigint`,
+            [building.generation],
+          ),
+        ).toEqual([]);
+        expect(await first.query('select card_id from search.cards')).toEqual([
+          { card_id: 'oracle-bolt' },
+        ]);
+      } finally {
+        pause.resume();
+      }
+      const resumed = await delayed;
+      expect(resumed).toMatchObject({
+        generation: building.generation,
+        published: true,
+        caughtUp: true,
+        catalog: { position: source === 'catalog' ? '12' : '10' },
+        accounts: [{ accountId, position: source === 'account' ? '6' : '4' }],
+      });
+      expect(await second.query('select card_id from search.cards order by card_id')).toEqual(
+        source === 'catalog'
+          ? [{ card_id: 'oracle-bolt' }, { card_id: 'oracle-filler-0' }]
+          : [{ card_id: 'oracle-bolt' }],
+      );
+      const tags = await second.transactor().transaction(async (statements) => {
+        await statements.query(SEARCH_ACCOUNT_SCOPE_SQL, { account_id: accountId });
+        return await statements.query('select tag_id from search.tags order by tag_id');
+      });
+      expect(tags).toEqual(
+        source === 'account'
+          ? [{ tag_id: 'tag-binder' }, { tag_id: 'tag-new' }]
+          : [{ tag_id: 'tag-binder' }],
+      );
+    },
+  );
+
   it('rejects the delayed older catalog run instead of overwriting newer changes', async (context) => {
     if (unavailable !== '') {
       context.skip(`A real PostgreSQL server is unavailable: ${unavailable}`);

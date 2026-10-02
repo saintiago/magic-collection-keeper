@@ -1236,6 +1236,12 @@ async function applyChangeBatch(
   }
 
   return await writeTransaction(sql, target, async (statements) => {
+    // A reset can remove this checkpoint while the batch is being assembled. Require the
+    // complete starting boundary under the generation lock before writing any records/evidence.
+    assertCheckpoint(await source.readCheckpoint(statements), {
+      position: start.position,
+      revisionId: start.revisionId,
+    });
     for (const publication of publications) {
       await source.writeRecords(statements, publication.records);
       await publication.marker.write(statements);
@@ -1622,18 +1628,23 @@ async function advanceCatalogCheckpoint(
   }
   await advanceCheckpoint(
     sql,
-    `insert into ${searchPrivateSchema}.catalog_checkpoint (generation_id, position, revision_id)
-     values (cast(:generation_id as bigint), :position, :revision_id)
-     on conflict (generation_id) do update set
-       position = excluded.position,
-       revision_id = excluded.revision_id
-      where catalog_checkpoint.position = :start_position
-     returning generation_id::text as generation_id`,
+    start === null
+      ? `insert into ${searchPrivateSchema}.catalog_checkpoint (generation_id, position, revision_id)
+         values (cast(:generation_id as bigint), :position, :revision_id)
+         on conflict (generation_id) do nothing
+         returning generation_id::text as generation_id`
+      : `update ${searchPrivateSchema}.catalog_checkpoint
+            set position = :position, revision_id = :revision_id
+          where generation_id = cast(:generation_id as bigint)
+            and position = :start_position and revision_id = :start_revision_id
+         returning generation_id::text as generation_id`,
     {
       generation_id: generation,
       position: applied.position,
       revision_id: revisionId,
-      start_position: start?.position ?? null,
+      ...(start === null
+        ? {}
+        : { start_position: start.position, start_revision_id: start.revisionId }),
     },
   );
 }
@@ -1669,16 +1680,20 @@ async function advanceAccountCheckpoint(
 ): Promise<void> {
   await advanceCheckpoint(
     sql,
-    `insert into ${searchPrivateSchema}.account_checkpoint (generation_id, account_id, position)
-     values (cast(:generation_id as bigint), :account_id, :position)
-     on conflict (generation_id, account_id) do update set position = excluded.position
-      where account_checkpoint.position = :start_position
-     returning generation_id::text as generation_id`,
+    start === null
+      ? `insert into ${searchPrivateSchema}.account_checkpoint (generation_id, account_id, position)
+         values (cast(:generation_id as bigint), :account_id, :position)
+         on conflict (generation_id, account_id) do nothing
+         returning generation_id::text as generation_id`
+      : `update ${searchPrivateSchema}.account_checkpoint set position = :position
+          where generation_id = cast(:generation_id as bigint) and account_id = :account_id
+            and position = :start_position
+         returning generation_id::text as generation_id`,
     {
       generation_id: generation,
       account_id: accountId,
       position: applied.position,
-      start_position: start?.position ?? null,
+      ...(start === null ? {} : { start_position: start.position }),
     },
   );
 }
