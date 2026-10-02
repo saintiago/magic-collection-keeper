@@ -77,8 +77,11 @@ identity, ordering, continuation and revision behavior rather than a database la
 ## Identities and information
 
 Keep playable and printing identities separate and stable. A printing belongs to one card; preserve
-that relationship during synchronization. Do not substitute a similar language or printing when a
-reference is unavailable. Batch basic-information lookup; no live provider request is needed.
+that relationship during synchronization. Historical card/printing references and printing-to-card
+relationships remain resolvable across provider removals, independently of current public-query
+membership. Retain the basic information needed to resolve saved references; a successful refresh
+cannot strand existing records or reference preparation. Do not substitute a similar language or
+printing when a reference is unavailable. Batch basic-information lookup; no live provider request is needed.
 
 Images are independent references. Preserve nonphysical printings with an empty finish list without
 inventing nonfoil or rejecting the bulk revision. Physical printings require a supported finish.

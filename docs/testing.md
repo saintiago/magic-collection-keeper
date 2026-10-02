@@ -76,7 +76,10 @@ batch responses and unavailable lookup errors. Reads must succeed without a live
 Exercise public queries and grants on real PostgreSQL; consumers must not read private tables or views.
 Use small deterministic snapshots: malformed/interrupted ingestion preserves the previous revision,
 retries do not duplicate identities, and concurrent readers see a coherent revision. Verify complete
-atomic revision publication, removals and revision-bound query continuation.
+atomic revision publication, removals and revision-bound query continuation. Removed provider
+printings leave current query membership while historical resolution and printing-to-card mapping
+remain available. Cover a refresh removing a printing before private reference preparation; subsequent
+provider-contract resolution and repeat-safe backfill must preserve the saved records.
 
 ### UserCards
 
