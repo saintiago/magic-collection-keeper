@@ -35,9 +35,7 @@ export function mountDesignLanguage(
     document,
     'A calm collection interface shaped by midnight stone, icy magic and fractured reflections.',
   );
-  const guide = document.createElement('a');
-  guide.href = '#design-controls';
-  guide.textContent = 'Explore the interactive states';
+  const guide = sectionLink(document, 'design-controls', 'Explore the interactive states');
   hero.append(eyebrow, heading, intro, guide);
 
   const grid = document.createElement('section');
@@ -166,6 +164,7 @@ function controls(
   const validation = statusLine(document, 'design-validation');
   validation.className = 'field-feedback';
   const secondary = button(document, 'design-secondary', 'Preview details');
+  const previewStatus = statusLine(document, 'design-preview-status');
   const save = submitButton(document, 'design-submit', 'Save example');
   save.className = 'primary-action';
   const retry = button(document, 'design-retry', 'Retry save');
@@ -179,6 +178,7 @@ function controls(
     controlLabel(document, 'Description', details),
     validation,
     secondary,
+    previewStatus,
     save,
     retry,
     saveStatus,
@@ -230,8 +230,8 @@ function controls(
   });
   retry.addEventListener('click', beginSave);
   secondary.addEventListener('click', () => {
-    saveStatus.textContent = `Preview ready: ${details.value.length} description characters.`;
-    saveStatus.dataset.feedback = 'success';
+    previewStatus.textContent = `Preview ready: ${details.value.length} description characters.`;
+    previewStatus.dataset.feedback = 'success';
   });
   article.append(form, searchResult, editor);
   return article;
@@ -284,9 +284,7 @@ function selection(document: Document): HTMLElement {
     group.append(option);
   }
   group.prepend(legend);
-  const link = document.createElement('a');
-  link.href = '#design-controls';
-  link.textContent = 'Return to controls';
+  const link = sectionLink(document, 'design-controls', 'Return to controls');
   article.append(group, status, link);
   return article;
 }
@@ -322,7 +320,7 @@ function card(document: Document): HTMLElement {
 }
 
 function notices(document: Document): { element: HTMLElement; dispose(): void } {
-  const article = panel(document, 'Success and error notices');
+  const article = panel(document, 'Success and error notices', 'design-notices');
   const noticeHost = createNoticeHost(article);
   noticeHost.show({
     id: 'design-success',
@@ -370,6 +368,17 @@ function dialog(document: Document): { element: HTMLElement; dispose(): void } {
   });
   article.append(open, outcome);
   return { element: article, dispose: () => dialogs.closeAll() };
+}
+
+function sectionLink(document: Document, targetId: string, label: string): HTMLAnchorElement {
+  const link = document.createElement('a');
+  link.href = document.location.href;
+  link.textContent = label;
+  link.addEventListener('click', (event) => {
+    event.preventDefault();
+    document.getElementById(targetId)?.scrollIntoView();
+  });
+  return link;
 }
 
 function isAbort(cause: unknown): boolean {

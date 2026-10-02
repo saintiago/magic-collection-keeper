@@ -352,6 +352,10 @@ p {
   animation: rf-panel-enter var(--rf-state-motion) both;
 }
 
+.design-grid > article.design-notices {
+  animation: none;
+}
+
 .design-grid > article::after {
   content: '';
   position: absolute;

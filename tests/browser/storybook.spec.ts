@@ -276,6 +276,10 @@ test('shows the design language through shared card, dialog and notice presenter
   await page.getByRole('button', { name: 'Save example' }).click();
   await expect(page.locator('#design-save-status')).toHaveText('Saving “Fractured favorites”…');
   await expect(page.locator('#stage-status')).toContainText('Saving gallery example');
+  await page.getByRole('button', { name: 'Preview details' }).click();
+  await expect(page.locator('#design-preview-status')).toContainText('Preview ready');
+  await expect(page.locator('#design-save-status')).toHaveText('Saving “Fractured favorites”…');
+  await expect(page.locator('#design-save-status')).toHaveAttribute('aria-busy', 'true');
   await advance(page);
   await expect(page.locator('#design-save-status')).toContainText('Save failed');
   await page.getByRole('button', { name: 'Retry save' }).click();
@@ -317,6 +321,21 @@ test('shows the design language through shared card, dialog and notice presenter
   ).toBe(true);
 });
 
+test('keeps gallery section links separate from the mocked-app route', async ({ page }) => {
+  await openStorybook(page, '#/catalog');
+  await page.getByRole('button', { name: 'Design language' }).click();
+
+  for (const name of ['Explore the interactive states', 'Return to controls']) {
+    await page.getByRole('link', { name }).click();
+    await expect(page).toHaveURL(/#\/catalog$/);
+    await page.getByRole('button', { name: 'Mocked app' }).click();
+    if (name === 'Explore the interactive states') await advance(page);
+    await expect(page.getByRole('heading', { name: 'Catalog and search' })).toBeVisible();
+    await expect(page.getByText('Page not found')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Design language' }).click();
+  }
+});
+
 test('reflows the Reality Fracture preset and retains static feedback with reduced motion', async ({
   page,
 }) => {
@@ -349,6 +368,23 @@ test('reflows the Reality Fracture preset and retains static feedback with reduc
     'border-color',
     'rgb(119, 222, 237)',
   );
+  await page.getByLabel('Select Lightning Bolt').uncheck();
+  await expect(page.getByLabel('Select Lightning Bolt')).not.toBeChecked();
+});
+
+test('keeps card selection clickable after gallery animations settle', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 760 });
+  await openStorybook(page);
+  await page.getByRole('button', { name: 'Design language' }).click();
+  await page
+    .locator('.design-grid > article')
+    .first()
+    .evaluate(async (article) => {
+      await Promise.all(article.getAnimations().map((animation) => animation.finished));
+    });
+
+  await page.getByLabel('Select Lightning Bolt').uncheck();
+  await expect(page.getByLabel('Select Lightning Bolt')).not.toBeChecked();
 });
 
 test('disposes a pending gallery action when leaving the design-language tab', async ({ page }) => {
