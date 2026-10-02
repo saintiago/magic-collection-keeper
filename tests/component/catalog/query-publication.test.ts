@@ -526,7 +526,7 @@ describe('catalog query publication', () => {
     expect(future.code).toBe('stale-continuation');
   });
 
-  it('retains every published lookup while changes follow current membership', async () => {
+  it('retains historical facts in transitional snapshots and changes', async () => {
     await publish('snapshot-1', [bolt, solRing]);
     const before = await readWholeSnapshot(publication(), 100);
 
@@ -544,17 +544,26 @@ describe('catalog query publication', () => {
     const page = await publication().readChanges({ position: before.position, pageSize: 100 });
     expect(page.changes.map(summarizeChange).sort()).toEqual(
       [
-        'card-name:removed:oracle-bolt/en/Lightning Bolt',
-        'card-name:removed:oracle-sol-ring/en/Sol Ring',
         'card-name:upsert:oracle-bolt/es/Relámpago',
-        'card:removed:oracle-sol-ring',
-        'printing:removed:printing-bolt-en',
-        'printing:removed:printing-ring-en',
         'printing:upsert:printing-bolt-es',
         `revision:${published.revisionId}:snapshot-2`,
       ].sort(),
     );
-    expect(page.changes.some((change) => change.kind !== 'revision' && change.removed)).toBe(true);
+    expect(page.changes.some((change) => change.kind !== 'revision' && change.removed)).toBe(false);
+
+    const after = await readWholeSnapshot(publication(), 100);
+    expect(after.records.map(summarize).sort()).toEqual(
+      [
+        'card:oracle-bolt:Lightning Bolt:Lightning Bolt deals 3 damage to any target.',
+        'card:oracle-sol-ring:Sol Ring:{T}: Add {C}{C}.',
+        'name:oracle-bolt:en:Lightning Bolt',
+        'name:oracle-bolt:es:Relámpago',
+        'name:oracle-sol-ring:en:Sol Ring',
+        'printing:printing-bolt-en:oracle-bolt:en:nonfoil',
+        'printing:printing-bolt-es:oracle-bolt:es:nonfoil',
+        'printing:printing-ring-en:oracle-sol-ring:en:nonfoil',
+      ].sort(),
+    );
   });
 });
 

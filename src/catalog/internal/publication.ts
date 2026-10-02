@@ -5,10 +5,10 @@
  * failed or interrupted ingestion leaves the previous revision and its records exactly as they
  * were, and readers observe either the complete previous revision or the complete candidate one.
  * The same transaction appends the durable publication stream the query publication serves: one
- * change per record this revision inserted, changed, restored or removed from current membership,
- * then the revision that completes them and the retention of older publications. Removed records
- * keep their stored facts for historical resolution while current queries and transitional change
- * consumers observe the removal.
+ * change per record this revision inserted, changed or restored, then the revision that completes
+ * them and the retention of older publications. Removed records keep their stored facts for
+ * historical resolution and transitional consumers; current Catalog queries use separate
+ * membership flags.
  */
 
 import { CatalogError } from './errors.js';
@@ -228,22 +228,6 @@ const resetCandidateStatements = [
   `update catalog_private.printing set candidate = false where candidate`,
 ] as const;
 
-function removalStatement(kind: 'card' | 'card-name' | 'printing'): string {
-  const source =
-    kind === 'card'
-      ? `select card_id as record_identity from catalog_private.card where current and not candidate`
-      : kind === 'printing'
-        ? `select printing_id as record_identity from catalog_private.printing where current and not candidate`
-        : `select jsonb_build_array(card_id, language, name)::text as record_identity
-           from catalog_private.card_name where current and not candidate`;
-  return `insert into catalog_private.publication (
-    revision_id, source_name, source_version, published_at, kind, record_identity, removed, record
-  )
-  select :revision_id, :source_name, :source_version, cast(:published_at as timestamptz),
-         '${kind}', removed.record_identity, true, null
-  from (${source}) as removed`;
-}
-
 const finishMembershipStatements = [
   `update catalog_private.card set current = candidate`,
   `update catalog_private.card_name set current = candidate`,
@@ -386,9 +370,6 @@ export async function publishCandidate(
       );
     }
     await flush();
-    await statements.query(removalStatement('printing'), revision);
-    await statements.query(removalStatement('card-name'), revision);
-    await statements.query(removalStatement('card'), revision);
     for (const statement of finishMembershipStatements) {
       await statements.query(statement);
     }

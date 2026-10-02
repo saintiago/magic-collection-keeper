@@ -139,6 +139,15 @@ describe('catalog public queries', () => {
       name: 'Relámpago',
     });
 
+    for (const resultLevel of ['card', 'printing'] as const) {
+      const multiword = await catalog.query({
+        resultLevel,
+        query: 'name:relámpago lightning',
+      });
+      expect(multiword.entries).toHaveLength(resultLevel === 'card' ? 1 : 2);
+      expect(multiword.entries.every((entry) => entry.card.matchedName === 'Relámpago')).toBe(true);
+    }
+
     const impossible = await catalog.query({
       resultLevel: 'card',
       query: 'set:lea lang:es',

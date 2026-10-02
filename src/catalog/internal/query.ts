@@ -195,6 +195,11 @@ interface QueryStatement {
   readonly parameters: Readonly<Record<string, CatalogSqlValue>>;
 }
 
+type NameScope =
+  | { readonly kind: 'all' }
+  | { readonly kind: 'canonical' }
+  | { readonly kind: 'candidate'; readonly name: string };
+
 function pageStatement(query: CatalogQuery, offset: number, limit: number): QueryStatement {
   const parameters: Record<string, CatalogSqlValue> = {};
   let parameterCount = 0;
@@ -265,18 +270,22 @@ order by row_kind desc, row_position`;
 }
 
 /** A card query chooses one related printing for the complete filter expression. */
-function filterSqls(filters: readonly CatalogFilter[], context: SqlContext): string {
+function filterSqls(
+  filters: readonly CatalogFilter[],
+  context: SqlContext,
+  nameScope: NameScope = { kind: 'all' },
+): string {
   if (filters.length === 0) return 'true';
   if (context.printing !== null) {
-    return boundFiltersSql(filters, context, context.printing);
+    return boundFiltersSql(filters, context, context.printing, nameScope);
   }
-  const parts = [boundFiltersSql(filters, context, null)];
+  const parts = [boundFiltersSql(filters, context, null, nameScope)];
   if (filters.some(filterUsesPrinting)) {
     const printing = context.alias('related_printing');
     parts.push(
       `exists (select 1 from catalog.printings as ${printing}` +
         ` where ${printing}.card_id = ${context.card}.card_id` +
-        ` and ${boundFiltersSql(filters, context, printing)})`,
+        ` and ${boundFiltersSql(filters, context, printing, nameScope)})`,
     );
   }
   return `(${parts.join(' or ')})`;
@@ -298,24 +307,30 @@ function boundFiltersSql(
   filters: readonly CatalogFilter[],
   context: SqlContext,
   printing: string | null,
+  nameScope: NameScope,
 ): string {
-  return `(${filters.map((filter) => boundFilterSql(filter, context, printing)).join(' and ')})`;
+  return `(${filters
+    .map((filter) => boundFilterSql(filter, context, printing, nameScope))
+    .join(' and ')})`;
 }
 
 function boundFilterSql(
   filter: CatalogFilter,
   context: SqlContext,
   printing: string | null,
+  nameScope: NameScope,
 ): string {
   switch (filter.kind) {
     case 'criterion':
-      return criterionSql(filter.criterion, context, printing);
+      return criterionSql(filter.criterion, context, printing, nameScope);
     case 'not':
-      return `not (${boundFilterSql(filter.operand, context, printing)})`;
+      return `not (${boundFilterSql(filter.operand, context, printing, nameScope)})`;
     case 'or':
-      return `(${filter.operands.map((part) => boundFilterSql(part, context, printing)).join(' or ')})`;
+      return `(${filter.operands
+        .map((part) => boundFilterSql(part, context, printing, nameScope))
+        .join(' or ')})`;
     case 'and':
-      return boundFiltersSql(filter.operands, context, printing);
+      return boundFiltersSql(filter.operands, context, printing, nameScope);
   }
 }
 
@@ -323,13 +338,19 @@ function criterionSql(
   criterion: CatalogCriterion,
   context: SqlContext,
   printing: string | null,
+  nameScope: NameScope,
 ): string {
   switch (criterion.kind) {
     case 'name': {
       const value = context.bind(criterion.text);
+      const canonical = `strpos(lower(${context.card}.name), ${value}) > 0`;
+      if (nameScope.kind === 'canonical') return canonical;
+      if (nameScope.kind === 'candidate') {
+        return `(${canonical} or strpos(lower(${nameScope.name}), ${value}) > 0)`;
+      }
       const name = context.alias('name_alias');
       return (
-        `(strpos(lower(${context.card}.name), ${value}) > 0 or exists (` +
+        `(${canonical} or exists (` +
         `select 1 from catalog.card_names as ${name} where ${name}.card_id = ${context.card}.card_id` +
         ` and strpos(lower(${name}.name), ${value}) > 0))`
       );
@@ -389,40 +410,28 @@ function colorSql(
 }
 
 function matchedNameSql(filters: readonly CatalogFilter[], context: SqlContext): string {
-  const texts = positiveNameTexts(filters);
-  if (texts.length === 0) return 'null::text';
-  const canonical = texts
-    .map((text) => `strpos(lower(${context.card}.name), ${context.bind(text)}) > 0`)
-    .join(' or ');
+  if (!filters.some((filter) => filterUsesPositiveName(filter))) return 'null::text';
+  const canonical = filterSqls(filters, context, { kind: 'canonical' });
   const name = context.alias('matched_name');
-  const translated = texts
-    .map((text) => `strpos(lower(${name}.name), ${context.bind(text)}) > 0`)
-    .join(' or ');
+  const translated = filterSqls(filters, context, { kind: 'candidate', name: `${name}.name` });
   return (
     `case when ${canonical} then null::text else (` +
     `select ${name}.name from catalog.card_names as ${name}` +
-    ` where ${name}.card_id = ${context.card}.card_id and (${translated})` +
+    ` where ${name}.card_id = ${context.card}.card_id and ${translated}` +
     ` order by lower(${name}.name), ${name}.language, ${name}.name limit 1) end`
   );
 }
 
-function positiveNameTexts(filters: readonly CatalogFilter[]): readonly string[] {
-  const values = new Set<string>();
-  const visit = (filter: CatalogFilter, negated: boolean): void => {
-    switch (filter.kind) {
-      case 'criterion':
-        if (!negated && filter.criterion.kind === 'name') values.add(filter.criterion.text);
-        return;
-      case 'not':
-        visit(filter.operand, !negated);
-        return;
-      case 'and':
-      case 'or':
-        filter.operands.forEach((operand) => visit(operand, negated));
-    }
-  };
-  filters.forEach((filter) => visit(filter, false));
-  return [...values].sort();
+function filterUsesPositiveName(filter: CatalogFilter, negated = false): boolean {
+  switch (filter.kind) {
+    case 'criterion':
+      return !negated && filter.criterion.kind === 'name';
+    case 'not':
+      return filterUsesPositiveName(filter.operand, !negated);
+    case 'and':
+    case 'or':
+      return filter.operands.some((operand) => filterUsesPositiveName(operand, negated));
+  }
 }
 
 const entryRowSchema = z.object({

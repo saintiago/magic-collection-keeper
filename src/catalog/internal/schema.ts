@@ -402,10 +402,9 @@ export function catalogReaderGrants(readerRole: string): string {
 }
 
 /**
- * Grants trusted indexing access to the publication contract: the published records and the
+ * Grants trusted indexing access to the publication contract: retained resolution records and the
  * durable change stream, and no mutation. Application supplies this credential to an indexing
- * runtime separately from an end-user read role (docs/data-architecture.md#access-and-deployment);
- * the read service never needs it and never reaches the private schema.
+ * runtime separately from an end-user read role (docs/data-architecture.md#access-and-deployment).
  */
 export function catalogPublicationGrants(role: string): string {
   return [
