@@ -34,8 +34,14 @@ jobs:
           cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
           repository="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-recognition --query "Stacks[0].Outputs[?OutputKey=='RecognitionRepositoryUri'].OutputValue | [0]" --output text)"
           printf '%s\n' "$repository" > .turbo/ci/repository
-      - name: Build and publish recognition image
+      - name: Recover published image candidate
+        id: candidate
         if: inputs.promote_from == ''
+        run: |
+          version="$(jq -r .version package.json)-$(git rev-parse HEAD | cut -c1-12)"
+          bash scripts/ci/image-candidate.sh "$(cat .turbo/ci/repository)" "$version" .turbo/ci/artifact.json
+      - name: Build and publish recognition image
+        if: inputs.promote_from == '' && steps.candidate.outputs.found != 'true'
         run: |
           python -m venv .recognition-build/runtime
           .recognition-build/runtime/bin/pip install -r src/recognition/python/requirements-visual.txt
@@ -47,11 +53,11 @@ jobs:
           registry="${repository%%/*}"
           aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
           version="$(jq -r .version .turbo/release/recognition/manifest.json)"
-          docker build --tag "$repository:$version" .turbo/release/recognition
+          manifest_sha="$(sha256sum .turbo/release/recognition/manifest.json | cut -d' ' -f1)"
+          docker build --label "keeper.manifest-sha256=$manifest_sha" --tag "$repository:$version" .turbo/release/recognition
           docker push "$repository:$version"
           digest="$(aws ecr describe-images --repository-name "${repository#*/}" --image-ids imageTag="$version" --query 'imageDetails[0].imageDigest' --output text)"
           image_uri="$repository@$digest"
-          manifest_sha="$(sha256sum .turbo/release/recognition/manifest.json | cut -d' ' -f1)"
           jq -n --arg imageUri "$image_uri" --arg digest "$digest" --arg version "$version" --arg manifestSha256 "$manifest_sha" '{kind:"image",values:{imageUri:$imageUri,digest:$digest,version:$version,manifestSha256:$manifestSha256}}' > .turbo/ci/artifact.json
       - name: Copy test-verified recognition image
         if: inputs.promote_from != ''
@@ -66,11 +72,16 @@ jobs:
           target_repository="$(cat .turbo/ci/repository)"
           version="$(jq -r '.components.recognition.artifact.values.version' .turbo/ci/source.json)"
           manifest_sha="$(jq -r '.components.recognition.artifact.values.manifestSha256' .turbo/ci/source.json)"
-          for registry in "${source_path%%/*}" "${target_repository%%/*}"; do aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"; done
-          docker pull "$source_uri"
-          docker tag "$source_uri" "$target_repository:$version"
-          docker push "$target_repository:$version"
-          digest="$(aws ecr describe-images --repository-name "${target_repository#*/}" --image-ids imageTag="$version" --query 'imageDetails[0].imageDigest' --output text)"
+          if digest="$(aws ecr describe-images --repository-name "${target_repository#*/}" --image-ids imageTag="$version" --query 'imageDetails[0].imageDigest' --output text 2> .turbo/ci/image-error.txt)"; then
+            test "$digest" = "$source_digest"
+          else
+            grep -Fq ImageNotFoundException .turbo/ci/image-error.txt
+            for registry in "${source_path%%/*}" "${target_repository%%/*}"; do aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"; done
+            docker pull "$source_uri"
+            docker tag "$source_uri" "$target_repository:$version"
+            docker push "$target_repository:$version"
+            digest="$(aws ecr describe-images --repository-name "${target_repository#*/}" --image-ids imageTag="$version" --query 'imageDetails[0].imageDigest' --output text)"
+          fi
           test "$digest" = "$source_digest"
           image_uri="$target_repository@$digest"
           jq -n --arg imageUri "$image_uri" --arg digest "$digest" --arg version "$version" --arg manifestSha256 "$manifest_sha" '{kind:"image",values:{imageUri:$imageUri,digest:$digest,version:$version,manifestSha256:$manifestSha256}}' > .turbo/ci/artifact.json

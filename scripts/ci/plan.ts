@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { execFile } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -26,15 +27,15 @@ interface CommandLine {
   readonly configurationDirectory: string | null;
 }
 
-export async function createDeploymentPlan(command: CommandLine): Promise<void> {
+export async function createDeploymentPlan(command: CommandLine, root = repoRoot): Promise<void> {
   const deployedRecord = await optionalRecord(command.record);
   const base =
     deployedRecord?.revision === zeroRevision
       ? command.base
       : (deployedRecord?.revision ?? command.base);
-  const changedPaths = await diffPaths(base, command.head);
-  const mapping = await readStackInputMapping(path.join(repoRoot, 'scripts/ci/stack-inputs.json'));
-  const productionInputs = await collectProductionInputs(repoRoot);
+  const changedPaths = await diffPaths(base, command.head, root);
+  const mapping = await readStackInputMapping(path.join(root, 'scripts/ci/stack-inputs.json'));
+  const productionInputs = await collectProductionInputs(root);
   const configurationIdentities = await readConfigurationIdentities(command.configurationDirectory);
   const plan = planDeployments({
     baseRevision: base,
@@ -43,6 +44,7 @@ export async function createDeploymentPlan(command: CommandLine): Promise<void> 
     mapping,
     productionInputs,
     configurationIdentities,
+    previousProductionInputs: await collectInputsAtRevision(root, base),
     ...(deployedRecord === undefined ? {} : { deployedRecord }),
   });
   await writeFile(command.out, `${JSON.stringify(plan, null, 2)}\n`, 'utf8');
@@ -56,11 +58,11 @@ export async function createDeploymentPlan(command: CommandLine): Promise<void> 
   }
 }
 
-async function diffPaths(base: string, head: string): Promise<readonly string[]> {
+async function diffPaths(base: string, head: string, root: string): Promise<readonly string[]> {
   const { stdout } = await execFileAsync(
     'git',
     ['diff', '--name-status', '--find-renames', `${base}..${head}`],
-    { cwd: repoRoot },
+    { cwd: root },
   );
   const files = new Set<string>();
   for (const line of stdout.split('\n')) {
@@ -75,6 +77,25 @@ async function diffPaths(base: string, head: string): Promise<readonly string[]>
     }
   }
   return [...files];
+}
+
+/** Inspect the base tree without running its scripts or changing the active checkout. */
+async function collectInputsAtRevision(root: string, revision: string) {
+  assertRevision(revision);
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'keeper-plan-'));
+  const tree = path.join(directory, 'tree');
+  try {
+    await execFileAsync(
+      'git',
+      ['archive', '--format=tar', `--output=${directory}/base.tar`, revision],
+      { cwd: root },
+    );
+    await mkdir(tree);
+    await execFileAsync('tar', ['-xf', `${directory}/base.tar`, '-C', tree]);
+    return await collectProductionInputs(tree);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 async function optionalRecord(file: string | null): Promise<DeploymentRecord | undefined> {

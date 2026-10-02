@@ -1,4 +1,7 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -6,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertFreshRevision,
+  deploymentUnits,
   emptyDeploymentRecord,
   finalizeDeploymentRecord,
   recordVerifiedComponent,
@@ -21,6 +25,9 @@ import {
   readStackInputMapping,
 } from '../../scripts/ci/planner.js';
 
+import { createDeploymentPlan } from '../../scripts/ci/plan.js';
+
+const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const mappingFile = path.join(root, 'scripts/ci/stack-inputs.json');
 const revision = '1'.repeat(40);
@@ -66,7 +73,7 @@ describe('selective CI/CD planning', () => {
       inputs: ['src/ui/removed-production-module.ts'],
     });
     const plan = planDeployments({
-      baseRevision: '0'.repeat(40),
+      baseRevision: revision,
       sourceRevision: revision,
       changedPaths: ['src/ui/removed-production-module.ts'],
       mapping,
@@ -76,6 +83,91 @@ describe('selective CI/CD planning', () => {
     expect(plan.candidates).toEqual(['web']);
     expect(plan.reasons.web).toEqual(['src/ui/removed-production-module.ts']);
   });
+
+  it.each(deploymentUnits)(
+    'reconciles a partial %s deployment even when the next revision reverts to the finalized files',
+    async (unit) => {
+      const mapping = await readStackInputMapping(mappingFile);
+      const baseline = finalizeDeploymentRecord(
+        emptyDeploymentRecord('test'),
+        revision,
+        '2026-10-03T00:00:00Z',
+      );
+      const partial = recordVerifiedComponent(baseline, unit, {
+        ...verifiedComponent(`keeper-test-${unit}`),
+        sourceRevision: '2'.repeat(40),
+      });
+      const plan = planDeployments({
+        baseRevision: revision,
+        sourceRevision: '3'.repeat(40),
+        changedPaths: [], // A..C is empty after reverting B's files.
+        mapping,
+        productionInputs: {},
+        deployedRecord: partial,
+      });
+      expect(plan.candidates).toContain(unit);
+    },
+  );
+
+  it.each(['delete', 'rename'])(
+    'plans a credential-free module %s using the real base graph',
+    async (operation) => {
+      const directory = await mkdtemp(path.join(os.tmpdir(), 'keeper-plan-test-'));
+      try {
+        const git = (args: string[]) => exec('git', args, { cwd: directory });
+        await git(['init', '-q']);
+        await git(['config', 'user.email', 'test@example.com']);
+        await git(['config', 'user.name', 'Test']);
+        for (const name of ['src/application/entrypoints', 'src/ui', 'scripts/ci']) {
+          await mkdir(path.join(directory, name), { recursive: true });
+        }
+        await writeFile(
+          path.join(directory, 'scripts/ci/stack-inputs.json'),
+          await readFile(mappingFile),
+        );
+        for (const name of ['catalog-serving', 'usercards', 'catalog-ingestion']) {
+          await writeFile(
+            path.join(directory, `src/application/entrypoints/${name}.ts`),
+            'export const value = 1;',
+          );
+        }
+        for (const name of ['prepare-recognition', 'package-recognition']) {
+          await writeFile(path.join(directory, `scripts/${name}.ts`), 'export const value = 1;');
+        }
+        const entry = path.join(directory, 'src/application/entrypoints/web.ts');
+        await writeFile(entry, "export { value } from '../../ui/old.js';");
+        await writeFile(
+          path.join(directory, 'src/ui/old.ts'),
+          "export { value } from 'removed-npm-dependency';",
+        );
+        await git(['add', '.']);
+        await git(['commit', '-qm', 'base']);
+        const base = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+        if (operation === 'rename') {
+          await git(['mv', 'src/ui/old.ts', 'src/ui/new.ts']);
+          await writeFile(entry, "export { value } from '../../ui/new.js';");
+          await writeFile(path.join(directory, 'src/ui/new.ts'), 'export const value = 1;');
+        } else {
+          await rm(path.join(directory, 'src/ui/old.ts'));
+          await writeFile(entry, 'export const value = 1;');
+        }
+        await git(['add', '.']);
+        await git(['commit', '-qm', operation]);
+        const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+        const out = path.join(directory, 'plan.json');
+        await createDeploymentPlan(
+          { base, head, out, record: null, githubOutput: null, configurationDirectory: null },
+          directory,
+        );
+        const plan = JSON.parse(await readFile(out, 'utf8'));
+        expect(plan.candidates).toEqual(['web']);
+        expect(plan.reasons.web).toContain('src/ui/old.ts');
+        if (operation === 'rename') expect(plan.reasons.web).toContain('src/ui/new.ts');
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('maps Recognition preparation and packaging helpers to every artifact they affect', async () => {
     const mapping = await readStackInputMapping(mappingFile);
@@ -120,7 +212,7 @@ describe('selective CI/CD planning', () => {
       environmentConfigurationSha256: 'a'.repeat(64),
     });
     const plan = planDeployments({
-      baseRevision: '0'.repeat(40),
+      baseRevision: revision,
       sourceRevision: revision,
       changedPaths: [],
       mapping,
@@ -167,7 +259,7 @@ describe('selective CI/CD planning', () => {
       'utf8',
     );
     expect(entry.match(/permissions: \{ contents: read, id-token: write \}/g)).toHaveLength(7);
-    expect(promotion).toContain('environments/test/releases/${{ inputs.revision }}.json');
+    expect(promotion).toContain('environments/test/releases/${{ inputs.release_id }}.json');
     expect(promotion).toContain('.turbo/ci/source.json');
 
     const recognition = await readFile(
@@ -190,6 +282,33 @@ describe('selective CI/CD planning', () => {
 });
 
 describe('deployment evidence', () => {
+  it('gives repeated finalization the same identity and configuration redeployments a separate release', () => {
+    const verified = recordVerifiedComponent(
+      emptyDeploymentRecord('test'),
+      'gateway',
+      verifiedComponent('keeper-test-gateway'),
+    );
+    const first = finalizeDeploymentRecord(verified, revision, '2026-10-03T00:00:00Z');
+    const retry = finalizeDeploymentRecord(verified, revision, '2026-10-03T01:00:00Z');
+    expect(retry.releaseId).toBe(first.releaseId);
+    expect(finalizeDeploymentRecord(first, revision, '2026-10-03T02:00:00Z').releaseId).toBe(
+      first.releaseId,
+    );
+    const configured = recordVerifiedComponent(first, 'gateway', {
+      ...verifiedComponent('keeper-test-gateway'),
+      configurationSha256: 'd'.repeat(64),
+    });
+    const next = finalizeDeploymentRecord(configured, revision, '2026-10-03T03:00:00Z');
+    expect(next.releaseId).not.toBe(first.releaseId);
+    const reverified = recordVerifiedComponent(first, 'gateway', {
+      ...verifiedComponent('keeper-test-gateway'),
+      evidenceUri: 's3://state/another-run/evidence.txt',
+    });
+    expect(
+      finalizeDeploymentRecord(reverified, revision, '2026-10-03T04:00:00Z').releaseId,
+    ).not.toBe(first.releaseId);
+  });
+
   it('advances the environment baseline only when finalized and retains the rollback identity', () => {
     const initial = emptyDeploymentRecord('test');
     const first = recordVerifiedComponent(

@@ -57,6 +57,8 @@ export interface DeploymentRecord {
   /** The revision through which every selected deployment completed and was verified. */
   readonly revision: string;
   readonly updatedAt: string;
+  /** Immutable finalized combination identity, independent of source revision. */
+  readonly releaseId?: string;
   readonly components: Partial<Record<DeploymentUnit, ComponentDeploymentRecord>>;
 }
 
@@ -132,7 +134,12 @@ export function finalizeDeploymentRecord(
 ): DeploymentRecord {
   assertRevision(revision);
   if (!Number.isFinite(Date.parse(updatedAt))) throw new Error('updatedAt must be an ISO instant.');
-  return { ...record, revision, updatedAt };
+  const releaseId = contentIdentity({
+    environment: record.environment,
+    revision,
+    components: record.components,
+  });
+  return { ...record, revision, updatedAt, releaseId };
 }
 
 /** Rejects a revision that would move either the finalized baseline or a verified component back. */

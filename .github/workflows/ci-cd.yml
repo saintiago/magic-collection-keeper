@@ -199,7 +199,8 @@ jobs:
           mkdir -p .turbo/ci
           aws s3 cp "s3://$STATE_BUCKET/environments/test/current.json" .turbo/ci/current.json
           npm run ci:record -- finalize --record .turbo/ci/current.json --environment test --revision "$GITHUB_SHA" --out .turbo/ci/final.json
-          release_key="environments/test/releases/$GITHUB_SHA.json"
+          release_id="$(jq -r .releaseId .turbo/ci/final.json)"
+          release_key="environments/test/releases/$release_id.json"
           if ! aws s3api put-object --bucket "$STATE_BUCKET" --key "$release_key" --body .turbo/ci/final.json --content-type application/json --if-none-match '*'; then
             aws s3 cp "s3://$STATE_BUCKET/$release_key" .turbo/ci/existing-release.json
             jq -S 'del(.updatedAt)' .turbo/ci/final.json > .turbo/ci/final-identity.json

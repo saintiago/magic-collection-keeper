@@ -43,6 +43,7 @@ export interface PlanOptions {
   readonly changedPaths: readonly string[];
   readonly mapping: StackInputMapping;
   readonly productionInputs: Partial<Record<DeploymentUnit, readonly string[]>>;
+  readonly previousProductionInputs?: Partial<Record<DeploymentUnit, readonly string[]>>;
   readonly deployedRecord?: DeploymentRecord;
   readonly configurationIdentities?: Partial<Record<DeploymentUnit, string>>;
 }
@@ -68,7 +69,10 @@ export function planDeployments(options: PlanOptions): DeploymentPlan {
     }
     for (const unit of deploymentUnits) {
       const current = options.productionInputs[unit] ?? [];
-      const previous = deployedInputs[unit];
+      const previous = [
+        ...deployedInputs[unit],
+        ...(options.previousProductionInputs?.[unit] ?? []),
+      ];
       if (!current.includes(changed) && !previous.includes(changed)) continue;
       classified = true;
       addReason(candidates, reasons, unit, changed);
@@ -88,6 +92,10 @@ export function planDeployments(options: PlanOptions): DeploymentPlan {
   }
 
   for (const unit of deploymentUnits) {
+    const component = options.deployedRecord?.components[unit];
+    if (component !== undefined && component.sourceRevision !== options.baseRevision) {
+      addReason(candidates, reasons, unit, '[component differs from finalized baseline]');
+    }
     const desired = options.configurationIdentities?.[unit];
     if (
       desired !== undefined &&
@@ -206,6 +214,9 @@ function bundleOptions(root: string, platform: 'browser' | 'node', entry: string
     absWorkingDir: root,
     entryPoints: [entry],
     bundle: true,
+    // Lockfile/package changes already select all consumers. Resolve only repository source so
+    // the base graph also works when a dependency has been removed from the current install.
+    packages: 'external',
     format: 'esm',
     platform,
     target: platform === 'node' ? 'node24' : 'es2022',

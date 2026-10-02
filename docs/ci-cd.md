@@ -95,6 +95,9 @@ object key and version.
 
 Use source imports and explicit non-code package inputs together. Account for removed/renamed files
 and previous input graphs, so removing a production dependency still selects the affected artifact.
+Credential-free planning collects the production graph from the comparison base as well as the
+current checkout. Deployment planning conservatively reconciles any component whose verified
+revision differs from the finalized baseline, including partial deployments later reverted in Git.
 If the planner cannot classify a changed input, fail planning rather than silently skip it.
 Documentation/tests for the new design do not alter deployed resources.
 
@@ -131,14 +134,21 @@ record the actual attempted state for recovery. The environment record describes
 combination, including components still running older revisions.
 
 Finalization publishes that combination under the immutable
-`environments/<environment>/releases/<revision>.json` key before updating `current.json`. Production
-planning downloads the selected test release once and passes that pinned snapshot to every
+`environments/<environment>/releases/<releaseId>.json` key before updating `current.json`. The
+release ID hashes the environment, source revision and verified component records, excluding the
+finalization timestamp. Retrying finalization of that combination is idempotent, while a new
+configuration or verification record produces a separate snapshot even at the same Git revision.
+Production planning downloads the selected test release once and passes that pinned snapshot to every
 component job. Activated deployments require every state-record read to succeed; a missing or
 unreadable record is an activation error and must never be replaced with an inferred empty state.
 
 CloudFormation updates use the intended stack only, with explicit dependencies handled by the
 planner. Avoid a blanket `cdk deploy --all`. A selected stack update may be a no-op; publishing a
-candidate artifact does not imply that it must replace the deployed version.
+candidate artifact does not imply that it must replace the deployed version. Recognition and Catalog
+ingestion first look up their immutable package-version/revision tag and reuse a published image by
+digest. Its image label retains the packaging manifest hash, so a fresh runner can recover the full
+candidate identity without rebuilding. Only an absent image permits a build; lookup failures stop
+publication. Promotion similarly reuses an existing destination tag after checking its digest.
 
 Catalog synchronization, owner-data migration and destructive cleanup are separately invoked
 operations. Neither automatic test deployment nor production promotion starts them implicitly.
@@ -171,8 +181,8 @@ bucket, repository and secret resources. A failed attempt is written under the e
 selected units verify successfully.
 
 Configure the `production` GitHub Environment with required reviewers and its own role, state record
-and parameter files. `promote-production.yml` accepts only the exact revision in the current test
-record with passing evidence for every component. It copies the recorded S3 object versions, browser
+and parameter files. `promote-production.yml` accepts an immutable test release ID and its exact source
+revision, with passing evidence for every component. It copies the recorded S3 object versions, browser
 bytes and ECR manifests into production-owned locations, applies production public settings and
 configuration, and does not rebuild application code or start Catalog synchronization or migration.
 

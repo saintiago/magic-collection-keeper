@@ -45,7 +45,7 @@ jobs:
             --request OPTIONS --header "Origin: $origin" \
             --header 'Access-Control-Request-Method: GET' "$base_url/api/search"
           grep -Eiq '^HTTP/[^ ]+ 20[04]' .turbo/ci/headers.txt
-          grep -Eiq "^access-control-allow-origin: $origin\r?$" .turbo/ci/headers.txt
+          tr -d '\r' < .turbo/ci/headers.txt | grep -Fiqx "access-control-allow-origin: $origin"
           grep -Eiq '^access-control-allow-methods: .*GET' .turbo/ci/headers.txt
           printf 'Browser-origin GET preflight returned the configured CORS headers.\n' > .turbo/ci/evidence.txt
       - uses: ./.github/actions/record-verified

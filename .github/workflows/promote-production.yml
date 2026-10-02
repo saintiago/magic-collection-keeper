@@ -7,6 +7,10 @@ on:
         description: Full test-verified Git revision to promote
         required: true
         type: string
+      release_id:
+        description: Immutable test release ID from the finalized record
+        required: true
+        type: string
 
 concurrency:
   group: keeper-production-deployment
@@ -40,8 +44,10 @@ jobs:
         env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
         run: |
           [[ '${{ inputs.revision }}' =~ ^[0-9a-f]{40}$ ]]
+          [[ '${{ inputs.release_id }}' =~ ^[0-9a-f]{64}$ ]]
           mkdir -p .turbo/ci
-          aws s3 cp "s3://$STATE_BUCKET/environments/test/releases/${{ inputs.revision }}.json" .turbo/ci/source.json
+          aws s3 cp "s3://$STATE_BUCKET/environments/test/releases/${{ inputs.release_id }}.json" .turbo/ci/source.json
+          test "$(jq -r .releaseId .turbo/ci/source.json)" = '${{ inputs.release_id }}'
           aws s3 cp "s3://$STATE_BUCKET/environments/production/current.json" .turbo/ci/production.json
           aws s3 cp "s3://$STATE_BUCKET/environments/production/parameters/" .turbo/ci/production-parameters/ --recursive
           npm run ci:promotion-plan -- .turbo/ci/source.json .turbo/ci/production.json '${{ inputs.revision }}' .turbo/ci/plan.json .turbo/ci/production-parameters "$GITHUB_OUTPUT"
@@ -123,7 +129,8 @@ jobs:
           mkdir -p .turbo/ci
           aws s3 cp "s3://$STATE_BUCKET/environments/production/current.json" .turbo/ci/current.json
           npm run ci:record -- finalize --record .turbo/ci/current.json --environment production --revision '${{ inputs.revision }}' --out .turbo/ci/final.json
-          release_key="environments/production/releases/${{ inputs.revision }}.json"
+          release_id="$(jq -r .releaseId .turbo/ci/final.json)"
+          release_key="environments/production/releases/$release_id.json"
           if ! aws s3api put-object --bucket "$STATE_BUCKET" --key "$release_key" --body .turbo/ci/final.json --content-type application/json --if-none-match '*'; then
             aws s3 cp "s3://$STATE_BUCKET/$release_key" .turbo/ci/existing-release.json
             jq -S 'del(.updatedAt)' .turbo/ci/final.json > .turbo/ci/final-identity.json
