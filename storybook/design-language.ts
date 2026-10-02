@@ -13,6 +13,7 @@ import {
   textArea,
   textInput,
 } from '../src/ui/shared/controls.js';
+import { createCardViews, createDialogs, createNoticeHost } from '../src/ui/index.js';
 
 export function mountDesignLanguage(container: HTMLElement): void {
   const document = container.ownerDocument;
@@ -113,44 +114,50 @@ function states(document: Document): HTMLElement {
 
 function card(document: Document): HTMLElement {
   const article = panel(document, 'Card view');
-  const figure = document.createElement('figure');
-  figure.className = 'card-sample';
-  const image = document.createElement('img');
-  image.src = './card-back.svg';
-  image.alt = 'Local fixture for Lightning Bolt';
-  const caption = document.createElement('figcaption');
-  caption.textContent = 'Lightning Bolt — M11 · 149 · EN';
-  figure.append(image, caption);
-  article.append(figure);
+  article.append(
+    createCardViews().basicContent(document, {
+      key: 'printing:m11-149',
+      target: { kind: 'printing', printingId: 'm11-149' },
+      basic: {
+        card: { cardId: 'lightning-bolt', name: 'Lightning Bolt', matchedName: null },
+        printing: {
+          printingId: 'm11-149',
+          edition: 'M11',
+          collectorNumber: '149',
+          language: 'en',
+        },
+      },
+      quantity: { copies: 1, intended: 4 },
+    }),
+  );
   return article;
 }
 
 function notices(document: Document): HTMLElement {
   const article = panel(document, 'Success and error notices');
-  const success = statusLine(document, 'design-success');
-  success.textContent = 'Created “Cube”.';
-  const failure = document.createElement('p');
-  failure.className = 'error-notice';
-  failure.setAttribute('role', 'alert');
-  failure.textContent = 'Error: the mock operation could not be completed.';
-  article.append(success, failure);
+  const notices = createNoticeHost(article);
+  notices.show({ id: 'design-success', severity: 'status', message: 'Created “Cube”.' });
+  notices.show({
+    id: 'design-error',
+    severity: 'error',
+    message: 'The mock operation could not be completed.',
+    action: { label: 'Try again', run: () => undefined },
+  });
   return article;
 }
 
 function dialog(document: Document): HTMLElement {
   const article = panel(document, 'Dialog');
   const open = button(document, 'design-dialog-open', 'Open confirmation');
-  const modal = document.createElement('dialog');
-  modal.append(
-    text(document, 'h3', '', 'Discard pending entry?'),
-    note(document, 'This local example changes no application data.'),
-  );
-  const cancel = button(document, 'design-dialog-cancel', 'Cancel');
-  const confirm = button(document, 'design-dialog-confirm', 'Discard');
-  modal.append(cancel, confirm);
-  open.addEventListener('click', () => modal.showModal());
-  cancel.addEventListener('click', () => modal.close());
-  confirm.addEventListener('click', () => modal.close());
-  article.append(open, modal);
+  const dialogs = createDialogs(article);
+  open.addEventListener('click', () => {
+    void dialogs.confirm({
+      title: 'Discard pending entry?',
+      message: 'This local example changes no application data.',
+      cancelLabel: 'Cancel',
+      confirmLabel: 'Discard',
+    });
+  });
+  article.append(open);
   return article;
 }

@@ -93,23 +93,9 @@ body {
   background: #7b3ff2;
 }
 
-.swatch-error,
-.error-notice {
+.swatch-error {
   color: white;
   background: #9d1824;
-}
-
-.card-sample {
-  width: 10rem;
-}
-
-.card-sample img {
-  width: 100%;
-  height: auto;
-}
-
-.design-grid [aria-busy='true']::after {
-  content: ' ⏳';
 }
 
 .mocked-app > header > button {

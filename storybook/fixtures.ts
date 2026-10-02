@@ -84,28 +84,28 @@ const printings: readonly PrintingRecord[] = [
   },
 ];
 
-const copies = new Map<string, PhysicalCopy>([
-  [
-    'copy-bolt-1',
-    {
-      copyId: 'copy-bolt-1',
-      printingId: 'm11-149',
-      finish: 'nonfoil',
-      condition: 'LP',
-      revision: 1,
-    },
-  ],
-]);
-
 export interface LocalProviders {
   readonly catalog: CatalogService;
   readonly userCards: UserCardsOperations;
 }
 
 export function createLocalProviders(progression: ManualProgression): LocalProviders {
+  const copies = new Map<string, PhysicalCopy>([
+    [
+      'copy-bolt-1',
+      {
+        copyId: 'copy-bolt-1',
+        printingId: 'm11-149',
+        finish: 'nonfoil',
+        condition: 'LP',
+        revision: 1,
+      },
+    ],
+  ]);
   const mutableTags: Tag[] = [
     { tagId: 'tag-deck', kind: 'deck', label: 'Friday deck', system: false, revision: 1 },
     { tagId: 'tag-wishlist', kind: 'wishlist', label: 'Wishlist', system: false, revision: 1 },
+    { tagId: 'tag-binder', kind: 'location', label: 'Trade binder', system: false, revision: 1 },
   ];
   const associations: Association[] = [
     {
@@ -121,162 +121,625 @@ export function createLocalProviders(progression: ManualProgression): LocalProvi
   const entries: ImportEntry[] = [];
   let privateRevision = 1;
   let tagSequence = 2;
+  let associationSequence = 1;
+  let copySequence = 1;
+  const receipts = new Map<string, import('../src/usercards/index.js').ImportReceipt>();
+  const changeEntry = (entryId: string, change: (entry: ImportEntry) => ImportEntry) => {
+    const index = entries.findIndex((entry) => entry.entryId === entryId);
+    const previous = entries[index];
+    if (previous === undefined) throw new Error('The local import entry no longer exists.');
+    const entry = change(previous);
+    entries.splice(index, 1, entry);
+    const session = sessions.find((item) => item.sessionId === entry.sessionId);
+    if (session === undefined) throw new Error('The local import no longer exists.');
+    privateRevision += 1;
+    return {
+      privateRevision: String(privateRevision),
+      session: refreshSession(session, entries),
+      entry,
+    };
+  };
 
   const catalog: CatalogService = {
-    query(input) {
-      return progression.wait('Loading catalog results', () => {
-        const resultLevel = input.resultLevel;
-        const result: CatalogEntry[] =
-          resultLevel === 'printing'
-            ? printings.map((printing) => catalogEntry(printing))
-            : cards.map((card) => ({
-                entryKey: `card:${card.cardId}`,
-                target: { kind: 'card', cardId: card.cardId },
-                card: { ...card, matchedName: null },
-                printing: null,
-              }));
-        return { entries: result, totalCount: result.length, revision, continuation: null };
-      });
+    query(input, signal) {
+      return progression.wait(
+        'Loading catalog results',
+        () => {
+          const matchingPrintings = printings.filter((printing) => catalogMatches(input, printing));
+          const matchingCards = new Set(matchingPrintings.map((printing) => printing.cardId));
+          const result: CatalogEntry[] =
+            input.resultLevel === 'printing'
+              ? matchingPrintings.map((printing) => catalogEntry(printing))
+              : cards
+                  .filter((card) => matchingCards.has(card.cardId))
+                  .map((card) => ({
+                    entryKey: `card:${card.cardId}`,
+                    target: { kind: 'card', cardId: card.cardId },
+                    card: { ...card, matchedName: null },
+                    printing: null,
+                  }));
+          return { entries: result, totalCount: result.length, revision, continuation: null };
+        },
+        signal,
+      );
     },
-    resolve(references) {
-      return progression.wait('Loading card details', () => resolveCatalog(references));
+    async resolve(references) {
+      return resolveCatalog(references);
     },
-    listCardPrintings(cardId) {
-      return progression.wait('Loading printing choices', () => ({
+    async listCardPrintings(cardId) {
+      return {
         cardId,
         cardExists: cards.some((card) => card.cardId === cardId),
         revision,
         printings: printings.filter((printing) => printing.cardId === cardId),
         continuation: null,
-      }));
+      };
     },
   };
 
-  const unavailable = (): Promise<never> =>
-    progression.wait('Completing mock action', () => {
-      throw new Error('This local fixture does not expose that operation in the current state.');
-    });
   const client: UserCardsBrowserClient = {
-    query(input) {
-      return progression.wait('Loading collection results', () => privateQuery(input.resultLevel));
+    query(input, signal) {
+      return progression.wait(
+        'Loading collection results',
+        () => privateQuery(input, copies, associations, mutableTags, privateRevision),
+        signal,
+      );
     },
-    readFragments(input) {
-      return progression.wait('Loading ownership and tags', () => fragments(input.references));
+    readFragments(input, signal) {
+      return progression.wait(
+        'Loading ownership and tags',
+        () => fragments(input.references, copies, associations, mutableTags, privateRevision),
+        signal,
+      );
     },
-    readPhysicalDetail(copyId) {
-      return progression.wait('Loading copy details', () => {
-        const copy = copies.get(copyId);
-        if (copy === undefined) throw new Error('The local copy does not exist.');
-        return {
-          copy,
-          memberships: associations.filter(
-            (association) => association.targetLevel === 'copy' && association.targetId === copyId,
-          ),
-          privateRevision: String(privateRevision),
-        };
-      });
+    async readPhysicalDetail(copyId) {
+      const copy = copies.get(copyId);
+      if (copy === undefined) throw new Error('The local copy does not exist.');
+      return {
+        copy,
+        memberships: associations.filter(
+          (association) => association.targetLevel === 'copy' && association.targetId === copyId,
+        ),
+        privateRevision: String(privateRevision),
+      };
     },
-    readCopies(copyIds) {
-      return progression.wait('Loading copies', () => ({
+    async readCopies(copyIds) {
+      return {
         privateRevision: String(privateRevision),
         copies: new Map(copyIds.flatMap((id) => (copies.has(id) ? [[id, copies.get(id)!]] : []))),
         missing: copyIds.filter((id) => !copies.has(id)),
-      }));
+      };
     },
-    correctCopy: unavailable,
-    listTags() {
-      return progression.wait('Loading tags', () => ({
-        privateRevision: String(privateRevision),
-        tags: [...mutableTags],
-        continuation: null,
-      }));
+    correctCopy(input, signal) {
+      return progression.wait(
+        'Saving copy changes',
+        () => {
+          const previous = copies.get(input.copyId);
+          if (previous === undefined) throw new Error('The local copy no longer exists.');
+          const copy: PhysicalCopy = {
+            copyId: previous.copyId,
+            printingId: input.printingId,
+            finish: input.finish,
+            condition: input.condition,
+            revision: previous.revision + 1,
+          };
+          copies.set(copy.copyId, copy);
+          privateRevision += 1;
+          return { privateRevision: String(privateRevision), copies: [copy] };
+        },
+        signal,
+      );
     },
-    readTags(tagIds) {
-      return progression.wait('Loading tag details', () => ({
-        privateRevision: String(privateRevision),
-        tags: new Map(
-          mutableTags.filter((tag) => tagIds.includes(tag.tagId)).map((tag) => [tag.tagId, tag]),
-        ),
-        missing: tagIds.filter((id) => !mutableTags.some((tag) => tag.tagId === id)),
-      }));
-    },
-    createTag(input) {
-      return progression.wait('Creating tag', () => {
-        privateRevision += 1;
-        tagSequence += 1;
-        const tag: Tag = {
-          tagId: `tag-local-${String(tagSequence)}`,
-          kind: input.kind,
-          label: input.label,
-          system: false,
-          revision: 1,
-        };
-        mutableTags.push(tag);
-        return { privateRevision: String(privateRevision), tag };
-      });
-    },
-    renameTag(input) {
-      return progression.wait('Renaming tag', () => {
-        const index = mutableTags.findIndex((tag) => tag.tagId === input.tagId);
-        const previous = mutableTags[index];
-        if (previous === undefined) throw new Error('The local tag no longer exists.');
-        const tag = { ...previous, label: input.label, revision: previous.revision + 1 };
-        mutableTags.splice(index, 1, tag);
-        privateRevision += 1;
-        return { privateRevision: String(privateRevision), tag };
-      });
-    },
-    listAssociations(tagId) {
-      return progression.wait('Loading tag cards', () => ({
-        privateRevision: String(privateRevision),
-        associations: associations.filter((association) => association.tagId === tagId),
-        continuation: null,
-      }));
-    },
-    readAssociations(ids) {
-      return progression.wait('Loading associations', () => ({
-        privateRevision: String(privateRevision),
-        associations: new Map(
-          associations
-            .filter((item) => ids.includes(item.associationId))
-            .map((item) => [item.associationId, item]),
-        ),
-        missing: ids.filter((id) => !associations.some((item) => item.associationId === id)),
-      }));
-    },
-    createAssociation: unavailable,
-    changeAssociation: unavailable,
-    removeAssociation: unavailable,
-    setCopyLocation: unavailable,
-    listImportSessions() {
-      return progression.wait('Loading pending imports', () => ({
-        privateRevision: String(privateRevision),
-        sessions: [...sessions],
-        continuation: null,
-      }));
-    },
-    listImportEntries(input) {
-      return progression.wait('Loading pending entries', () => {
-        const session = sessions.find((candidate) => candidate.sessionId === input.sessionId);
-        if (session === undefined) throw new Error('The local import does not exist.');
-        return {
+    listTags(_options, signal) {
+      return progression.wait(
+        'Loading tags',
+        () => ({
           privateRevision: String(privateRevision),
-          session,
-          entries: entries.filter((entry) => entry.sessionId === input.sessionId),
+          tags: [...mutableTags],
           continuation: null,
-        };
-      });
+        }),
+        signal,
+      );
     },
-    stageImportEntries: unavailable,
-    stageSourceImport: unavailable,
-    stageCaptureObservation: unavailable,
-    reviewImportEntry: unavailable,
-    attachImportCandidates: unavailable,
-    discardImportEntry: unavailable,
-    discardImportSession: unavailable,
-    confirmImport: unavailable,
-    recoverImportOperation: () =>
-      progression.wait('Checking the mock operation', () => ({ outcome: 'absent' as const })),
+    readTags(tagIds, signal) {
+      return progression.wait(
+        'Loading tag details',
+        () => ({
+          privateRevision: String(privateRevision),
+          tags: new Map(
+            mutableTags.filter((tag) => tagIds.includes(tag.tagId)).map((tag) => [tag.tagId, tag]),
+          ),
+          missing: tagIds.filter((id) => !mutableTags.some((tag) => tag.tagId === id)),
+        }),
+        signal,
+      );
+    },
+    createTag(input, signal) {
+      return progression.wait(
+        'Creating tag',
+        () => {
+          privateRevision += 1;
+          tagSequence += 1;
+          const tag: Tag = {
+            tagId: `tag-local-${String(tagSequence)}`,
+            kind: input.kind,
+            label: input.label,
+            system: false,
+            revision: 1,
+          };
+          mutableTags.push(tag);
+          return { privateRevision: String(privateRevision), tag };
+        },
+        signal,
+      );
+    },
+    renameTag(input, signal) {
+      return progression.wait(
+        'Renaming tag',
+        () => {
+          const index = mutableTags.findIndex((tag) => tag.tagId === input.tagId);
+          const previous = mutableTags[index];
+          if (previous === undefined) throw new Error('The local tag no longer exists.');
+          const tag = { ...previous, label: input.label, revision: previous.revision + 1 };
+          mutableTags.splice(index, 1, tag);
+          privateRevision += 1;
+          return { privateRevision: String(privateRevision), tag };
+        },
+        signal,
+      );
+    },
+    listAssociations(tagId, _options, signal) {
+      return progression.wait(
+        'Loading tag cards',
+        () => ({
+          privateRevision: String(privateRevision),
+          associations: associations.filter((association) => association.tagId === tagId),
+          continuation: null,
+        }),
+        signal,
+      );
+    },
+    readAssociations(ids, signal) {
+      return progression.wait(
+        'Loading associations',
+        () => ({
+          privateRevision: String(privateRevision),
+          associations: new Map(
+            associations
+              .filter((item) => ids.includes(item.associationId))
+              .map((item) => [item.associationId, item]),
+          ),
+          missing: ids.filter((id) => !associations.some((item) => item.associationId === id)),
+        }),
+        signal,
+      );
+    },
+    createAssociation(input, signal) {
+      return progression.wait(
+        'Adding tag card',
+        () => {
+          const association: Association = {
+            associationId: `association-local-${String(++associationSequence)}`,
+            tagId: input.tagId,
+            targetLevel: input.targetLevel,
+            targetId: input.targetId,
+            quantity: input.targetLevel === 'copy' ? null : (input.quantity ?? 1),
+            revision: 1,
+          };
+          associations.push(association);
+          privateRevision += 1;
+          return { privateRevision: String(privateRevision), association };
+        },
+        signal,
+      );
+    },
+    changeAssociation(input, signal) {
+      return progression.wait(
+        'Saving tag card',
+        () => {
+          const index = associations.findIndex(
+            (item) => item.associationId === input.associationId,
+          );
+          const previous = associations[index];
+          if (previous === undefined) throw new Error('The local association no longer exists.');
+          const association: Association = {
+            ...previous,
+            targetLevel: input.targetLevel,
+            targetId: input.targetId,
+            quantity: input.targetLevel === 'copy' ? null : (input.quantity ?? 1),
+            revision: previous.revision + 1,
+          };
+          associations.splice(index, 1, association);
+          privateRevision += 1;
+          return { privateRevision: String(privateRevision), association };
+        },
+        signal,
+      );
+    },
+    removeAssociation(input, signal) {
+      return progression.wait(
+        'Removing tag card',
+        () => {
+          const index = associations.findIndex(
+            (item) => item.associationId === input.associationId,
+          );
+          if (index < 0) throw new Error('The local association no longer exists.');
+          associations.splice(index, 1);
+          privateRevision += 1;
+          return { privateRevision: String(privateRevision), associationId: input.associationId };
+        },
+        signal,
+      );
+    },
+    setCopyLocation(input, signal) {
+      return progression.wait(
+        'Moving copy',
+        () => {
+          const previous = copies.get(input.copyId);
+          if (previous === undefined) throw new Error('The local copy no longer exists.');
+          for (let index = associations.length - 1; index >= 0; index -= 1) {
+            const item = associations[index];
+            const tag = mutableTags.find((candidate) => candidate.tagId === item?.tagId);
+            if (
+              item?.targetLevel === 'copy' &&
+              item.targetId === input.copyId &&
+              tag?.kind === 'location'
+            ) {
+              associations.splice(index, 1);
+            }
+          }
+          const copy = { ...previous, revision: previous.revision + 1 };
+          copies.set(copy.copyId, copy);
+          const location: Association | null =
+            input.locationTagId === null
+              ? null
+              : {
+                  associationId: `association-local-${String(++associationSequence)}`,
+                  tagId: input.locationTagId,
+                  targetLevel: 'copy',
+                  targetId: input.copyId,
+                  quantity: null,
+                  revision: 1,
+                };
+          if (location !== null) associations.push(location);
+          privateRevision += 1;
+          return { privateRevision: String(privateRevision), copy, location };
+        },
+        signal,
+      );
+    },
+    listImportSessions(_options, signal) {
+      return progression.wait(
+        'Loading pending imports',
+        () => ({
+          privateRevision: String(privateRevision),
+          sessions: sessions.map((session) => refreshSession(session, entries)),
+          continuation: null,
+        }),
+        signal,
+      );
+    },
+    listImportEntries(input, signal) {
+      return progression.wait(
+        'Loading pending entries',
+        () => {
+          const session = sessions.find((candidate) => candidate.sessionId === input.sessionId);
+          if (session === undefined) throw new Error('The local import does not exist.');
+          return {
+            privateRevision: String(privateRevision),
+            session: refreshSession(session, entries),
+            entries: entries.filter((entry) => entry.sessionId === input.sessionId),
+            continuation: null,
+          };
+        },
+        signal,
+      );
+    },
+    stageImportEntries(input, signal) {
+      return progression.wait(
+        'Adding cards to review',
+        () => {
+          const session = ensureSession(
+            sessions,
+            input.sessionId,
+            input.source.kind,
+            input.source.id,
+            input.source.reference ?? null,
+          );
+          const staged: ImportEntry[] = [];
+          for (const candidate of input.entries) {
+            if (entries.some((entry) => entry.entryId === candidate.entryId)) continue;
+            const printing = printings.find((item) => item.printingId === candidate.printingId);
+            const entry: ImportEntry = {
+              entryId: candidate.entryId,
+              sessionId: input.sessionId,
+              position: entries.filter((item) => item.sessionId === input.sessionId).length + 1,
+              state: 'pending',
+              cardId: printing?.cardId ?? null,
+              printingId: printing?.printingId ?? null,
+              finish: candidate.finish ?? printing?.finishes[0] ?? null,
+              condition: candidate.condition ?? null,
+              quantity: candidate.quantity,
+              candidates: candidate.candidates ?? [],
+              sourceLine: null,
+              revision: 1,
+            };
+            entries.push(entry);
+            staged.push(entry);
+          }
+          privateRevision += 1;
+          return {
+            privateRevision: String(privateRevision),
+            session: refreshSession(session, entries),
+            entries: staged,
+            staged: staged.length,
+            replayed: staged.length === 0,
+          };
+        },
+        signal,
+      );
+    },
+    stageSourceImport(input, signal) {
+      return progression.wait(
+        'Importing source cards',
+        () => {
+          const session = ensureSession(
+            sessions,
+            input.sessionId,
+            input.format,
+            input.format === 'wizards-precon' ? input.sourceId : input.sessionId,
+            input.format === 'moxfield'
+              ? input.url
+              : input.format === 'wizards-precon'
+                ? input.reference
+                : null,
+          );
+          const sourceLines =
+            input.format === 'pasted-list'
+              ? input.text
+                  .split(/\r?\n/u)
+                  .filter((line) => line.trim() !== '')
+                  .map((line) => {
+                    const match = line.trim().match(/^(\d+)\s+(.+)$/u);
+                    return { name: match?.[2] ?? line.trim(), quantity: Number(match?.[1] ?? 1) };
+                  })
+              : input.format === 'wizards-precon'
+                ? input.entries.map((line) => ({ name: line.name, quantity: line.quantity }))
+                : [{ name: 'Lightning Bolt', quantity: 1 }];
+          const rows: import('../src/usercards/index.js').SourceImportRow[] = [];
+          for (const [index, line] of sourceLines.entries()) {
+            const card = cards.find((item) => item.name.toLowerCase() === line.name.toLowerCase());
+            const printing = printings.find((item) => item.cardId === card?.cardId);
+            const entryId = `${input.sessionId}-line-${String(index + 1)}`;
+            const existing = entries.find((entry) => entry.entryId === entryId);
+            if (existing === undefined)
+              entries.push({
+                entryId,
+                sessionId: input.sessionId,
+                position: entries.filter((entry) => entry.sessionId === input.sessionId).length + 1,
+                state: 'pending',
+                cardId: card?.cardId ?? null,
+                printingId: printing?.printingId ?? null,
+                finish: printing?.finishes[0] ?? null,
+                condition: null,
+                quantity: line.quantity,
+                candidates: [],
+                revision: 1,
+                sourceLine: {
+                  printingId: printing?.printingId ?? null,
+                  name: line.name,
+                  section: null,
+                  set: printing?.edition ?? null,
+                  collectorNumber: printing?.collectorNumber ?? null,
+                  language: printing?.language ?? null,
+                  finish: printing?.finishes[0] ?? null,
+                  declaredQuantity: line.quantity,
+                  problem: printing === undefined ? 'Choose a published printing.' : null,
+                },
+              });
+            rows.push({
+              position: index + 1,
+              line: entries.find((entry) => entry.entryId === entryId)?.sourceLine ?? null,
+              outcome: existing === undefined ? 'staged' : 'pending',
+              problem: printing === undefined ? 'Choose a published printing.' : null,
+              entryId,
+              sessionId: input.sessionId,
+            });
+          }
+          privateRevision += 1;
+          return {
+            privateRevision: String(privateRevision),
+            session: refreshSession(session, entries),
+            rows,
+            staged: rows.filter((row) => row.outcome === 'staged').length,
+          };
+        },
+        signal,
+      );
+    },
+    stageCaptureObservation(input, signal) {
+      return progression.wait(
+        'Adding captured card to review',
+        () => {
+          const session = ensureSession(
+            sessions,
+            input.sessionId,
+            'capture',
+            input.sessionId,
+            null,
+          );
+          const existing = entries.find((entry) => entry.entryId === input.captureId);
+          if (existing !== undefined)
+            return {
+              privateRevision: String(privateRevision),
+              outcome: 'suppressed' as const,
+              replayed: true,
+              session: refreshSession(session, entries),
+              entry: null,
+            };
+          const printing = printings.find((item) => item.printingId === input.printingId);
+          const entry: ImportEntry | null =
+            printing === undefined
+              ? null
+              : {
+                  entryId: input.captureId,
+                  sessionId: input.sessionId,
+                  position: entries.filter((item) => item.sessionId === input.sessionId).length + 1,
+                  state: 'pending',
+                  cardId: printing.cardId,
+                  printingId: printing.printingId,
+                  finish: input.finish ?? printing.finishes[0] ?? null,
+                  condition: null,
+                  quantity: 1,
+                  candidates: input.candidates ?? [],
+                  sourceLine: null,
+                  revision: 1,
+                };
+          if (entry !== null) entries.push(entry);
+          privateRevision += 1;
+          return {
+            privateRevision: String(privateRevision),
+            outcome: entry === null ? ('unresolved' as const) : ('admitted' as const),
+            replayed: false,
+            session: refreshSession(session, entries),
+            entry,
+          };
+        },
+        signal,
+      );
+    },
+    reviewImportEntry(input, signal) {
+      return progression.wait(
+        'Saving import review',
+        () =>
+          changeEntry(input.entryId, (entry) => ({
+            ...entry,
+            cardId:
+              input.cardId ??
+              printings.find((item) => item.printingId === input.printingId)?.cardId ??
+              null,
+            printingId: input.printingId,
+            finish: input.finish,
+            condition: input.condition,
+            quantity: input.quantity,
+            revision: entry.revision + 1,
+          })),
+        signal,
+      );
+    },
+    attachImportCandidates(input, signal) {
+      return progression.wait(
+        'Saving capture alternatives',
+        () =>
+          changeEntry(input.entryId, (entry) => ({
+            ...entry,
+            candidates: [...entry.candidates, ...input.candidates],
+            revision: entry.revision + 1,
+          })),
+        signal,
+      );
+    },
+    discardImportEntry(input, signal) {
+      return progression.wait(
+        'Discarding import entry',
+        () =>
+          changeEntry(input.entryId, (entry) => ({
+            ...entry,
+            state: 'discarded',
+            revision: entry.revision + 1,
+          })),
+        signal,
+      );
+    },
+    discardImportSession(input, signal) {
+      return progression.wait(
+        'Discarding import',
+        () => {
+          const session = sessions.find((item) => item.sessionId === input.sessionId);
+          if (session === undefined) throw new Error('The local import no longer exists.');
+          for (let index = 0; index < entries.length; index += 1) {
+            const entry = entries[index];
+            if (entry?.sessionId === input.sessionId && entry.state === 'pending') {
+              entries[index] = { ...entry, state: 'discarded', revision: entry.revision + 1 };
+            }
+          }
+          privateRevision += 1;
+          return {
+            privateRevision: String(privateRevision),
+            session: refreshSession(session, entries),
+          };
+        },
+        signal,
+      );
+    },
+    confirmImport(input, signal) {
+      return progression.wait(
+        'Confirming import',
+        () => {
+          const recorded = receipts.get(input.operationId);
+          if (recorded !== undefined)
+            return { ...recorded, privateRevision: String(privateRevision), replayed: true };
+          const session = sessions.find((item) => item.sessionId === input.sessionId);
+          if (session === undefined) throw new Error('The local import no longer exists.');
+          const madeCopies: PhysicalCopy[] = [];
+          const madeAssociations: Association[] = [];
+          for (const wanted of input.entries) {
+            const index = entries.findIndex((entry) => entry.entryId === wanted.entryId);
+            const entry = entries[index];
+            if (entry === undefined || entry.state !== 'pending') continue;
+            if (input.destination.kind === 'ownership' && entry.printingId !== null) {
+              for (let count = 0; count < entry.quantity; count += 1) {
+                const copy: PhysicalCopy = {
+                  copyId: `copy-local-${String(++copySequence)}`,
+                  printingId: entry.printingId,
+                  finish: entry.finish ?? 'nonfoil',
+                  condition: entry.condition,
+                  revision: 1,
+                };
+                copies.set(copy.copyId, copy);
+                madeCopies.push(copy);
+              }
+            } else if (input.destination.kind === 'tag' && entry.cardId !== null) {
+              const association: Association = {
+                associationId: `association-local-${String(++associationSequence)}`,
+                tagId: input.destination.tagId,
+                targetLevel: entry.printingId === null ? 'card' : 'printing',
+                targetId: entry.printingId ?? entry.cardId,
+                quantity: entry.quantity,
+                revision: 1,
+              };
+              associations.push(association);
+              madeAssociations.push(association);
+            }
+            entries[index] = { ...entry, state: 'confirmed', revision: entry.revision + 1 };
+          }
+          const receipt: import('../src/usercards/index.js').ImportReceipt = {
+            operationId: input.operationId,
+            sessionId: input.sessionId,
+            sourceKind: session.sourceKind,
+            sourceId: session.sourceId,
+            destination: input.destination,
+            copies: madeCopies,
+            associations: madeAssociations,
+          };
+          receipts.set(input.operationId, receipt);
+          privateRevision += 1;
+          return { ...receipt, privateRevision: String(privateRevision), replayed: false };
+        },
+        signal,
+      );
+    },
+    recoverImportOperation: (operationId, signal) =>
+      progression.wait(
+        'Checking the mock operation',
+        () => {
+          const receipt = receipts.get(operationId);
+          return receipt === undefined
+            ? ({ outcome: 'absent' } as const)
+            : ({ outcome: 'recorded', receipt } as const);
+        },
+        signal,
+      ),
   };
 
   return {
@@ -293,6 +756,77 @@ function catalogEntry(printing: PrintingRecord): CatalogEntry {
     card: { ...card, matchedName: null },
     printing,
   };
+}
+
+function catalogMatches(
+  input: import('../src/catalog/index.js').CatalogQueryInput,
+  printing: PrintingRecord,
+): boolean {
+  const card = cards.find((candidate) => candidate.cardId === printing.cardId)!;
+  const searchable = [
+    card.name,
+    ...card.names.map((name) => name.name),
+    card.rulesText ?? '',
+    card.typeLine ?? '',
+    printing.edition,
+    printing.collectorNumber,
+    printing.language,
+  ]
+    .join(' ')
+    .toLowerCase();
+  const query = input.query?.trim().toLowerCase() ?? '';
+  return (
+    (query === '' || query.split(/\s+/u).every((part) => searchable.includes(part))) &&
+    (input.criteria ?? []).every((criterion) => {
+      const includes = (value: string, wanted: string) =>
+        value.toLowerCase().includes(wanted.toLowerCase());
+      switch (criterion.kind) {
+        case 'name':
+          return [card.name, ...card.names.map((name) => name.name)].some((name) =>
+            includes(name, criterion.text),
+          );
+        case 'rulesText':
+          return includes(card.rulesText ?? '', criterion.text);
+        case 'type':
+          return includes(card.typeLine ?? '', criterion.text);
+        case 'set':
+          return printing.edition.toLowerCase() === criterion.edition.toLowerCase();
+        case 'language':
+          return printing.language === criterion.language;
+        case 'finish':
+          return printing.finishes.includes(criterion.finish);
+        case 'manaValue':
+          return numericComparison(card.manaValue ?? 0, criterion.value, criterion.comparison);
+        case 'color':
+          return setComparison(card.colors, criterion.colors, criterion.comparison);
+        case 'colorIdentity':
+          return setComparison(card.colorIdentity, criterion.colors, criterion.comparison);
+      }
+    })
+  );
+}
+
+function numericComparison(left: number, right: number, comparison: string): boolean {
+  if (comparison === '=') return left === right;
+  if (comparison === '!=') return left !== right;
+  if (comparison === '>') return left > right;
+  if (comparison === '>=') return left >= right;
+  if (comparison === '<') return left < right;
+  return left <= right;
+}
+
+function setComparison(
+  left: readonly string[],
+  right: readonly string[],
+  comparison: string,
+): boolean {
+  const contains = right.every((value) => left.includes(value));
+  const equal = contains && left.every((value) => right.includes(value));
+  if (comparison === '=') return equal;
+  if (comparison === '!=') return !equal;
+  if (comparison === '>' || comparison === '>=') return contains && (comparison === '>=' || !equal);
+  const subset = left.every((value) => right.includes(value));
+  return subset && (comparison === '<=' || !equal);
 }
 
 function resolveCatalog(references: readonly CatalogReference[]): CatalogResolution {
@@ -322,49 +856,229 @@ function resolveCatalog(references: readonly CatalogReference[]): CatalogResolut
   };
 }
 
-function privateQuery(level: 'card' | 'printing' | 'copy'): UserCardsQueryPage {
-  const target =
-    level === 'card'
-      ? { kind: 'card' as const, cardId: 'lightning-bolt' }
-      : level === 'printing'
-        ? { kind: 'printing' as const, printingId: 'm11-149' }
-        : { kind: 'copy' as const, copyId: 'copy-bolt-1' };
+function privateQuery(
+  input: import('../src/usercards/index.js').UserCardsQueryInput,
+  copies: ReadonlyMap<string, PhysicalCopy>,
+  associations: readonly Association[],
+  tags: readonly Tag[],
+  privateRevision: number,
+): UserCardsQueryPage {
+  const targets = privateTargets(input.resultLevel, copies, associations).filter((target) => {
+    const related = associations.filter((item) => associationMatches(target, item, copies));
+    const owned = copiesFor(target, copies);
+    const scopeTagId = input.scope.kind === 'tag' ? input.scope.tagId : null;
+    if (scopeTagId !== null && !related.some((item) => item.tagId === scopeTagId)) return false;
+    return (input.criteria ?? []).every((criterion) => {
+      switch (criterion.kind) {
+        case 'identity':
+          return criterion.references.some((reference) => sameHierarchy(target, reference, copies));
+        case 'owned':
+          return criterion.value === owned.length > 0;
+        case 'tag':
+          return related.some((item) => item.tagId === criterion.tagId);
+        case 'location':
+          return related.some(
+            (item) =>
+              item.tagId === criterion.tagId &&
+              tags.find((tag) => tag.tagId === item.tagId)?.kind === 'location',
+          );
+        case 'finish':
+          return (
+            owned.some((copy) => copy.finish === criterion.finish) ||
+            (target.kind === 'printing' &&
+              printings
+                .find((item) => item.printingId === target.printingId)
+                ?.finishes.includes(criterion.finish) === true)
+          );
+        case 'condition':
+          return owned.some((copy) => copy.condition === criterion.condition);
+      }
+    });
+  });
+  const result = targets.map((target) => {
+    const related = associations.filter((item) => associationMatches(target, item, copies));
+    const locationTags = related.filter(
+      (item) => tags.find((tag) => tag.tagId === item.tagId)?.kind === 'location',
+    );
+    return {
+      entryKey: referenceKey(target),
+      target,
+      ownedCopyCount: copiesFor(target, copies).length,
+      intendedQuantity: intendedQuantity(related),
+      physicalLocationCount: new Set(locationTags.map((item) => item.tagId)).size,
+      directAssociationCount: related.length,
+      derivedAssociationCount: 0,
+    };
+  });
   return {
-    entries: [
-      {
-        entryKey: referenceKey(target),
-        target,
-        ownedCopyCount: 1,
-        intendedQuantity: 4,
-        physicalLocationCount: 0,
-        directAssociationCount: 1,
-        derivedAssociationCount: 0,
-      },
-    ],
-    totalCount: 1,
-    privateRevision: '1',
+    entries: result,
+    totalCount: result.length,
+    privateRevision: String(privateRevision),
     continuation: null,
   };
 }
 
-function fragments(references: readonly UserCardsReference[]): UserCardsFragmentsResult {
+function privateTargets(
+  level: import('../src/usercards/index.js').UserCardsResultLevel,
+  copies: ReadonlyMap<string, PhysicalCopy>,
+  associations: readonly Association[],
+): UserCardsReference[] {
+  if (level === 'copy') return [...copies.keys()].map((copyId) => ({ kind: 'copy', copyId }));
+  const printingIds = new Set([...copies.values()].map((copy) => copy.printingId));
+  const cardIds = new Set<string>();
+  for (const item of associations) {
+    if (item.targetLevel === 'card') cardIds.add(item.targetId);
+    if (item.targetLevel === 'printing') printingIds.add(item.targetId);
+    if (item.targetLevel === 'copy') {
+      const printingId = copies.get(item.targetId)?.printingId;
+      if (printingId !== undefined) printingIds.add(printingId);
+    }
+  }
+  for (const printingId of printingIds) {
+    const cardId = printings.find((item) => item.printingId === printingId)?.cardId;
+    if (cardId !== undefined) cardIds.add(cardId);
+  }
+  return level === 'printing'
+    ? [...printingIds].map((printingId) => ({ kind: 'printing', printingId }))
+    : [...cardIds].map((cardId) => ({ kind: 'card', cardId }));
+}
+
+function hierarchy(reference: UserCardsReference, copies: ReadonlyMap<string, PhysicalCopy>) {
+  if (reference.kind === 'card')
+    return { cardId: reference.cardId, printingId: null, copyId: null };
+  const printingId =
+    reference.kind === 'printing'
+      ? reference.printingId
+      : (copies.get(reference.copyId)?.printingId ?? null);
+  return {
+    cardId:
+      printingId === null
+        ? null
+        : (printings.find((item) => item.printingId === printingId)?.cardId ?? null),
+    printingId,
+    copyId: reference.kind === 'copy' ? reference.copyId : null,
+  };
+}
+
+function sameHierarchy(
+  left: UserCardsReference,
+  right: UserCardsReference,
+  copies: ReadonlyMap<string, PhysicalCopy>,
+): boolean {
+  const one = hierarchy(left, copies);
+  const two = hierarchy(right, copies);
+  return (
+    one.cardId !== null &&
+    one.cardId === two.cardId &&
+    (left.kind === 'card' ||
+      right.kind === 'card' ||
+      (one.printingId !== null &&
+        one.printingId === two.printingId &&
+        (left.kind === 'printing' || right.kind === 'printing' || one.copyId === two.copyId)))
+  );
+}
+
+function associationMatches(
+  target: UserCardsReference,
+  association: Association,
+  copies: ReadonlyMap<string, PhysicalCopy>,
+): boolean {
+  const reference: UserCardsReference =
+    association.targetLevel === 'card'
+      ? { kind: 'card', cardId: association.targetId }
+      : association.targetLevel === 'printing'
+        ? { kind: 'printing', printingId: association.targetId }
+        : { kind: 'copy', copyId: association.targetId };
+  return sameHierarchy(target, reference, copies);
+}
+
+function copiesFor(
+  target: UserCardsReference,
+  copies: ReadonlyMap<string, PhysicalCopy>,
+): PhysicalCopy[] {
+  return [...copies.values()].filter((copy) =>
+    sameHierarchy(target, { kind: 'copy', copyId: copy.copyId }, copies),
+  );
+}
+
+function intendedQuantity(associations: readonly Association[]): number | null {
+  return associations.reduce<number | null>(
+    (sum, item) => (item.quantity === null ? sum : (sum ?? 0) + item.quantity),
+    null,
+  );
+}
+
+function fragments(
+  references: readonly UserCardsReference[],
+  copies: ReadonlyMap<string, PhysicalCopy>,
+  associations: readonly Association[],
+  tags: readonly Tag[],
+  privateRevision: number,
+): UserCardsFragmentsResult {
   const result = new Map<
     string,
     UserCardsFragmentsResult['fragments'] extends ReadonlyMap<string, infer Value> ? Value : never
   >();
   for (const reference of references) {
     const key = referenceKey(reference);
-    const id = key.slice(key.indexOf(':') + 1);
+    const related = associations.filter((item) => associationMatches(reference, item, copies));
     result.set(key, {
       reference,
-      ownedCopyCount:
-        reference.kind === 'copy' || id === 'lightning-bolt' || id === 'm11-149' ? 1 : 0,
-      tagIds: id === 'lightning-bolt' ? ['tag-deck'] : [],
-      physicalLocationCount: 0,
-      intendedQuantity: id === 'lightning-bolt' ? 4 : null,
+      ownedCopyCount: copiesFor(reference, copies).length,
+      tagIds: [...new Set(related.map((item) => item.tagId))],
+      physicalLocationCount: new Set(
+        related
+          .filter((item) => tags.find((tag) => tag.tagId === item.tagId)?.kind === 'location')
+          .map((item) => item.tagId),
+      ).size,
+      intendedQuantity: intendedQuantity(related),
     });
   }
-  return { privateRevision: '1', fragments: result, missing: [] };
+  return { privateRevision: String(privateRevision), fragments: result, missing: [] };
+}
+
+function ensureSession(
+  sessions: ImportSession[],
+  sessionId: string,
+  sourceKind: string,
+  sourceId: string,
+  sourceReference: string | null,
+): ImportSession {
+  const existing = sessions.find((session) => session.sessionId === sessionId);
+  if (existing !== undefined) return existing;
+  const session: ImportSession = {
+    sessionId,
+    sourceKind,
+    sourceId,
+    sourceReference,
+    state: 'pending',
+    pendingEntries: 0,
+    confirmedEntries: 0,
+    discardedEntries: 0,
+    revision: 1,
+  };
+  sessions.push(session);
+  return session;
+}
+
+function refreshSession(session: ImportSession, entries: readonly ImportEntry[]): ImportSession {
+  const own = entries.filter((entry) => entry.sessionId === session.sessionId);
+  const pendingEntries = own.filter((entry) => entry.state === 'pending').length;
+  const confirmedEntries = own.filter((entry) => entry.state === 'confirmed').length;
+  const discardedEntries = own.filter((entry) => entry.state === 'discarded').length;
+  return {
+    ...session,
+    state:
+      pendingEntries > 0 || own.length === 0
+        ? 'pending'
+        : confirmedEntries > 0
+          ? 'confirmed'
+          : 'discarded',
+    pendingEntries,
+    confirmedEntries,
+    discardedEntries,
+    revision: Math.max(session.revision, ...own.map((entry) => entry.revision)),
+  };
 }
 
 function referenceKey(reference: UserCardsReference): string {

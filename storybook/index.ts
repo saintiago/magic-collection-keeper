@@ -1,7 +1,12 @@
 /** Local design workspace entry point (docs/ui/storybook.md). */
 
 import type { AuthenticatedRequest, UserInterfaceCapabilities } from '../src/application/index.js';
-import type { Capture, CaptureBrowser, CaptureSnapshot } from '../src/capture/index.js';
+import type {
+  Capture,
+  CaptureBrowser,
+  CaptureBrowserDevice,
+  CaptureSnapshot,
+} from '../src/capture/index.js';
 import { createCardListBrowser } from '../src/card-list/index.js';
 import {
   createUserInterface,
@@ -36,8 +41,14 @@ const identity = fixedIdentity();
 const request = localRequest();
 const capture: CaptureBrowser = {
   createImportId: () => 'local-capture-import',
-  create: ({ accountId, importId }) => unavailableCapture(accountId, importId),
+  create: ({ accountId, importId, reviewed }) => inspectableCapture(accountId, importId, reviewed),
   endAccount: () => undefined,
+};
+const device: CaptureBrowserDevice = {
+  openCamera: async () => {
+    throw new Error('The local capture session supplies its own inspectable states.');
+  },
+  release: () => undefined,
 };
 const capabilities: UserInterfaceCapabilities = {
   settings: {
@@ -81,6 +92,7 @@ root.replaceChildren(header, workspace);
 let view: 'app' | 'design' = 'app';
 let application: UserInterface | null = null;
 let initialLoaded = false;
+let initialController: AbortController | null = null;
 
 appButton.addEventListener('click', showApp);
 designButton.addEventListener('click', showDesign);
@@ -95,6 +107,8 @@ progression.subscribe((stage) => {
     stage === null ? 'No stage is waiting.' : `Waiting: ${stage.label}. Press Space to continue.`;
 });
 progression.installKeyboard(window);
+window.addEventListener('popstate', () => progression.cancelAll(), { capture: true });
+window.addEventListener('hashchange', () => progression.cancelAll(), { capture: true });
 workspace.addEventListener(
   'click',
   (event) => {
@@ -105,6 +119,7 @@ workspace.addEventListener(
   },
   { capture: true },
 );
+workspace.addEventListener('submit', () => progression.cancelAll(), { capture: true });
 
 globalThis.keeperStorybook = {
   get stage() {
@@ -123,21 +138,23 @@ globalThis.keeperStorybook = {
 
 updateTabs();
 workspace.replaceChildren(loadingMessage());
-void progression.wait('Loading mocked app', () => {
-  initialLoaded = true;
-  if (view === 'app') mountApp();
-});
+startInitialLoad();
 
 function showApp(): void {
   view = 'app';
   updateTabs();
   if (initialLoaded) mountApp();
-  else workspace.replaceChildren(loadingMessage());
+  else {
+    workspace.replaceChildren(loadingMessage());
+    startInitialLoad();
+  }
 }
 
 function showDesign(): void {
   view = 'design';
   updateTabs();
+  initialController?.abort();
+  initialController = null;
   progression.cancelAll();
   disposeApp();
   mountDesignLanguage(workspace);
@@ -148,7 +165,7 @@ function mountApp(): void {
   const appRoot = document.createElement('div');
   appRoot.className = 'mocked-app';
   workspace.replaceChildren(appRoot);
-  application = createUserInterface({ root: appRoot, capabilities, identity });
+  application = createUserInterface({ root: appRoot, capabilities, identity, device });
 }
 
 function disposeApp(): void {
@@ -177,10 +194,39 @@ function loadingMessage(): HTMLParagraphElement {
   return message;
 }
 
-/** A stable device-free session lets the current Import page present its unavailable state. */
-function unavailableCapture(accountId: string, importId: string): Capture {
-  const snapshot: CaptureSnapshot = {
-    status: { kind: 'unavailable', failure: null },
+function startInitialLoad(): void {
+  if (initialLoaded || initialController !== null || view !== 'app') return;
+  const controller = new AbortController();
+  initialController = controller;
+  void progression
+    .wait('Loading mocked app', () => undefined, controller.signal)
+    .then(
+      () => {
+        if (initialController !== controller) return;
+        initialController = null;
+        initialLoaded = true;
+        if (view === 'app') mountApp();
+      },
+      (cause: unknown) => {
+        if (initialController !== controller) return;
+        initialController = null;
+        if (view !== 'app' || isAbort(cause)) return;
+        const message = loadingMessage();
+        message.textContent = 'Mocked app loading failed. Press Space to retry.';
+        workspace.replaceChildren(message);
+        startInitialLoad();
+      },
+    );
+}
+
+/** A device-free session exposes the capture control's idle, starting, running and failed views. */
+function inspectableCapture(
+  accountId: string,
+  importId: string,
+  reviewed: Parameters<CaptureBrowser['create']>[0]['reviewed'],
+): Capture {
+  let snapshot: CaptureSnapshot = {
+    status: { kind: 'idle', failure: null },
     preview: null,
     attempt: null,
     events: [],
@@ -188,19 +234,158 @@ function unavailableCapture(accountId: string, importId: string): Capture {
     busy: false,
     running: false,
   };
+  const listeners = new Set<(value: CaptureSnapshot) => void>();
+  let disposed = false;
+  let startController: AbortController | null = null;
+  const report = (): void => {
+    for (const listener of listeners) listener(snapshot);
+  };
+  const start = async (): Promise<void> => {
+    if (disposed || snapshot.running || snapshot.status.kind === 'starting') return;
+    const controller = new AbortController();
+    startController = controller;
+    snapshot = { ...snapshot, status: { kind: 'starting', failure: null }, busy: true };
+    report();
+    try {
+      await progression.wait('Starting local camera', () => undefined, controller.signal);
+      if (disposed || startController !== controller) return;
+      snapshot = {
+        ...snapshot,
+        status: { kind: 'running', failure: null },
+        attempt: {
+          captureId: 'local-capture-1',
+          attempt: 1,
+          reading: {
+            captureId: 'local-capture-1',
+            attempt: 1,
+            revision: 1,
+            status: 'possible',
+            candidates: [
+              {
+                cardId: 'lightning-bolt',
+                printingId: 'm11-149',
+                name: 'Lightning Bolt',
+                evidence: 'title-evidence',
+              },
+            ],
+            suggestedPrintingId: 'm11-149',
+            presence: 'single',
+            provisional: true,
+            uncertain: false,
+          },
+        },
+        busy: true,
+        running: true,
+      };
+      report();
+      const operation = providers.userCards.account(accountId).stageCaptureObservation(
+        {
+          sessionId: importId,
+          captureId: 'local-capture-1',
+          printingId: 'm11-149',
+          finish: 'nonfoil',
+        },
+        controller.signal,
+      );
+      const outcome = await operation.observe();
+      if (disposed || startController !== controller) return;
+      startController = null;
+      if (outcome.state === 'committed') {
+        const entryId = outcome.record.entry?.entryId ?? null;
+        const reading = snapshot.attempt?.reading ?? null;
+        snapshot = {
+          ...snapshot,
+          attempt: null,
+          busy: false,
+          events: [
+            ...snapshot.events,
+            {
+              kind: 'accepted',
+              sequence: 1,
+              captureId: 'local-capture-1',
+              attempt: 1,
+              cue: 'accepted',
+              entryId: entryId ?? 'local-capture-1',
+              replayed: outcome.record.replayed,
+              reading: reading === null ? null : { ...reading, provisional: false },
+            },
+          ],
+        };
+        report();
+        reviewed?.({ kind: 'staged', session: outcome.record.session, entryId });
+        return;
+      }
+      snapshot = {
+        ...snapshot,
+        attempt: null,
+        busy: false,
+        running: false,
+        recoverable: outcome.state === 'unknown',
+        events: [
+          ...snapshot.events,
+          {
+            kind: 'unavailable',
+            sequence: 1,
+            captureId: 'local-capture-1',
+            attempt: 1,
+            cue: 'error',
+            reason: 'staging',
+            failure: outcome.state === 'rejected' ? outcome.failure.message : null,
+            recoverable: outcome.state === 'unknown',
+          },
+        ],
+      };
+      report();
+    } catch (cause) {
+      if (startController === controller) startController = null;
+      if (disposed || isAbort(cause)) return;
+      snapshot = {
+        ...snapshot,
+        status: { kind: 'failed', failure: cause instanceof Error ? cause.message : String(cause) },
+        busy: false,
+        running: false,
+      };
+      report();
+    }
+  };
   return {
     accountId,
     importId,
     prepare: async () => undefined,
-    start: async () => undefined,
-    stop: () => undefined,
-    retry: async () => undefined,
+    start,
+    stop: () => {
+      startController?.abort();
+      startController = null;
+      snapshot = {
+        ...snapshot,
+        status: { kind: 'stopped', failure: null },
+        busy: false,
+        running: false,
+      };
+      report();
+    },
+    retry: async () => {
+      if (snapshot.recoverable) {
+        snapshot = { ...snapshot, recoverable: false, running: false };
+      }
+      await start();
+    },
     observe(listener) {
       listener(snapshot);
-      return () => undefined;
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
-    dispose: () => undefined,
+    dispose: () => {
+      disposed = true;
+      startController?.abort();
+      startController = null;
+      listeners.clear();
+    },
   };
+}
+
+function isAbort(cause: unknown): boolean {
+  return cause instanceof DOMException && cause.name === 'AbortError';
 }
 
 function fixedIdentity(): UiIdentity {
