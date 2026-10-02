@@ -177,16 +177,16 @@ async function buildServingArtifacts(root: string, outDir: string): Promise<void
     },
   ] as const) {
     const entry = path.join(outDir, artifact.entry);
-    await build(servingBundleOptions(root, artifact.source, entry));
+    await build(backendBundleOptions(root, artifact.source, entry));
     const source = await readFile(entry);
     await writeFile(path.join(outDir, artifact.archive), await zipArchive({ 'index.mjs': source }));
   }
 }
 
-/** The exact production options for one independently packaged serving entry point. */
-export function servingBundleOptions(
+/** The exact production options for one independently packaged backend entry point. */
+export function backendBundleOptions(
   root: string,
-  source: 'catalog-serving.ts' | 'usercards.ts',
+  source: 'catalog-serving.ts' | 'usercards.ts' | 'catalog-ingestion.ts',
   outfile: string,
 ): BuildOptions {
   return bundleOptions(root, outfile, 'node', {
@@ -240,31 +240,18 @@ async function buildBrowser(
 }
 
 async function buildCatalog(root: string, outDir: string): Promise<void> {
-  await bundle(
-    root,
-    path.join(root, 'src', 'application', 'entrypoints', 'catalog-ingestion.ts'),
-    path.join(outDir, artifactLayout.catalogIngestionEntry),
-    'node',
+  await build(
+    backendBundleOptions(
+      root,
+      'catalog-ingestion.ts',
+      path.join(outDir, artifactLayout.catalogIngestionEntry),
+    ),
   );
   await writeFile(
     path.join(outDir, artifactLayout.catalogIngestionDockerfile),
     catalogDockerfile(),
     'utf8',
   );
-}
-
-/**
- * One bundle of a committed entry and every dependency it reaches, so the artifact does not depend
- * on a runtime's own version of a dependency. The Lambda and container runtimes only supply
- * Node.js.
- */
-async function bundle(
-  root: string,
-  entry: string,
-  outfile: string,
-  platform: 'node' | 'browser',
-): Promise<void> {
-  await build(bundleOptions(root, outfile, platform, { entryPoints: [entry] }));
 }
 
 /** One bundle of the browser boot code the page loads; the same options, from generated source. */

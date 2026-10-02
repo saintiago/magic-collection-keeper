@@ -2,7 +2,7 @@
 
 import { pathToFileURL } from 'node:url';
 
-import { runCatalogJob } from '../deployment.js';
+import { runCatalogJob } from '../internal/catalog-ingestion-deployment.js';
 
 export async function main(): Promise<number> {
   const outcome = await runCatalogJob({ environment: process.env });

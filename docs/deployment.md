@@ -82,8 +82,10 @@ compatibility and are not packaging inputs.
 Backend consumers use the narrow `catalog/contract.ts`, `catalog/serving.ts`,
 `usercards/contract.ts` and `usercards/serving.ts` entries. Broad component entries may publish
 storage/bootstrap capabilities for tooling, but production serving bundles do not evaluate them.
-The packaging isolation test mutates each provider's internal schema input and verifies that the
-other component's production bundle is unchanged.
+Ingestion uses a dedicated Catalog-only composition, separate from the retained combined runtime.
+The packaging isolation test mutates each provider's internal schema SQL and verifies that the
+other component's production serving and ingestion bundles are unchanged, while the owning
+component's bundle changes.
 
 Build application artifacts before synthesis. CDK receives immutable artifact references from a
 release manifest and preserves the deployed references for unchanged components. Synthesis does

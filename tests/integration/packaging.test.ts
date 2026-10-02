@@ -26,7 +26,7 @@ import {
   artifactLayout,
   packageArtifacts,
   publicSettingsFromStackOutputs,
-  servingBundleOptions,
+  backendBundleOptions,
   type ArtifactManifest,
 } from '../../scripts/package-artifacts.js';
 import { readRevision } from '../../scripts/packaging-support.js';
@@ -152,19 +152,26 @@ describe('packaging the deployable artifacts', () => {
     expect(manifest.artifacts.userCards.entry).toBe('index.mjs');
   }, 120_000);
 
-  it('keeps provider storage internals out of the other serving artifact', async () => {
+  it('keeps provider storage internals out of the unrelated backend artifacts', async () => {
     for (const isolation of [
       {
         consumer: 'usercards.ts' as const,
+        owner: 'catalog-ingestion.ts' as const,
         providerStorage: path.join(repoRoot, 'src/catalog/internal/schema.ts'),
       },
       {
         consumer: 'catalog-serving.ts' as const,
+        owner: 'usercards.ts' as const,
+        providerStorage: path.join(repoRoot, 'src/usercards/internal/schema.ts'),
+      },
+      {
+        consumer: 'catalog-ingestion.ts' as const,
+        owner: 'usercards.ts' as const,
         providerStorage: path.join(repoRoot, 'src/usercards/internal/schema.ts'),
       },
     ]) {
       const baseline = await build({
-        ...servingBundleOptions(repoRoot, isolation.consumer, 'isolated.mjs'),
+        ...backendBundleOptions(repoRoot, isolation.consumer, 'isolated.mjs'),
         write: false,
         metafile: true,
       });
@@ -174,17 +181,25 @@ describe('packaging the deployable artifacts', () => {
           builder.onLoad({ filter: /[/\\]schema\.ts$/ }, async (args) => {
             if (path.resolve(args.path) !== isolation.providerStorage) return null;
             return {
-              contents: `${await readFile(args.path, 'utf8')}\nvoid 'provider-storage-mutation';\n`,
+              contents: (await readFile(args.path, 'utf8')).replace(
+                'create schema if not exists',
+                '-- provider-storage-mutation\ncreate schema if not exists',
+              ),
               loader: 'ts',
             };
           });
         },
       };
       const changedProvider = await build({
-        ...servingBundleOptions(repoRoot, isolation.consumer, 'isolated.mjs'),
+        ...backendBundleOptions(repoRoot, isolation.consumer, 'isolated.mjs'),
         write: false,
         plugins: [mutation],
       });
+      // The SQL comment must affect the owner artifact, or byte equality proves nothing.
+      const ownerOptions = backendBundleOptions(repoRoot, isolation.owner, 'owner.mjs');
+      const owner = await build({ ...ownerOptions, write: false });
+      const changedOwner = await build({ ...ownerOptions, write: false, plugins: [mutation] });
+      expect(changedOwner.outputFiles[0]?.contents).not.toEqual(owner.outputFiles[0]?.contents);
       const providerInput = path
         .relative(repoRoot, isolation.providerStorage)
         .split(path.sep)
