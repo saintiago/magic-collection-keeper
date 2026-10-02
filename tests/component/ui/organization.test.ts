@@ -166,7 +166,7 @@ describe('tag changes', () => {
       access({
         renameTag: async () => ({
           privateRevision: 'r2',
-          publicationPosition: '2',
+
           tag: renamed,
         }),
       }),
@@ -224,7 +224,7 @@ describe('tag changes', () => {
       access({
         changeAssociation: async () => ({
           privateRevision: 'r4',
-          publicationPosition: '4',
+
           association: changed,
         }),
       }),
@@ -282,7 +282,7 @@ describe('tag changes', () => {
         access({
           createAssociation: async () => ({
             privateRevision: 'r1',
-            publicationPosition: '1',
+
             association: added,
           }),
         }),
@@ -295,7 +295,7 @@ describe('tag changes', () => {
         access({
           removeAssociation: async () => ({
             privateRevision: 'r2',
-            publicationPosition: '2',
+
             associationId: 'association-1',
           }),
         }),
@@ -324,7 +324,7 @@ describe('copy locations', () => {
           moves.push(input);
           return {
             privateRevision: 'r6',
-            publicationPosition: '6',
+
             copy: { ...observed, revision: 6 },
             location: association({
               associationId: 'association-location',
@@ -386,7 +386,7 @@ describe('adding selected entries to a tag', () => {
           created.push(input);
           return {
             privateRevision: 'r1',
-            publicationPosition: '1',
+
             association: association({ revision: 1 }),
           };
         },
@@ -442,7 +442,7 @@ describe('adding selected entries to a tag', () => {
             committed.push(input);
             return {
               privateRevision: 'r1',
-              publicationPosition: '1',
+
               association: association({ revision: 1 }),
             };
           }
@@ -491,7 +491,7 @@ describe('adding selected entries to a tag', () => {
           if (calls === 1) {
             return {
               privateRevision: 'r1',
-              publicationPosition: '1',
+
               association: association({ revision: 1 }),
             };
           }
@@ -532,7 +532,7 @@ describe('adding selected entries to a tag', () => {
           if (calls === 1)
             return {
               privateRevision: 'r1',
-              publicationPosition: '1',
+
               association: association(),
             };
           if (calls === 2) throw new ApplicationError('conflict', 'Already associated.');
@@ -572,7 +572,7 @@ describe('adding selected entries to a tag', () => {
           moves.push(input);
           return {
             privateRevision: 'r6',
-            publicationPosition: '6',
+
             copy: observed,
             location: null,
           };
@@ -596,7 +596,7 @@ describe('adding selected entries to a tag', () => {
           memberships.push(input);
           return {
             privateRevision: 'r1',
-            publicationPosition: '1',
+
             association: association({ revision: 1 }),
           };
         },

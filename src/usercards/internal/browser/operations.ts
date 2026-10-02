@@ -35,6 +35,13 @@
 
 import type { CopyId, ImportDestination, ImportSessionId, TagId } from '../model.js';
 import type {
+  ReadUserCardsFragmentsInput,
+  UserCardsFragmentsResult,
+  UserCardsPhysicalDetail,
+  UserCardsQueryInput,
+  UserCardsQueryPage,
+} from '../query-model.js';
+import type {
   AttachImportCandidatesInput,
   CaptureStageResult,
   ConfirmImportInput,
@@ -94,6 +101,12 @@ import {
  * browser facade below composes the operation lifecycle over it, and no consumer reaches storage.
  */
 export interface UserCardsBrowserClient {
+  query?(input: UserCardsQueryInput, signal?: AbortSignal): Promise<UserCardsQueryPage>;
+  readFragments?(
+    input: ReadUserCardsFragmentsInput,
+    signal?: AbortSignal,
+  ): Promise<UserCardsFragmentsResult>;
+  readPhysicalDetail?(copyId: string, signal?: AbortSignal): Promise<UserCardsPhysicalDetail>;
   /** Authorized copies of the requested references, with the references this account has none for. */
   readCopies(copyIds: readonly CopyId[], signal?: AbortSignal): Promise<CopyReadResult>;
   /** The corrected state of one copy, guarded by the revision the caller read. */
@@ -227,14 +240,12 @@ export type UserCardsRecordReference =
 /**
  * One local committed-change invalidation. It requests a read of the scope it names; it is never a
  * second copy of authoritative data. The references are the records the change reported, the
- * imports are the pending imports whose entries may have changed, and the position is the durable
- * publication position when indexing is affected (docs/user-cards.md#query-surface).
+ * imports are the pending imports whose entries may have changed.
  */
 export interface UserCardsChange {
   readonly scope: UserCardsChangeScope;
   readonly records: readonly UserCardsRecordReference[];
   readonly imports: readonly ImportSessionId[];
-  readonly position: string | null;
 }
 
 /** What one operation reported: a definite refusal, or a failure that leaves the outcome open. */
@@ -374,6 +385,12 @@ export interface UserCardsOperations {
 export interface UserCardsAccountOperations {
   /** Input constraints and operation availability of this deployment. */
   readonly constraints: UserCardsConstraints;
+  query(input: UserCardsQueryInput, signal?: AbortSignal): Promise<UserCardsQueryPage>;
+  readFragments(
+    input: ReadUserCardsFragmentsInput,
+    signal?: AbortSignal,
+  ): Promise<UserCardsFragmentsResult>;
+  readPhysicalDetail(copyId: string, signal?: AbortSignal): Promise<UserCardsPhysicalDetail>;
   readCopies(copyIds: readonly CopyId[], signal?: AbortSignal): Promise<CopyReadResult>;
   listTags(options?: TagListOptions, signal?: AbortSignal): Promise<TagListResult>;
   readTags(tagIds: readonly string[], signal?: AbortSignal): Promise<TagReadResult>;
@@ -589,6 +606,13 @@ export function createUserCardsOperations(
 
     const scope: UserCardsAccountOperations = {
       constraints,
+      query: (input, signal) => guarded(() => requiredClient(client.query, 'query')(input, signal)),
+      readFragments: (input, signal) =>
+        guarded(() => requiredClient(client.readFragments, 'readFragments')(input, signal)),
+      readPhysicalDetail: (copyId, signal) =>
+        guarded(() =>
+          requiredClient(client.readPhysicalDetail, 'readPhysicalDetail')(copyId, signal),
+        ),
       readCopies: (copyIds, signal) => guarded(() => client.readCopies(copyIds, signal)),
       listTags: (options, signal) => guarded(() => client.listTags(options, signal)),
       readTags: (tagIds, signal) => guarded(() => client.readTags(tagIds, signal)),
@@ -769,7 +793,6 @@ export function createUserCardsOperations(
             scope: 'copies',
             records: result.copies.map((copy) => ({ kind: 'copy', copyId: copy.copyId })),
             imports: [],
-            position: result.publicationPosition,
           }),
           retry: 'guarded',
         }).handle;
@@ -849,7 +872,6 @@ export function createUserCardsOperations(
             scope: 'associations',
             records: [{ kind: 'association', associationId: result.associationId }],
             imports: [],
-            position: result.publicationPosition,
           }),
           retry: 'guarded',
         }).handle;
@@ -873,7 +895,6 @@ export function createUserCardsOperations(
                 : [{ kind: 'association', associationId: result.location.associationId } as const]),
             ],
             imports: [],
-            position: result.publicationPosition,
           }),
         }).handle;
       },
@@ -1494,7 +1515,6 @@ function tagChange(result: TagChangeResult): UserCardsChange {
     scope: 'tags',
     records: [{ kind: 'tag', tagId: result.tag.tagId }],
     imports: [],
-    position: result.publicationPosition,
   };
 }
 
@@ -1504,7 +1524,6 @@ function associationChange(result: AssociationChangeResult): UserCardsChange {
     scope: 'associations',
     records: [{ kind: 'association', associationId: result.association.associationId }],
     imports: [],
-    position: result.publicationPosition,
   };
 }
 
@@ -1523,19 +1542,17 @@ function confirmedChange(receipt: ImportReceipt): UserCardsChange {
           associationId: association.associationId,
         })),
         imports: [receipt.sessionId],
-        position: receipt.publicationPosition,
       }
     : {
         scope: 'copies',
         records: receipt.copies.map((copy) => ({ kind: 'copy', copyId: copy.copyId })),
         imports: [receipt.sessionId],
-        position: receipt.publicationPosition,
       };
 }
 
 /** One committed pending-import change: the import whose entries may have changed. */
 function importChange(sessionId: ImportSessionId): UserCardsChange {
-  return { scope: 'imports', records: [], imports: [sessionId], position: null };
+  return { scope: 'imports', records: [], imports: [sessionId] };
 }
 
 /** The failure one confirmation reports when the provider records no outcome for it. */
@@ -1876,4 +1893,9 @@ function readObject(value: unknown): Record<string, unknown> | null {
 
 function isText(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+function requiredClient<T>(operation: T | undefined, name: string): T {
+  if (operation === undefined) throw new Error(`UserCards ${name} is unavailable.`);
+  return operation;
 }

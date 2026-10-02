@@ -181,6 +181,33 @@ collection records. Source removal alone authorizes no live deletion. The inspec
 must distinguish removable derived resources, retained rollback artifacts and authoritative state.
 Keep existing scheduling disabled throughout transition; do not re-enable the obsolete worker.
 
+An existing two-stack installation cannot apply either final template first. Before changing the
+service stack, prepare an **additive foundation bridge** from the foundation template currently
+returned by `cloudformation get-template` (not from an assumed repository revision):
+
+1. Keep every deployed resource and output unchanged, including the exports still imported by the
+   deployed service: `database-reader-secret-arn`, `search-indexing-secret-arn`,
+   `search-query-secret-arn`, `catalog-publication-secret-arn`,
+   `usercards-publication-secret-arn` and `indexing-repository-arn`, each under its existing
+   `keeper-${Environment}-` name.
+2. Copy only `CatalogReaderSecret`, `UserCardsReaderSecret`,
+   `DatabaseCatalogReaderSecretArn` and `DatabaseUserCardsReaderSecretArn` from the final
+   `foundation.json` into that deployed template. Validate it and require its inspected foundation
+   change set to contain only those additive reader-secret resources and outputs: no replacement,
+   modification or removal of an existing resource.
+3. Execute that bridge and capture its outputs. Then create and inspect the final `service.json`
+   change set; it may switch to `catalog-reader-secret-arn` and `usercards-reader-secret-arn`
+   because both now exist. Execute and verify that service before preparing foundation cleanup.
+4. Keep the bridge foundation deployed for the required rollback window: the previous service
+   still imports the six legacy exports. Removing them prevents service rollback. Only after that
+   obligation ends, and with separate authorization for the concrete removals, inspect and execute
+   the final `foundation.json` change set. Its cleanup may remove obsolete definitions but must not
+   replace authoritative or retained resources.
+
+If any bridge or final change set differs from that order or action boundary, stop rather than
+trying the other final stack first. Retention policies preserve selected physical resources after an
+authorized removal; they do not make a still-imported CloudFormation export removable.
+
 Inspect foundation/service change sets before execution. Preserve previous artifact identities and
 compatible rollback behavior, capture deployed parameters after success, publish changed browser
 assets and invalidate CloudFront. Verify the actual deployed combination, not merely stack completion.

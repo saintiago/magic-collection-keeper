@@ -21,7 +21,7 @@ import {
 
 /** One caller request with the fields the case does not override. */
 function callerRequest(overrides: Partial<TransportRequest>): TransportRequest {
-  return { method: 'POST', path: '/api/search', ...overrides };
+  return { method: 'POST', path: '/api/catalog/query', ...overrides };
 }
 
 function readError(response: { readonly body: string }): Record<string, unknown> {
@@ -200,7 +200,8 @@ describe('application transport', () => {
     );
     const unauthorized = await harness.application.handle(
       callerRequest({
-        body: JSON.stringify({ resultLevel: 'card', criteria: [{ kind: 'owned' }] }),
+        path: '/api/collection/query',
+        body: JSON.stringify({ scope: { kind: 'collection' }, resultLevel: 'card' }),
       }),
     );
 
@@ -231,7 +232,7 @@ describe('application transport', () => {
       callerRequest({ method: 'GET', path: '/api/nothing' }),
     );
     const wrongMethod = await harness.application.handle(
-      callerRequest({ method: 'GET', path: '/api/collection/copies/read' }),
+      callerRequest({ method: 'GET', path: '/api/collection/copies' }),
     );
 
     expect(unknown.status).toBe(404);

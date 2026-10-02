@@ -381,7 +381,6 @@ describe('import confirmation', () => {
       associations: [],
       replayed: false,
       privateRevision: 'r5',
-      publicationPosition: '5',
     };
     const operation = access({ confirmImport: async () => receipt }).confirm({
       destination: { kind: 'ownership' } as const,
@@ -405,7 +404,7 @@ describe('import confirmation', () => {
           sourceKind: 'manual',
           sourceId: 'manual',
           destination: { kind: 'ownership' } as const,
-          publicationPosition: '5',
+
           copies: [
             {
               copyId: 'copy-1',
@@ -484,7 +483,7 @@ describe('import confirmation', () => {
       sourceKind: 'manual',
       sourceId: 'manual',
       destination: { kind: 'ownership' } as const,
-      publicationPosition: '5',
+
       copies: [
         {
           copyId: 'copy-1',

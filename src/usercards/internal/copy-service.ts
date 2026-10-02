@@ -100,7 +100,7 @@ export function createCopyOperations(dependencies: {
       const data = await store.insertCopies(accountId, copies);
       return {
         privateRevision: data.privateRevision,
-        publicationPosition: data.publicationPosition,
+
         copies: data.copies,
       };
     },
@@ -139,7 +139,7 @@ export function createCopyOperations(dependencies: {
       }
       return {
         privateRevision: outcome.privateRevision,
-        publicationPosition: outcome.publicationPosition,
+
         copies: [outcome.copy],
       };
     },

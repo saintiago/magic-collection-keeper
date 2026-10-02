@@ -4,7 +4,7 @@
  *
  * The packaged browser artifact loads the public settings of its environment and calls
  * {@link createBrowserDeployment}: Application validates the settings, composes the authenticated
- * transport, the Catalog/Search/UserCards clients and the preserved browser recognition engines,
+ * transport, the Catalog/UserCards clients and the preserved browser recognition engines,
  * and hands the shell the capabilities it needs. The deployment supplies what only it can — the
  * sign-in page it presents, the camera of this device and the page implementations of this build —
  * and receives back one shell that a replacement page implementation or recognition factory could

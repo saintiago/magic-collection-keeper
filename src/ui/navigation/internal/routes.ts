@@ -7,13 +7,9 @@
  * fragment is used instead of the path so a static deployment serves every view without server
  * rewrites.
  *
- * A catalog view names the whole query it presents: the text expression and the result level,
- * owned-only and finish controls. The controls are URL vocabulary of the UserInterface whose
- * values are the provider vocabularies Search and Catalog publish, so a reload or a shared link
- * evaluates the same query and the text expression and the controls normalize into the same query
- * model (docs/search.md#scryfall-compatibility). A collection view names the text expression and
- * the card, printing or physical-copy level it presents over the account's owned records
- * (docs/ui/pages.md#page-map).
+ * A catalog view names its public text expression, result level and finish. A collection view
+ * names its private result level and optional card identity. These URL values reproduce the
+ * corresponding owner query on reload (docs/ui/pages.md#page-map).
  */
 
 // Type-only imports keep the provider barrels out of a browser bundle: a value import would pull
@@ -71,6 +67,7 @@ export type UiView =
     }
   | {
       readonly page: 'collection';
+      readonly cardId?: string;
       /** Text expression of the query; empty presents every owned entry of the level. */
       readonly query: string;
       readonly level: UiCollectionLevel;
@@ -126,6 +123,8 @@ export function uiHref(view: UiView): string {
       if (view.level !== 'card') {
         query.set('level', view.level);
       }
+      if (view.cardId !== undefined)
+        query.set('cardId', decodeURIComponent(routeSegment(view.cardId)));
       const text = query.toString();
       return text === '' ? `${UI_ROUTE_PREFIX}collection` : `${UI_ROUTE_PREFIX}collection?${text}`;
     }
@@ -208,11 +207,15 @@ function readView(segments: readonly string[], search: string): UiView | null {
   if (head === 'collection' && segments.length === 1) {
     const parameters = new URLSearchParams(search);
     const query = readQueryText(parameters.get('query'));
+    const cardId = parameters.get('cardId');
+    if (cardId !== null && (cardId.length === 0 || cardId.length > UI_LIMITS.routeSegment))
+      return null;
     if (query === null) {
       return null;
     }
     return {
       page: 'collection',
+      ...(cardId === null ? {} : { cardId }),
       query,
       level: readUiCollectionLevel(parameters.get('level')),
     };

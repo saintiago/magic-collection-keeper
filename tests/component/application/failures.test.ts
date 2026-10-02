@@ -14,7 +14,6 @@ import {
 } from '../../../src/application/index.js';
 import { CatalogError } from '../../../src/catalog/index.js';
 import { RecognitionError } from '../../../src/recognition/index.js';
-import { SearchError } from '../../../src/search/index.js';
 import { UserCardsError } from '../../../src/usercards/index.js';
 
 describe('failure translation', () => {
@@ -32,13 +31,12 @@ describe('failure translation', () => {
     [new CatalogError('busy', 'Another publication is running.'), 'busy', 429],
     [new CatalogError('unavailable', 'The catalog is unavailable.'), 'unavailable', 503],
     [
-      new SearchError('unsupported-query', 'The expression is not supported.'),
+      new CatalogError('unsupported-query', 'The expression is not supported.'),
       'unsupported-query',
       400,
     ],
-    [new SearchError('unauthorized', 'Private criteria require a sign-in.'), 'unauthorized', 401],
-    [new SearchError('stale-continuation', 'Restart the search.'), 'stale-continuation', 409],
-    [new SearchError('unavailable', 'The search could not run.'), 'unavailable', 503],
+    [new CatalogError('stale-continuation', 'Restart the search.'), 'stale-continuation', 409],
+    [new CatalogError('unavailable', 'The search could not run.'), 'unavailable', 503],
     [new UserCardsError('invalid-request', 'The change is invalid.'), 'invalid-request', 400],
     [new UserCardsError('not-found', 'The record does not exist.'), 'not-found', 404],
     [new UserCardsError('conflict', 'The record changed.'), 'conflict', 409],

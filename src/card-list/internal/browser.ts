@@ -10,8 +10,7 @@
  * parts (committed-change subscriptions and local recent activity) follow the supplied account.
  */
 
-import type { SearchIndexingProgress } from '../../search/browser.js';
-import type { CardRecord, Catalog } from '../../catalog/index.js';
+import type { CardRecord, CatalogService } from '../../catalog/index.js';
 import type { UserCardsAccountOperations, UserCardsChange } from '../../usercards/browser.js';
 
 import type {
@@ -30,14 +29,12 @@ import {
   collectionQuerySource,
   entryOwnershipReader,
   pickerQuerySource,
-  searchCounts,
+  userCardsCounts,
   type CardListCatalogQuery,
   type CardListCollectionQuery,
-  type CardListCountsRead,
   type CardListCountsAccess,
   type CardListPickerQuery,
-  type CardListSearchRead,
-} from './bindings/search.js';
+} from './bindings/query.js';
 import { cardPrintingsSource, printingImagesReader } from './bindings/catalog.js';
 import { detailTargetSource, type CardListDetailTarget } from './bindings/detail.js';
 import { usercardsChanges } from './bindings/usercards.js';
@@ -47,12 +44,8 @@ import { createRecentActivity, type CardListRecentActivity } from './recent.js';
 
 /** The provider capabilities one browser composition of CardList consumes. */
 export interface CardListBrowserOptions {
-  /** Search's query, private-count and bounded-freshness capabilities. */
-  readonly search: CardListSearchRead & CardListCountsRead;
-  /** Catalog's resolution and printing capabilities. */
-  readonly catalog: Catalog;
-  /** Account-lifetime progress supplied by Application from Search. */
-  readonly progress: (accountId: string) => Pick<SearchIndexingProgress, 'status'>;
+  /** Catalog's query, resolution and printing capabilities. */
+  readonly catalog: CatalogService;
   /** UserCards' account-scoped browser operations, pending imports and associations. */
   readonly userCards: {
     account(accountId: string): UserCardsAccountOperations;
@@ -68,14 +61,14 @@ export interface CardListRecentBinding {
 }
 
 /**
- * Account-scoped bindings of the lists one page describes: Search queries, Catalog printings and
+ * Account-scoped bindings of the lists one page describes: owner queries, Catalog printings and
  * images, private ownership counts, pending imports, tag associations, committed changes and the
  * account's local recent activity. Pages supply intent and presentation only.
  */
 export interface CardListAccountBindings {
   /** The account these bindings belong to. */
   readonly accountId: string;
-  /** Committed-change notifications of the account, including its outstanding progress. */
+  /** Committed-change notifications of the account. */
   changes(): CardListChangeSource;
   /** The account's local recent card activity. */
   recent(): CardListRecentBinding;
@@ -114,7 +107,7 @@ export interface CardListBrowser {
   endAccount(accountId: string): void;
 }
 
-/** Account-local history and derived-count invalidation; Search owns indexing progress. */
+/** Account-local history and private-fragment access. */
 interface AccountScope {
   readonly recent: CardListRecentActivity;
   readonly counts: CardListCountsAccess;
@@ -126,12 +119,12 @@ interface AccountScope {
  * constructed here.
  */
 export function createCardListBrowser(options: CardListBrowserOptions): CardListBrowser {
-  const search = options?.search;
-  if (typeof search?.execute !== 'function') {
-    throw new TypeError('The CardList browser composition reads queries through Search.');
-  }
   const catalog = options?.catalog;
-  if (typeof catalog?.resolve !== 'function' || typeof catalog.listCardPrintings !== 'function') {
+  if (
+    typeof catalog?.query !== 'function' ||
+    typeof catalog?.resolve !== 'function' ||
+    typeof catalog.listCardPrintings !== 'function'
+  ) {
     throw new TypeError(
       'The CardList browser composition reads cards and printings through Catalog.',
     );
@@ -149,7 +142,7 @@ export function createCardListBrowser(options: CardListBrowserOptions): CardList
     if (account === undefined) {
       account = {
         recent: createRecentActivity(),
-        counts: searchCounts(search),
+        counts: userCardsCounts(userCards.account(accountId)),
       };
       scopes.set(accountId, account);
     }
@@ -157,17 +150,7 @@ export function createCardListBrowser(options: CardListBrowserOptions): CardList
   }
 
   function changesOf(accountId: string): CardListChangeSource {
-    const progress = options.progress(accountId);
-    const changes = usercardsChanges(userCards.account(accountId));
-    return {
-      subscribe(listener) {
-        const unsubscribe = changes.subscribe(listener);
-        for (const position of progress.status().outstanding) {
-          listener({ scope: 'copies', records: [], imports: [], position });
-        }
-        return unsubscribe;
-      },
-    };
+    return usercardsChanges(userCards.account(accountId));
   }
 
   return {
@@ -186,9 +169,9 @@ export function createCardListBrowser(options: CardListBrowserOptions): CardList
           source: account.recent.source(accountId),
           record: (entry) => account.recent.record(accountId, entry),
         }),
-        catalogQuery: () => catalogQuerySource(search),
-        collectionQuery: () => collectionQuerySource(search),
-        pickerQuery: () => pickerQuerySource(search),
+        catalogQuery: () => catalogQuerySource(catalog),
+        collectionQuery: () => collectionQuerySource(facade(), catalog),
+        pickerQuery: () => pickerQuerySource(facade(), catalog),
         cardPrintings: (card) => cardPrintingsSource(catalog, card),
         detailTarget: (target) =>
           detailTargetSource(
@@ -236,7 +219,6 @@ export function createCardListBrowser(options: CardListBrowserOptions): CardList
             },
             catalog,
             counts,
-            search,
           }),
       };
     },

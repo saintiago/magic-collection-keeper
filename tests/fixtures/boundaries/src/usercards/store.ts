@@ -1,6 +1,6 @@
 import type { RecordShape } from '../catalog/internal/records.js';
-import { searchEntry } from '../search/index.js';
+import { recognitionEntry } from '../recognition/index.js';
 
-export function storeCopies(id: string): RecordShape & typeof searchEntry {
-  return { ...searchEntry, id };
+export function storeCopies(id: string): RecordShape & typeof recognitionEntry {
+  return { ...recognitionEntry, id };
 }

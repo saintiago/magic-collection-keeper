@@ -89,8 +89,6 @@ export interface UiCardListInstall {
   readonly tools?: readonly { readonly id: string; readonly label: string }[];
   /** Gives the installed list a change source a journey can deliver notifications through. */
   readonly changes?: boolean;
-  /** Gives the installed source a bounded observation capability, as Search supplies. */
-  readonly observations?: boolean;
 }
 
 /** One page request the controlled source recorded. */
@@ -101,15 +99,6 @@ export interface UiCardListPageRequest {
   readonly pageSize: number;
   readonly continuation: string | null;
   /** Positions the read required the source to have incorporated. */
-  readonly required: readonly string[];
-  readonly aborted: boolean;
-}
-
-/** One bounded observation the installed list asked its source for. */
-export interface UiCardListObservationRequest {
-  readonly id: number;
-  readonly list: string;
-  readonly positions: readonly string[];
   readonly aborted: boolean;
 }
 
@@ -175,7 +164,6 @@ export interface UiCardListControl {
     page: {
       readonly entries: readonly UiListEntry[];
       readonly continuation?: string | null;
-      readonly current?: boolean;
     },
   ): void;
   /** Answers a request with the report that its sequence was invalidated and must restart. */
@@ -189,9 +177,6 @@ export interface UiCardListControl {
   failTool(id: number, message: string): void;
   /** Delivers one committed-change notification to an installed list. */
   changed(id: string, change: UiListChange): void;
-  observationRequests(): readonly UiCardListObservationRequest[];
-  settleObservation(id: number, state: 'incorporated' | 'delayed' | 'failed'): void;
-  failObservation(id: number, message: string): void;
 }
 
 interface Pending<Value> {
@@ -205,14 +190,6 @@ interface PageRecord {
   readonly context: string | null | undefined;
   readonly pageSize: number;
   readonly continuation: string | null;
-  readonly required: readonly string[];
-  isAborted(): boolean;
-}
-
-interface ObservationRecord {
-  readonly id: number;
-  readonly list: string;
-  readonly positions: readonly string[];
   isAborted(): boolean;
 }
 
@@ -235,8 +212,6 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
   const retiredFragments = new Set<number>();
   const pendingTools = new Map<number, Pending<UiOperationOutcome>>();
   const changeSources = new Map<string, Set<(change: UiListChange) => void>>();
-  const observations: ObservationRecord[] = [];
-  const pendingObservations = new Map<number, Pending<'incorporated' | 'delayed' | 'failed'>>();
   let sequence = 0;
 
   return {
@@ -266,7 +241,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
         // The journey installs the component's own default implementation behind the factory the
         // pages receive (docs/architecture.md#composition-and-replacement).
         create: createCardList,
-        source: pageSource(id, options.observations === true),
+        source: pageSource(id),
         context: options.context ?? 'result',
         accountId: harnessAccount,
         pageSize: options.pageSize ?? 2,
@@ -401,33 +376,8 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
         context: page.context,
         pageSize: page.pageSize,
         continuation: page.continuation,
-        required: [...page.required],
         aborted: page.isAborted(),
       }));
-    },
-    observationRequests() {
-      return observations.map((observation) => ({
-        id: observation.id,
-        list: observation.list,
-        positions: [...observation.positions],
-        aborted: observation.isAborted(),
-      }));
-    },
-    settleObservation(id, state) {
-      const pending = pendingObservations.get(id);
-      if (pending === undefined) {
-        throw new Error(`No observation ${id} is waiting.`);
-      }
-      pendingObservations.delete(id);
-      pending.resolve(state);
-    },
-    failObservation(id, message) {
-      const pending = pendingObservations.get(id);
-      if (pending === undefined) {
-        throw new Error(`No observation ${id} is waiting.`);
-      }
-      pendingObservations.delete(id);
-      pending.reject(new Error(message));
     },
     settlePage(id, page) {
       const pending = pendingPages.get(id);
@@ -439,7 +389,6 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
         status: 'page',
         entries: page.entries,
         continuation: page.continuation ?? null,
-        current: page.current !== false,
       });
     },
     invalidatePage(id) {
@@ -559,10 +508,7 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
     return sequence;
   }
 
-  function pageSource(
-    id: string,
-    observationsEnabled: boolean,
-  ): UiListSource<string | null | undefined> {
+  function pageSource(id: string): UiListSource<string | null | undefined> {
     return {
       load(request) {
         const requestId = next();
@@ -576,36 +522,12 @@ export function installCardListHarness(root: Element | null): UiCardListControl 
           context: request.context,
           pageSize: request.pageSize,
           continuation: request.continuation,
-          required: [...request.required.positions],
           isAborted: () => aborted,
         });
         return new Promise<UiListRead>((resolve, reject) => {
           pendingPages.set(requestId, { resolve, reject });
         });
       },
-      ...(observationsEnabled
-        ? {
-            observe(request: {
-              readonly positions: readonly string[];
-              readonly signal: AbortSignal;
-            }) {
-              const observationId = next();
-              let aborted = false;
-              request.signal.addEventListener('abort', () => {
-                aborted = true;
-              });
-              observations.push({
-                id: observationId,
-                list: id,
-                positions: [...request.positions],
-                isAborted: () => aborted,
-              });
-              return new Promise<'incorporated' | 'delayed' | 'failed'>((resolve, reject) => {
-                pendingObservations.set(observationId, { resolve, reject });
-              });
-            },
-          }
-        : {}),
     };
   }
 

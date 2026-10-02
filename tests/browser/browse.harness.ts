@@ -1,3 +1,5 @@
+import { publicPage, fragmentPage, type QueryEntryFixture } from './query-fixtures.js';
+import type { CatalogQueryInput } from '../../src/catalog/index.js';
 /**
  * Browser-side harness of the browsing pages (docs/user-interface.md#pages-and-navigation,
  * docs/user-interface.md#browsing-and-organization,
@@ -14,22 +16,19 @@
  * account transitions the private browsing state follows.
  */
 
-import { idleProgress } from './card-list-progress.js';
-
 import {
   ApplicationError,
   type ApplicationFailureCode,
-  type SearchClient,
   type UserInterfaceCapabilities,
 } from '../../src/application/index.js';
 import type {
-  Catalog,
+  CatalogService,
   CatalogReference,
   CatalogResolution,
   PrintingRecord,
 } from '../../src/catalog/index.js';
 import { createCardListBrowser } from '../../src/card-list/index.js';
-import type { SearchPage, SearchRequestInput } from '../../src/search/index.js';
+import type { QueryPageFixture, QueryInputFixture } from './query-fixtures.js';
 import {
   createBrowsePages,
   createUserInterface,
@@ -39,13 +38,14 @@ import {
   type UserInterface,
 } from '../../src/ui/index.js';
 
-import { unusedUserCards } from './unused-usercards.js';
+import { unusedUserCardsClient } from './unused-usercards.js';
+import { createUserCardsOperations } from '../../src/usercards/browser.js';
 import { unusedCapture } from './unused-capture.js';
 
 /** One Search request the catalog page issued. */
 export interface UiBrowseSearchRequest {
   readonly id: number;
-  readonly request: SearchRequestInput;
+  readonly request: QueryInputFixture;
   /** Whether closing the page withdrew the request before the journey settled it. */
   readonly aborted: boolean;
 }
@@ -72,7 +72,7 @@ export interface UiBrowseControl {
   /** Rejects the sign-out the shell awaits, as an authentication outage would. */
   failSignOut(message: string): void;
   searchRequests(): readonly UiBrowseSearchRequest[];
-  settleSearch(id: number, page: SearchPage): void;
+  settleSearch(id: number, page: QueryPageFixture): void;
   failSearch(
     id: number,
     failure: { readonly code: ApplicationFailureCode; readonly message: string },
@@ -92,7 +92,7 @@ interface Pending<Value> {
 
 interface SearchRecord {
   readonly id: number;
-  readonly request: SearchRequestInput;
+  readonly request: QueryInputFixture;
   isAborted(): boolean;
 }
 
@@ -119,9 +119,29 @@ export function installBrowseHarness(
   }
   const document = root.ownerDocument;
   const log: string[] = [];
+  const fixtures = new Map<string, QueryEntryFixture>();
+  const unusedUserCards = createUserCardsOperations({
+    client: {
+      ...unusedUserCardsClient,
+      readFragments: async (input) =>
+        fragmentPage(input, {
+          privateRevision: '1',
+          counts: new Map(
+            [...fixtures].map(([key, entry]) => [
+              key,
+              {
+                owned: entry.quantity?.copies ?? 0,
+                locations: 0,
+                intended: entry.quantity?.intended ?? null,
+              },
+            ]),
+          ),
+        }),
+    },
+  });
   const searches: SearchRecord[] = [];
   const catalogs: CatalogRecord[] = [];
-  const pendingSearches = new Map<number, Pending<SearchPage>>();
+  const pendingSearches = new Map<number, Pending<QueryPageFixture>>();
   const pendingCatalogs = new Map<number, Pending<CatalogResolution>>();
   let sequence = 0;
   let account: UiAccount | null = { accountId: 'alice', displayName: 'Alice' };
@@ -160,18 +180,15 @@ export function installBrowseHarness(
       },
     },
   );
-  const search: SearchClient = {
-    execute(input, signal) {
+  const catalog: CatalogService = {
+    query(input: CatalogQueryInput, signal?: AbortSignal) {
       const id = next();
       searches.push({ id, request: input, isAborted: () => signal?.aborted === true });
-      return new Promise<SearchPage>((resolve, reject) => {
+      return new Promise<QueryPageFixture>((resolve, reject) => {
         pendingSearches.set(id, { resolve, reject });
-      });
+      }).then(publicPage);
     },
-    counts: () => Promise.reject(new Error('The browsing journeys read no private counts.')),
-    observe: () => Promise.reject(new Error('The browsing journeys observe no progress.')),
-  };
-  const catalog: Catalog = {
+
     resolve(references) {
       const id = next();
       catalogs.push({ id, references: [...references] });
@@ -186,8 +203,6 @@ export function installBrowseHarness(
   // Application's own account lifecycle: leaving an account releases its local activity before
   // another account can present it (docs/architecture.md#runtime-boundaries).
   const cardList = createCardListBrowser({
-    progress: idleProgress,
-    search,
     catalog,
     userCards: unusedUserCards,
   });
@@ -212,13 +227,11 @@ export function installBrowseHarness(
     identity,
     request,
     catalog,
-    search,
     // The browsing journeys present no private record, so the contract is only present to satisfy
     // the capabilities Application supplies.
     userCards: unusedUserCards,
     cardList,
     capture: unusedCapture(unusedUserCards),
-    indexing: idleProgress,
   };
   const pages: readonly UiPageDefinition[] = [...createBrowsePages(), cardPage(document)];
   const shell: UserInterface = createUserInterface({
@@ -266,6 +279,7 @@ export function installBrowseHarness(
         aborted: record.isAborted(),
       })),
     settleSearch(id, page) {
+      for (const entry of page.entries) fixtures.set(entry.entryKey, entry);
       const pending = pendingSearches.get(id);
       if (pending === undefined) {
         throw new Error(`No search request ${id} is waiting.`);

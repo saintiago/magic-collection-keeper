@@ -2,16 +2,19 @@
  * Query and filter control vocabulary shared by the browsing pages and their query editors
  * (docs/ui/editors.md, docs/ui/pages.md#page-map).
  *
- * The values are the provider vocabularies Search and Catalog publish; the lists are declared once
+ * The values are the provider vocabularies Catalog and UserCards publish; the lists are declared once
  * here because the pages and editors present the same controls and a provider change needs one
  * deliberate decision about the criteria the views serve.
  */
 
 import type { Finish } from '../../catalog/index.js';
-import type { SearchResultLevel } from '../../search/index.js';
+import type { CardListResultLevel } from '../../card-list/index.js';
 
 /** Result levels the catalog page presents; a physical copy belongs to the collection views. */
-export const uiCatalogLevels = ['card', 'printing'] as const satisfies readonly SearchResultLevel[];
+export const uiCatalogLevels = [
+  'card',
+  'printing',
+] as const satisfies readonly CardListResultLevel[];
 export type UiCatalogLevel = (typeof uiCatalogLevels)[number];
 
 /**
@@ -22,7 +25,7 @@ export const uiCollectionLevels = [
   'card',
   'printing',
   'copy',
-] as const satisfies readonly SearchResultLevel[];
+] as const satisfies readonly CardListResultLevel[];
 export type UiCollectionLevel = (typeof uiCollectionLevels)[number];
 
 /** Finishes the catalog query's finish control offers, as Catalog publishes them. */

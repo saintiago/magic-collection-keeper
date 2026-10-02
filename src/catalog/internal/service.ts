@@ -53,7 +53,7 @@ export interface Catalog extends CatalogResolver {
 
 /** Public query capability kept separate from the narrower resolver contract. */
 export interface CatalogQueries {
-  query(request: CatalogQueryInput): Promise<CatalogQueryPage>;
+  query(request: CatalogQueryInput, signal?: AbortSignal): Promise<CatalogQueryPage>;
 }
 
 export interface CatalogService extends Catalog, CatalogQueries {}

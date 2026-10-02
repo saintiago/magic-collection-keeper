@@ -8,19 +8,13 @@
  * the authenticated client. Success returns the component's result; a failure keeps its code.
  */
 
-import { z } from 'zod';
-
-import type { Catalog, CatalogReference, CatalogResolution } from '../../catalog/index.js';
-import { SEARCH_LIMITS } from '../../search/index.js';
 import type {
-  Search,
-  SearchCountInput,
-  SearchCountResult,
-  SearchObservationOptions,
-  SearchProgress,
-  SearchProgressRequest,
-  SearchRequestInput,
-} from '../../search/index.js';
+  CatalogReference,
+  CatalogResolution,
+  CatalogQueryInput,
+  CatalogService,
+} from '../../catalog/index.js';
+import { z } from 'zod';
 import type {
   AssociationId,
   AssociationReadResult,
@@ -49,6 +43,10 @@ import type {
   TagReadResult,
   TrustedUserContext,
   UserCards,
+  UserCardsQueries,
+  UserCardsQueryInput,
+  ReadUserCardsFragmentsInput,
+  UserCardsFragmentsResult,
   SourceImportOperations,
 } from '../../usercards/index.js';
 
@@ -64,9 +62,9 @@ import type { Route, RouteCall } from './transport.js';
 
 /** Everything the route table dispatches to; each contract stays provider-owned. */
 export interface RouteDependencies {
-  readonly catalog: Catalog;
-  readonly search: Search;
+  readonly catalog: CatalogService;
   readonly userCards: UserCards;
+  readonly userCardsQueries: UserCardsQueries;
   /** Source-import operations, or null when the deployment disabled the capability. */
   readonly sourceImports: SourceImportOperations | null;
 }
@@ -76,23 +74,9 @@ const pageQuerySchema = z.object({
   continuation: z.string().min(1).optional(),
 });
 
-/**
- * One bounded observation of committed indexing progress
- * (docs/search.md#freshness). Positions stay opaque strings the authenticated account published;
- * the bound is the caller's explicit wait and stays within the provider's declared maximum.
- */
-const searchProgressSchema = z.object({
-  positions: z
-    .array(z.string().min(1).max(SEARCH_LIMITS.maxPositionLength))
-    .max(SEARCH_LIMITS.maxRequiredPositions)
-    .optional(),
-  catalogRevision: z.string().min(1).max(SEARCH_LIMITS.maxIdentifierLength).nullable().optional(),
-  timeoutMs: z.number().int().min(0).max(SEARCH_LIMITS.maxObservationTimeoutMs).optional(),
-});
-
 /** The whole interactive surface, in one place so both runtimes and the tests share it. */
 export function createRoutes(dependencies: RouteDependencies): readonly Route[] {
-  const { catalog, search, userCards, sourceImports } = dependencies;
+  const { catalog, userCards, userCardsQueries, sourceImports } = dependencies;
 
   return [
     {
@@ -114,43 +98,40 @@ export function createRoutes(dependencies: RouteDependencies): readonly Route[] 
         catalog.listCardPrintings(readParam(params, 'cardId'), readPageQuery(query)),
     },
     {
-      operation: 'search.execute',
+      operation: 'catalog.query',
       method: 'POST',
-      path: applicationRoutes.search,
+      path: applicationRoutes.catalogQuery,
       access: 'public',
-      call: ({ body, context }) => search.execute(body as unknown as SearchRequestInput, context),
+      call: ({ body }) => catalog.query(body as unknown as CatalogQueryInput),
     },
     {
-      // Counts describe the account's private copies and intentions, so the read is authenticated
-      // even though the references it names carry no query membership.
-      operation: 'search.counts',
+      operation: 'usercards.query',
       method: 'POST',
-      path: applicationRoutes.searchCounts,
+      path: applicationRoutes.userCardsQuery,
       access: 'authenticated',
-      call: async ({ body, context }) =>
-        searchCountPayload(await search.counts(body as unknown as SearchCountInput, context)),
+      call: (call) =>
+        userCardsQueries.query(context(call), call.body as unknown as UserCardsQueryInput),
     },
     {
-      // Committed positions are account-private and the observation waits at most the caller's
-      // explicit bound; it creates no indexing work and never resubmits a mutation
-      // (docs/search.md#freshness).
-      operation: 'search.progress',
+      operation: 'usercards.readFragments',
       method: 'POST',
-      path: applicationRoutes.searchProgress,
+      path: applicationRoutes.userCardsFragments,
       access: 'authenticated',
-      call: async ({ body, context }) => {
-        const parsed = searchProgressSchema.safeParse(body ?? {});
-        if (!parsed.success) {
-          throw new ApplicationError('invalid-request', 'The indexing observation is invalid.');
-        }
-        const request: SearchProgressRequest = {
-          positions: parsed.data.positions ?? [],
-          catalogRevision: parsed.data.catalogRevision ?? null,
-        };
-        const options: SearchObservationOptions =
-          parsed.data.timeoutMs === undefined ? {} : { timeoutMs: parsed.data.timeoutMs };
-        return searchProgressPayload(await search.observe(request, context, options));
-      },
+      call: async (call) =>
+        userCardsFragmentsPayload(
+          await userCardsQueries.readFragments(
+            context(call),
+            call.body as unknown as ReadUserCardsFragmentsInput,
+          ),
+        ),
+    },
+    {
+      operation: 'usercards.readPhysicalDetail',
+      method: 'GET',
+      path: applicationRoutes.userCardsPhysicalDetail,
+      access: 'authenticated',
+      call: (call) =>
+        userCardsQueries.readPhysicalDetail(context(call), readParam(call.params, 'copyId')),
     },
     {
       // The preserved browser engines hydrate a candidate through their own envelope; the new
@@ -486,17 +467,13 @@ function copyReadPayload(result: CopyReadResult): unknown {
   };
 }
 
-/** Serializes one private count result: the count map becomes an ordered array on the wire. */
-function searchCountPayload(result: SearchCountResult): unknown {
+/** Serializes private fragments: the reference-keyed map becomes an ordered array on the wire. */
+function userCardsFragmentsPayload(result: UserCardsFragmentsResult): unknown {
   return {
     privateRevision: result.privateRevision,
-    counts: [...result.counts].map(([key, count]) => ({ key, ...count })),
+    fragments: [...result.fragments].map(([key, fragment]) => ({ key, ...fragment })),
+    missing: result.missing,
   };
-}
-
-/** One bounded observation as the browser reads it; revisions stay the provider's own values. */
-function searchProgressPayload(result: SearchProgress): unknown {
-  return { state: result.state, revisions: result.revisions };
 }
 
 function tagReadPayload(result: TagReadResult): unknown {

@@ -21,7 +21,7 @@ import { build } from 'esbuild';
 
 import type { ApplicationFailureCode } from '../../src/application/index.js';
 import type { CardRecord, PrintingRecord } from '../../src/catalog/index.js';
-import type { SearchEntry, SearchPage } from '../../src/search/index.js';
+import type { QueryEntryFixture, QueryPageFixture } from './query-fixtures.js';
 import type { PhysicalCopy } from '../../src/usercards/index.js';
 import { organizationContinuationFailures } from '../support/organization-pagination.js';
 import type {
@@ -127,7 +127,7 @@ async function searchRequest(page: Page, index = 0): Promise<UiCollectionSearchR
   return request;
 }
 
-async function settleSearch(page: Page, id: number, value: SearchPage): Promise<void> {
+async function settleSearch(page: Page, id: number, value: QueryPageFixture): Promise<void> {
   await page.evaluate(
     ({ id: requestId, page: value }) => {
       (
@@ -344,7 +344,7 @@ function cardEntry(
   cardId: string,
   name: string,
   quantity: { readonly copies: number; readonly intended: number | null },
-): SearchEntry {
+): QueryEntryFixture {
   return {
     entryKey: `card:${cardId}`,
     target: { kind: 'card', cardId },
@@ -355,7 +355,7 @@ function cardEntry(
 }
 
 /** One owned physical-copy entry of the collection result. */
-function copyEntry(copyId: string, printingId: string, cardId = 'card-1'): SearchEntry {
+function copyEntry(copyId: string, printingId: string, cardId = 'card-1'): QueryEntryFixture {
   return {
     entryKey: `copy:${copyId}`,
     target: { kind: 'copy', copyId },
@@ -370,18 +370,11 @@ function copyEntry(copyId: string, printingId: string, cardId = 'card-1'): Searc
   };
 }
 
-function searchPage(entries: readonly SearchEntry[]): SearchPage {
+function searchPage(entries: readonly QueryEntryFixture[]): QueryPageFixture {
   return {
-    status: 'ready',
     entries,
     totalCount: entries.length,
     continuation: null,
-    revisions: {
-      generation: 'generation-1',
-      catalogRevision: 'revision-1',
-      catalogPosition: '1',
-      privateRevision: 'private-1',
-    },
   };
 }
 
@@ -441,7 +434,7 @@ test('the collection presents owned entries with their counts and opens the leve
   const request = await searchRequest(page);
   expect(request.request).toEqual({
     resultLevel: 'card',
-    criteria: [{ kind: 'owned' }],
+    scope: { kind: 'collection' },
     pageSize: expect.any(Number),
   });
   await settleSearch(
@@ -474,23 +467,22 @@ test('the collection level and expression build the query its URL carries', asyn
   const errors = await openCollection(page, '#/collection');
   await settleSearch(page, (await searchRequest(page)).id, searchPage([]));
 
-  await page.getByLabel('Search collection').fill('bolt');
+  await expect(page.locator('#collection-search')).toHaveCount(0);
   await page.getByLabel('Level').selectOption('copy');
-  await page.getByRole('button', { name: 'Search' }).click();
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
 
-  await expect(page).toHaveURL(/#\/collection\?query=bolt&level=copy$/);
+  await expect(page).toHaveURL(/#\/collection\?level=copy$/);
   const presented = await searchRequest(page, 1);
   expect(presented.request).toEqual({
     resultLevel: 'copy',
-    query: 'bolt',
-    criteria: [{ kind: 'owned' }],
+    scope: { kind: 'collection' },
     pageSize: expect.any(Number),
   });
   await settleSearch(page, presented.id, searchPage([copyEntry('copy-1', 'printing-1')]));
   await expect(page.locator('[data-ui-entry="copy:copy-1"]')).toBeVisible();
 
   // A direct entry with the same URL presents the same result.
-  await openCollection(page, '#/collection?query=bolt&level=copy');
+  await openCollection(page, '#/collection?level=copy');
   const reloaded = await searchRequest(page);
   expect(reloaded.request).toEqual(presented.request);
   expect(errors).toEqual([]);

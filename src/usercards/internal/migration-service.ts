@@ -201,7 +201,7 @@ export function createMigrationOperations(
           planDigest: plan.planDigest,
           totalBatches: batchList.length,
           appliedBatches: 0,
-          publicationPosition: recorded.progress.publicationPosition,
+
           replayed: true,
         };
       }
@@ -243,7 +243,7 @@ export function createMigrationOperations(
         planDigest: plan.planDigest,
         totalBatches: batchList.length,
         appliedBatches,
-        publicationPosition: progress.publicationPosition,
+
         replayed: appliedBatches === 0 && started.outcome === 'recorded',
       };
     },

@@ -19,7 +19,7 @@ import { build } from 'esbuild';
 
 import type { CardRecord, PrintingRecord } from '../../src/catalog/index.js';
 import { organizationContinuationFailures } from '../support/organization-pagination.js';
-import type { SearchCount } from '../../src/search/index.js';
+import type { CountsFixture } from './query-fixtures.js';
 import type { Association, PhysicalCopy, Tag } from '../../src/usercards/index.js';
 import type {
   UiTagsAssociationListRequest,
@@ -264,13 +264,13 @@ async function settleCatalog(
  */
 async function scriptCounts(
   page: Page,
-  counts: readonly (readonly [string, SearchCount])[],
+  counts: readonly (readonly [string, CountsFixture])[],
 ): Promise<void> {
   await control(page, 'scriptCounts', counts);
 }
 
 /** The counts of the association fixture's printing, as the real provider would evaluate them. */
-const wishlistCounts: readonly (readonly [string, SearchCount])[] = [
+const wishlistCounts: readonly (readonly [string, CountsFixture])[] = [
   ['printing:printing-1', { owned: 1, locations: 1, intended: 2 }],
 ];
 
@@ -773,15 +773,9 @@ for (const laterOutcome of ['conflict', 'unknown'] as const) {
           quantity: null,
         },
       ],
-      status: 'ready',
+
       totalCount: 2,
       continuation: null,
-      revisions: {
-        generation: 'tags-generation',
-        catalogRevision: 'tags-revision',
-        catalogPosition: '1',
-        privateRevision: 'private-1',
-      },
     });
 
     const results = page.locator('#tag-add-results [data-ui-entry]');
@@ -1287,7 +1281,6 @@ for (const method of ['move', 'add'] as const) {
       revision: 5,
     };
     if (method === 'add') {
-      await page.fill('#tag-add-query', 'bolt');
       await page.selectOption('#tag-add-level', 'copy');
       await page.click('#tag-add-submit');
       await settle(page, 'settleSearch', (await requested(page, 'searches')).id, {
@@ -1306,17 +1299,14 @@ for (const method of ['move', 'add'] as const) {
             quantity: null,
           },
         ],
-        status: 'ready',
+
         totalCount: 1,
         continuation: null,
-        revisions: {
-          generation: 'tags-generation',
-          catalogRevision: 'tags-revision',
-          catalogPosition: '1',
-          privateRevision: 'private-1',
-        },
       });
       await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', 1)).id, [stored]);
+      await settleCatalog(page, 2, { printings: [boltPrinting] });
+      await settleCatalog(page, 3, { cards: [boltCard] });
+      await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', 2)).id, [stored]);
       await page.locator('#tag-add-results [data-ui-select]').check();
     } else {
       await page.selectOption('#tag-move-association-1', '');
@@ -1354,8 +1344,8 @@ for (const method of ['move', 'add'] as const) {
     await settle(page, 'settleReadCopies', (await requested(page, 'readCopies', index++)).id, [
       stored,
     ]);
-    await settleCatalog(page, 2, { printings: [boltPrinting] });
-    await settleCatalog(page, 3, { cards: [boltCard] });
+    await settleCatalog(page, method === 'add' ? 4 : 2, { printings: [boltPrinting] });
+    await settleCatalog(page, method === 'add' ? 5 : 3, { cards: [boltCard] });
     await apply.click();
     await settle(page, 'fail', (await requested(page, 'readCopies', index++)).id, {
       code: 'unavailable',
@@ -1429,15 +1419,9 @@ test('searches the catalog and adds a card to the wishlist with its intended qua
         quantity: null,
       },
     ],
-    status: 'ready',
+
     totalCount: 2,
     continuation: null,
-    revisions: {
-      generation: 'tags-generation',
-      catalogRevision: 'tags-revision',
-      catalogPosition: '1',
-      privateRevision: 'private-1',
-    },
   });
 
   const result = page.locator('#tag-add-results [data-ui-entry="card:card-bolt"]');
@@ -1485,63 +1469,6 @@ test('searches the catalog and adds a card to the wishlist with its intended qua
       '#tag-associations [data-ui-entry="association:association-1"] [data-ui-intended]',
     ),
   ).toHaveText(' Intended: 4');
-  expect(errors).toEqual([]);
-});
-
-test('reports an indexing add search instead of an empty result', async ({ page }) => {
-  const errors = await openTags(page, '#/tags/tag-wish');
-  await scriptCounts(page, []);
-  const read = await requested<readonly string[]>(page, 'readTags');
-  await settle(page, 'settleReadTags', read.id, [
-    tag({ tagId: 'tag-wish', kind: 'wishlist', label: 'Wanted' }),
-  ]);
-  const listing = await requested<UiTagsAssociationListRequest>(page, 'listAssociations');
-  await settle(page, 'settleListAssociations', listing.id, { associations: [] });
-
-  await page.fill('#tag-add-query', 'bolt');
-  await page.click('#tag-add-submit');
-  const search = await requested<{ readonly request: Record<string, unknown> }>(page, 'searches');
-  const results = page.locator('#tag-add-results');
-  // The index has no complete answer yet: presenting the empty page would tell the account that
-  // no catalog entry matches (docs/search.md#freshness).
-  await settle(page, 'settleSearch', search.id, {
-    status: 'updating',
-    entries: [],
-    totalCount: null,
-    continuation: null,
-    revisions: null,
-  });
-  await expect(results.locator('[data-ui-status]')).toHaveText(
-    'The search results are still being indexed.',
-  );
-  await expect(results).not.toContainText('No entries');
-
-  // The retry repeats the same query rather than resubmitting any mutation, and presents the
-  // entries the index has since produced.
-  await results.locator('[data-ui-retry]').click();
-  const retry = await requested<{ readonly request: Record<string, unknown> }>(page, 'searches', 1);
-  expect(retry.arguments.request).toEqual(search.arguments.request);
-  await settle(page, 'settleSearch', retry.id, {
-    status: 'ready',
-    entries: [
-      {
-        entryKey: 'card:card-bolt',
-        target: { kind: 'card', cardId: 'card-bolt' },
-        card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
-        printing: null,
-        quantity: null,
-      },
-    ],
-    totalCount: 1,
-    continuation: null,
-    revisions: {
-      generation: 'tags-generation',
-      catalogRevision: 'tags-revision',
-      catalogPosition: '1',
-      privateRevision: 'private-1',
-    },
-  });
-  await expect(results.locator('[data-ui-entry="card:card-bolt"]')).toBeVisible();
   expect(errors).toEqual([]);
 });
 

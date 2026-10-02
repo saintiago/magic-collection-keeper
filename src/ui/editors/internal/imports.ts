@@ -1623,7 +1623,7 @@ export function createImportReviewEditor(
    * picker: the row's search describes the list once, and a further search refines the window it
    * holds. The list owns matching, ordering, continuation and the recovery of a failed page, so an
    * exact card or printing beyond the first page stays reachable
-   * (docs/search.md#freshness, docs/ui/editors.md#interface).
+   * (docs/card-list.md#loading-and-recovery, docs/ui/editors.md#interface).
    */
   function openEntrySearch(
     editor: UiImportEntryEditor,

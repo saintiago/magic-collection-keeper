@@ -7,7 +7,6 @@
 
 import { CatalogError } from '../../catalog/index.js';
 import { RecognitionError } from '../../recognition/index.js';
-import { SearchError } from '../../search/index.js';
 import { UserCardsError } from '../../usercards/index.js';
 
 import { ApplicationError, isAbortCause } from './failures.js';
@@ -22,9 +21,6 @@ export function translateFailure(cause: unknown): ApplicationError {
     return cause;
   }
   if (cause instanceof CatalogError) {
-    return new ApplicationError(cause.code, cause.message, { cause });
-  }
-  if (cause instanceof SearchError) {
     return new ApplicationError(cause.code, cause.message, { cause });
   }
   if (cause instanceof UserCardsError) {

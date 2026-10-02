@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Magic Collection Keeper rebuild service (docs/operations.md#infrastructure, docs/tech-stack.md#aws-stack). Adds the environment's app client to the retained Cognito user pool, the JWT-authorized HTTP API, the interactive Node.js Lambda, the recognition container Lambda, the finite Fargate task definitions of catalog synchronization and background Search indexing, and the CloudFront delivery of the private browser bucket. Imports the foundation stack of the same Environment; it creates no provisioned concurrency, no ECS service and no schedule.",
+  "Description": "Magic Collection Keeper rebuild service. Adds the app client, JWT-authorized API, interactive Lambda, Recognition Lambda, finite Catalog task and private-browser CloudFront delivery.",
   "Parameters": {
     "Environment": {
       "Type": "String",
@@ -34,17 +34,6 @@
       "AllowedPattern": "^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/.+@sha256:[0-9a-f]{64}$",
       "Description": "Immutable image URI of the finite catalog job in the foundation's catalog repository, pinned by digest."
     },
-    "IndexingJobImageUri": {
-      "Type": "String",
-      "AllowedPattern": "^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/.+@sha256:[0-9a-f]{64}$",
-      "Description": "Immutable image URI of the background indexing job in the foundation's indexing repository, pinned by digest."
-    },
-    "IndexingScheduleExpression": {
-      "Type": "String",
-      "Default": "rate(15 minutes)",
-      "AllowedPattern": "^(rate|cron)\\([^)]+\\)$",
-      "Description": "EventBridge Scheduler expression that starts the next finite background indexing run, so committed changes keep reaching Search without an operator starting tasks. rate(15 minutes) bounds ordinary indexing lag to roughly one cadence; a run that does not catch up is resumed by the next start."
-    },
     "TitleModelId": {
       "Type": "String",
       "Default": "amazon.nova-lite-v1:0",
@@ -59,15 +48,41 @@
     }
   },
   "Conditions": {
-    "TitleModel": { "Fn::Not": [{ "Fn::Equals": [{ "Ref": "TitleModelId" }, ""] }] },
-    "IdentityModel": { "Fn::Not": [{ "Fn::Equals": [{ "Ref": "IdentityModelId" }, ""] }] }
+    "TitleModel": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "TitleModelId"
+            },
+            ""
+          ]
+        }
+      ]
+    },
+    "IdentityModel": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "IdentityModelId"
+            },
+            ""
+          ]
+        }
+      ]
+    }
   },
   "Resources": {
     "UserPoolClient": {
       "Type": "AWS::Cognito::UserPoolClient",
       "Properties": {
-        "UserPoolId": { "Ref": "ExistingUserPoolId" },
-        "ClientName": { "Fn::Sub": "keeper-${Environment}" },
+        "UserPoolId": {
+          "Ref": "ExistingUserPoolId"
+        },
+        "ClientName": {
+          "Fn::Sub": "keeper-${Environment}"
+        },
         "GenerateSecret": false,
         "ExplicitAuthFlows": ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"],
         "PreventUserExistenceErrors": "ENABLED",
@@ -86,17 +101,25 @@
     "HttpApi": {
       "Type": "AWS::ApiGatewayV2::Api",
       "Properties": {
-        "Name": { "Fn::Sub": "keeper-${Environment}" },
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}"
+        },
         "Description": "Interactive API and recognition compute entry point of the rebuild",
         "ProtocolType": "HTTP",
         "CorsConfiguration": {
-          "AllowOrigins": [{ "Fn::Sub": "https://${Distribution.DomainName}" }],
+          "AllowOrigins": [
+            {
+              "Fn::Sub": "https://${Distribution.DomainName}"
+            }
+          ],
           "AllowHeaders": ["authorization", "content-type"],
           "AllowMethods": ["GET", "POST", "OPTIONS"],
           "MaxAge": 600
         },
         "Tags": {
-          "Environment": { "Ref": "Environment" },
+          "Environment": {
+            "Ref": "Environment"
+          },
           "Application": "magic-collection-keeper"
         }
       }
@@ -104,12 +127,20 @@
     "JwtAuthorizer": {
       "Type": "AWS::ApiGatewayV2::Authorizer",
       "Properties": {
-        "ApiId": { "Ref": "HttpApi" },
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
         "AuthorizerType": "JWT",
-        "Name": { "Fn::Sub": "keeper-${Environment}-cognito" },
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-cognito"
+        },
         "IdentitySource": ["$request.header.Authorization"],
         "JwtConfiguration": {
-          "Audience": [{ "Ref": "UserPoolClient" }],
+          "Audience": [
+            {
+              "Ref": "UserPoolClient"
+            }
+          ],
           "Issuer": {
             "Fn::Sub": "https://cognito-idp.${AWS::Region}.amazonaws.com/${ExistingUserPoolId}"
           }
@@ -119,9 +150,13 @@
     "InteractiveIntegration": {
       "Type": "AWS::ApiGatewayV2::Integration",
       "Properties": {
-        "ApiId": { "Ref": "HttpApi" },
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
         "IntegrationType": "AWS_PROXY",
-        "IntegrationUri": { "Fn::GetAtt": ["ApiFunction", "Arn"] },
+        "IntegrationUri": {
+          "Fn::GetAtt": ["ApiFunction", "Arn"]
+        },
         "PayloadFormatVersion": "2.0",
         "TimeoutInMillis": 29000
       }
@@ -129,9 +164,13 @@
     "RecognitionIntegration": {
       "Type": "AWS::ApiGatewayV2::Integration",
       "Properties": {
-        "ApiId": { "Ref": "HttpApi" },
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
         "IntegrationType": "AWS_PROXY",
-        "IntegrationUri": { "Fn::GetAtt": ["RecognitionFunction", "Arn"] },
+        "IntegrationUri": {
+          "Fn::GetAtt": ["RecognitionFunction", "Arn"]
+        },
         "PayloadFormatVersion": "2.0",
         "TimeoutInMillis": 29000
       }
@@ -139,60 +178,90 @@
     "InteractiveRoute": {
       "Type": "AWS::ApiGatewayV2::Route",
       "Properties": {
-        "ApiId": { "Ref": "HttpApi" },
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
         "RouteKey": "ANY /api/{proxy+}",
         "AuthorizationType": "JWT",
         "AuthorizationScopes": [],
-        "AuthorizerId": { "Ref": "JwtAuthorizer" },
-        "Target": { "Fn::Sub": "integrations/${InteractiveIntegration}" }
+        "AuthorizerId": {
+          "Ref": "JwtAuthorizer"
+        },
+        "Target": {
+          "Fn::Sub": "integrations/${InteractiveIntegration}"
+        }
       }
     },
     "PreflightRoute": {
       "Type": "AWS::ApiGatewayV2::Route",
       "Properties": {
-        "ApiId": { "Ref": "HttpApi" },
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
         "RouteKey": "OPTIONS /api/{proxy+}",
         "AuthorizationType": "NONE",
-        "Target": { "Fn::Sub": "integrations/${InteractiveIntegration}" }
+        "Target": {
+          "Fn::Sub": "integrations/${InteractiveIntegration}"
+        }
       }
     },
     "RecognitionRoute": {
       "Type": "AWS::ApiGatewayV2::Route",
       "Properties": {
-        "ApiId": { "Ref": "HttpApi" },
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
         "RouteKey": "POST /api/recognize",
         "AuthorizationType": "JWT",
         "AuthorizationScopes": [],
-        "AuthorizerId": { "Ref": "JwtAuthorizer" },
-        "Target": { "Fn::Sub": "integrations/${RecognitionIntegration}" }
+        "AuthorizerId": {
+          "Ref": "JwtAuthorizer"
+        },
+        "Target": {
+          "Fn::Sub": "integrations/${RecognitionIntegration}"
+        }
       }
     },
     "RecognitionIndependentRoute": {
       "Type": "AWS::ApiGatewayV2::Route",
       "Properties": {
-        "ApiId": { "Ref": "HttpApi" },
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
         "RouteKey": "POST /api/recognize-independent",
         "AuthorizationType": "JWT",
         "AuthorizationScopes": [],
-        "AuthorizerId": { "Ref": "JwtAuthorizer" },
-        "Target": { "Fn::Sub": "integrations/${RecognitionIntegration}" }
+        "AuthorizerId": {
+          "Ref": "JwtAuthorizer"
+        },
+        "Target": {
+          "Fn::Sub": "integrations/${RecognitionIntegration}"
+        }
       }
     },
     "RecognitionSourceRoute": {
       "Type": "AWS::ApiGatewayV2::Route",
       "Properties": {
-        "ApiId": { "Ref": "HttpApi" },
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
         "RouteKey": "GET /api/recognition/source",
         "AuthorizationType": "JWT",
         "AuthorizationScopes": [],
-        "AuthorizerId": { "Ref": "JwtAuthorizer" },
-        "Target": { "Fn::Sub": "integrations/${RecognitionIntegration}" }
+        "AuthorizerId": {
+          "Ref": "JwtAuthorizer"
+        },
+        "Target": {
+          "Fn::Sub": "integrations/${RecognitionIntegration}"
+        }
       }
     },
     "DefaultStage": {
       "Type": "AWS::ApiGatewayV2::Stage",
       "Properties": {
-        "ApiId": { "Ref": "HttpApi" },
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
         "StageName": "$default",
         "AutoDeploy": true,
         "DefaultRouteSettings": {
@@ -200,7 +269,9 @@
           "ThrottlingRateLimit": 50
         },
         "AccessLogSettings": {
-          "DestinationArn": { "Fn::GetAtt": ["ApiAccessLogGroup", "Arn"] },
+          "DestinationArn": {
+            "Fn::GetAtt": ["ApiAccessLogGroup", "Arn"]
+          },
           "Format": "{\"requestId\":\"$context.requestId\",\"ip\":\"$context.identity.sourceIp\",\"requestTime\":\"$context.requestTime\",\"httpMethod\":\"$context.httpMethod\",\"path\":\"$context.path\",\"status\":\"$context.status\",\"protocol\":\"$context.protocol\",\"responseLength\":\"$context.responseLength\",\"integrationStatus\":\"$context.integrationStatus\",\"integrationLatency\":\"$context.integrationLatency\",\"responseLatency\":\"$context.responseLatency\"}"
         }
       }
@@ -208,55 +279,84 @@
     "ApiAccessLogGroup": {
       "Type": "AWS::Logs::LogGroup",
       "Properties": {
-        "LogGroupName": { "Fn::Sub": "/aws/api-gateway/keeper-${Environment}" },
+        "LogGroupName": {
+          "Fn::Sub": "/aws/api-gateway/keeper-${Environment}"
+        },
         "RetentionInDays": 30,
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "ApiLogGroup": {
       "Type": "AWS::Logs::LogGroup",
       "Properties": {
-        "LogGroupName": { "Fn::Sub": "/aws/lambda/keeper-${Environment}-api" },
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/keeper-${Environment}-api"
+        },
         "RetentionInDays": 30,
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "RecognitionLogGroup": {
       "Type": "AWS::Logs::LogGroup",
       "Properties": {
-        "LogGroupName": { "Fn::Sub": "/aws/lambda/keeper-${Environment}-recognition" },
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/keeper-${Environment}-recognition"
+        },
         "RetentionInDays": 30,
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "CatalogLogGroup": {
       "Type": "AWS::Logs::LogGroup",
       "Properties": {
-        "LogGroupName": { "Fn::Sub": "/aws/ecs/keeper-${Environment}-catalog" },
+        "LogGroupName": {
+          "Fn::Sub": "/aws/ecs/keeper-${Environment}-catalog"
+        },
         "RetentionInDays": 30,
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
-        ]
-      }
-    },
-    "IndexingLogGroup": {
-      "Type": "AWS::Logs::LogGroup",
-      "Properties": {
-        "LogGroupName": { "Fn::Sub": "/aws/ecs/keeper-${Environment}-indexing" },
-        "RetentionInDays": 30,
-        "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -264,40 +364,50 @@
       "Type": "AWS::Lambda::Function",
       "DependsOn": "ApiLogGroup",
       "Properties": {
-        "FunctionName": { "Fn::Sub": "keeper-${Environment}-api" },
+        "FunctionName": {
+          "Fn::Sub": "keeper-${Environment}-api"
+        },
         "Description": "Interactive entry point of the rebuild: validated settings, authenticated transports and provider failure translation",
         "Runtime": "nodejs24.x",
         "Handler": "index.handler",
         "Architectures": ["x86_64"],
         "MemorySize": 1024,
         "Timeout": 25,
-        "Role": { "Fn::GetAtt": ["ApiFunctionRole", "Arn"] },
+        "Role": {
+          "Fn::GetAtt": ["ApiFunctionRole", "Arn"]
+        },
         "Code": {
           "S3Bucket": {
-            "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-artifacts-bucket" }
+            "Fn::ImportValue": {
+              "Fn::Sub": "keeper-${Environment}-artifacts-bucket"
+            }
           },
-          "S3Key": { "Ref": "ApiCodeKey" },
-          "S3ObjectVersion": { "Ref": "ApiCodeVersion" }
+          "S3Key": {
+            "Ref": "ApiCodeKey"
+          },
+          "S3ObjectVersion": {
+            "Ref": "ApiCodeVersion"
+          }
         },
         "Environment": {
           "Variables": {
-            "KEEPER_ENVIRONMENT": { "Ref": "Environment" },
-            "KEEPER_USER_POOL_ID": { "Ref": "ExistingUserPoolId" },
-            "KEEPER_USER_POOL_CLIENT_ID": { "Ref": "UserPoolClient" },
+            "KEEPER_ENVIRONMENT": {
+              "Ref": "Environment"
+            },
+            "KEEPER_USER_POOL_ID": {
+              "Ref": "ExistingUserPoolId"
+            },
+            "KEEPER_USER_POOL_CLIENT_ID": {
+              "Ref": "UserPoolClient"
+            },
             "KEEPER_DATABASE_CLUSTER_ARN": {
-              "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-database-cluster-arn" }
-            },
-            "KEEPER_DATABASE_NAME": {
-              "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-database-name" }
-            },
-            "KEEPER_DATABASE_READER_SECRET_ARN": {
               "Fn::ImportValue": {
-                "Fn::Sub": "keeper-${Environment}-database-reader-secret-arn"
+                "Fn::Sub": "keeper-${Environment}-database-cluster-arn"
               }
             },
-            "KEEPER_DATABASE_SEARCH_QUERY_SECRET_ARN": {
+            "KEEPER_DATABASE_NAME": {
               "Fn::ImportValue": {
-                "Fn::Sub": "keeper-${Environment}-search-query-secret-arn"
+                "Fn::Sub": "keeper-${Environment}-database-name"
               }
             },
             "KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN": {
@@ -306,33 +416,59 @@
               }
             },
             "KEEPER_SNAPSHOT_BUCKET": {
-              "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-snapshot-bucket" }
+              "Fn::ImportValue": {
+                "Fn::Sub": "keeper-${Environment}-snapshot-bucket"
+              }
             },
             "KEEPER_SNAPSHOT_PREFIX": {
-              "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-snapshot-prefix" }
+              "Fn::ImportValue": {
+                "Fn::Sub": "keeper-${Environment}-snapshot-prefix"
+              }
             },
-            "KEEPER_RECOGNITION_BASE_URL": { "Fn::GetAtt": ["HttpApi", "ApiEndpoint"] },
+            "KEEPER_RECOGNITION_BASE_URL": {
+              "Fn::GetAtt": ["HttpApi", "ApiEndpoint"]
+            },
             "KEEPER_CLOUD_RECOGNITION": "true",
             "KEEPER_SOURCE_IMPORTS": "true",
-            "KEEPER_REQUEST_TIMEOUT_MS": "20000"
+            "KEEPER_REQUEST_TIMEOUT_MS": "20000",
+            "KEEPER_DATABASE_CATALOG_READER_SECRET_ARN": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "keeper-${Environment}-catalog-reader-secret-arn"
+              }
+            },
+            "KEEPER_DATABASE_USERCARDS_READER_SECRET_ARN": {
+              "Fn::ImportValue": {
+                "Fn::Sub": "keeper-${Environment}-usercards-reader-secret-arn"
+              }
+            }
           }
         },
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "ApiFunctionRole": {
       "Type": "AWS::IAM::Role",
       "Properties": {
-        "Description": "Interactive API runtime: transaction-capable RDS Data API access, the published-view reader secret, the Search query secret, the UserCards writer secret and its own log group",
+        "Description": "Interactive API runtime with owner-scoped Catalog and UserCards read credentials and the UserCards writer credential",
         "AssumeRolePolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [
             {
               "Effect": "Allow",
-              "Principal": { "Service": "lambda.amazonaws.com" },
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
               "Action": "sts:AssumeRole"
             }
           ]
@@ -347,7 +483,9 @@
                   "Sid": "Logs",
                   "Effect": "Allow",
                   "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
-                  "Resource": { "Fn::Sub": "${ApiLogGroup.Arn}:*" }
+                  "Resource": {
+                    "Fn::Sub": "${ApiLogGroup.Arn}:*"
+                  }
                 },
                 {
                   "Sid": "DataApi",
@@ -360,7 +498,9 @@
                     "rds-data:RollbackTransaction"
                   ],
                   "Resource": {
-                    "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-database-cluster-arn" }
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "keeper-${Environment}-database-cluster-arn"
+                    }
                   }
                 },
                 {
@@ -370,12 +510,12 @@
                   "Resource": [
                     {
                       "Fn::ImportValue": {
-                        "Fn::Sub": "keeper-${Environment}-database-reader-secret-arn"
+                        "Fn::Sub": "keeper-${Environment}-catalog-reader-secret-arn"
                       }
                     },
                     {
                       "Fn::ImportValue": {
-                        "Fn::Sub": "keeper-${Environment}-search-query-secret-arn"
+                        "Fn::Sub": "keeper-${Environment}-usercards-reader-secret-arn"
                       }
                     },
                     {
@@ -390,15 +530,25 @@
           }
         ],
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "ApiFunctionPermission": {
       "Type": "AWS::Lambda::Permission",
       "Properties": {
-        "FunctionName": { "Ref": "ApiFunction" },
+        "FunctionName": {
+          "Ref": "ApiFunction"
+        },
         "Action": "lambda:InvokeFunction",
         "Principal": "apigateway.amazonaws.com",
         "SourceArn": {
@@ -410,28 +560,62 @@
       "Type": "AWS::Lambda::Function",
       "DependsOn": "RecognitionLogGroup",
       "Properties": {
-        "FunctionName": { "Fn::Sub": "keeper-${Environment}-recognition" },
+        "FunctionName": {
+          "Fn::Sub": "keeper-${Environment}-recognition"
+        },
         "Description": "Recognition compute entry point: the preserved Python engines and their model-provider settings",
         "PackageType": "Image",
-        "Code": { "ImageUri": { "Ref": "RecognitionImageUri" } },
+        "Code": {
+          "ImageUri": {
+            "Ref": "RecognitionImageUri"
+          }
+        },
         "Architectures": ["x86_64"],
         "MemorySize": 3008,
         "Timeout": 25,
-        "Role": { "Fn::GetAtt": ["RecognitionFunctionRole", "Arn"] },
+        "Role": {
+          "Fn::GetAtt": ["RecognitionFunctionRole", "Arn"]
+        },
         "Environment": {
           "Variables": {
-            "KEEPER_ENVIRONMENT": { "Ref": "Environment" },
+            "KEEPER_ENVIRONMENT": {
+              "Ref": "Environment"
+            },
             "KEEPER_TITLE_MODEL": {
-              "Fn::If": ["TitleModel", { "Ref": "TitleModelId" }, { "Ref": "AWS::NoValue" }]
+              "Fn::If": [
+                "TitleModel",
+                {
+                  "Ref": "TitleModelId"
+                },
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
             },
             "KEEPER_IDENTITY_MODEL": {
-              "Fn::If": ["IdentityModel", { "Ref": "IdentityModelId" }, { "Ref": "AWS::NoValue" }]
+              "Fn::If": [
+                "IdentityModel",
+                {
+                  "Ref": "IdentityModelId"
+                },
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
             }
           }
         },
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -444,7 +628,9 @@
           "Statement": [
             {
               "Effect": "Allow",
-              "Principal": { "Service": "lambda.amazonaws.com" },
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
               "Action": "sts:AssumeRole"
             }
           ]
@@ -459,7 +645,9 @@
                   "Sid": "Logs",
                   "Effect": "Allow",
                   "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
-                  "Resource": { "Fn::Sub": "${RecognitionLogGroup.Arn}:*" }
+                  "Resource": {
+                    "Fn::Sub": "${RecognitionLogGroup.Arn}:*"
+                  }
                 },
                 {
                   "Fn::If": [
@@ -472,7 +660,9 @@
                         "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${TitleModelId}"
                       }
                     },
-                    { "Ref": "AWS::NoValue" }
+                    {
+                      "Ref": "AWS::NoValue"
+                    }
                   ]
                 },
                 {
@@ -486,7 +676,9 @@
                         "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${IdentityModelId}"
                       }
                     },
-                    { "Ref": "AWS::NoValue" }
+                    {
+                      "Ref": "AWS::NoValue"
+                    }
                   ]
                 }
               ]
@@ -494,15 +686,25 @@
           }
         ],
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "RecognitionFunctionPermission": {
       "Type": "AWS::Lambda::Permission",
       "Properties": {
-        "FunctionName": { "Ref": "RecognitionFunction" },
+        "FunctionName": {
+          "Ref": "RecognitionFunction"
+        },
         "Action": "lambda:InvokeFunction",
         "Principal": "apigateway.amazonaws.com",
         "SourceArn": {
@@ -513,7 +715,9 @@
     "RecognitionIndependentPermission": {
       "Type": "AWS::Lambda::Permission",
       "Properties": {
-        "FunctionName": { "Ref": "RecognitionFunction" },
+        "FunctionName": {
+          "Ref": "RecognitionFunction"
+        },
         "Action": "lambda:InvokeFunction",
         "Principal": "apigateway.amazonaws.com",
         "SourceArn": {
@@ -524,7 +728,9 @@
     "RecognitionSourcePermission": {
       "Type": "AWS::Lambda::Permission",
       "Properties": {
-        "FunctionName": { "Ref": "RecognitionFunction" },
+        "FunctionName": {
+          "Ref": "RecognitionFunction"
+        },
         "Action": "lambda:InvokeFunction",
         "Principal": "apigateway.amazonaws.com",
         "SourceArn": {
@@ -535,50 +741,89 @@
     "EcsCluster": {
       "Type": "AWS::ECS::Cluster",
       "Properties": {
-        "ClusterName": { "Fn::Sub": "keeper-${Environment}" },
+        "ClusterName": {
+          "Fn::Sub": "keeper-${Environment}"
+        },
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "CatalogTaskDefinition": {
       "Type": "AWS::ECS::TaskDefinition",
       "Properties": {
-        "Family": { "Fn::Sub": "keeper-${Environment}-catalog" },
+        "Family": {
+          "Fn::Sub": "keeper-${Environment}-catalog"
+        },
         "Cpu": "1024",
         "Memory": "2048",
         "NetworkMode": "awsvpc",
         "RequiresCompatibilities": ["FARGATE"],
-        "RuntimePlatform": { "CpuArchitecture": "X86_64", "OperatingSystemFamily": "LINUX" },
-        "ExecutionRoleArn": { "Fn::GetAtt": ["CatalogTaskExecutionRole", "Arn"] },
-        "TaskRoleArn": { "Fn::GetAtt": ["CatalogTaskRole", "Arn"] },
+        "RuntimePlatform": {
+          "CpuArchitecture": "X86_64",
+          "OperatingSystemFamily": "LINUX"
+        },
+        "ExecutionRoleArn": {
+          "Fn::GetAtt": ["CatalogTaskExecutionRole", "Arn"]
+        },
+        "TaskRoleArn": {
+          "Fn::GetAtt": ["CatalogTaskRole", "Arn"]
+        },
         "ContainerDefinitions": [
           {
             "Name": "catalog-job",
-            "Image": { "Ref": "CatalogJobImageUri" },
+            "Image": {
+              "Ref": "CatalogJobImageUri"
+            },
             "Essential": true,
             "LogConfiguration": {
               "LogDriver": "awslogs",
               "Options": {
-                "awslogs-group": { "Ref": "CatalogLogGroup" },
-                "awslogs-region": { "Ref": "AWS::Region" },
+                "awslogs-group": {
+                  "Ref": "CatalogLogGroup"
+                },
+                "awslogs-region": {
+                  "Ref": "AWS::Region"
+                },
                 "awslogs-stream-prefix": "catalog"
               }
             },
             "Environment": [
-              { "Name": "AWS_REGION", "Value": { "Ref": "AWS::Region" } },
-              { "Name": "KEEPER_ENVIRONMENT", "Value": { "Ref": "Environment" } },
+              {
+                "Name": "AWS_REGION",
+                "Value": {
+                  "Ref": "AWS::Region"
+                }
+              },
+              {
+                "Name": "KEEPER_ENVIRONMENT",
+                "Value": {
+                  "Ref": "Environment"
+                }
+              },
               {
                 "Name": "KEEPER_DATABASE_CLUSTER_ARN",
                 "Value": {
-                  "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-database-cluster-arn" }
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "keeper-${Environment}-database-cluster-arn"
+                  }
                 }
               },
               {
                 "Name": "KEEPER_DATABASE_NAME",
                 "Value": {
-                  "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-database-name" }
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "keeper-${Environment}-database-name"
+                  }
                 }
               },
               {
@@ -592,21 +837,33 @@
               {
                 "Name": "KEEPER_SNAPSHOT_BUCKET",
                 "Value": {
-                  "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-snapshot-bucket" }
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "keeper-${Environment}-snapshot-bucket"
+                  }
                 }
               },
               {
                 "Name": "KEEPER_SNAPSHOT_PREFIX",
                 "Value": {
-                  "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-snapshot-prefix" }
+                  "Fn::ImportValue": {
+                    "Fn::Sub": "keeper-${Environment}-snapshot-prefix"
+                  }
                 }
               }
             ]
           }
         ],
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -619,7 +876,9 @@
           "Statement": [
             {
               "Effect": "Allow",
-              "Principal": { "Service": "ecs-tasks.amazonaws.com" },
+              "Principal": {
+                "Service": "ecs-tasks.amazonaws.com"
+              },
               "Action": "sts:AssumeRole"
             }
           ]
@@ -698,7 +957,9 @@
                     "rds-data:RollbackTransaction"
                   ],
                   "Resource": {
-                    "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-database-cluster-arn" }
+                    "Fn::ImportValue": {
+                      "Fn::Sub": "keeper-${Environment}-database-cluster-arn"
+                    }
                   }
                 },
                 {
@@ -715,15 +976,25 @@
                   "Sid": "Logs",
                   "Effect": "Allow",
                   "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
-                  "Resource": { "Fn::Sub": "${CatalogLogGroup.Arn}:*" }
+                  "Resource": {
+                    "Fn::Sub": "${CatalogLogGroup.Arn}:*"
+                  }
                 }
               ]
             }
           }
         ],
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -736,7 +1007,9 @@
           "Statement": [
             {
               "Effect": "Allow",
-              "Principal": { "Service": "ecs-tasks.amazonaws.com" },
+              "Principal": {
+                "Service": "ecs-tasks.amazonaws.com"
+              },
               "Action": "sts:AssumeRole"
             }
           ]
@@ -771,318 +1044,35 @@
                   "Sid": "Logs",
                   "Effect": "Allow",
                   "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
-                  "Resource": { "Fn::Sub": "${CatalogLogGroup.Arn}:*" }
-                }
-              ]
-            }
-          }
-        ],
-        "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
-        ]
-      }
-    },
-    "IndexingTaskDefinition": {
-      "Type": "AWS::ECS::TaskDefinition",
-      "Properties": {
-        "Family": { "Fn::Sub": "keeper-${Environment}-indexing" },
-        "Cpu": "1024",
-        "Memory": "2048",
-        "NetworkMode": "awsvpc",
-        "RequiresCompatibilities": ["FARGATE"],
-        "RuntimePlatform": { "CpuArchitecture": "X86_64", "OperatingSystemFamily": "LINUX" },
-        "ExecutionRoleArn": { "Fn::GetAtt": ["IndexingTaskExecutionRole", "Arn"] },
-        "TaskRoleArn": { "Fn::GetAtt": ["IndexingTaskRole", "Arn"] },
-        "ContainerDefinitions": [
-          {
-            "Name": "indexing-job",
-            "Image": { "Ref": "IndexingJobImageUri" },
-            "Essential": true,
-            "LogConfiguration": {
-              "LogDriver": "awslogs",
-              "Options": {
-                "awslogs-group": { "Ref": "IndexingLogGroup" },
-                "awslogs-region": { "Ref": "AWS::Region" },
-                "awslogs-stream-prefix": "indexing"
-              }
-            },
-            "Environment": [
-              { "Name": "AWS_REGION", "Value": { "Ref": "AWS::Region" } },
-              { "Name": "KEEPER_ENVIRONMENT", "Value": { "Ref": "Environment" } },
-              {
-                "Name": "KEEPER_DATABASE_CLUSTER_ARN",
-                "Value": {
-                  "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-database-cluster-arn" }
-                }
-              },
-              {
-                "Name": "KEEPER_DATABASE_NAME",
-                "Value": {
-                  "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-database-name" }
-                }
-              },
-              {
-                "Name": "KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN",
-                "Value": {
-                  "Fn::ImportValue": {
-                    "Fn::Sub": "keeper-${Environment}-search-indexing-secret-arn"
-                  }
-                }
-              },
-              {
-                "Name": "KEEPER_DATABASE_CATALOG_PUBLICATION_SECRET_ARN",
-                "Value": {
-                  "Fn::ImportValue": {
-                    "Fn::Sub": "keeper-${Environment}-catalog-publication-secret-arn"
-                  }
-                }
-              },
-              {
-                "Name": "KEEPER_DATABASE_USERCARDS_PUBLICATION_SECRET_ARN",
-                "Value": {
-                  "Fn::ImportValue": {
-                    "Fn::Sub": "keeper-${Environment}-usercards-publication-secret-arn"
-                  }
-                }
-              }
-            ]
-          }
-        ],
-        "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
-        ]
-      }
-    },
-    "IndexingTaskRole": {
-      "Type": "AWS::IAM::Role",
-      "Properties": {
-        "Description": "Background indexing job: maintain Search's projection through the RDS Data API with the Search indexing secret, read the Catalog and UserCards publications with their own publication secrets, and log to its own group",
-        "AssumeRolePolicyDocument": {
-          "Version": "2012-10-17",
-          "Statement": [
-            {
-              "Effect": "Allow",
-              "Principal": { "Service": "ecs-tasks.amazonaws.com" },
-              "Action": "sts:AssumeRole"
-            }
-          ]
-        },
-        "Policies": [
-          {
-            "PolicyName": "IndexingJobAccess",
-            "PolicyDocument": {
-              "Version": "2012-10-17",
-              "Statement": [
-                {
-                  "Sid": "DataApi",
-                  "Effect": "Allow",
-                  "Action": [
-                    "rds-data:BatchExecuteStatement",
-                    "rds-data:BeginTransaction",
-                    "rds-data:CommitTransaction",
-                    "rds-data:ExecuteStatement",
-                    "rds-data:RollbackTransaction"
-                  ],
                   "Resource": {
-                    "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-database-cluster-arn" }
+                    "Fn::Sub": "${CatalogLogGroup.Arn}:*"
                   }
-                },
-                {
-                  "Sid": "DatabaseSecrets",
-                  "Effect": "Allow",
-                  "Action": "secretsmanager:GetSecretValue",
-                  "Resource": [
-                    {
-                      "Fn::ImportValue": {
-                        "Fn::Sub": "keeper-${Environment}-search-indexing-secret-arn"
-                      }
-                    },
-                    {
-                      "Fn::ImportValue": {
-                        "Fn::Sub": "keeper-${Environment}-catalog-publication-secret-arn"
-                      }
-                    },
-                    {
-                      "Fn::ImportValue": {
-                        "Fn::Sub": "keeper-${Environment}-usercards-publication-secret-arn"
-                      }
-                    }
-                  ]
-                },
-                {
-                  "Sid": "Logs",
-                  "Effect": "Allow",
-                  "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
-                  "Resource": { "Fn::Sub": "${IndexingLogGroup.Arn}:*" }
                 }
               ]
             }
           }
         ],
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
-        ]
-      }
-    },
-    "IndexingTaskExecutionRole": {
-      "Type": "AWS::IAM::Role",
-      "Properties": {
-        "Description": "Background indexing job start-up: pull its immutable image from the indexing repository and write its log stream",
-        "AssumeRolePolicyDocument": {
-          "Version": "2012-10-17",
-          "Statement": [
-            {
-              "Effect": "Allow",
-              "Principal": { "Service": "ecs-tasks.amazonaws.com" },
-              "Action": "sts:AssumeRole"
-            }
-          ]
-        },
-        "Policies": [
           {
-            "PolicyName": "IndexingJobStartup",
-            "PolicyDocument": {
-              "Version": "2012-10-17",
-              "Statement": [
-                {
-                  "Sid": "RegistryAuthorization",
-                  "Effect": "Allow",
-                  "Action": "ecr:GetAuthorizationToken",
-                  "Resource": "*"
-                },
-                {
-                  "Sid": "IndexingImage",
-                  "Effect": "Allow",
-                  "Action": [
-                    "ecr:BatchCheckLayerAvailability",
-                    "ecr:BatchGetImage",
-                    "ecr:GetDownloadUrlForLayer"
-                  ],
-                  "Resource": {
-                    "Fn::ImportValue": {
-                      "Fn::Sub": "keeper-${Environment}-indexing-repository-arn"
-                    }
-                  }
-                },
-                {
-                  "Sid": "Logs",
-                  "Effect": "Allow",
-                  "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
-                  "Resource": { "Fn::Sub": "${IndexingLogGroup.Arn}:*" }
-                }
-              ]
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
             }
-          }
-        ],
-        "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
-        ]
-      }
-    },
-    "IndexingScheduleRole": {
-      "Type": "AWS::IAM::Role",
-      "Properties": {
-        "Description": "EventBridge Scheduler start of the finite background indexing task: it may start exactly that task definition and pass only its own two roles",
-        "AssumeRolePolicyDocument": {
-          "Version": "2012-10-17",
-          "Statement": [
-            {
-              "Effect": "Allow",
-              "Principal": { "Service": "scheduler.amazonaws.com" },
-              "Action": "sts:AssumeRole"
-            }
-          ]
-        },
-        "Policies": [
+          },
           {
-            "PolicyName": "StartIndexingTask",
-            "PolicyDocument": {
-              "Version": "2012-10-17",
-              "Statement": [
-                {
-                  "Sid": "StartTheIndexingTask",
-                  "Effect": "Allow",
-                  "Action": "ecs:RunTask",
-                  "Resource": { "Ref": "IndexingTaskDefinition" },
-                  "Condition": {
-                    "ArnLike": {
-                      "ecs:cluster": { "Fn::GetAtt": ["EcsCluster", "Arn"] }
-                    }
-                  }
-                },
-                {
-                  "Sid": "PassTheTaskRoles",
-                  "Effect": "Allow",
-                  "Action": "iam:PassRole",
-                  "Resource": [
-                    { "Fn::GetAtt": ["IndexingTaskRole", "Arn"] },
-                    { "Fn::GetAtt": ["IndexingTaskExecutionRole", "Arn"] }
-                  ],
-                  "Condition": {
-                    "StringEquals": { "iam:PassedToService": "ecs-tasks.amazonaws.com" }
-                  }
-                }
-              ]
-            }
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
           }
-        ],
-        "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
         ]
-      }
-    },
-    "IndexingSchedule": {
-      "Type": "AWS::Scheduler::Schedule",
-      "Properties": {
-        "Name": { "Fn::Sub": "keeper-${Environment}-indexing" },
-        "Description": "Starts the next finite background indexing run, so committed changes reach Search without an operator starting a task. Each start is one bounded, resumable pass; failures and incomplete passes are retried by the next start.",
-        "ScheduleExpression": { "Ref": "IndexingScheduleExpression" },
-        "ScheduleExpressionTimezone": "UTC",
-        "FlexibleTimeWindow": { "Mode": "OFF" },
-        "State": "ENABLED",
-        "Target": {
-          "Arn": { "Fn::GetAtt": ["EcsCluster", "Arn"] },
-          "RoleArn": { "Fn::GetAtt": ["IndexingScheduleRole", "Arn"] },
-          "EcsParameters": {
-            "TaskDefinitionArn": { "Ref": "IndexingTaskDefinition" },
-            "LaunchType": "FARGATE",
-            "TaskCount": 1,
-            "NetworkConfiguration": {
-              "AwsvpcConfiguration": {
-                "Subnets": {
-                  "Fn::Split": [
-                    ",",
-                    {
-                      "Fn::ImportValue": {
-                        "Fn::Sub": "keeper-${Environment}-public-subnet-ids"
-                      }
-                    }
-                  ]
-                },
-                "SecurityGroups": [
-                  {
-                    "Fn::ImportValue": {
-                      "Fn::Sub": "keeper-${Environment}-task-security-group-id"
-                    }
-                  }
-                ],
-                "AssignPublicIp": "ENABLED"
-              }
-            }
-          }
-        }
       }
     },
     "OriginAccessControl": {
       "Type": "AWS::CloudFront::OriginAccessControl",
       "Properties": {
         "OriginAccessControlConfig": {
-          "Name": { "Fn::Sub": "keeper-${Environment}" },
+          "Name": {
+            "Fn::Sub": "keeper-${Environment}"
+          },
           "Description": "Signed access of the rebuild distribution to the private browser bucket",
           "OriginAccessControlOriginType": "s3",
           "SigningBehavior": "always",
@@ -1094,7 +1084,9 @@
       "Type": "AWS::CloudFront::Distribution",
       "Properties": {
         "DistributionConfig": {
-          "Comment": { "Fn::Sub": "keeper-${Environment} browser delivery" },
+          "Comment": {
+            "Fn::Sub": "keeper-${Environment} browser delivery"
+          },
           "Enabled": true,
           "HttpVersion": "http2and3",
           "IPV6Enabled": true,
@@ -1108,13 +1100,19 @@
                   "${Bucket}.s3.${AWS::Region}.amazonaws.com",
                   {
                     "Bucket": {
-                      "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-browser-bucket" }
+                      "Fn::ImportValue": {
+                        "Fn::Sub": "keeper-${Environment}-browser-bucket"
+                      }
                     }
                   }
                 ]
               },
-              "OriginAccessControlId": { "Ref": "OriginAccessControl" },
-              "S3OriginConfig": { "OriginAccessIdentity": "" }
+              "OriginAccessControlId": {
+                "Ref": "OriginAccessControl"
+              },
+              "S3OriginConfig": {
+                "OriginAccessIdentity": ""
+              }
             }
           ],
           "DefaultCacheBehavior": {
@@ -1140,11 +1138,21 @@
               "ErrorCachingMinTTL": 0
             }
           ],
-          "ViewerCertificate": { "CloudFrontDefaultCertificate": true }
+          "ViewerCertificate": {
+            "CloudFrontDefaultCertificate": true
+          }
         },
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -1152,7 +1160,9 @@
       "Type": "AWS::S3::BucketPolicy",
       "Properties": {
         "Bucket": {
-          "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-browser-bucket" }
+          "Fn::ImportValue": {
+            "Fn::Sub": "keeper-${Environment}-browser-bucket"
+          }
         },
         "PolicyDocument": {
           "Version": "2012-10-17",
@@ -1160,14 +1170,18 @@
             {
               "Sid": "DistributionReadsBrowserArtifacts",
               "Effect": "Allow",
-              "Principal": { "Service": "cloudfront.amazonaws.com" },
+              "Principal": {
+                "Service": "cloudfront.amazonaws.com"
+              },
               "Action": "s3:GetObject",
               "Resource": {
                 "Fn::Sub": [
                   "arn:${AWS::Partition}:s3:::${Bucket}/*",
                   {
                     "Bucket": {
-                      "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-browser-bucket" }
+                      "Fn::ImportValue": {
+                        "Fn::Sub": "keeper-${Environment}-browser-bucket"
+                      }
                     }
                   }
                 ]
@@ -1187,55 +1201,19 @@
     "ApiFunctionErrorsAlarm": {
       "Type": "AWS::CloudWatch::Alarm",
       "Properties": {
-        "AlarmName": { "Fn::Sub": "keeper-${Environment}-api-errors" },
+        "AlarmName": {
+          "Fn::Sub": "keeper-${Environment}-api-errors"
+        },
         "AlarmDescription": "The interactive entry point reported at least one failed invocation in five minutes.",
         "Namespace": "AWS/Lambda",
         "MetricName": "Errors",
-        "Dimensions": [{ "Name": "FunctionName", "Value": { "Ref": "ApiFunction" } }],
-        "Statistic": "Sum",
-        "Period": 300,
-        "EvaluationPeriods": 1,
-        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
-        "Threshold": 1,
-        "TreatMissingData": "notBreaching",
-        "AlarmActions": [
-          {
-            "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-alarm-topic-arn" }
-          }
-        ]
-      }
-    },
-    "RecognitionFunctionErrorsAlarm": {
-      "Type": "AWS::CloudWatch::Alarm",
-      "Properties": {
-        "AlarmName": { "Fn::Sub": "keeper-${Environment}-recognition-errors" },
-        "AlarmDescription": "The recognition compute entry point reported at least one failed invocation in five minutes.",
-        "Namespace": "AWS/Lambda",
-        "MetricName": "Errors",
-        "Dimensions": [{ "Name": "FunctionName", "Value": { "Ref": "RecognitionFunction" } }],
-        "Statistic": "Sum",
-        "Period": 300,
-        "EvaluationPeriods": 1,
-        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
-        "Threshold": 1,
-        "TreatMissingData": "notBreaching",
-        "AlarmActions": [
-          {
-            "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-alarm-topic-arn" }
-          }
-        ]
-      }
-    },
-    "ApiServerErrorAlarm": {
-      "Type": "AWS::CloudWatch::Alarm",
-      "Properties": {
-        "AlarmName": { "Fn::Sub": "keeper-${Environment}-api-server-errors" },
-        "AlarmDescription": "The HTTP API returned at least one server error in five minutes.",
-        "Namespace": "AWS/ApiGateway",
-        "MetricName": "5xx",
         "Dimensions": [
-          { "Name": "ApiId", "Value": { "Ref": "HttpApi" } },
-          { "Name": "Stage", "Value": "$default" }
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "ApiFunction"
+            }
+          }
         ],
         "Statistic": "Sum",
         "Period": 300,
@@ -1245,7 +1223,77 @@
         "TreatMissingData": "notBreaching",
         "AlarmActions": [
           {
-            "Fn::ImportValue": { "Fn::Sub": "keeper-${Environment}-alarm-topic-arn" }
+            "Fn::ImportValue": {
+              "Fn::Sub": "keeper-${Environment}-alarm-topic-arn"
+            }
+          }
+        ]
+      }
+    },
+    "RecognitionFunctionErrorsAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": {
+          "Fn::Sub": "keeper-${Environment}-recognition-errors"
+        },
+        "AlarmDescription": "The recognition compute entry point reported at least one failed invocation in five minutes.",
+        "Namespace": "AWS/Lambda",
+        "MetricName": "Errors",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "RecognitionFunction"
+            }
+          }
+        ],
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Fn::ImportValue": {
+              "Fn::Sub": "keeper-${Environment}-alarm-topic-arn"
+            }
+          }
+        ]
+      }
+    },
+    "ApiServerErrorAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": {
+          "Fn::Sub": "keeper-${Environment}-api-server-errors"
+        },
+        "AlarmDescription": "The HTTP API returned at least one server error in five minutes.",
+        "Namespace": "AWS/ApiGateway",
+        "MetricName": "5xx",
+        "Dimensions": [
+          {
+            "Name": "ApiId",
+            "Value": {
+              "Ref": "HttpApi"
+            }
+          },
+          {
+            "Name": "Stage",
+            "Value": "$default"
+          }
+        ],
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Fn::ImportValue": {
+              "Fn::Sub": "keeper-${Environment}-alarm-topic-arn"
+            }
           }
         ]
       }
@@ -1254,47 +1302,63 @@
   "Outputs": {
     "ApiBaseUrl": {
       "Description": "Base URL of the interactive entry point (public browser setting apiBaseUrl).",
-      "Value": { "Fn::GetAtt": ["HttpApi", "ApiEndpoint"] }
+      "Value": {
+        "Fn::GetAtt": ["HttpApi", "ApiEndpoint"]
+      }
     },
     "RecognitionBaseUrl": {
       "Description": "Base URL of the recognition compute entry point (public browser setting computeBaseUrl).",
-      "Value": { "Fn::GetAtt": ["HttpApi", "ApiEndpoint"] }
+      "Value": {
+        "Fn::GetAtt": ["HttpApi", "ApiEndpoint"]
+      }
     },
     "BrowserUrl": {
       "Description": "HTTPS URL of the delivered browser application.",
-      "Value": { "Fn::Sub": "https://${Distribution.DomainName}" }
+      "Value": {
+        "Fn::Sub": "https://${Distribution.DomainName}"
+      }
     },
     "UserPoolId": {
       "Description": "Retained user pool this environment authenticates against.",
-      "Value": { "Ref": "ExistingUserPoolId" }
+      "Value": {
+        "Ref": "ExistingUserPoolId"
+      }
     },
     "UserPoolClientId": {
       "Description": "App client of the rebuild in that pool (public browser setting appClientId).",
-      "Value": { "Ref": "UserPoolClient" }
+      "Value": {
+        "Ref": "UserPoolClient"
+      }
     },
     "DistributionId": {
       "Description": "Distribution to invalidate when a deployment replaces cached browser artifacts.",
-      "Value": { "Ref": "Distribution" }
+      "Value": {
+        "Ref": "Distribution"
+      }
     },
     "ApiFunctionName": {
       "Description": "Interactive API function, for logs and alarms.",
-      "Value": { "Ref": "ApiFunction" }
+      "Value": {
+        "Ref": "ApiFunction"
+      }
     },
     "RecognitionFunctionName": {
       "Description": "Recognition container function, for logs and alarms.",
-      "Value": { "Ref": "RecognitionFunction" }
+      "Value": {
+        "Ref": "RecognitionFunction"
+      }
     },
     "EcsClusterName": {
       "Description": "Cluster the finite catalog task runs in.",
-      "Value": { "Ref": "EcsCluster" }
+      "Value": {
+        "Ref": "EcsCluster"
+      }
     },
     "CatalogTaskDefinitionArn": {
       "Description": "Task definition to start an explicit catalog synchronization with.",
-      "Value": { "Ref": "CatalogTaskDefinition" }
-    },
-    "IndexingTaskDefinitionArn": {
-      "Description": "Task definition to start an explicit background indexing run with.",
-      "Value": { "Ref": "IndexingTaskDefinition" }
+      "Value": {
+        "Ref": "CatalogTaskDefinition"
+      }
     }
   }
 }

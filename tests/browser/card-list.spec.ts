@@ -193,30 +193,6 @@ async function fragmentRequests(page: Page): Promise<readonly UiCardListFragment
   );
 }
 
-async function observationRequests(
-  page: Page,
-): Promise<readonly import('./card-list.harness.js').UiCardListObservationRequest[]> {
-  return page.evaluate(() =>
-    (globalThis as unknown as GlobalControl).keeperCardListControl.observationRequests(),
-  );
-}
-
-async function settleObservation(
-  page: Page,
-  id: number,
-  state: 'incorporated' | 'delayed' | 'failed',
-): Promise<void> {
-  await page.evaluate(
-    (input) => {
-      (globalThis as unknown as GlobalControl).keeperCardListControl.settleObservation(
-        input.id,
-        input.state,
-      );
-    },
-    { id, state },
-  );
-}
-
 async function settleFragment(
   page: Page,
   id: number,
@@ -598,7 +574,15 @@ test('loads images, ownership, tags and tools independently and retries one fail
   ]);
   await expect(
     page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="tags"]'),
-  ).toHaveAttribute('data-ui-state', 'failed');
+  ).toHaveAttribute('data-ui-state', 'refresh-failed');
+  await expect(
+    page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="tags"]'),
+  ).toContainText('Deck');
+  await expect(
+    page.locator(
+      '#list-a [data-ui-entry="copy:1"] [data-ui-fragment="tags"] [data-ui-fragment-message]',
+    ),
+  ).toContainText('tags refresh unavailable');
 });
 
 test('drops an obsolete page instead of replacing the active result', async ({ page }) => {
@@ -708,7 +692,12 @@ test('keeps the selection through enrichment and refinement and acts through a t
   // The entry kept its enriched fragment; the entry that arrived with the new result reads it.
   await expect(
     page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-fragment="images"]'),
-  ).toHaveText('No images');
+  ).toContainText('No images');
+  await expect(
+    page.locator(
+      '#list-a [data-ui-entry="copy:1"] [data-ui-fragment="images"] [data-ui-fragment-refreshing]',
+    ),
+  ).toHaveText('Refreshing images…');
   await expect(
     page.locator('#list-a [data-ui-entry="copy:5"] [data-ui-fragment="images"]'),
   ).toHaveText('Loading images…');
@@ -740,77 +729,6 @@ test('renders refreshed quantities and the consumer’s own content for the fres
   await expect(page.locator('#list-a [data-ui-entry="copy:1"] [data-ui-custom-entry]')).toHaveText(
     'copies 7 intended 2',
   );
-});
-
-test('presents an updating empty result as indexing instead of a successful emptiness', async ({
-  page,
-}) => {
-  await openLists(page);
-  await install(page, 'a', { pageSize: 2, changes: true });
-  const first = await onlyRequest(page, 'a');
-  await settlePage(page, first.id, []);
-  const status = page.locator('#list-a [data-ui-status]');
-  await expect(status).toHaveText('No entries');
-
-  // A committed change reaches the list before the index holds its entry: the usable indexed
-  // result is empty, but it is awaiting indexing rather than a successful emptiness.
-  await page.evaluate(() => {
-    (globalThis as unknown as GlobalControl).keeperCardListControl.changed('a', {
-      scope: 'copies',
-      records: [],
-      imports: [],
-      position: '5',
-    });
-  });
-  const read = (await pageRequests(page)).at(-1)!;
-  expect(read).toMatchObject({ continuation: null });
-  await settlePage(page, read.id, [], null, { current: false });
-
-  await expect(status).toHaveAttribute('data-ui-freshness', 'indexing');
-  await expect(status).toHaveText('Results are still being indexed.');
-  await expect(status).not.toHaveText('No entries');
-});
-
-test('observes awaited indexing, exposes a delay and recovers it through retry', async ({
-  page,
-}) => {
-  await openLists(page);
-  await install(page, 'a', { pageSize: 2, changes: true, observations: true });
-  await settlePage(page, (await onlyRequest(page, 'a')).id, [card('1')]);
-
-  // A committed change the index has not incorporated is observed through the source's own
-  // bounded freshness capability instead of waiting for another user action.
-  await page.evaluate(() => {
-    (globalThis as unknown as GlobalControl).keeperCardListControl.changed('a', {
-      scope: 'copies',
-      records: [],
-      imports: [],
-      position: '5',
-    });
-  });
-  const read = (await pageRequests(page)).at(-1)!;
-  await settlePage(page, read.id, [card('1')], null, { current: false });
-  const observation = (await observationRequests(page)).at(-1)!;
-  expect(observation.positions).toEqual(['5']);
-
-  await settleObservation(page, observation.id, 'delayed');
-  const status = page.locator('#list-a [data-ui-status]');
-  await expect(status).toHaveAttribute('data-ui-freshness', 'delayed');
-  await expect(status).toHaveText(
-    'Results are still being indexed; this is taking longer than expected.',
-  );
-
-  // Checking again starts no write, observes the same positions and refreshes the generation once
-  // the provider established them.
-  await page.locator('#list-a [data-ui-retry]').click();
-  const retry = (await observationRequests(page)).at(-1)!;
-  expect(retry.positions).toEqual(['5']);
-  await settleObservation(page, retry.id, 'incorporated');
-  const refreshed = (await pageRequests(page)).at(-1)!;
-  expect(refreshed.required).toEqual(['5']);
-  await settlePage(page, refreshed.id, [card('1'), card('2')]);
-  await expect(status).toHaveAttribute('data-ui-freshness', 'current');
-  await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(2);
 });
 
 test('exposes a selected identity the source replaced as unavailable until reselected', async ({
@@ -1213,6 +1131,46 @@ test('reloads one fragment without waiting for the read it supersedes', async ({
   await expect(slot.locator('img')).toHaveAttribute('src', 'https://keeper.test/bolt.png');
 });
 
+test('renders retained fragment values as refreshing and reports a failed refresh', async ({
+  page,
+}) => {
+  await openLists(page);
+  await install(page, 'a', { fragments: ['ownership'] });
+  await settlePage(page, (await onlyRequest(page, 'a')).id, [card('1')]);
+  await settleFragment(page, (await fragmentRequests(page)).at(-1)!.id, [
+    {
+      key: 'card:1',
+      status: 'ready',
+      values: { owned: 2, locations: 1, intended: null },
+    },
+  ]);
+
+  const slot = page.locator('#list-a [data-ui-entry="card:1"] [data-ui-fragment="ownership"]');
+  await reloadFragment(page, 'a', 'card:1', 'ownership');
+  await expect(slot).toHaveAttribute('data-ui-state', 'refreshing');
+  await expect(slot).toContainText('Owned: 2 · Locations: 1');
+  await expect(slot.locator('[data-ui-fragment-refreshing]')).toHaveText('Refreshing ownership…');
+
+  await failFragment(page, (await fragmentRequests(page)).at(-1)!.id, 'Counts unavailable');
+  await expect(slot).toHaveAttribute('data-ui-state', 'refresh-failed');
+  await expect(slot).toContainText('Owned: 2 · Locations: 1');
+  await expect(slot.locator('[data-ui-fragment-message]')).toHaveText(
+    'ownership refresh unavailable: Counts unavailable',
+  );
+
+  await reloadFragment(page, 'a', 'card:1', 'ownership');
+  await expect(slot).toHaveAttribute('data-ui-state', 'refreshing');
+  await settleFragment(page, (await fragmentRequests(page)).at(-1)!.id, [
+    {
+      key: 'card:1',
+      status: 'ready',
+      values: { owned: 3, locations: 1, intended: null },
+    },
+  ]);
+  await expect(slot).toHaveAttribute('data-ui-state', 'ready');
+  await expect(slot).toHaveText('Owned: 3 · Locations: 1');
+});
+
 test('keeps keyboard focus on a retained entry through window updates', async ({ page }) => {
   await openLists(page);
   await install(page, 'a', { pageSize: 2, fragments: ['images'] });
@@ -1549,7 +1507,6 @@ test('restores the retained window, selection and local focus from its own sourc
     position: { continuation: 'cursor-1', offset: 0 },
     selection: ['card:2'],
     selectedTargets: [],
-    awaiting: [],
     scrollTop: 0,
     focus: { control: 'select', key: 'card:2' },
   });
@@ -1677,7 +1634,7 @@ test('restarts an invalidated continuation and keeps the usable window and selec
   expect(restarted.id).not.toBe(continued.id);
   await expect(page.locator('#list-a [data-ui-entry]')).toHaveCount(2);
   await expect(page.locator('#list-a [data-ui-select="card:1"]')).toBeChecked();
-  await expect(page.locator('#list-a [data-ui-status]')).toHaveText('');
+  await expect(page.locator('#list-a [data-ui-status]')).toHaveText('Refreshing…');
   const requests = await pageRequests(page);
   expect(requests).toHaveLength(3);
   expect(requests[1]).toMatchObject({ id: continued.id, continuation: 'next', aborted: false });

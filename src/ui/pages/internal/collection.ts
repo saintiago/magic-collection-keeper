@@ -2,9 +2,8 @@
  * Collection pages of the UserInterface (docs/ui/navigation.md,
  * docs/ui/pages.md#page-map).
  *
- * The collection view presents the account's owned records through the list boundary: the text
- * expression and the level control of the presented view build one Search query restricted to
- * owned entries, the URL carries that query so a reload or a direct entry presents the same result,
+ * The collection view presents the account's owned records through the list boundary: the level
+ * control and optional card identity build a private UserCards query, the URL carries that query so a reload or a direct entry presents the same result,
  * and the entries show the counts the result evaluated — physical copies and intended quantities —
  * distinctly. At the physical-copy level every copy stays an individual entry, so equivalent
  * copies group for convenient bulk selection without losing their individual identities, and the
@@ -70,7 +69,7 @@ function collectionPage(): UiPageDefinition {
         context: collectionQueryOf(view),
         accountId: context.account.accountId,
         // A committed change of the account's copies makes this result stale: the list reacquires
-        // it through Search instead of a page patching the presented rows.
+        // it through UserCards instead of a page patching the presented rows.
         changes: bindings.changes(),
         pageSize: UI_LIMITS.catalogPage,
         restored: readListState<CardListCollectionQuery>(restored),
@@ -129,12 +128,21 @@ function collectionPage(): UiPageDefinition {
 
 /** The query the collection page presents for one view. */
 function collectionQueryOf(view: Extract<UiView, { page: 'collection' }>): CardListCollectionQuery {
-  return { text: view.query, level: view.level };
+  return {
+    text: view.query,
+    level: view.level,
+    ...(view.cardId === undefined ? {} : { cardId: view.cardId }),
+  };
 }
 
 /** One collection view from a query; the URL then identifies the whole presented result. */
 function collectionView(query: CardListCollectionQuery): UiView {
-  return { page: 'collection', query: query.text, level: query.level };
+  return {
+    page: 'collection',
+    query: query.text,
+    level: query.level,
+    ...(query.cardId === undefined ? {} : { cardId: query.cardId }),
+  };
 }
 
 /** Location one presented entry opens, or null when it carries no openable identity. */

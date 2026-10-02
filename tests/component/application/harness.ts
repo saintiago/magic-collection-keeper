@@ -14,9 +14,13 @@ import {
   type IdentityVerifier,
 } from '../../../src/application/index.js';
 import { createPostgresApplication, type Application } from '../../../src/application/backend.js';
-import type { CardPrintingsPage, Catalog, CatalogResolution } from '../../../src/catalog/index.js';
+import type {
+  CardPrintingsPage,
+  CatalogService,
+  CatalogResolution,
+} from '../../../src/catalog/index.js';
 import type { CatalogSnapshotSource } from '../../../src/catalog/index.js';
-import type { Search } from '../../../src/search/index.js';
+import type { UserCardsQueries } from '../../../src/usercards/index.js';
 import type {
   AssociationReadResult,
   CopyReadResult,
@@ -72,7 +76,7 @@ export function signedInStorage(idToken = 'id-token-value'): BrowserSessionStore
 }
 
 export interface CatalogSpy {
-  readonly contract: Catalog;
+  readonly contract: CatalogService;
   readonly resolve: Mock<(references: unknown) => Promise<CatalogResolution>>;
   readonly listCardPrintings: Mock<
     (cardId: string, options?: unknown) => Promise<CardPrintingsPage>
@@ -97,45 +101,34 @@ export function createCatalogSpy(): CatalogSpy {
   return {
     resolve,
     listCardPrintings,
-    contract: { resolve, listCardPrintings } as unknown as Catalog,
+    contract: {
+      resolve,
+      listCardPrintings,
+      query: async () => ({
+        entries: [],
+        totalCount: 0,
+        revision: testRevision,
+        continuation: null,
+      }),
+    } as unknown as CatalogService,
   };
 }
 
-export interface SearchSpy {
-  readonly contract: Search;
-  readonly execute: Mock;
-  readonly counts: Mock;
-  readonly observe: Mock;
-}
-
-/** A Search contract whose evaluation the case scripts and observes. */
-export function createSearchSpy(): SearchSpy {
-  const execute = vi.fn(async () => ({
-    status: 'ready' as const,
+export function createQueriesSpy() {
+  const query = vi.fn(async () => ({
     entries: [],
     totalCount: 0,
     continuation: null,
-    revisions: {
-      generation: 'generation-1',
-      catalogRevision: testRevision.revisionId,
-      catalogPosition: '1',
-      privateRevision: null,
-    },
+    privateRevision: '1',
   }));
-  const counts = vi.fn(async () => ({
-    privateRevision: 'private-revision-1',
-    counts: new Map(),
+  const readFragments = vi.fn(async () => ({
+    fragments: new Map(),
+    missing: [],
+    privateRevision: '1',
   }));
-  const observe = vi.fn(async () => ({
-    state: 'incorporated' as const,
-    revisions: {
-      generation: 'generation-1',
-      catalogRevision: testRevision.revisionId,
-      catalogPosition: '1',
-      privateRevision: '1',
-    },
-  }));
-  return { execute, counts, observe, contract: { execute, counts, observe } as unknown as Search };
+  const readPhysicalDetail = vi.fn();
+  const contract: UserCardsQueries = { query, readFragments, readPhysicalDetail };
+  return { contract, query, readFragments, readPhysicalDetail };
 }
 
 export interface UserCardsSpy {
@@ -186,24 +179,24 @@ export function createUserCardsSpy(): UserCardsSpy {
     readCopies,
     createCopies: vi.fn(async () => ({
       privateRevision: 'r1',
-      publicationPosition: '1',
+
       copies: [],
     })),
     correctCopy: vi.fn(async () => ({
       privateRevision: 'r1',
-      publicationPosition: '1',
+
       copies: [],
     })),
     setCopyLocation: vi.fn(async () => ({
       privateRevision: 'r1',
-      publicationPosition: '1',
+
       copy: null,
       location: null,
     })),
     listTags: vi.fn(async () => ({ privateRevision: 'r1', tags: [], continuation: null })),
     readTags,
-    createTag: vi.fn(async () => ({ privateRevision: 'r1', publicationPosition: '1', tag: null })),
-    renameTag: vi.fn(async () => ({ privateRevision: 'r1', publicationPosition: '1', tag: null })),
+    createTag: vi.fn(async () => ({ privateRevision: 'r1', tag: null })),
+    renameTag: vi.fn(async () => ({ privateRevision: 'r1', tag: null })),
     listAssociations: vi.fn(async () => ({
       privateRevision: 'r1',
       associations: [],
@@ -212,17 +205,17 @@ export function createUserCardsSpy(): UserCardsSpy {
     readAssociations,
     createAssociation: vi.fn(async () => ({
       privateRevision: 'r1',
-      publicationPosition: '1',
+
       association: null,
     })),
     changeAssociation: vi.fn(async () => ({
       privateRevision: 'r1',
-      publicationPosition: '1',
+
       association: null,
     })),
     removeAssociation: vi.fn(async () => ({
       privateRevision: 'r1',
-      publicationPosition: '1',
+
       associationId: 'a1',
     })),
     listImportSessions: vi.fn(async () => ({
@@ -263,7 +256,7 @@ export function createUserCardsSpy(): UserCardsSpy {
       sessionId: 'session-1',
       sourceKind: 'scan',
       sourceId: 'scan',
-      publicationPosition: '1',
+
       copies: [],
       replayed: false,
       privateRevision: 'r1',
@@ -369,14 +362,14 @@ export function createTestApplication(
     configuration: options.configuration ?? testConfiguration(),
     identity: options.identity ?? testIdentityVerifier(),
     resources: {
-      readSql: sql.sql,
-      searchSql: sql.sql,
+      catalogReadSql: sql.sql,
+      userCardsReadSql: sql.sql,
       writeSql: sql.sql,
       catalogSynchronization: {
         sql: sql.sql,
         snapshots: options.snapshots ?? createSnapshotSource({}),
       },
-      searchIndexing: null,
+
       deckSource: null,
     },
     diagnostics: { record: diagnostics } satisfies Diagnostics,

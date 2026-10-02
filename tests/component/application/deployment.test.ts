@@ -23,9 +23,7 @@ import {
   createS3SnapshotClient,
   readCatalogJobEnvironment,
   readInteractiveEnvironment,
-  readIndexingJobEnvironment,
   runCatalogJob,
-  runIndexingJob,
   type DataApiCommand,
 } from '../../../src/application/deployment.js';
 import { backgroundFailureDiagnostic } from '../../../src/application/internal/diagnostics.js';
@@ -39,9 +37,9 @@ const interactiveEnvironment: Record<string, string> = {
   KEEPER_USER_POOL_CLIENT_ID: 'keeper-test-client',
   KEEPER_DATABASE_CLUSTER_ARN: 'arn:aws:rds:us-east-1:123456789012:cluster:keeper-test',
   KEEPER_DATABASE_NAME: 'keeper',
-  KEEPER_DATABASE_READER_SECRET_ARN:
+  KEEPER_DATABASE_CATALOG_READER_SECRET_ARN:
     'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-reader',
-  KEEPER_DATABASE_SEARCH_QUERY_SECRET_ARN:
+  KEEPER_DATABASE_USERCARDS_READER_SECRET_ARN:
     'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-search-query',
   KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN:
     'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-usercards-writer',
@@ -64,25 +62,6 @@ const catalogJobEnvironment: Record<string, string> = {
   KEEPER_SNAPSHOT_PREFIX: 'snapshots/',
 };
 
-/**
- * The variables the background indexing job receives: Search's indexing secret and one
- * publication reader per provider, and no provider writer or end-user reader credential
- * (docs/data-architecture.md#access-and-deployment).
- */
-const indexingJobEnvironment: Record<string, string> = {
-  KEEPER_ENVIRONMENT: 'test',
-  AWS_REGION: 'us-east-1',
-  KEEPER_DATABASE_CLUSTER_ARN: 'arn:aws:rds:us-east-1:123456789012:cluster:keeper-test',
-  KEEPER_DATABASE_NAME: 'keeper',
-  KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN:
-    'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-search-indexing',
-  KEEPER_DATABASE_CATALOG_PUBLICATION_SECRET_ARN:
-    'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-catalog-publication',
-  KEEPER_DATABASE_USERCARDS_PUBLICATION_SECRET_ARN:
-    'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-usercards-publication',
-};
-
-/** A Data API port that records the calls the transactor issues. */
 function recordingClient(responses: readonly Readonly<Record<string, unknown>>[] = []) {
   const commands: DataApiCommand[] = [];
   let index = 0;
@@ -109,7 +88,7 @@ describe('deployment configuration', () => {
       region: 'us-east-1',
     });
     expect(configuration.resources.catalogDatabase.secretArn).toContain('keeper-reader');
-    expect(configuration.resources.userCardsDatabase.secretArn).toContain(
+    expect(configuration.resources.userCardsWriteDatabase.secretArn).toContain(
       'keeper-usercards-writer',
     );
     expect(configuration.resources.catalogSnapshots).toEqual({
@@ -123,11 +102,11 @@ describe('deployment configuration', () => {
 
   it('names the missing variable instead of reporting an unreadable configuration', () => {
     const environment = { ...interactiveEnvironment };
-    delete environment['KEEPER_DATABASE_READER_SECRET_ARN'];
+    delete environment['KEEPER_DATABASE_CATALOG_READER_SECRET_ARN'];
 
     expect(() => readInteractiveEnvironment(environment)).toThrow(ConfigurationError);
     expect(() => readInteractiveEnvironment(environment)).toThrow(
-      /KEEPER_DATABASE_READER_SECRET_ARN/,
+      /KEEPER_DATABASE_CATALOG_READER_SECRET_ARN/,
     );
   });
 
@@ -166,65 +145,6 @@ describe('deployment configuration', () => {
     expect(() => readCatalogJobEnvironment(environment)).toThrow(
       /KEEPER_DATABASE_CATALOG_WRITER_SECRET_ARN/,
     );
-  });
-
-  it('reads the indexing job without any identity, browser or provider credential', () => {
-    const configuration = readIndexingJobEnvironment(indexingJobEnvironment);
-
-    expect(configuration).toEqual({
-      environment: 'test',
-      region: 'us-east-1',
-      database: {
-        clusterArn: 'arn:aws:rds:us-east-1:123456789012:cluster:keeper-test',
-        secretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-search-indexing',
-        database: 'keeper',
-      },
-      publications: {
-        catalog: {
-          clusterArn: 'arn:aws:rds:us-east-1:123456789012:cluster:keeper-test',
-          secretArn:
-            'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-catalog-publication',
-          database: 'keeper',
-        },
-        userCards: {
-          clusterArn: 'arn:aws:rds:us-east-1:123456789012:cluster:keeper-test',
-          secretArn:
-            'arn:aws:secretsmanager:us-east-1:123456789012:secret:keeper-usercards-publication',
-          database: 'keeper',
-        },
-      },
-      accounts: [],
-      rebuild: false,
-    });
-    expect(configuration.database.secretArn).not.toContain('writer');
-    expect(configuration.database.secretArn).not.toContain('reader');
-  });
-
-  it('reads the accounts and rebuild mode one explicit indexing run names', () => {
-    const configuration = readIndexingJobEnvironment({
-      ...indexingJobEnvironment,
-      KEEPER_INDEXING_ACCOUNTS: 'cognito-alice, cognito-bob',
-      KEEPER_INDEXING_REBUILD: 'true',
-    });
-
-    expect(configuration.accounts).toEqual(['cognito-alice', 'cognito-bob']);
-    expect(configuration.rebuild).toBe(true);
-  });
-
-  it('requires Search’s indexing and publication credentials and rejects an unreadable rebuild mode', () => {
-    const missing = { ...indexingJobEnvironment };
-    delete missing['KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN'];
-    expect(() => readIndexingJobEnvironment(missing)).toThrow(
-      /KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN/,
-    );
-    const withoutPublication = { ...indexingJobEnvironment };
-    delete withoutPublication['KEEPER_DATABASE_CATALOG_PUBLICATION_SECRET_ARN'];
-    expect(() => readIndexingJobEnvironment(withoutPublication)).toThrow(
-      /KEEPER_DATABASE_CATALOG_PUBLICATION_SECRET_ARN/,
-    );
-    expect(() =>
-      readIndexingJobEnvironment({ ...indexingJobEnvironment, KEEPER_INDEXING_REBUILD: 'yes' }),
-    ).toThrow(/KEEPER_INDEXING_REBUILD/);
   });
 });
 
@@ -764,31 +684,6 @@ describe('catalog job snapshot lifecycle', () => {
     // The busy run reports its outcome without opening the transfer it never consumes.
     expect(outcome).toEqual({ ok: false, failureCode: 'busy', revision: null });
     expect(reads).toBe(0);
-  });
-});
-
-describe('background indexing job outcome', () => {
-  it('reports a missing configuration variable as a failed pass without leaking a value', async () => {
-    const environment = { ...indexingJobEnvironment };
-    delete environment['KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN'];
-    const records: Record<string, unknown>[] = [];
-
-    const outcome = await runIndexingJob({
-      environment,
-      dataApi: recordingClient(),
-      log: (record) => records.push({ ...record }),
-    });
-
-    expect(outcome).toEqual({ ok: false, failureCode: 'unavailable', result: null });
-    expect(records.at(-1)).toMatchObject({
-      operation: 'search.index',
-      outcome: 'failed',
-      failureCode: 'unavailable',
-    });
-    expect(String(records.at(-1)?.['problem'])).toContain(
-      'KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN',
-    );
-    expect(JSON.stringify(records)).not.toContain('keeper-test');
   });
 });
 

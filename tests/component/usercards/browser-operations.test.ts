@@ -169,7 +169,7 @@ function pendingCall<Value>(): {
 function tag(tagId = 'tag-1'): TagChangeResult {
   return {
     privateRevision: 'revision-2',
-    publicationPosition: '3',
+
     tag: { tagId, kind: 'deck', label: 'Deck', system: false, revision: 1 },
   };
 }
@@ -261,7 +261,7 @@ describe('UserCards browser operations', () => {
             sourceKind: 'pasted-list',
             sourceId: 'import-1',
             destination: { kind: 'ownership' },
-            publicationPosition: '7',
+
             copies: [
               {
                 copyId: 'copy-1',
@@ -303,7 +303,6 @@ describe('UserCards browser operations', () => {
         scope: 'copies',
         records: [{ kind: 'copy', copyId: 'copy-1' }],
         imports: ['import-1'],
-        position: '7',
       },
     ]);
     expect(account.retained()).toEqual([]);
@@ -320,7 +319,7 @@ describe('UserCards browser operations', () => {
         sourceKind: 'moxfield',
         sourceId: 'deck-1',
         destination: input.destination,
-        publicationPosition: '9',
+
         copies: [],
         associations: [
           {
@@ -355,7 +354,6 @@ describe('UserCards browser operations', () => {
         scope: 'associations',
         records: [{ kind: 'association', associationId: 'association-1' }],
         imports: ['import-1'],
-        position: '9',
       },
     ]);
   });
@@ -506,8 +504,8 @@ describe('UserCards browser operations', () => {
 
     expect(staged).toEqual(['line-1', 'line-1']);
     expect(changes).toEqual([
-      { scope: 'imports', records: [], imports: ['import-1'], position: null },
-      { scope: 'imports', records: [], imports: ['import-1'], position: null },
+      { scope: 'imports', records: [], imports: ['import-1'] },
+      { scope: 'imports', records: [], imports: ['import-1'] },
     ]);
   });
 
@@ -516,7 +514,7 @@ describe('UserCards browser operations', () => {
     const client = scriptedClient({
       correctCopy: async () => ({
         privateRevision: 'revision-2',
-        publicationPosition: '11',
+
         copies: [
           {
             copyId: 'copy-1',
@@ -529,7 +527,7 @@ describe('UserCards browser operations', () => {
       }),
       removeAssociation: async () => ({
         privateRevision: 'revision-3',
-        publicationPosition: '12',
+
         associationId: 'association-1',
       }),
     });
@@ -558,13 +556,11 @@ describe('UserCards browser operations', () => {
         scope: 'copies',
         records: [{ kind: 'copy', copyId: 'copy-1' }],
         imports: [],
-        position: '11',
       },
       {
         scope: 'associations',
         records: [{ kind: 'association', associationId: 'association-1' }],
         imports: [],
-        position: '12',
       },
     ]);
   });
@@ -802,9 +798,7 @@ describe('UserCards browser operations', () => {
     expect(await first.observe()).toMatchObject({ state: 'committed' });
     expect(await second.observe()).toMatchObject({ state: 'committed' });
     expect(dispatched).toBe(1);
-    expect(changes).toEqual([
-      { scope: 'imports', records: [], imports: [first.operationId], position: null },
-    ]);
+    expect(changes).toEqual([{ scope: 'imports', records: [], imports: [first.operationId] }]);
   });
 
   it('refuses changed input under a retained staging identity', async () => {
@@ -935,7 +929,7 @@ describe('UserCards browser operations', () => {
       sourceKind: 'pasted-list',
       sourceId: 'import-1',
       destination: { kind: 'ownership' },
-      publicationPosition: '5',
+
       copies: [
         {
           copyId: 'copy-1',

@@ -21,8 +21,6 @@ export const CARD_LIST_LIMITS = {
    * the Catalog contract, so a binding resolves a larger set in further requests.
    */
   resolveBatch: 100,
-  /** Characters one committed publication position may carry while it awaits incorporation. */
-  position: 100,
   /** Recent card entries one account's activity keeps, most recent first. */
   recentCards: 24,
 } as const;

@@ -18,7 +18,6 @@ import {
   type CardListFragmentKind,
   type CardListFragmentReader,
   type CardListFragmentState,
-  type CardListObservation,
   type CardListPage,
   type CardListPosition,
   type CardListRetained,
@@ -58,10 +57,6 @@ export function readCardListRead(value: unknown, pageSize: number): CardListRead
   if (continuation !== undefined && continuation !== null && typeof continuation !== 'string') {
     return unreadableRead('The list source reported an unreadable continuation.');
   }
-  const current = report.current;
-  if (current !== undefined && typeof current !== 'boolean') {
-    return unreadableRead('The list source reported an unreadable freshness state.');
-  }
   const read: CardListEntry[] = [];
   const keys = new Set<string>();
   for (const candidate of entries) {
@@ -81,7 +76,6 @@ export function readCardListRead(value: unknown, pageSize: number): CardListRead
       entries: read,
       continuation:
         typeof continuation === 'string' && continuation.length > 0 ? continuation : null,
-      current: current !== false,
     },
   };
 }
@@ -530,19 +524,8 @@ export interface RetainedState<Context> {
   readonly window: number;
   readonly selection: readonly string[];
   readonly selectedTargets: readonly CardListSelectedTarget[];
-  /** Committed positions the retained result still awaited incorporation of. */
-  readonly awaiting: readonly string[];
   readonly scrollTop: number;
   readonly focus: CardListFocus | null;
-}
-
-/**
- * One observation outcome as a source reported it, or null when the answer named no state. A
- * source that answers with something else than the bounded observation states is unavailable, not
- * an incorporation and not a delay.
- */
-export function readObservation(value: unknown): CardListObservation | null {
-  return value === 'incorporated' || value === 'delayed' || value === 'failed' ? value : null;
 }
 
 /** One retained handle as the list that produced it exposes it to its consumer. */
@@ -598,7 +581,6 @@ export function readRetainedState<Context>(
     }
   }
   const targets = readSelectedTargets(state.selectedTargets);
-  const awaiting = readRetainedAwaiting(state.awaiting);
   const restoredContext = Object.hasOwn(state, 'context') ? (state.context as Context) : context;
   const scrollTop = state.scrollTop;
   if (typeof scrollTop !== 'number' || !Number.isFinite(scrollTop) || scrollTop < 0) {
@@ -612,37 +594,9 @@ export function readRetainedState<Context>(
     window,
     selection: keys,
     selectedTargets: targets,
-    awaiting,
     scrollTop,
     focus: readRetainedFocus(state.focus),
   };
-}
-
-/**
- * Committed positions a retained result awaited. An absent value restores none, so a handle of an
- * earlier visit keeps restoring; an unreadable value is a consumer bug like the rest of the handle.
- */
-function readRetainedAwaiting(value: unknown): readonly string[] {
-  if (value === undefined || value === null) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    throw new TypeError('A retained list names the committed positions it awaited.');
-  }
-  const positions: string[] = [];
-  for (const position of value) {
-    if (
-      typeof position !== 'string' ||
-      position.length === 0 ||
-      position.length > CARD_LIST_LIMITS.position
-    ) {
-      throw new TypeError('A retained list holds bounded committed publication positions.');
-    }
-    if (!positions.includes(position)) {
-      positions.push(position);
-    }
-  }
-  return positions;
 }
 
 function readAccountOf(state: Readonly<Record<string, unknown>>): string | null {

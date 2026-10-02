@@ -1,9 +1,7 @@
 /**
- * Floating notices of the Navigation module (docs/ui/navigation.md#indexing-notice,
- * docs/ui/navigation.md#error-notices).
+ * Floating notices of the Navigation module (docs/ui/navigation.md#error-notices).
  *
- * Navigation owns the one floating presentation region of the shell: the indexing notice of the
- * presented account and the operation and service failures the pages report through the capability
+ * Navigation owns the one floating presentation region of the shell: the operation and service failures the pages report through the capability
  * they receive. A notice is identified by the operation it reports, so showing the same identity
  * again updates the presented notice instead of duplicating it, and the same presentation serves
  * progress and errors: an error notice is red and names its failure in text, so color alone never

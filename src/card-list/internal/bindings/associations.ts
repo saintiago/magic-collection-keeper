@@ -31,13 +31,7 @@ import type {
   CardListSourceRequest,
   CardListTarget,
 } from '../contract.js';
-import {
-  cardListEntryKey,
-  observeSearchProgress,
-  type CardListSearchRead,
-  isInvalidatedContinuation,
-  type CardListCountsAccess,
-} from './search.js';
+import { cardListEntryKey, isInvalidatedContinuation, type CardListCountsAccess } from './query.js';
 import { resolveCards, resolvePrintings } from './catalog.js';
 
 /** The UserCards reads one tag's association binding consumes. */
@@ -83,7 +77,6 @@ export function tagAssociationsBinding(options: {
   readonly read: CardListTagAssociationsRead;
   readonly catalog: Catalog;
   readonly counts: CardListCountsAccess;
-  readonly search?: CardListSearchRead;
 }): CardListTagAssociations {
   const tagId = options?.tagId;
   if (typeof tagId !== 'string' || tagId.length === 0) {
@@ -103,37 +96,18 @@ export function tagAssociationsBinding(options: {
   }
   const counts = options?.counts;
   if (typeof counts?.ofBatch !== 'function') {
-    throw new TypeError('The associations read their private counts through Search.');
+    throw new TypeError('The associations read their private fragments through UserCards.');
   }
   const records = new Map<string, Association>();
-  // Proof established before the next authoritative read; it covers derived counts only.
-  let incorporated: ReadonlySet<string> = new Set();
   /** Keys of the window the list presents, bounded like the list's own working set. */
   const presented: string[] = [];
 
   return {
     source: {
-      ...(options.search === undefined
-        ? {}
-        : {
-            async observe(request) {
-              const state = await observeSearchProgress(
-                options.search!,
-                request.positions,
-                request.signal,
-              );
-              request.signal.throwIfAborted();
-              if (state === 'incorporated') incorporated = new Set(request.positions);
-              return state;
-            },
-          }),
       // A committed change of the account's associations, tags or copies may change this sequence,
       // so the list reacquires it through this same read.
       affects: () => true,
       async load(request: CardListSourceRequest<string>) {
-        // Never gate authoritative membership on Search availability. A read begun after the
-        // observation established its requirements also refreshes the derived fragments.
-        const current = request.required.positions.every((position) => incorporated.has(position));
         let page: AssociationListResult;
         try {
           page = await read.associations(
@@ -197,7 +171,7 @@ export function tagAssociationsBinding(options: {
         }
         if (request.continuation === null) counts.invalidate?.();
         // The provider's own read is authoritative for the associations it returns.
-        return { status: 'page', entries, continuation: page.continuation, current };
+        return { status: 'page', entries, continuation: page.continuation, current: true };
       },
     },
     record(key) {

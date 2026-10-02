@@ -253,7 +253,7 @@ describe('rebuild infrastructure templates', () => {
     expect(resourcesOfType(foundation, 'AWS::EC2::VPC')).toHaveLength(1);
     expect(resourcesOfType(foundation, 'AWS::EC2::Subnet')).toHaveLength(4);
     expect(resourcesOfType(foundation, 'AWS::S3::Bucket')).toHaveLength(3);
-    expect(resourcesOfType(foundation, 'AWS::ECR::Repository')).toHaveLength(3);
+    expect(resourcesOfType(foundation, 'AWS::ECR::Repository')).toHaveLength(2);
   });
 
   it('keeps the existing user pool and adds one separate app client', () => {
@@ -330,33 +330,21 @@ describe('rebuild infrastructure templates', () => {
       importNames(node).filter((name) => name.endsWith('-secret-arn'));
     expect(new Set(secretsOf(service.Resources.ApiFunctionRole))).toEqual(
       new Set([
-        'keeper-${Environment}-database-reader-secret-arn',
-        'keeper-${Environment}-search-query-secret-arn',
+        'keeper-${Environment}-catalog-reader-secret-arn',
+        'keeper-${Environment}-usercards-reader-secret-arn',
         'keeper-${Environment}-usercards-writer-secret-arn',
       ]),
     );
     expect(secretsOf(service.Resources.CatalogTaskRole)).toEqual([
       'keeper-${Environment}-catalog-writer-secret-arn',
     ]);
-    // Search's indexing role maintains only Search's projection, and the provider publication
-    // adapters read with the credentials those providers grant for indexing: no writer secret and
-    // no end-user reader credential reaches background indexing
-    // (docs/data-architecture.md#access-and-deployment).
-    expect(new Set(secretsOf(service.Resources.IndexingTaskRole))).toEqual(
-      new Set([
-        'keeper-${Environment}-search-indexing-secret-arn',
-        'keeper-${Environment}-catalog-publication-secret-arn',
-        'keeper-${Environment}-usercards-publication-secret-arn',
-      ]),
-    );
-
     const api = lambdaEnvironment(service, 'ApiFunction');
-    expect(api.KEEPER_DATABASE_READER_SECRET_ARN).toEqual(
-      importValue('keeper-${Environment}-database-reader-secret-arn'),
+    expect(api.KEEPER_DATABASE_CATALOG_READER_SECRET_ARN).toEqual(
+      importValue('keeper-${Environment}-catalog-reader-secret-arn'),
     );
     // Search queries run as Search's own query role, which reaches no provider view.
-    expect(api.KEEPER_DATABASE_SEARCH_QUERY_SECRET_ARN).toEqual(
-      importValue('keeper-${Environment}-search-query-secret-arn'),
+    expect(api.KEEPER_DATABASE_USERCARDS_READER_SECRET_ARN).toEqual(
+      importValue('keeper-${Environment}-usercards-reader-secret-arn'),
     );
     expect(api.KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN).toEqual(
       importValue('keeper-${Environment}-usercards-writer-secret-arn'),
@@ -370,28 +358,10 @@ describe('rebuild infrastructure templates', () => {
       importValue('keeper-${Environment}-catalog-writer-secret-arn'),
     );
     expect(catalog.KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN).toBeUndefined();
-    const indexing = containerEnvironment(service.Resources.IndexingTaskDefinition);
-    expect(indexing.KEEPER_DATABASE_SEARCH_INDEXING_SECRET_ARN).toEqual(
-      importValue('keeper-${Environment}-search-indexing-secret-arn'),
-    );
-    expect(indexing.KEEPER_DATABASE_CATALOG_PUBLICATION_SECRET_ARN).toEqual(
-      importValue('keeper-${Environment}-catalog-publication-secret-arn'),
-    );
-    expect(indexing.KEEPER_DATABASE_USERCARDS_PUBLICATION_SECRET_ARN).toEqual(
-      importValue('keeper-${Environment}-usercards-publication-secret-arn'),
-    );
-    expect(indexing.KEEPER_DATABASE_CATALOG_WRITER_SECRET_ARN).toBeUndefined();
-    expect(indexing.KEEPER_DATABASE_USERCARDS_WRITER_SECRET_ARN).toBeUndefined();
-    expect(indexing.KEEPER_DATABASE_READER_SECRET_ARN).toBeUndefined();
-    expect(indexing.KEEPER_DATABASE_SEARCH_QUERY_SECRET_ARN).toBeUndefined();
-
     const exports = exportNames(foundation);
     expect(exports).toContain('keeper-${Environment}-usercards-writer-secret-arn');
     expect(exports).toContain('keeper-${Environment}-catalog-writer-secret-arn');
-    expect(exports).toContain('keeper-${Environment}-search-indexing-secret-arn');
-    expect(exports).toContain('keeper-${Environment}-search-query-secret-arn');
-    expect(exports).toContain('keeper-${Environment}-catalog-publication-secret-arn');
-    expect(exports).toContain('keeper-${Environment}-usercards-publication-secret-arn');
+    expect(exports).toContain('keeper-${Environment}-usercards-reader-secret-arn');
     expect(exports).not.toContain('keeper-${Environment}-database-writer-secret-arn');
     const usernameTemplate = (logicalName: string): string => {
       const generate = foundation.Resources[logicalName]?.Properties?.GenerateSecretString as
@@ -399,15 +369,9 @@ describe('rebuild infrastructure templates', () => {
       const template = generate?.SecretStringTemplate as Json | undefined;
       return String(template?.['Fn::Sub'] ?? '');
     };
-    expect(usernameTemplate('ReaderSecret')).toContain('ReaderRoleName');
+    expect(usernameTemplate('CatalogReaderSecret')).toContain('CatalogReaderRoleName');
     expect(usernameTemplate('UserCardsWriterSecret')).toContain('UserCardsWriterRoleName');
     expect(usernameTemplate('CatalogWriterSecret')).toContain('CatalogWriterRoleName');
-    expect(usernameTemplate('SearchIndexingSecret')).toContain('SearchIndexingRoleName');
-    expect(usernameTemplate('SearchQuerySecret')).toContain('SearchQueryRoleName');
-    expect(usernameTemplate('CatalogPublicationSecret')).toContain('CatalogPublicationRoleName');
-    expect(usernameTemplate('UserCardsPublicationSecret')).toContain(
-      'UserCardsPublicationRoleName',
-    );
   });
 
   it('accepts only VPC ranges that hold the four defined subnets', () => {
@@ -554,22 +518,6 @@ describe('rebuild infrastructure templates', () => {
         prefixes: ['ecr:', 'logs:'],
         actions: ['ecr:BatchGetImage', 'logs:PutLogEvents'],
       },
-      IndexingTaskRole: {
-        prefixes: ['logs:', 'rds-data:', 'secretsmanager:'],
-        actions: [
-          'rds-data:ExecuteStatement',
-          'secretsmanager:GetSecretValue',
-          'logs:PutLogEvents',
-        ],
-      },
-      IndexingTaskExecutionRole: {
-        prefixes: ['ecr:', 'logs:'],
-        actions: ['ecr:BatchGetImage', 'logs:PutLogEvents'],
-      },
-      IndexingScheduleRole: {
-        prefixes: ['ecs:', 'iam:'],
-        actions: ['ecs:RunTask', 'iam:PassRole'],
-      },
     };
     for (const [templateName, template] of Object.entries(templates)) {
       for (const [roleName, role] of resourcesOfType(template, 'AWS::IAM::Role')) {
@@ -623,11 +571,7 @@ describe('rebuild infrastructure templates', () => {
     }
     expect(singleResource(foundation, 'AWS::RDS::DBCluster')[1].DeletionPolicy).toBe('Snapshot');
 
-    for (const parameterName of [
-      'RecognitionImageUri',
-      'CatalogJobImageUri',
-      'IndexingJobImageUri',
-    ] as const) {
+    for (const parameterName of ['RecognitionImageUri', 'CatalogJobImageUri'] as const) {
       expect(service.Parameters?.[parameterName]?.AllowedPattern ?? '', parameterName).toContain(
         '@sha256:',
       );
@@ -642,7 +586,7 @@ describe('rebuild infrastructure templates', () => {
     // ECR resolves `Ref` to the repository name, and CloudFormation generates that name: the
     // documented push and digest reads name the repository through these outputs instead of a
     // guessed `keeper-<environment>-<job>` (infra/README.md#packaging-and-publication).
-    for (const logical of ['CatalogRepository', 'IndexingRepository', 'RecognitionRepository']) {
+    for (const logical of ['CatalogRepository', 'RecognitionRepository']) {
       expect(foundation.Outputs?.[`${logical}Name`]?.Value, logical).toEqual({ Ref: logical });
     }
   });
@@ -665,7 +609,7 @@ describe('rebuild infrastructure templates', () => {
     // that job's next run, and nothing keeps capacity warm between runs.
     const images = new Map<string, unknown>();
     const tasks = resourcesOfType(service, 'AWS::ECS::TaskDefinition');
-    expect(tasks).toHaveLength(2);
+    expect(tasks).toHaveLength(1);
     for (const [name, task] of tasks) {
       expect(task.Properties?.RequiresCompatibilities, name).toEqual(['FARGATE']);
       expect(task.Properties?.NetworkMode, name).toBe('awsvpc');
@@ -676,38 +620,6 @@ describe('rebuild infrastructure templates', () => {
       images.set(String(containerName), containers[0]?.Image);
     }
     expect(images.get('catalog-job')).toEqual({ Ref: 'CatalogJobImageUri' });
-    expect(images.get('indexing-job')).toEqual({ Ref: 'IndexingJobImageUri' });
-  });
-
-  it('activates indexing by starting the finite indexing task on a schedule', () => {
-    // Background activation is a start of the finite task, never an always-on service: the
-    // schedule names that task definition and nothing else keeps capacity warm
-    // (docs/data-architecture.md#asynchronous-synchronization).
-    const [scheduleName, schedule] = singleResource(service, 'AWS::Scheduler::Schedule');
-    const scheduleProperties = properties([scheduleName, schedule]);
-    expect(scheduleProperties.ScheduleExpression).toEqual({ Ref: 'IndexingScheduleExpression' });
-    expect(scheduleProperties.FlexibleTimeWindow).toEqual({ Mode: 'OFF' });
-    expect(scheduleProperties.State).toBe('ENABLED');
-    const target = scheduleProperties.Target as Json;
-    expect(target.Arn).toEqual({ 'Fn::GetAtt': ['EcsCluster', 'Arn'] });
-    expect(target.RoleArn).toEqual({ 'Fn::GetAtt': ['IndexingScheduleRole', 'Arn'] });
-    expect(target.EcsParameters).toMatchObject({
-      TaskDefinitionArn: { Ref: 'IndexingTaskDefinition' },
-      LaunchType: 'FARGATE',
-      TaskCount: 1,
-    });
-
-    // The scheduler's role can start that one task definition and pass only the task's own roles.
-    const statements = policyStatements(service.Resources.IndexingScheduleRole!);
-    const runTask = statements.find((statement) => statement.Sid === 'StartTheIndexingTask');
-    expect(actionsOf(runTask ?? {})).toEqual(['ecs:RunTask']);
-    expect(refName(runTask?.Resource)).toBe('IndexingTaskDefinition');
-    const passRole = statements.find((statement) => statement.Sid === 'PassTheTaskRoles');
-    expect(actionsOf(passRole ?? {})).toEqual(['iam:PassRole']);
-    expect(passRole?.Resource).toEqual([
-      { 'Fn::GetAtt': ['IndexingTaskRole', 'Arn'] },
-      { 'Fn::GetAtt': ['IndexingTaskExecutionRole', 'Arn'] },
-    ]);
   });
 
   it('delivers the browser through CloudFront and its private bucket policy', () => {

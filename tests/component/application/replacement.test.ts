@@ -10,7 +10,7 @@ import type { Recognition } from '../../../src/recognition/index.js';
 import {
   claimsFor,
   createCatalogSpy,
-  createSearchSpy,
+  createQueriesSpy,
   createUserCardsSpy,
   createSourceImportsSpy,
   signedInStorage,
@@ -23,7 +23,7 @@ import {
 
 function replacement() {
   const catalog = createCatalogSpy();
-  const search = createSearchSpy();
+  const queries = createQueriesSpy();
   const userCards = createUserCardsSpy();
   const sourceImports = createSourceImportsSpy();
   const synchronize = vi.fn(async () => testRevision);
@@ -33,19 +33,18 @@ function replacement() {
     identity: testIdentityVerifier(),
     components: {
       catalog: catalog.contract,
-      search: search.contract,
+      userCardsQueries: queries.contract,
       userCards: userCards.contract,
       sourceImports: sourceImports.contract,
       synchronizer: { synchronize },
-      indexer: null,
     },
   });
-  return { application, catalog, search, userCards, synchronize };
+  return { application, catalog, queries, userCards, synchronize };
 }
 
 describe('component replacement at Application', () => {
   it('serves supplied components without database clients or resource coordinates', async () => {
-    const { application, catalog, search, synchronize } = replacement();
+    const { application, catalog, queries, synchronize } = replacement();
     const response = await application.handle({
       method: 'POST',
       path: '/api/catalog/resolve',
@@ -58,44 +57,17 @@ describe('component replacement at Application', () => {
       cards: [],
       printings: [],
     });
-    expect(
-      (
-        await application.handle({
-          method: 'POST',
-          path: '/api/search',
-          body: JSON.stringify({ resultLevel: 'card' }),
-        })
-      ).status,
-    ).toBe(200);
-    expect(search.execute).toHaveBeenCalledOnce();
-    const counts = await application.handle({
+    const responsePage = await application.handle({
       method: 'POST',
-      path: '/api/search/counts',
-      body: JSON.stringify({ references: [{ kind: 'card', cardId: 'bolt' }] }),
+      path: '/api/collection/query',
+      body: JSON.stringify({ scope: { kind: 'collection' }, resultLevel: 'card' }),
       authentication: { claims: claimsFor(testAccount) },
     });
-    expect(counts.status).toBe(200);
-    expect(search.counts).toHaveBeenCalledWith(
-      { references: [{ kind: 'card', cardId: 'bolt' }] },
+    expect(responsePage.status).toBe(200);
+    expect(queries.query).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: testAccount }),
+      { scope: { kind: 'collection' }, resultLevel: 'card' },
     );
-    expect(JSON.parse(counts.body)).toEqual({
-      privateRevision: 'private-revision-1',
-      counts: [],
-    });
-    const progress = await application.handle({
-      method: 'POST',
-      path: '/api/search/progress',
-      body: JSON.stringify({ positions: ['7'], timeoutMs: 0 }),
-      authentication: { claims: claimsFor(testAccount) },
-    });
-    expect(progress.status).toBe(200);
-    expect(search.observe).toHaveBeenCalledWith(
-      { positions: ['7'], catalogRevision: null },
-      expect.objectContaining({ accountId: testAccount }),
-      expect.objectContaining({ timeoutMs: 0 }),
-    );
-    expect(JSON.parse(progress.body)).toMatchObject({ state: 'incorporated' });
     await expect(application.synchronizeCatalog({ dataset: 'default_cards' })).resolves.toEqual(
       testRevision,
     );

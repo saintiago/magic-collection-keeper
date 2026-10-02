@@ -1,21 +1,4 @@
-/**
- * UserCards' own published read relations (docs/user-cards.md#query-surface).
- *
- * Private tables live in `usercards_private`. The component's publication reads these views; its
- * reader and trusted publication grants reach nothing else, and another component builds its own
- * searchable data from the publication contract instead of reading them. Both published relations
- * are account-scoped at the database boundary: they select the account bound to the connection with
- * `USERCARDS_ACCOUNT_SCOPE_SQL` and return no rows when no account is bound, so a missing or cleared
- * context fails closed and one account's scope cannot leak into another transaction on a reused
- * connection. Every private view is a security-barrier view, so a consumer's own predicate is
- * evaluated after the account filter instead of on foreign rows.
- * `tests/integration/usercards-query-surface.test.ts` verifies the views against this declaration,
- * so a replacement storage maps its data to exactly these relations and passes the same tests; the
- * publication stream writes the record of a change from the same relations, so a change carries
- * exactly the published record. Pending import state has no published relation: it is read through
- * the component's own pending reads and stays outside the ownership relations
- * (docs/user-cards.md#import-and-capture-state).
- */
+/** UserCards-owned storage and account-scoped read views. Every private view enforces the transaction account before exposing records. Query readers receive only the owner query surface; mutations and pending reads remain behind their own contracts. */
 
 import { finishes } from '../../catalog/index.js';
 import {
@@ -26,7 +9,6 @@ import {
   tagKinds,
 } from './model.js';
 
-export const usercardsQuerySchema = 'usercards';
 export const usercardsPrivateSchema = 'usercards_private';
 export const usercardsCurrentQuerySchema = 'usercards_current_query';
 
@@ -42,160 +24,6 @@ export const USERCARDS_ACCOUNT_SETTING = 'usercards.account_id';
  * views. Without it the scoped relations return no rows instead of every account's private data.
  */
 export const USERCARDS_ACCOUNT_SCOPE_SQL = `select set_config('${USERCARDS_ACCOUNT_SETTING}', :account_id, true)`;
-
-/** Column types as consumers read them, not the storage's internal representation. */
-export type UserCardsColumnType = 'text' | 'boolean' | 'integer';
-
-export interface UserCardsRelationColumn {
-  readonly name: string;
-  readonly type: UserCardsColumnType;
-  readonly nullable: boolean;
-  readonly meaning: string;
-}
-
-export interface UserCardsQueryRelation {
-  /** Schema-qualified relation name. Private table names never appear here. */
-  readonly name: string;
-  readonly columns: readonly UserCardsRelationColumn[];
-}
-
-export interface UserCardsQuerySurface {
-  readonly version: number;
-  readonly relations: {
-    readonly copies: UserCardsQueryRelation;
-    readonly tags: UserCardsQueryRelation;
-    readonly associations: UserCardsQueryRelation;
-    readonly privateRevision: UserCardsQueryRelation;
-  };
-}
-
-export const USERCARDS_QUERY_SURFACE: UserCardsQuerySurface = {
-  version: 2,
-  relations: {
-    copies: {
-      name: `${usercardsQuerySchema}.copies`,
-      columns: [
-        {
-          name: 'copy_id',
-          type: 'text',
-          nullable: false,
-          meaning: 'Physical-copy identity; unique in this relation and stable across corrections.',
-        },
-        {
-          name: 'printing_id',
-          type: 'text',
-          nullable: false,
-          meaning: 'Catalog printing reference; the card, edition and language follow from it.',
-        },
-        {
-          name: 'finish',
-          type: 'text',
-          nullable: false,
-          meaning: 'Physical finish of the copy: nonfoil, foil or etched.',
-        },
-        {
-          name: 'condition',
-          type: 'text',
-          nullable: true,
-          meaning: 'Physical condition code; null while the condition is unknown.',
-        },
-        {
-          name: 'owned',
-          type: 'boolean',
-          nullable: false,
-          meaning:
-            'Whether the copy carries the account’s system owned association; a copy stored by the component is owned until that membership changes.',
-        },
-        {
-          name: 'location_id',
-          type: 'text',
-          nullable: true,
-          meaning:
-            'Tag identity of the copy’s single physical location; null while the copy has no location.',
-        },
-      ],
-    },
-    tags: {
-      name: `${usercardsQuerySchema}.tags`,
-      columns: [
-        {
-          name: 'tag_id',
-          type: 'text',
-          nullable: false,
-          meaning:
-            'Tag identity; unique in this relation and stable across label edits and association changes.',
-        },
-        {
-          name: 'kind',
-          type: 'text',
-          nullable: false,
-          meaning: 'Tag kind: deck, wishlist, location, other or the system owned tag.',
-        },
-        {
-          name: 'label',
-          type: 'text',
-          nullable: false,
-          meaning: 'Editable display label; renaming a tag keeps its identity and memberships.',
-        },
-        {
-          name: 'system',
-          type: 'boolean',
-          nullable: false,
-          meaning:
-            'Whether the tag is system-managed; its lifecycle is not driven by the tag operations.',
-        },
-      ],
-    },
-    associations: {
-      name: `${usercardsQuerySchema}.associations`,
-      columns: [
-        {
-          name: 'association_id',
-          type: 'text',
-          nullable: false,
-          meaning: 'Association identity; unique in this relation and stable across refinements.',
-        },
-        {
-          name: 'tag_id',
-          type: 'text',
-          nullable: false,
-          meaning: 'Tag the association belongs to.',
-        },
-        {
-          name: 'target_level',
-          type: 'text',
-          nullable: false,
-          meaning: 'Associated level: card, printing or copy.',
-        },
-        {
-          name: 'target_id',
-          type: 'text',
-          nullable: false,
-          meaning: 'Card, printing or copy identity at the associated level.',
-        },
-        {
-          name: 'quantity',
-          type: 'integer',
-          nullable: true,
-          meaning:
-            'Intended or required quantity of a card or printing association; null for copy membership, which is a count of copies.',
-        },
-      ],
-    },
-    privateRevision: {
-      name: `${usercardsQuerySchema}.private_revision`,
-      columns: [
-        {
-          name: 'revision',
-          type: 'text',
-          nullable: false,
-          meaning:
-            'Monotonic revision of the bound account’s private data, 0 before the first change; a continuation becomes stale when it changes.',
-        },
-      ],
-    },
-  },
-};
 
 const identifierLength = USERCARDS_LIMITS.maxIdentifierLength;
 /** Fingerprints are digests, so their bound only has to cover the encodings a store may choose. */
@@ -222,23 +50,14 @@ const associationLevelsCheckSql = tagKinds
  */
 const boundAccountSql = `nullif(current_setting('${USERCARDS_ACCOUNT_SETTING}', true), '')`;
 
-/**
- * Schema owned by the UserCards provider. Applying it is idempotent. The `copies` relation lists
- * the account's physical copies only, together with their derived ownership and location
- * membership; pending import entries have their own records and never appear here. The `tags` and
- * `associations` relations publish the account's organization of cards, printings and copies.
- */
+/** Idempotent authoritative storage and read-only account-scoped query views. */
 export const usercardsSchemaSql = `
 create schema if not exists ${usercardsPrivateSchema};
-create schema if not exists ${usercardsQuerySchema};
 create schema if not exists ${usercardsCurrentQuerySchema};
 
 create table if not exists ${usercardsPrivateSchema}.account_state (
   account_id text primary key check (length(account_id) between 1 and ${identifierLength}),
-  revision integer not null default 0 check (revision >= 0),
-  -- Lowest publication position still readable for this account. Retention advances it when it
-  -- drops older publications, so a resume from before it fails explicitly instead of skipping.
-  expired_below bigint not null default 0 check (expired_below >= 0)
+  revision integer not null default 0 check (revision >= 0)
 );
 
 -- UserCards keeps the stable playable-card relationship needed to group its printing-specific
@@ -504,8 +323,7 @@ create index if not exists copy_provenance_acquisition_index
 -- One recorded migration per verified source snapshot (docs/migration.md#rehearsal-and-execution-gates).
 -- The migration row carries what identifies the loaded artifact; the archive rows carry the exact
 -- source evidence the plan's source digest covers, and the batch rows are the replay receipts that
--- make a repeated or interrupted load repeat-safe. Nothing here is published: a migration's records
--- publish through the normal publication stream.
+-- make a repeated or interrupted load repeat-safe. Loaded records are read through current queries.
 create table if not exists ${usercardsPrivateSchema}.migration (
   account_id text not null check (length(account_id) between 1 and ${identifierLength}),
   migration_id text not null check (length(migration_id) between 1 and ${identifierLength}),
@@ -553,40 +371,13 @@ create table if not exists ${usercardsPrivateSchema}.migration_batch (
     references ${usercardsPrivateSchema}.migration (account_id, migration_id)
 );
 
--- The durable publication stream (docs/user-cards.md#query-surface). Every query-visible mutation
--- writes the changes of the records it touched and the revision that completes them in its own
--- transaction, so a consumer observes a logical mutation completely or not at all. Positions
--- only grow; the revision names the account-scoped private-data revision the change belongs to,
--- and a record change carries the stable identity and the upsert or removal meaning a consumer
--- applies. Pending import state has no record here.
-create table if not exists ${usercardsPrivateSchema}.publication (
-  position bigint not null generated always as identity primary key,
-  account_id text not null check (length(account_id) between 1 and ${identifierLength}),
-  revision integer not null check (revision >= 1),
-  kind text not null check (kind in ('revision', 'copy', 'tag', 'association')),
-  record_identity text check (record_identity is null
-    or length(record_identity) between 1 and ${identifierLength}),
-  removed boolean not null default false,
-  record jsonb,
-  check (kind <> 'revision' or (record_identity is null and record is null and not removed)),
-  check (kind = 'revision' or (record_identity is not null and (removed or record is not null))),
-  check (not removed or record is null),
-  unique (account_id, revision, kind, record_identity)
-);
-
--- One completion marker per publication; the snapshot reports the newest one's position.
-create unique index if not exists publication_revision_index
-  on ${usercardsPrivateSchema}.publication (account_id, revision) where kind = 'revision';
-
-create index if not exists publication_account_position_index
-  on ${usercardsPrivateSchema}.publication (account_id, position);
-
 -- The provider-owned current-query capability reads only these account-scoped relations. They
 -- retain the storage columns its query construction needs while preventing its database role from
 -- selecting another account's base records directly. Stable references are visible only when the
 -- bound account has a copy or printing association that requires them.
 create or replace view ${usercardsCurrentQuerySchema}.account_state with (security_barrier) as
-  select account_id, revision, expired_below
+  -- Preserve the installed view shape during compatible upgrades; no retention state is used.
+  select account_id, revision, 0::bigint as expired_below
   from ${usercardsPrivateSchema}.account_state
   where account_id = ${boundAccountSql};
 
@@ -619,63 +410,11 @@ create or replace view ${usercardsCurrentQuerySchema}.association with (security
   from ${usercardsPrivateSchema}.association
   where account_id = ${boundAccountSql};
 
-create or replace view ${usercardsQuerySchema}.copies with (security_barrier) as
-  select copy.copy_id,
-         copy.printing_id,
-         copy.finish,
-         copy.condition,
-         (owned.association_id is not null) as owned,
-         location.tag_id as location_id
-  from ${usercardsPrivateSchema}.copy as copy
-  left join ${usercardsPrivateSchema}.association as owned
-    on owned.account_id = copy.account_id
-   and owned.tag_kind = 'owned'
-   and owned.target_level = 'copy'
-   and owned.target_id = copy.copy_id
-  left join ${usercardsPrivateSchema}.association as location
-    on location.account_id = copy.account_id
-   and location.tag_kind = 'location'
-   and location.target_level = 'copy'
-   and location.target_id = copy.copy_id
-  where copy.account_id = ${boundAccountSql};
-
-create or replace view ${usercardsQuerySchema}.tags with (security_barrier) as
-  select tag_id, kind, label, system
-  from ${usercardsPrivateSchema}.tag
-  where account_id = ${boundAccountSql};
-
-create or replace view ${usercardsQuerySchema}.associations with (security_barrier) as
-  select association_id, tag_id, target_level, target_id, quantity
-  from ${usercardsPrivateSchema}.association
-  where account_id = ${boundAccountSql};
-
-create or replace view ${usercardsQuerySchema}.private_revision as
-  select coalesce(state.revision, 0)::text as revision
-  from (select ${boundAccountSql} as account_id) as bound
-  left join ${usercardsPrivateSchema}.account_state as state
-    on state.account_id = bound.account_id
-  where bound.account_id is not null;
-
 revoke all on schema ${usercardsPrivateSchema} from public;
 revoke all on schema ${usercardsCurrentQuerySchema} from public;
 `.trim();
 
 const readerRolePattern = /^[a-z_][a-z0-9_]{0,62}$/;
-
-/**
- * Grants a consumer role read access to the published views and nothing else. The UserCards schema
- * owner applies this after `usercardsSchemaSql`; base tables stay unreachable for the reader.
- */
-export function usercardsReaderGrants(readerRole: string): string {
-  assertRole(readerRole);
-  const relations = Object.values(USERCARDS_QUERY_SURFACE.relations).map(
-    (relation) => relation.name,
-  );
-  return [
-    `grant usage on schema ${usercardsQuerySchema} to "${readerRole}";`,
-    `grant select on ${relations.join(', ')} to "${readerRole}";`,
-  ].join('\n');
-}
 
 /**
  * Grants the provider-owned current query capability read-only access to exactly the authoritative
@@ -687,23 +426,6 @@ export function usercardsQueryGrants(role: string): string {
   return [
     `grant usage on schema ${usercardsCurrentQuerySchema} to "${role}";`,
     `grant select on ${usercardsCurrentQuerySchema}.account_state, ${usercardsCurrentQuerySchema}.printing_reference, ${usercardsCurrentQuerySchema}.copy, ${usercardsCurrentQuerySchema}.tag, ${usercardsCurrentQuerySchema}.association to "${role}";`,
-  ].join('\n');
-}
-
-/**
- * Grants trusted indexing access to the publication contract: the account-scoped published
- * relations, the durable change stream and the recorded retention floor, and no mutation.
- * Application supplies this credential to an indexing runtime separately from an end-user read
- * role (docs/data-architecture.md#access-and-deployment); an end-user read role never reaches the
- * private schema and an indexer never reaches the private records behind the publication.
- */
-export function usercardsPublicationGrants(role: string): string {
-  assertRole(role);
-  return [
-    usercardsReaderGrants(role),
-    `grant usage on schema ${usercardsPrivateSchema} to "${role}";`,
-    `grant select on ${usercardsPrivateSchema}.publication to "${role}";`,
-    `grant select on ${usercardsPrivateSchema}.account_state to "${role}";`,
   ].join('\n');
 }
 

@@ -11,22 +11,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { Catalog, PrintingRecord } from '../../../src/catalog/index.js';
-import type { SearchEntry, SearchPage } from '../../../src/search/index.js';
-import type { SearchClient } from '../../../src/application/index.js';
 import type { PhysicalCopy } from '../../../src/usercards/index.js';
 import {
   createUserCardsOperations,
   type UserCardsBrowserClient,
 } from '../../../src/usercards/browser.js';
 import { unusedUserCardsClient } from '../../support/usercards-browser.js';
-import {
-  cardListEntryKey as uiEntryKey,
-  collectionQueryRequest as collectionSearchRequest,
-  collectionQuerySource as createCollectionQuerySource,
-  printingImagesReader,
-  type CardListEntry as UiListEntry,
-} from '../../../src/card-list/index.js';
+import { collectionQueryRequest as collectionSearchRequest } from '../../../src/card-list/index.js';
 import {
   copyChangeTool,
   correctCopy,
@@ -41,18 +32,6 @@ import {
 } from '../../../src/ui/index.js';
 import { copyConditions } from '../../../src/usercards/index.js';
 import { finishes } from '../../../src/catalog/index.js';
-
-/** One Search entry as the collection query returns it for one owned card. */
-function entry(overrides: Partial<SearchEntry> = {}): SearchEntry {
-  return {
-    entryKey: 'card:card-bolt',
-    target: { kind: 'card', cardId: 'card-bolt' },
-    card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
-    printing: null,
-    quantity: { copies: 3, intended: null },
-    ...overrides,
-  };
-}
 
 /** One copy record as the private read returns it. */
 function copy(overrides: Partial<PhysicalCopy> = {}): PhysicalCopy {
@@ -113,10 +92,9 @@ describe('collection routes', () => {
 
 describe('collection query', () => {
   it('always evaluates the owned records of the presented level', () => {
-    expect(collectionSearchRequest({ text: ' bolt ', level: 'copy' }, 50, null)).toEqual({
+    expect(collectionSearchRequest({ text: '', level: 'copy' }, 50, null)).toEqual({
       resultLevel: 'copy',
-      query: 'bolt',
-      criteria: [{ kind: 'owned' }],
+      scope: { kind: 'collection' },
       pageSize: 50,
     });
   });
@@ -124,7 +102,7 @@ describe('collection query', () => {
   it('presents every owned entry of the level for an empty expression', () => {
     expect(collectionSearchRequest({ text: '   ', level: 'card' }, 20, null)).toEqual({
       resultLevel: 'card',
-      criteria: [{ kind: 'owned' }],
+      scope: { kind: 'collection' },
       pageSize: 20,
     });
   });
@@ -132,157 +110,10 @@ describe('collection query', () => {
   it('carries the continuation of the page that produced it unchanged', () => {
     expect(collectionSearchRequest({ text: '', level: 'printing' }, 20, 'cursor-1')).toEqual({
       resultLevel: 'printing',
-      criteria: [{ kind: 'owned' }],
+      scope: { kind: 'collection' },
       pageSize: 20,
       continuation: 'cursor-1',
     });
-  });
-});
-
-describe('collection search access', () => {
-  it('presents the owned entries and quantities Search evaluated', async () => {
-    const requests: unknown[] = [];
-    const pages: SearchPage = {
-      status: 'ready',
-      entries: [
-        entry(),
-        entry({
-          entryKey: 'copy:copy-1',
-          target: { kind: 'copy', copyId: 'copy-1' },
-          printing: {
-            printingId: 'printing-1',
-            edition: 'M11',
-            collectorNumber: '149',
-            language: 'en',
-          },
-          quantity: { copies: 1, intended: null },
-        }),
-      ],
-      totalCount: 2,
-      continuation: 'cursor-2',
-      revisions: {
-        generation: 'generation-1',
-        catalogRevision: 'revision-1',
-        catalogPosition: '1',
-        privateRevision: 'private-1',
-      },
-    };
-    const search: SearchClient = {
-      execute(input) {
-        requests.push(input);
-        return Promise.resolve(pages);
-      },
-      counts: () => Promise.reject(new Error('The list source reads no private counts.')),
-      observe: () => Promise.reject(new Error('The list source observes no progress.')),
-    };
-    const catalog = {
-      resolve: () =>
-        Promise.resolve({
-          revision: revision(),
-          cards: new Map(),
-          printings: new Map(),
-          missing: [],
-        }),
-      listCardPrintings: () => Promise.reject(new Error('The list source reads no printings.')),
-    } as unknown as Catalog;
-    const access = {
-      source: createCollectionQuerySource(search),
-      images: printingImagesReader(catalog),
-    };
-    const signal = new AbortController().signal;
-
-    const read = await access.source.load({
-      context: { text: 'bolt', level: 'copy' },
-      pageSize: 50,
-      continuation: 'cursor-1',
-      signal,
-      required: { positions: [] },
-    });
-    if (read.status !== 'page') {
-      throw new Error('The collection source did not report a page.');
-    }
-
-    expect(requests).toEqual([
-      {
-        resultLevel: 'copy',
-        query: 'bolt',
-        criteria: [{ kind: 'owned' }],
-        pageSize: 50,
-        continuation: 'cursor-1',
-      },
-    ]);
-    expect(read.continuation).toBe('cursor-2');
-    expect(read.entries).toEqual<readonly UiListEntry[]>([
-      {
-        key: 'card:card-bolt',
-        target: { kind: 'card', cardId: 'card-bolt' },
-        basic: {
-          card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
-          printing: null,
-        },
-        quantity: { copies: 3, intended: null },
-      },
-      {
-        key: 'copy:copy-1',
-        target: { kind: 'copy', copyId: 'copy-1' },
-        basic: {
-          card: { cardId: 'card-bolt', name: 'Lightning Bolt', matchedName: null },
-          printing: {
-            printingId: 'printing-1',
-            edition: 'M11',
-            collectorNumber: '149',
-            language: 'en',
-          },
-        },
-        quantity: { copies: 1, intended: null },
-      },
-    ]);
-    expect(read.entries.map((presented) => uiEntryKey(presented.target))).toEqual([
-      'card:card-bolt',
-      'copy:copy-1',
-    ]);
-  });
-
-  it('reads images of the printings the presented entries name', async () => {
-    const references: unknown[] = [];
-    const printing = printingRecord();
-    const catalog = {
-      resolve(input: readonly unknown[]) {
-        references.push(...input);
-        return Promise.resolve({
-          revision: revision(),
-          cards: new Map(),
-          printings: new Map([[printing.printingId, printing]]),
-          missing: [],
-        });
-      },
-      listCardPrintings: () => Promise.reject(new Error('The list source reads no printings.')),
-    } as unknown as Catalog;
-    const search: SearchClient = {
-      execute: () => Promise.reject(new Error('The images reader runs no query.')),
-      counts: () => Promise.reject(new Error('The images reader reads no private counts.')),
-      observe: () => Promise.reject(new Error('The images reader observes no progress.')),
-    };
-    const access = {
-      source: createCollectionQuerySource(search),
-      images: printingImagesReader(catalog),
-    };
-
-    const results = await access.images.read({
-      keys: ['printing:printing-1', 'card:card-bolt'],
-      information: ['images'],
-      signal: new AbortController().signal,
-    });
-
-    expect(references).toEqual([{ kind: 'printing', printingId: 'printing-1' }]);
-    expect(results).toEqual([
-      {
-        key: 'printing:printing-1',
-        status: 'ready',
-        values: [{ src: 'https://images.test/normal.jpg', alt: 'M11 149 · en' }],
-      },
-      { key: 'card:card-bolt', status: 'absent', values: null },
-    ]);
   });
 });
 
@@ -617,7 +448,7 @@ describe('copy access', () => {
       correctCopy: (input) =>
         Promise.resolve({
           privateRevision: 'private-2',
-          publicationPosition: '2',
+
           copies: [copy({ ...input })],
         }),
     };
@@ -663,42 +494,10 @@ function copyAccess(options: {
     async correctCopy(input) {
       return {
         privateRevision: 'private-2',
-        publicationPosition: '2',
+
         copies: [await options.correct(input)],
       };
     },
   };
   return createCopyAccess(createUserCardsOperations({ client, storage: null }).account('alice'));
-}
-
-function printingRecord(): PrintingRecord {
-  return {
-    printingId: 'printing-1',
-    cardId: 'card-bolt',
-    edition: 'M11',
-    collectorNumber: '149',
-    language: 'en',
-    finishes: ['nonfoil', 'foil'],
-    physical: true,
-    images: {
-      small: 'https://images.test/small.jpg',
-      normal: 'https://images.test/normal.jpg',
-      large: null,
-      artCrop: null,
-    },
-  };
-}
-
-function revision(): {
-  revisionId: string;
-  sourceName: string;
-  sourceVersion: string;
-  publishedAt: string;
-} {
-  return {
-    revisionId: 'revision-1',
-    sourceName: 'fixture',
-    sourceVersion: '1',
-    publishedAt: '2026-09-01T00:00:00.000Z',
-  };
 }

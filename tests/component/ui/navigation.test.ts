@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { CATALOG_LIMITS } from '../../../src/catalog/index.js';
-import { SEARCH_LIMITS } from '../../../src/search/index.js';
+import { CATALOG_QUERY_LIMITS } from '../../../src/catalog/index.js';
 import { USERCARDS_LIMITS } from '../../../src/usercards/index.js';
 import {
   createViewStateStore,
@@ -109,7 +109,7 @@ describe('dedicated page routes', () => {
     expect(UI_LIMITS.routeSegment).toBeGreaterThanOrEqual(
       Math.max(
         CATALOG_LIMITS.maxIdentifierLength,
-        SEARCH_LIMITS.maxIdentifierLength,
+        CATALOG_QUERY_LIMITS.maxIdentifierLength,
         USERCARDS_LIMITS.maxIdentifierLength,
       ),
     );

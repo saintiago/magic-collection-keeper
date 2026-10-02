@@ -1,3 +1,5 @@
+import { publicPage } from './query-fixtures.js';
+import type { CatalogQueryInput } from '../../src/catalog/index.js';
 /**
  * Browser-side harness of the Import page (docs/user-interface.md#capture-and-review,
  * docs/user-cards.md#import-and-capture-state, docs/testing.md#browser-and-recognition-evidence).
@@ -9,12 +11,9 @@
  * controls and confirmation handling while observing exactly what crossed the component contracts.
  */
 
-import { idleProgress } from './card-list-progress.js';
-
 import {
   ApplicationError,
   type ApplicationFailureCode,
-  type SearchClient,
   type UserInterfaceCapabilities,
 } from '../../src/application/index.js';
 import {
@@ -26,12 +25,12 @@ import {
 // synchronization job, out of the browser bundle (docs/application.md#interface).
 import type {
   CardRecord,
-  Catalog,
+  CatalogService,
   CatalogReference,
   CatalogResolution,
   PrintingRecord,
 } from '../../src/catalog/index.js';
-import type { SearchPage, SearchRequestInput } from '../../src/search/index.js';
+import type { QueryPageFixture, QueryInputFixture } from './query-fixtures.js';
 import { createCardListBrowser } from '../../src/card-list/index.js';
 import type {
   ConfirmImportInput,
@@ -119,7 +118,7 @@ export interface UiImportControl {
   tags(): readonly UiImportRequest<UiImportTagsRequest>[];
   /** Deck creations the review issued for a new confirmation destination. */
   createdTags(): readonly UiImportRequest<CreateTagInput>[];
-  searches(): readonly UiImportRequest<SearchRequestInput>[];
+  searches(): readonly UiImportRequest<QueryInputFixture>[];
   catalogRequests(): readonly UiImportRequest<UiImportCatalogRequest>[];
   settleSessions(
     id: number,
@@ -154,7 +153,7 @@ export interface UiImportControl {
   scriptDestinationFailure(
     failure: { readonly code: ApplicationFailureCode; readonly message: string } | null,
   ): void;
-  settleSearch(id: number, page: SearchPage): void;
+  settleSearch(id: number, page: QueryPageFixture): void;
   /** Answers every following catalog resolve from this table, like the provider the page reads. */
   scriptCatalog(
     records: {
@@ -226,7 +225,7 @@ export function installImportHarness(
   const recoverRequests: UiImportRequest<string>[] = [];
   const tagRequests: UiImportRequest<UiImportTagsRequest>[] = [];
   const createTagRequests: UiImportRequest<CreateTagInput>[] = [];
-  const searchRequests: UiImportRequest<SearchRequestInput>[] = [];
+  const searchRequests: UiImportRequest<QueryInputFixture>[] = [];
   const catalogRequests: UiImportRequest<UiImportCatalogRequest>[] = [];
   /** Catalog records every following resolve answers from, or null while each one is settled. */
   let scriptedCatalog: {
@@ -323,7 +322,11 @@ export function installImportHarness(
     },
     { endSession: () => log.push('session-ended') },
   );
-  const catalog: Catalog = {
+  const catalog: CatalogService = {
+    query(input: CatalogQueryInput) {
+      return (begin(searchRequests, input) as Promise<QueryPageFixture>).then(publicPage);
+    },
+
     resolve(references) {
       if (scriptedCatalog !== null) {
         sequence += 1;
@@ -340,17 +343,6 @@ export function installImportHarness(
     },
     listCardPrintings() {
       return Promise.reject(new Error('The Import page reads no card printing page.'));
-    },
-  };
-  const search: SearchClient = {
-    execute(input, signal) {
-      return begin(searchRequests, input, signal) as Promise<SearchPage>;
-    },
-    counts() {
-      return Promise.reject(new Error('The Import page reads no private counts.'));
-    },
-    observe() {
-      return Promise.reject(new Error('The Import page observes no indexing progress.'));
     },
   };
   const scriptedUserCards: UserCardsBrowserClient = {
@@ -432,7 +424,7 @@ export function installImportHarness(
   });
   // Application ends the UserCards scope of the account it leaves, so no retained attempt or read
   // of that account reaches the account that signs in next (docs/architecture.md#runtime-boundaries).
-  const cardList = createCardListBrowser({ progress: idleProgress, search, catalog, userCards });
+  const cardList = createCardListBrowser({ catalog, userCards });
   let scopedAccountId: string | null = account?.accountId ?? null;
   listeners.add((next) => {
     const nextAccountId = next?.accountId ?? null;
@@ -455,11 +447,9 @@ export function installImportHarness(
     identity,
     request,
     catalog,
-    search,
     userCards,
     cardList,
     capture: unusedCapture(userCards),
-    indexing: idleProgress,
   };
   const shell: UserInterface = createUserInterface({
     root,
@@ -583,7 +573,7 @@ export function installImportHarness(
     settleCreateTag: (id, tag) =>
       settle(id, tag, (value) => ({
         privateRevision: 'private-1',
-        publicationPosition: '1',
+
         tag: value,
       })),
     scriptDestinationTags: (tags) => {

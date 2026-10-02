@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { finishes } from '../../../src/catalog/index.js';
-import { searchResultLevels } from '../../../src/search/index.js';
+import { catalogResultLevels } from '../../../src/catalog/index.js';
 import {
   UI_LIMITS,
   readUiCatalogFinish,
@@ -24,7 +24,7 @@ import {
 
 describe('catalog control vocabulary', () => {
   it('presents the card and printing levels Search evaluates and the finishes Catalog publishes', () => {
-    expect([...uiCatalogLevels]).toEqual(searchResultLevels.filter((level) => level !== 'copy'));
+    expect([...uiCatalogLevels]).toEqual(catalogResultLevels);
     expect([...uiCatalogFinishes]).toEqual([...finishes]);
   });
 

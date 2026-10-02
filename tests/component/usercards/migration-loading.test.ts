@@ -16,12 +16,9 @@ import {
 } from '../../../src/catalog/index.js';
 import {
   createUserCards,
-  createUserCardsPublication,
   createSourceImports,
   type TrustedUserContext,
   type UserCards,
-  type UserCardsPublication,
-  type UserCardsPublishedRecord,
   type UserCardsSqlTransactor,
   type UserCardsSqlValue,
 } from '../../../src/usercards/index.js';
@@ -201,7 +198,6 @@ describe('usercards migration loading', () => {
   let database: UserCardsTestDatabase;
   let catalog: Catalog;
   let userCards: UserCards;
-  let publication: UserCardsPublication;
 
   beforeEach(async () => {
     database = await createUserCardsTestDatabase();
@@ -212,26 +208,11 @@ describe('usercards migration loading', () => {
     });
     catalog = createCatalog({ sql: database.sql });
     userCards = createUserCards({ sql: database.sql, catalog });
-    publication = createUserCardsPublication({ sql: database.sql });
   });
 
   afterEach(async () => {
     await database.close();
   });
-
-  async function snapshot(accountId: string): Promise<readonly UserCardsPublishedRecord[]> {
-    const records: UserCardsPublishedRecord[] = [];
-    let continuation: string | undefined;
-    do {
-      const page = await publication.readSnapshot({
-        accountId,
-        ...(continuation === undefined ? {} : { continuation }),
-      });
-      records.push(...page.records);
-      continuation = page.continuation ?? undefined;
-    } while (continuation !== undefined);
-    return records;
-  }
 
   it('loads a verified prepared plan and reconciles its exact records', async () => {
     const plan = prepareMigration(legacyExport());
@@ -245,7 +226,6 @@ describe('usercards migration loading', () => {
     expect(batches).toBeGreaterThan(0);
     expect(loaded.appliedBatches).toBe(batches);
     expect(loaded.replayed).toBe(false);
-    expect(loaded.publicationPosition).not.toBeNull();
 
     const readback = await userCards.readMigrationReadback(alice);
     expect(reconcileMigration(plan, [readback])).toEqual([]);
@@ -262,37 +242,6 @@ describe('usercards migration loading', () => {
     expect(readback.pending).toHaveLength(2);
   });
 
-  it('publishes loaded copies with their ownership and location and keeps pending state private', async () => {
-    const plan = prepareMigration(legacyExport());
-    await userCards.loadMigrationPlan(alice, { plan, sourceDigest: plan.sourceDigest });
-    const account = plan.accounts[0]!;
-
-    const records = await snapshot(alice.accountId);
-    const copies = records.flatMap((record) => (record.kind === 'copy' ? [record.copy] : []));
-    expect(copies.map((copy) => copy.copyId).sort()).toEqual(
-      account.copies.map((copy) => copy.copyId).sort(),
-    );
-    expect(copies.every((copy) => copy.owned)).toBe(true);
-    // The physical location publishes with its copy, never on a later association change.
-    const assigned = account.associations.find(
-      (association) => association.targetLevel === 'copy' && association.quantity === null,
-    );
-    const locationTag = account.tags.find((tag) => tag.kind === 'location')!;
-    const located = copies.find((copy) => copy.copyId === assigned!.targetId);
-    expect(located?.locationId).toBe(locationTag.tagId);
-    expect(records.filter((record) => record.kind === 'tag')).toHaveLength(4); // System tag included.
-    expect(records.filter((record) => record.kind === 'association')).toHaveLength(6);
-
-    const sessions = await userCards.listImportSessions(alice);
-    expect(sessions.sessions).toEqual(account.sessions);
-    const entries = await userCards.listImportEntries(alice, {
-      sessionId: account.sessions[0]!.sessionId,
-    });
-    expect(entries.entries.map((entry) => entry.entryId)).toEqual(
-      account.pending.map((entry) => entry.entryId),
-    );
-  });
-
   it('returns the recorded outcome for a repeated identical plan without writing again', async () => {
     const plan = prepareMigration(legacyExport());
     const first = await userCards.loadMigrationPlan(alice, {
@@ -307,7 +256,6 @@ describe('usercards migration loading', () => {
     expect(second.replayed).toBe(true);
     expect(second.appliedBatches).toBe(0);
     expect(second.totalBatches).toBe(first.totalBatches);
-    expect(second.publicationPosition).toBe(first.publicationPosition);
     const readback = await userCards.readMigrationReadback(alice);
     expect(readback.copies).toHaveLength(2);
     expect(reconcileMigration(plan, [readback])).toEqual([]);
@@ -453,7 +401,6 @@ describe('usercards migration loading', () => {
       sourceDigest: plan.sourceDigest,
     });
     expect(loaded.totalBatches).toBe(0);
-    expect(loaded.publicationPosition).toBeNull();
     expect(reconcileMigration(plan, [await userCards.readMigrationReadback(alice)])).toEqual([]);
 
     const later = prepareMigration(
@@ -685,7 +632,6 @@ describe('usercards migration loading', () => {
     expect(replayed.replayed).toBe(true);
     expect(replayed.appliedBatches).toBe(0);
     expect(replayed.totalBatches).toBe(first.totalBatches);
-    expect(replayed.publicationPosition).toBe(first.publicationPosition);
 
     // A Catalog outage is equally irrelevant to the recorded outcome, while an account that still
     // has to be written validates its plan against the target first.

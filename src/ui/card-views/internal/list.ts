@@ -30,6 +30,7 @@ import {
   type CardListFragmentKind,
   type CardListFragmentReaders,
   type CardListFragmentState,
+  type CardListSettledFragmentState,
   type CardListOptions,
   type CardListRetained,
   type CardListSnapshot,
@@ -518,11 +519,12 @@ export function createCardListView<Context>(
     for (const entrySnapshot of snapshot.entries) {
       for (const [kind, state] of entrySnapshot.fragments) {
         const slotKey = fragmentSlotKey(entrySnapshot.entry.key, kind);
-        if (renderedFragments.get(slotKey) === state) {
+        const previous = renderedFragments.get(slotKey);
+        if (previous === state) {
           continue;
         }
         renderedFragments.set(slotKey, state);
-        renderFragmentSlot(entrySnapshot.entry, kind, state);
+        renderFragmentSlot(entrySnapshot.entry, kind, state, previous);
       }
     }
   }
@@ -531,9 +533,21 @@ export function createCardListView<Context>(
     entry: CardListEntry,
     kind: CardListFragmentKind,
     state: CardListFragmentState,
+    previous?: CardListFragmentState,
   ): void {
     const slot = rows.get(entry.key)?.fragments.get(kind);
     if (slot === undefined) {
+      return;
+    }
+    const retained = settledFragmentState(state);
+    if (
+      (state.status === 'refreshing' || state.status === 'refresh-failed') &&
+      retained !== null &&
+      retained === settledFragmentState(previous)
+    ) {
+      removeFragmentRefreshStatus(slot);
+      slot.dataset.uiState = state.status;
+      appendFragmentRefreshStatus(kind, state, slot);
       return;
     }
     // Replacing the slot's content must not drop keyboard focus from the entry it belongs to.
@@ -551,6 +565,16 @@ export function createCardListView<Context>(
   ): void {
     if (state.status === 'loading') {
       slot.textContent = `Loading ${fragmentLabel(kind)}…`;
+      return;
+    }
+    if (state.status === 'refreshing') {
+      paintFragmentSlot(entry, kind, state.previous, slot);
+      appendFragmentRefreshStatus(kind, state, slot);
+      return;
+    }
+    if (state.status === 'refresh-failed') {
+      paintFragmentSlot(entry, kind, state.previous, slot);
+      appendFragmentRefreshStatus(kind, state, slot);
       return;
     }
     if (state.status === 'absent') {
@@ -571,6 +595,52 @@ export function createCardListView<Context>(
     }
     const overridden = presentation.renderFragment?.(kind, entry, state.values) ?? null;
     slot.append(overridden ?? renderFragmentValues(kind, state.values));
+  }
+
+  /** The settled answer carried by a settled or refresh presentation. */
+  function settledFragmentState(
+    state: CardListFragmentState | undefined,
+  ): CardListSettledFragmentState | null {
+    if (state?.status === 'ready' || state?.status === 'absent') return state;
+    if (state?.status === 'refreshing' || state?.status === 'refresh-failed') {
+      return state.previous;
+    }
+    return null;
+  }
+
+  /** Adds refresh progress or failure without replacing the retained fragment content. */
+  function appendFragmentRefreshStatus(
+    kind: CardListFragmentKind,
+    state: Extract<CardListFragmentState, { status: 'refreshing' | 'refresh-failed' }>,
+    slot: HTMLElement,
+  ): void {
+    const status = document.createElement('span');
+    status.dataset.uiFragmentRefreshStatus = '';
+    const message = document.createElement('span');
+    if (state.status === 'refreshing') {
+      message.dataset.uiFragmentRefreshing = '';
+      message.textContent = `Refreshing ${fragmentLabel(kind)}…`;
+      status.append(message);
+    } else {
+      message.dataset.uiFragmentMessage = '';
+      message.textContent = `${fragmentLabel(kind)} refresh unavailable: ${state.message}`;
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.textContent = 'Retry';
+      retry.dataset.uiFragmentRetry = kind;
+      retry.setAttribute('aria-label', `Retry ${fragmentLabel(kind)}`);
+      status.append(message, ' ', retry);
+    }
+    slot.append(' ', status);
+  }
+
+  /** Removes only the refresh decoration, leaving an editor or other usable value mounted. */
+  function removeFragmentRefreshStatus(slot: HTMLElement): void {
+    const status = slot.querySelector('[data-ui-fragment-refresh-status]');
+    if (status === null) return;
+    const separator = status.previousSibling;
+    status.remove();
+    if (separator?.nodeType === 3 && separator.textContent === ' ') separator.remove();
   }
 
   function renderFragmentValues(kind: CardListFragmentKind, values: unknown): Node {
@@ -649,37 +719,11 @@ export function createCardListView<Context>(
     section.setAttribute('aria-busy', snapshot.loading ? 'true' : 'false');
     moreButton.hidden = !snapshot.hasMore;
     moreButton.disabled = snapshot.loading;
-    // A delayed, failed or unavailable indexing status is explicit and recoverable: checking
-    // again starts no business write and never resets the presented content
-    // (docs/card-list.md#loading-and-recovery).
-    retryButton.hidden =
-      snapshot.error === null &&
-      snapshot.freshness !== 'delayed' &&
-      snapshot.freshness !== 'failed' &&
-      snapshot.freshness !== 'unavailable';
-    if (snapshot.error !== null) {
-      statusLine.textContent = snapshot.error;
-      statusLine.dataset.uiFreshness = snapshot.freshness;
-      return;
-    }
-    statusLine.dataset.uiFreshness = snapshot.freshness;
+    retryButton.hidden = snapshot.error === null;
     const parts: string[] = [];
-    // Freshness is presented independently of the number of entries: an empty result that still
-    // awaits known committed changes is updating, never a successful empty result
-    // (docs/card-list.md#loading-and-recovery).
-    if (snapshot.freshness === 'indexing') {
-      parts.push('Results are still being indexed.');
-    } else if (snapshot.freshness === 'delayed') {
-      parts.push('Results are still being indexed; this is taking longer than expected.');
-    } else if (snapshot.freshness === 'failed') {
-      parts.push('Indexing failed; retry to check the results again.');
-    } else if (snapshot.freshness === 'unavailable') {
-      parts.push('The indexing status is unavailable; retry to check again.');
-    } else if (snapshot.entries.length === 0) {
-      // An updating result without usable entries is a retryable read, so this state only shows
-      // while that read is pending or the result is a successful empty one.
-      parts.push(snapshot.loading ? 'Loading…' : 'No entries');
-    }
+    if (snapshot.error !== null) parts.push(snapshot.error);
+    else if (snapshot.loading) parts.push(snapshot.entries.length ? 'Refreshing…' : 'Loading…');
+    else if (snapshot.entries.length === 0) parts.push('No entries');
     if (snapshot.selection.unavailable.length > 0) {
       const unavailable = snapshot.selection.unavailable.length;
       parts.push(

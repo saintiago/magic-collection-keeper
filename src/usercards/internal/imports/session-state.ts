@@ -15,7 +15,6 @@ import {
   revisionBranchSql,
   revisionFromRow,
   revisionReadStatement,
-  revisionStatement,
 } from '../sql.js';
 
 export interface Statement {
@@ -105,20 +104,6 @@ export async function currentRevision(
     request.statement,
     request.parameters,
     'The private-data revision could not be read.',
-  );
-  return revisionFromRow(rows[0]);
-}
-
-export async function advanceRevision(
-  statements: UserCardsSqlExecutor,
-  accountId: string,
-): Promise<string> {
-  const publication = revisionStatement(accountId);
-  const rows = await readRows(
-    statements,
-    publication.statement,
-    publication.parameters,
-    'The private-data revision could not be advanced.',
   );
   return revisionFromRow(rows[0]);
 }

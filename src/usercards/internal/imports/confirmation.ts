@@ -16,7 +16,7 @@ import {
   type ImportDestination,
   type PhysicalCopy,
 } from '../model.js';
-import { publishMutation } from '../publication.js';
+import { advanceRevision } from '../revision.js';
 import { storePrintingReferences } from '../references.js';
 import {
   associationFromRow,
@@ -34,7 +34,6 @@ import type {
   ImportStore,
 } from '../store.js';
 import {
-  advanceRevision,
   bumpSessionStatement,
   currentRevision,
   integerValue,
@@ -1143,10 +1142,8 @@ async function confirmTagDestination(
   }
   // The associations this confirmation created or grew and the revision that completes them
   // commit together, and the recorded outcome reports the position they were published at.
-  const publication = await publishMutation(statements, accountId, {
-    associations: recorded.map((association) => association.associationId),
-  });
-  const position = recordedPositionStatement(accountId, plan.operationId, publication.position);
+  const committedRevision = await advanceRevision(statements, accountId);
+  const position = recordedPositionStatement(accountId, plan.operationId, committedRevision);
   await readRows(
     statements,
     position.statement,
@@ -1156,7 +1153,7 @@ async function confirmTagDestination(
   return {
     outcome: 'confirmed' as const,
     replayed: false,
-    privateRevision: publication.revision,
+    privateRevision: committedRevision,
     receipt: await requireReceipt(statements, accountId, plan.operationId),
   };
 }
@@ -1305,9 +1302,9 @@ async function confirmOwnershipDestination(
   // no record and reports the position its acquisitions were recorded at.
   let privateRevision: string;
   if (acquired) {
-    const publication = await publishMutation(statements, accountId, created);
-    privateRevision = publication.revision;
-    const recorded = recordedPositionStatement(accountId, plan.operationId, publication.position);
+    const committedRevision = await advanceRevision(statements, accountId);
+    privateRevision = committedRevision;
+    const recorded = recordedPositionStatement(accountId, plan.operationId, committedRevision);
     await readRows(
       statements,
       recorded.statement,

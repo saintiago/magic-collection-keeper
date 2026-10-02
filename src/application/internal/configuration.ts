@@ -67,8 +67,8 @@ const configurationFields = z.object({
   }),
   resources: z.object({
     catalogDatabase: databaseResourceSchema,
-    searchDatabase: databaseResourceSchema,
-    userCardsDatabase: databaseResourceSchema,
+    userCardsReadDatabase: databaseResourceSchema,
+    userCardsWriteDatabase: databaseResourceSchema,
     catalogSnapshots: z.object({
       bucket: bucketSchema,
       prefix: z
@@ -167,9 +167,8 @@ export interface ApplicationConfiguration {
   };
   readonly resources: {
     readonly catalogDatabase: ApplicationDatabaseResource;
-    /** Search's own query credential; it reaches Search's published projection only. */
-    readonly searchDatabase: ApplicationDatabaseResource;
-    readonly userCardsDatabase: ApplicationDatabaseResource;
+    readonly userCardsReadDatabase: ApplicationDatabaseResource;
+    readonly userCardsWriteDatabase: ApplicationDatabaseResource;
     readonly catalogSnapshots: {
       readonly bucket: string;
       readonly prefix: string | null;

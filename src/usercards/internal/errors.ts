@@ -4,11 +4,8 @@
  * foreign or unknown private reference is a missing record in every case, never a success and
  * never evidence that another account owns it (docs/user-cards.md#interface).
  *
- * A publication continuation or change position the component can no longer resume from reports
- * `stale-continuation`: the account published another revision after a snapshot page, or the
- * position is not one this account's retained publication history carries, whether expired or
- * another account's. Either outcome requires reading a new snapshot rather than skipping changes
- * (docs/user-cards.md#query-surface).
+ * A continuation invalidated by changed criteria or an authoritative revision reports
+ * `stale-continuation`, so a consumer starts again from the first page.
  */
 export type UserCardsFailureCode =
   'invalid-request' | 'not-found' | 'conflict' | 'stale-continuation' | 'unavailable';

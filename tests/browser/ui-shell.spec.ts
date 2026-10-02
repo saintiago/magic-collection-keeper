@@ -19,7 +19,6 @@ import { build } from 'esbuild';
 
 import type { UiShellControl, UiShellStart } from './ui-shell.harness.js';
 import { UI_LIMITS } from '../../src/ui/index.js';
-import type { SearchIndexingStatus } from '../../src/search/browser.js';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const harnessPath = path.join(repoRoot, 'tests', 'browser', 'ui-shell.harness.ts');
@@ -216,59 +215,6 @@ async function retainedResources(page: Page): Promise<number> {
 }
 
 /** Publishes one indexing status of an account, as Search's progress tracker would. */
-async function publishIndexing(
-  page: Page,
-  accountId: string,
-  state: SearchIndexingStatus['state'],
-  outstanding: readonly string[] = [],
-): Promise<void> {
-  await page.evaluate(
-    (input) => {
-      const control = (globalThis as unknown as { keeperUiControl: UiShellControl })
-        .keeperUiControl;
-      control.publishIndexing(input.accountId, input.state, input.outstanding);
-    },
-    { accountId, state, outstanding },
-  );
-}
-
-/** Status checks the indexing notice's retry action requested. */
-async function indexingChecks(page: Page, accountId: string): Promise<number> {
-  return page.evaluate(
-    (id) =>
-      (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl.indexingChecks(
-        id,
-      ),
-    accountId,
-  );
-}
-
-/** Listeners one account's progress tracker still holds. */
-async function indexingListeners(page: Page, accountId: string): Promise<number> {
-  return page.evaluate(
-    (id) =>
-      (
-        globalThis as unknown as { keeperUiControl: UiShellControl }
-      ).keeperUiControl.indexingListeners(id),
-    accountId,
-  );
-}
-
-/** Resolves the deferred page factory of the late-factory journeys. */
-async function resolveDeferredPage(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
-    control.resolveDeferredPage();
-  });
-}
-
-/** Rejects the deferred page factory of the late-factory journeys. */
-async function rejectDeferredPage(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
-    control.rejectDeferredPage();
-  });
-}
 
 test('a deep link presents its view and a reload keeps it', async ({ page }) => {
   const errors = await openShell(page, '#/cards/card-1/printing-1');
@@ -1138,85 +1084,6 @@ for (const transition of ['account', 'sign-out', 'dispose'] as const) {
   }
 }
 
-test('one indexing notice persists across pages until the changes are incorporated', async ({
-  page,
-}) => {
-  const errors = await openShell(page, '#/');
-  const notice = page.locator('[data-ui-notice="navigation:indexing"]');
-  await expect(notice).toHaveCount(0);
-
-  await publishIndexing(page, 'alice', 'indexing', ['5']);
-  await expect(notice).toBeVisible();
-  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'progress');
-  await expect(notice).toHaveAttribute('role', 'status');
-  await expect(notice.locator('.ui-notice-spinner')).toBeVisible();
-  await expect(notice).toContainText('Indexing your cards…');
-
-  // The notice stays across page changes, and concurrent changes combine into the same one.
-  await page.getByRole('link', { name: 'Collection' }).click();
-  await expect(page.locator('#collection-marker')).toBeVisible();
-  await expect(notice).toBeVisible();
-  await publishIndexing(page, 'alice', 'indexing', ['5', '6']);
-  await expect(notice).toHaveCount(1);
-  await expect(notice).toContainText('Indexing your cards…');
-
-  await publishIndexing(page, 'alice', 'incorporated');
-  await expect(notice).toHaveCount(0);
-  expect(errors).toEqual([]);
-});
-
-test('the indexing notice reports delayed and failed progress with a status-only retry', async ({
-  page,
-}) => {
-  const errors = await openShell(page, '#/');
-  await publishIndexing(page, 'alice', 'indexing', ['5']);
-  await publishIndexing(page, 'alice', 'delayed', ['5']);
-
-  const notice = page.locator('[data-ui-notice="navigation:indexing"]');
-  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'status');
-  await expect(notice).toContainText('Indexing is delayed');
-  await expect(notice.locator('.ui-notice-spinner')).toBeHidden();
-
-  // The retry checks progress and repeats no write, and a keyboard user reaches it.
-  const requests = (await notes(page)).filter((note) => note.startsWith('request:'));
-  const retry = notice.getByRole('button', { name: 'Check indexing status' });
-  await retry.focus();
-  await page.keyboard.press('Enter');
-  await expect.poll(() => indexingChecks(page, 'alice')).toBe(1);
-  expect(await indexingChecks(page, 'alice')).toBe(1);
-  expect((await notes(page)).filter((note) => note.startsWith('request:'))).toEqual(requests);
-
-  await publishIndexing(page, 'alice', 'failed', ['5']);
-  await expect(notice).toHaveAttribute('data-ui-notice-severity', 'error');
-  await expect(notice.locator('.ui-notice-mark')).toHaveText('Error:');
-  await expect(notice).toContainText('Indexing failed');
-  await expect(notice.locator('.ui-notice-spinner')).toBeHidden();
-  expect(errors).toEqual([]);
-});
-
-test('an account change clears the indexing notice and fences the departed progress', async ({
-  page,
-}) => {
-  const errors = await openShell(page, '#/');
-  await publishIndexing(page, 'alice', 'indexing', ['5']);
-  const notice = page.locator('[data-ui-notice="navigation:indexing"]');
-  await expect(notice).toBeVisible();
-
-  await signInAs(page, 'bob');
-  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
-  await expect(notice).toHaveCount(0);
-  expect(await indexingListeners(page, 'alice')).toBe(0);
-
-  // A status the account the shell left publishes later reaches no notice of the new account.
-  await publishIndexing(page, 'alice', 'indexing', ['6']);
-  await expect(notice).toHaveCount(0);
-
-  // The presented account's own progress is presented again.
-  await publishIndexing(page, 'bob', 'indexing', ['7']);
-  await expect(notice).toBeVisible();
-  expect(errors).toEqual([]);
-});
-
 test('a page reports an operation failure as a floating error notice it updates and dismisses', async ({
   page,
 }) => {
@@ -1369,4 +1236,18 @@ for (const identity of ['identified', 'anonymous'] as const) {
       expect(errors).toEqual([]);
     });
   }
+}
+
+async function resolveDeferredPage(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.resolveDeferredPage();
+  });
+}
+
+async function rejectDeferredPage(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const control = (globalThis as unknown as { keeperUiControl: UiShellControl }).keeperUiControl;
+    control.rejectDeferredPage();
+  });
 }

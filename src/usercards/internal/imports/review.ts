@@ -1,3 +1,4 @@
+import { advanceRevision } from '../revision.js';
 /** review persistence for private imports. See docs/user-cards.md#internal-design. */
 import { UserCardsError } from '../errors.js';
 import type {
@@ -17,7 +18,6 @@ import type {
   ImportStore,
 } from '../store.js';
 import {
-  advanceRevision,
   bumpSessionStatement,
   currentRevision,
   integerValue,

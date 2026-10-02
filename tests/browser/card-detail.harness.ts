@@ -111,7 +111,7 @@ export function installDetailPageHarness(level: 'card' | 'copy') {
             return {
               status: 'page',
               continuation: null,
-              current: true,
+
               entries: [
                 {
                   ...entry,
@@ -153,7 +153,6 @@ export function installDetailPageHarness(level: 'card' | 'copy') {
             status: 'page',
             entries: [entry],
             continuation: null,
-            current: true,
           }),
         },
       });

@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createPostgresApplication, type Application } from '../../src/application/backend.js';
 import { catalogSchemaSql } from '../../src/catalog/index.js';
-import { SEARCH_ACCOUNT_SCOPE_SQL, searchSchemaSql } from '../../src/search/index.js';
 import { usercardsSchemaSql } from '../../src/usercards/index.js';
 import { claimsFor, testConfiguration, testIdentityVerifier } from '../support/application.js';
 import { createSnapshotSource } from '../support/catalog-snapshot.js';
@@ -82,26 +81,19 @@ describe('application entry points', () => {
   let application: Application;
 
   beforeEach(async () => {
-    database = await createTestDatabase(
-      `${catalogSchemaSql}\n\n${usercardsSchemaSql}\n\n${searchSchemaSql}`,
-    );
+    database = await createTestDatabase(`${catalogSchemaSql}\n\n${usercardsSchemaSql}`);
     application = createPostgresApplication({
       configuration: testConfiguration(),
       identity: testIdentityVerifier(),
       resources: {
-        readSql: database.sql,
-        searchSql: database.sql,
+        catalogReadSql: database.sql,
+        userCardsReadSql: database.sql,
         writeSql: database.sql,
         catalogSynchronization: {
           sql: database.sql,
           snapshots: createSnapshotSource({
             default_cards: { sourceVersion, records: [bolt, translatedBolt, counterspell] },
           }),
-        },
-        searchIndexing: {
-          sql: database.sql,
-          catalogPublicationSql: database.sql,
-          userCardsPublicationSql: database.sql,
         },
         deckSource: null,
       },
@@ -278,88 +270,53 @@ describe('application entry points', () => {
     expect(withoutIdentity.status).toBe(401);
   });
 
-  it('evaluates a private search inside the scope of the verified account', async () => {
+  it('reads committed owner state immediately and isolates query and fragment access', async () => {
     await publishCatalog();
-    await call({
+    const created = await call({
       method: 'POST',
       path: '/api/collection/copies',
-      accountId: 'cognito-alice',
-      body: {
-        printingId: 'printing-tle-32-en',
-        finish: 'foil',
-        condition: null,
-        quantity: 3,
-      },
+      accountId: 'alice',
+      body: { printingId: 'printing-tle-32-en', finish: 'nonfoil', condition: null, quantity: 2 },
     });
-    // Search answers from its own projection; the write becomes visible through its job entry point.
-    await application.indexSearch({ accounts: ['cognito-alice', 'cognito-bob'] });
-    const ownedQuery = { resultLevel: 'card', criteria: [{ kind: 'owned' }] };
-
+    expect(created.status).toBe(200);
+    const query = { scope: { kind: 'collection' }, resultLevel: 'card' };
     const alice = await call({
       method: 'POST',
-      path: '/api/search',
-      accountId: 'cognito-alice',
-      body: ownedQuery,
+      path: '/api/collection/query',
+      accountId: 'alice',
+      body: query,
     });
-    expect(alice.status).toBe(200);
-    const alicePage = alice.payload as {
-      readonly entries: readonly {
-        readonly card: { readonly cardId: string };
-        readonly quantity: { readonly copies: number | null } | null;
-      }[];
-    };
-    expect(alicePage.entries).toHaveLength(1);
-    expect(alicePage.entries[0]?.card.cardId).toBe('oracle-lightning-bolt');
-    expect(alicePage.entries[0]?.quantity?.copies).toBe(3);
-
+    expect(alice).toMatchObject({
+      status: 200,
+      payload: { totalCount: 1, entries: [{ ownedCopyCount: 2 }] },
+    });
     const bob = await call({
       method: 'POST',
-      path: '/api/search',
-      accountId: 'cognito-bob',
-      body: ownedQuery,
+      path: '/api/collection/query',
+      accountId: 'bob',
+      body: query,
     });
-    expect(bob.status).toBe(200);
-    expect((bob.payload as { readonly entries: readonly unknown[] }).entries).toEqual([]);
-
-    const anonymous = await call({ method: 'POST', path: '/api/search', body: ownedQuery });
-    expect(anonymous.status).toBe(401);
-  });
-
-  it('indexes Search through its job entry point over the published component contracts', async () => {
-    await publishCatalog();
-    await call({
+    expect(bob).toMatchObject({ status: 200, payload: { totalCount: 0, entries: [] } });
+    const reference = { kind: 'printing', printingId: 'printing-tle-32-en' };
+    const fragments = await call({
       method: 'POST',
-      path: '/api/collection/copies',
-      accountId: 'cognito-alice',
-      body: {
-        printingId: 'printing-tle-32-en',
-        finish: 'nonfoil',
-        condition: 'NM',
-        quantity: 2,
-      },
+      path: '/api/collection/fragments',
+      accountId: 'alice',
+      body: { references: [reference] },
     });
-
-    const result = await application.indexSearch({ accounts: ['cognito-alice'] });
-
-    expect(result).toMatchObject({
-      published: true,
-      rebuilt: true,
-      caughtUp: true,
-      unresolvedReferences: 0,
+    expect(fragments).toMatchObject({
+      status: 200,
+      payload: { fragments: [{ ownedCopyCount: 2 }] },
     });
-    expect(await database.query('select card_id from search.cards order by card_id')).toEqual([
-      { card_id: 'oracle-counterspell' },
-      { card_id: 'oracle-lightning-bolt' },
-    ]);
     expect(
-      await database.query('select account_id, position from search_private.account_checkpoint'),
-    ).toEqual([{ account_id: 'cognito-alice', position: expect.any(String) }]);
-    // The private projection is bound to the account, as the query surface is.
-    const copies = await database.sql.transaction(async (statements) => {
-      await statements.query(SEARCH_ACCOUNT_SCOPE_SQL, { account_id: 'cognito-alice' });
-      return await statements.query('select copy_id from search.copies');
+      (await call({ method: 'POST', path: '/api/collection/query', body: query })).status,
+    ).toBe(401);
+    const publicResult = await call({
+      method: 'POST',
+      path: '/api/catalog/query',
+      body: { resultLevel: 'card', query: 'bolt' },
     });
-    expect(copies).toHaveLength(2);
+    expect(publicResult).toMatchObject({ status: 200, payload: { totalCount: 1 } });
   });
 
   it('rejects an identity of another environment before any private write', async () => {
@@ -460,58 +417,6 @@ describe('application entry points', () => {
     expect(conflicted.status).toBe(409);
     expect((conflicted.payload as { readonly error: { readonly code: string } }).error.code).toBe(
       'conflict',
-    );
-  });
-
-  it('requires restarting a search whose continuation became stale', async () => {
-    await publishCatalog();
-    for (const printingId of ['printing-tle-32-en', 'printing-tle-33-en']) {
-      await call({
-        method: 'POST',
-        path: '/api/collection/copies',
-        accountId: 'cognito-alice',
-        body: { printingId, finish: 'nonfoil', condition: null, quantity: 1 },
-      });
-    }
-    await application.indexSearch({ accounts: ['cognito-alice'] });
-    const query = {
-      resultLevel: 'card',
-      criteria: [{ kind: 'owned' }],
-      pageSize: 1,
-    };
-    const first = await call({
-      method: 'POST',
-      path: '/api/search',
-      accountId: 'cognito-alice',
-      body: query,
-    });
-    expect(first.status).toBe(200);
-    const continuation = (first.payload as { readonly continuation: string | null }).continuation;
-    expect(continuation).toBeTruthy();
-
-    await call({
-      method: 'POST',
-      path: '/api/collection/copies',
-      accountId: 'cognito-alice',
-      body: {
-        printingId: 'printing-tle-33-en',
-        finish: 'nonfoil',
-        condition: null,
-        quantity: 1,
-      },
-    });
-    await application.indexSearch({ accounts: ['cognito-alice'] });
-
-    const resumed = await call({
-      method: 'POST',
-      path: '/api/search',
-      accountId: 'cognito-alice',
-      body: { ...query, continuation },
-    });
-
-    expect(resumed.status).toBe(409);
-    expect((resumed.payload as { readonly error: { readonly code: string } }).error.code).toBe(
-      'stale-continuation',
     );
   });
 

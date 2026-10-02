@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Magic Collection Keeper rebuild foundation (docs/operations.md#infrastructure, docs/tech-stack.md#aws-stack). Defines the isolated network, the private Aurora PostgreSQL Serverless v2 cluster reached through the RDS Data API, the private browser, source-snapshot and deployment-artifact buckets, the container-image repositories, the published-view reader secret, one writer secret per mutating component, Search's query and indexing secrets, one publication-reader secret per provider and the shared alarm topic. It creates no compute and no periodic work, and it retains stateful resources on deletion. Deploy the service stack afterwards with the same Environment value.",
+  "Description": "Magic Collection Keeper rebuild foundation. Defines the isolated network, Aurora PostgreSQL cluster, retained buckets, Catalog and Recognition repositories, owner-specific reader/writer secrets, logs and alarms.",
   "Parameters": {
     "Environment": {
       "Type": "String",
@@ -19,7 +19,7 @@
       "MinLength": 1,
       "MaxLength": 63,
       "AllowedPattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
-      "Description": "Database inside the Aurora cluster that holds the published Catalog and UserCards schemas and Search's projection."
+      "Description": "Database inside the Aurora cluster that holds the authoritative Catalog and UserCards schemas."
     },
     "DatabaseEngineVersion": {
       "Type": "String",
@@ -47,12 +47,6 @@
       "MaxValue": 35,
       "Description": "Days of automated Aurora backups kept inside the backup window."
     },
-    "ReaderRoleName": {
-      "Type": "String",
-      "Default": "keeper_reader",
-      "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
-      "Description": "PostgreSQL role that reads the published views only. The schema bootstrap creates it with the generated password of the reader secret and applies the components' reader grants."
-    },
     "UserCardsWriterRoleName": {
       "Type": "String",
       "Default": "keeper_usercards_writer",
@@ -65,35 +59,23 @@
       "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
       "Description": "PostgreSQL role that owns Catalog private mutations. The schema bootstrap creates it with the generated password of the Catalog writer secret and grants it only the Catalog private schema; only the finite catalog task receives that credential."
     },
-    "SearchIndexingRoleName": {
-      "Type": "String",
-      "Default": "keeper_search_indexing",
-      "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
-      "Description": "PostgreSQL role that maintains Search's private projection. The schema bootstrap creates it with the generated password of the Search indexing secret and grants it Search's indexing privileges only, so it reaches no provider relation; only the background indexing job receives this credential."
-    },
-    "SearchQueryRoleName": {
-      "Type": "String",
-      "Default": "keeper_search_query",
-      "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
-      "Description": "PostgreSQL role that reads Search's published projection only. The schema bootstrap creates it with the generated password of the Search query secret and applies Search's reader grants; the interactive API answers Search queries with it, so a query cannot reach Catalog or UserCards storage."
-    },
-    "CatalogPublicationRoleName": {
-      "Type": "String",
-      "Default": "keeper_catalog_publication",
-      "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
-      "Description": "PostgreSQL role that reads the Catalog publication contract: the published records and the durable change stream, and no Catalog mutation. The schema bootstrap creates it with the generated password of the Catalog publication secret; only the background indexing job receives that credential."
-    },
-    "UserCardsPublicationRoleName": {
-      "Type": "String",
-      "Default": "keeper_usercards_publication",
-      "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
-      "Description": "PostgreSQL role that reads the UserCards publication contract: the account register, the published records and the durable change stream, and no private mutation. The schema bootstrap creates it with the generated password of the UserCards publication secret; only the background indexing job receives that credential."
-    },
     "SnapshotPrefix": {
       "Type": "String",
       "Default": "snapshots/",
       "AllowedPattern": "^([A-Za-z0-9!_.*'()/-]+/)?$",
       "Description": "Key prefix of the private source-snapshot bucket that the finite catalog job streams from."
+    },
+    "CatalogReaderRoleName": {
+      "Type": "String",
+      "Default": "keeper_catalog_reader",
+      "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
+      "Description": "PostgreSQL role that reads Catalog public views only."
+    },
+    "UserCardsReaderRoleName": {
+      "Type": "String",
+      "Default": "keeper_usercards_reader",
+      "AllowedPattern": "^[a-z_][a-z0-9_]{0,62}$",
+      "Description": "PostgreSQL role that reads account-scoped UserCards query views only."
     }
   },
   "Rules": {
@@ -102,249 +84,104 @@
         {
           "Assert": {
             "Fn::Not": [
-              { "Fn::Equals": [{ "Ref": "ReaderRoleName" }, { "Ref": "UserCardsWriterRoleName" }] }
-            ]
-          },
-          "AssertDescription": "The published-view reader role and the UserCards writer role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              { "Fn::Equals": [{ "Ref": "ReaderRoleName" }, { "Ref": "CatalogWriterRoleName" }] }
-            ]
-          },
-          "AssertDescription": "The published-view reader role and the Catalog writer role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              { "Fn::Equals": [{ "Ref": "ReaderRoleName" }, { "Ref": "SearchIndexingRoleName" }] }
-            ]
-          },
-          "AssertDescription": "The published-view reader role and the Search indexing role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              { "Fn::Equals": [{ "Ref": "ReaderRoleName" }, { "Ref": "SearchQueryRoleName" }] }
-            ]
-          },
-          "AssertDescription": "The published-view reader role and the Search query role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
               {
-                "Fn::Equals": [{ "Ref": "ReaderRoleName" }, { "Ref": "CatalogPublicationRoleName" }]
+                "Fn::Equals": [
+                  {
+                    "Ref": "CatalogReaderRoleName"
+                  },
+                  {
+                    "Ref": "CatalogWriterRoleName"
+                  }
+                ]
               }
             ]
           },
-          "AssertDescription": "The published-view reader role and the Catalog publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+          "AssertDescription": "CatalogReaderRoleName and CatalogWriterRoleName must be different PostgreSQL roles."
         },
         {
           "Assert": {
             "Fn::Not": [
               {
                 "Fn::Equals": [
-                  { "Ref": "ReaderRoleName" },
-                  { "Ref": "UserCardsPublicationRoleName" }
+                  {
+                    "Ref": "CatalogReaderRoleName"
+                  },
+                  {
+                    "Ref": "UserCardsReaderRoleName"
+                  }
                 ]
               }
             ]
           },
-          "AssertDescription": "The published-view reader role and the UserCards publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+          "AssertDescription": "CatalogReaderRoleName and UserCardsReaderRoleName must be different PostgreSQL roles."
         },
         {
           "Assert": {
             "Fn::Not": [
               {
                 "Fn::Equals": [
-                  { "Ref": "UserCardsWriterRoleName" },
-                  { "Ref": "CatalogWriterRoleName" }
+                  {
+                    "Ref": "CatalogReaderRoleName"
+                  },
+                  {
+                    "Ref": "UserCardsWriterRoleName"
+                  }
                 ]
               }
             ]
           },
-          "AssertDescription": "The UserCards writer role and the Catalog writer role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+          "AssertDescription": "CatalogReaderRoleName and UserCardsWriterRoleName must be different PostgreSQL roles."
         },
         {
           "Assert": {
             "Fn::Not": [
               {
                 "Fn::Equals": [
-                  { "Ref": "UserCardsWriterRoleName" },
-                  { "Ref": "SearchIndexingRoleName" }
+                  {
+                    "Ref": "CatalogWriterRoleName"
+                  },
+                  {
+                    "Ref": "UserCardsReaderRoleName"
+                  }
                 ]
               }
             ]
           },
-          "AssertDescription": "The UserCards writer role and the Search indexing role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+          "AssertDescription": "CatalogWriterRoleName and UserCardsReaderRoleName must be different PostgreSQL roles."
         },
         {
           "Assert": {
             "Fn::Not": [
               {
                 "Fn::Equals": [
-                  { "Ref": "UserCardsWriterRoleName" },
-                  { "Ref": "SearchQueryRoleName" }
+                  {
+                    "Ref": "CatalogWriterRoleName"
+                  },
+                  {
+                    "Ref": "UserCardsWriterRoleName"
+                  }
                 ]
               }
             ]
           },
-          "AssertDescription": "The UserCards writer role and the Search query role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+          "AssertDescription": "CatalogWriterRoleName and UserCardsWriterRoleName must be different PostgreSQL roles."
         },
         {
           "Assert": {
             "Fn::Not": [
               {
                 "Fn::Equals": [
-                  { "Ref": "UserCardsWriterRoleName" },
-                  { "Ref": "CatalogPublicationRoleName" }
+                  {
+                    "Ref": "UserCardsReaderRoleName"
+                  },
+                  {
+                    "Ref": "UserCardsWriterRoleName"
+                  }
                 ]
               }
             ]
           },
-          "AssertDescription": "The UserCards writer role and the Catalog publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              {
-                "Fn::Equals": [
-                  { "Ref": "UserCardsWriterRoleName" },
-                  { "Ref": "UserCardsPublicationRoleName" }
-                ]
-              }
-            ]
-          },
-          "AssertDescription": "The UserCards writer role and the UserCards publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              {
-                "Fn::Equals": [
-                  { "Ref": "CatalogWriterRoleName" },
-                  { "Ref": "SearchIndexingRoleName" }
-                ]
-              }
-            ]
-          },
-          "AssertDescription": "The Catalog writer role and the Search indexing role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              {
-                "Fn::Equals": [{ "Ref": "CatalogWriterRoleName" }, { "Ref": "SearchQueryRoleName" }]
-              }
-            ]
-          },
-          "AssertDescription": "The Catalog writer role and the Search query role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              {
-                "Fn::Equals": [
-                  { "Ref": "CatalogWriterRoleName" },
-                  { "Ref": "CatalogPublicationRoleName" }
-                ]
-              }
-            ]
-          },
-          "AssertDescription": "The Catalog writer role and the Catalog publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              {
-                "Fn::Equals": [
-                  { "Ref": "CatalogWriterRoleName" },
-                  { "Ref": "UserCardsPublicationRoleName" }
-                ]
-              }
-            ]
-          },
-          "AssertDescription": "The Catalog writer role and the UserCards publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              {
-                "Fn::Equals": [
-                  { "Ref": "SearchIndexingRoleName" },
-                  { "Ref": "SearchQueryRoleName" }
-                ]
-              }
-            ]
-          },
-          "AssertDescription": "The Search indexing role and the Search query role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              {
-                "Fn::Equals": [
-                  { "Ref": "SearchIndexingRoleName" },
-                  { "Ref": "CatalogPublicationRoleName" }
-                ]
-              }
-            ]
-          },
-          "AssertDescription": "The Search indexing role and the Catalog publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              {
-                "Fn::Equals": [
-                  { "Ref": "SearchIndexingRoleName" },
-                  { "Ref": "UserCardsPublicationRoleName" }
-                ]
-              }
-            ]
-          },
-          "AssertDescription": "The Search indexing role and the UserCards publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              {
-                "Fn::Equals": [
-                  { "Ref": "SearchQueryRoleName" },
-                  { "Ref": "CatalogPublicationRoleName" }
-                ]
-              }
-            ]
-          },
-          "AssertDescription": "The Search query role and the Catalog publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              {
-                "Fn::Equals": [
-                  { "Ref": "SearchQueryRoleName" },
-                  { "Ref": "UserCardsPublicationRoleName" }
-                ]
-              }
-            ]
-          },
-          "AssertDescription": "The Search query role and the UserCards publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
-        },
-        {
-          "Assert": {
-            "Fn::Not": [
-              {
-                "Fn::Equals": [
-                  { "Ref": "CatalogPublicationRoleName" },
-                  { "Ref": "UserCardsPublicationRoleName" }
-                ]
-              }
-            ]
-          },
-          "AssertDescription": "The Catalog publication role and the UserCards publication role must be different PostgreSQL roles, so a workload credential never carries another workload’s database authority."
+          "AssertDescription": "UserCardsReaderRoleName and UserCardsWriterRoleName must be different PostgreSQL roles."
         }
       ]
     }
@@ -353,13 +190,28 @@
     "Vpc": {
       "Type": "AWS::EC2::VPC",
       "Properties": {
-        "CidrBlock": { "Ref": "VpcCidr" },
+        "CidrBlock": {
+          "Ref": "VpcCidr"
+        },
         "EnableDnsHostnames": true,
         "EnableDnsSupport": true,
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-vpc" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-vpc"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -367,27 +219,59 @@
       "Type": "AWS::EC2::InternetGateway",
       "Properties": {
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-igw" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-igw"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "InternetGatewayAttachment": {
       "Type": "AWS::EC2::VPCGatewayAttachment",
       "Properties": {
-        "InternetGatewayId": { "Ref": "InternetGateway" },
-        "VpcId": { "Ref": "Vpc" }
+        "InternetGatewayId": {
+          "Ref": "InternetGateway"
+        },
+        "VpcId": {
+          "Ref": "Vpc"
+        }
       }
     },
     "PublicRouteTable": {
       "Type": "AWS::EC2::RouteTable",
       "Properties": {
-        "VpcId": { "Ref": "Vpc" },
+        "VpcId": {
+          "Ref": "Vpc"
+        },
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-public" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-public"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -395,104 +279,279 @@
       "Type": "AWS::EC2::Route",
       "DependsOn": "InternetGatewayAttachment",
       "Properties": {
-        "RouteTableId": { "Ref": "PublicRouteTable" },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
         "DestinationCidrBlock": "0.0.0.0/0",
-        "GatewayId": { "Ref": "InternetGateway" }
+        "GatewayId": {
+          "Ref": "InternetGateway"
+        }
       }
     },
     "PublicSubnetA": {
       "Type": "AWS::EC2::Subnet",
       "Properties": {
-        "VpcId": { "Ref": "Vpc" },
-        "AvailabilityZone": { "Fn::Select": [0, { "Fn::GetAZs": "" }] },
-        "CidrBlock": { "Fn::Select": [0, { "Fn::Cidr": [{ "Ref": "VpcCidr" }, 4, 8] }] },
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            0,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "CidrBlock": {
+          "Fn::Select": [
+            0,
+            {
+              "Fn::Cidr": [
+                {
+                  "Ref": "VpcCidr"
+                },
+                4,
+                8
+              ]
+            }
+          ]
+        },
         "MapPublicIpOnLaunch": false,
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-public-a" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-public-a"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "PublicSubnetB": {
       "Type": "AWS::EC2::Subnet",
       "Properties": {
-        "VpcId": { "Ref": "Vpc" },
-        "AvailabilityZone": { "Fn::Select": [1, { "Fn::GetAZs": "" }] },
-        "CidrBlock": { "Fn::Select": [1, { "Fn::Cidr": [{ "Ref": "VpcCidr" }, 4, 8] }] },
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            1,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "CidrBlock": {
+          "Fn::Select": [
+            1,
+            {
+              "Fn::Cidr": [
+                {
+                  "Ref": "VpcCidr"
+                },
+                4,
+                8
+              ]
+            }
+          ]
+        },
         "MapPublicIpOnLaunch": false,
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-public-b" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-public-b"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "PublicSubnetARouteAssociation": {
       "Type": "AWS::EC2::SubnetRouteTableAssociation",
       "Properties": {
-        "RouteTableId": { "Ref": "PublicRouteTable" },
-        "SubnetId": { "Ref": "PublicSubnetA" }
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "SubnetId": {
+          "Ref": "PublicSubnetA"
+        }
       }
     },
     "PublicSubnetBRouteAssociation": {
       "Type": "AWS::EC2::SubnetRouteTableAssociation",
       "Properties": {
-        "RouteTableId": { "Ref": "PublicRouteTable" },
-        "SubnetId": { "Ref": "PublicSubnetB" }
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "SubnetId": {
+          "Ref": "PublicSubnetB"
+        }
       }
     },
     "DatabaseRouteTable": {
       "Type": "AWS::EC2::RouteTable",
       "Properties": {
-        "VpcId": { "Ref": "Vpc" },
+        "VpcId": {
+          "Ref": "Vpc"
+        },
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-database" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-database"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "DatabaseSubnetA": {
       "Type": "AWS::EC2::Subnet",
       "Properties": {
-        "VpcId": { "Ref": "Vpc" },
-        "AvailabilityZone": { "Fn::Select": [0, { "Fn::GetAZs": "" }] },
-        "CidrBlock": { "Fn::Select": [2, { "Fn::Cidr": [{ "Ref": "VpcCidr" }, 4, 8] }] },
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            0,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "CidrBlock": {
+          "Fn::Select": [
+            2,
+            {
+              "Fn::Cidr": [
+                {
+                  "Ref": "VpcCidr"
+                },
+                4,
+                8
+              ]
+            }
+          ]
+        },
         "MapPublicIpOnLaunch": false,
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-database-a" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-database-a"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "DatabaseSubnetB": {
       "Type": "AWS::EC2::Subnet",
       "Properties": {
-        "VpcId": { "Ref": "Vpc" },
-        "AvailabilityZone": { "Fn::Select": [1, { "Fn::GetAZs": "" }] },
-        "CidrBlock": { "Fn::Select": [3, { "Fn::Cidr": [{ "Ref": "VpcCidr" }, 4, 8] }] },
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "AvailabilityZone": {
+          "Fn::Select": [
+            1,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        },
+        "CidrBlock": {
+          "Fn::Select": [
+            3,
+            {
+              "Fn::Cidr": [
+                {
+                  "Ref": "VpcCidr"
+                },
+                4,
+                8
+              ]
+            }
+          ]
+        },
         "MapPublicIpOnLaunch": false,
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-database-b" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-database-b"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "DatabaseSubnetARouteAssociation": {
       "Type": "AWS::EC2::SubnetRouteTableAssociation",
       "Properties": {
-        "RouteTableId": { "Ref": "DatabaseRouteTable" },
-        "SubnetId": { "Ref": "DatabaseSubnetA" }
+        "RouteTableId": {
+          "Ref": "DatabaseRouteTable"
+        },
+        "SubnetId": {
+          "Ref": "DatabaseSubnetA"
+        }
       }
     },
     "DatabaseSubnetBRouteAssociation": {
       "Type": "AWS::EC2::SubnetRouteTableAssociation",
       "Properties": {
-        "RouteTableId": { "Ref": "DatabaseRouteTable" },
-        "SubnetId": { "Ref": "DatabaseSubnetB" }
+        "RouteTableId": {
+          "Ref": "DatabaseRouteTable"
+        },
+        "SubnetId": {
+          "Ref": "DatabaseSubnetB"
+        }
       }
     },
     "DatabaseSubnetGroup": {
@@ -501,10 +560,25 @@
         "DBSubnetGroupDescription": {
           "Fn::Sub": "Isolated database subnets of keeper-${Environment}: no route to the internet gateway or a NAT gateway"
         },
-        "SubnetIds": [{ "Ref": "DatabaseSubnetA" }, { "Ref": "DatabaseSubnetB" }],
+        "SubnetIds": [
+          {
+            "Ref": "DatabaseSubnetA"
+          },
+          {
+            "Ref": "DatabaseSubnetB"
+          }
+        ],
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -512,20 +586,37 @@
       "Type": "AWS::EC2::SecurityGroup",
       "Properties": {
         "GroupDescription": "Aurora cluster of the rebuild: no client traffic; the IAM-authorized RDS Data API is the only path to the data",
-        "VpcId": { "Ref": "Vpc" },
+        "VpcId": {
+          "Ref": "Vpc"
+        },
         "SecurityGroupEgress": [],
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-database" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-database"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "TaskSecurityGroup": {
       "Type": "AWS::EC2::SecurityGroup",
       "Properties": {
-        "GroupDescription": "Finite background jobs (catalog synchronization and Search indexing): outbound HTTPS only, no inbound rule",
-        "VpcId": { "Ref": "Vpc" },
+        "GroupDescription": "Finite Catalog synchronization job: outbound HTTPS only, no inbound rule",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
         "SecurityGroupEgress": [
           {
             "IpProtocol": "tcp",
@@ -536,9 +627,22 @@
           }
         ],
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-finite-task" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-finite-task"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -548,26 +652,50 @@
       "UpdateReplacePolicy": "Snapshot",
       "Properties": {
         "Engine": "aurora-postgresql",
-        "EngineVersion": { "Ref": "DatabaseEngineVersion" },
-        "DatabaseName": { "Ref": "DatabaseName" },
+        "EngineVersion": {
+          "Ref": "DatabaseEngineVersion"
+        },
+        "DatabaseName": {
+          "Ref": "DatabaseName"
+        },
         "MasterUsername": "keeper_owner",
         "ManageMasterUserPassword": true,
         "EnableHttpEndpoint": true,
         "ServerlessV2ScalingConfiguration": {
           "MinCapacity": 0,
-          "MaxCapacity": { "Ref": "DatabaseMaximumCapacity" },
-          "SecondsUntilAutoPause": { "Ref": "DatabaseAutoPauseSeconds" }
+          "MaxCapacity": {
+            "Ref": "DatabaseMaximumCapacity"
+          },
+          "SecondsUntilAutoPause": {
+            "Ref": "DatabaseAutoPauseSeconds"
+          }
         },
-        "BackupRetentionPeriod": { "Ref": "DatabaseBackupRetentionDays" },
+        "BackupRetentionPeriod": {
+          "Ref": "DatabaseBackupRetentionDays"
+        },
         "StorageEncrypted": true,
         "DeletionProtection": true,
         "CopyTagsToSnapshot": true,
         "EnableCloudwatchLogsExports": ["postgresql"],
-        "DBSubnetGroupName": { "Ref": "DatabaseSubnetGroup" },
-        "VpcSecurityGroupIds": [{ "Ref": "DatabaseSecurityGroup" }],
+        "DBSubnetGroupName": {
+          "Ref": "DatabaseSubnetGroup"
+        },
+        "VpcSecurityGroupIds": [
+          {
+            "Ref": "DatabaseSecurityGroup"
+          }
+        ],
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -576,28 +704,22 @@
       "Properties": {
         "Engine": "aurora-postgresql",
         "DBInstanceClass": "db.serverless",
-        "DBClusterIdentifier": { "Ref": "DatabaseCluster" },
+        "DBClusterIdentifier": {
+          "Ref": "DatabaseCluster"
+        },
         "PubliclyAccessible": false,
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
-      }
-    },
-    "ReaderSecret": {
-      "Type": "AWS::SecretsManager::Secret",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
-      "Properties": {
-        "Description": {
-          "Fn::Sub": "Read-only published-view credential of the keeper-${Environment} Aurora cluster; consumed through the RDS Data API"
-        },
-        "GenerateSecretString": {
-          "SecretStringTemplate": { "Fn::Sub": "{\"username\":\"${ReaderRoleName}\"}" },
-          "GenerateStringKey": "password",
-          "PasswordLength": 32,
-          "ExcludeCharacters": "\"@/\\"
-        }
       }
     },
     "UserCardsWriterSecret": {
@@ -609,7 +731,9 @@
           "Fn::Sub": "UserCards private-mutation credential of the keeper-${Environment} Aurora cluster; only the interactive API consumes it through the RDS Data API"
         },
         "GenerateSecretString": {
-          "SecretStringTemplate": { "Fn::Sub": "{\"username\":\"${UserCardsWriterRoleName}\"}" },
+          "SecretStringTemplate": {
+            "Fn::Sub": "{\"username\":\"${UserCardsWriterRoleName}\"}"
+          },
           "GenerateStringKey": "password",
           "PasswordLength": 32,
           "ExcludeCharacters": "\"@/\\"
@@ -625,74 +749,8 @@
           "Fn::Sub": "Catalog private-mutation credential of the keeper-${Environment} Aurora cluster; only the finite catalog task consumes it through the RDS Data API"
         },
         "GenerateSecretString": {
-          "SecretStringTemplate": { "Fn::Sub": "{\"username\":\"${CatalogWriterRoleName}\"}" },
-          "GenerateStringKey": "password",
-          "PasswordLength": 32,
-          "ExcludeCharacters": "\"@/\\"
-        }
-      }
-    },
-    "SearchIndexingSecret": {
-      "Type": "AWS::SecretsManager::Secret",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
-      "Properties": {
-        "Description": {
-          "Fn::Sub": "Search indexing credential of the keeper-${Environment} Aurora cluster; maintains Search's private projection and reaches no provider relation, and only the background indexing job consumes it through the RDS Data API"
-        },
-        "GenerateSecretString": {
-          "SecretStringTemplate": { "Fn::Sub": "{\"username\":\"${SearchIndexingRoleName}\"}" },
-          "GenerateStringKey": "password",
-          "PasswordLength": 32,
-          "ExcludeCharacters": "\"@/\\"
-        }
-      }
-    },
-    "SearchQuerySecret": {
-      "Type": "AWS::SecretsManager::Secret",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
-      "Properties": {
-        "Description": {
-          "Fn::Sub": "Search query credential of the keeper-${Environment} Aurora cluster; reads Search's published projection only, and only the interactive API consumes it through the RDS Data API"
-        },
-        "GenerateSecretString": {
-          "SecretStringTemplate": { "Fn::Sub": "{\"username\":\"${SearchQueryRoleName}\"}" },
-          "GenerateStringKey": "password",
-          "PasswordLength": 32,
-          "ExcludeCharacters": "\"@/\\"
-        }
-      }
-    },
-    "CatalogPublicationSecret": {
-      "Type": "AWS::SecretsManager::Secret",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
-      "Properties": {
-        "Description": {
-          "Fn::Sub": "Catalog publication credential of the keeper-${Environment} Aurora cluster; reads the Catalog published records and change stream without mutation, and only the background indexing job consumes it through the RDS Data API"
-        },
-        "GenerateSecretString": {
           "SecretStringTemplate": {
-            "Fn::Sub": "{\"username\":\"${CatalogPublicationRoleName}\"}"
-          },
-          "GenerateStringKey": "password",
-          "PasswordLength": 32,
-          "ExcludeCharacters": "\"@/\\"
-        }
-      }
-    },
-    "UserCardsPublicationSecret": {
-      "Type": "AWS::SecretsManager::Secret",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
-      "Properties": {
-        "Description": {
-          "Fn::Sub": "UserCards publication credential of the keeper-${Environment} Aurora cluster; reads the account register, published records and change stream without private mutation, and only the background indexing job consumes it through the RDS Data API"
-        },
-        "GenerateSecretString": {
-          "SecretStringTemplate": {
-            "Fn::Sub": "{\"username\":\"${UserCardsPublicationRoleName}\"}"
+            "Fn::Sub": "{\"username\":\"${CatalogWriterRoleName}\"}"
           },
           "GenerateStringKey": "password",
           "PasswordLength": 32,
@@ -713,29 +771,58 @@
         },
         "BucketEncryption": {
           "ServerSideEncryptionConfiguration": [
-            { "ServerSideEncryptionByDefault": { "SSEAlgorithm": "AES256" } }
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
           ]
         },
-        "OwnershipControls": { "Rules": [{ "ObjectOwnership": "BucketOwnerEnforced" }] },
-        "VersioningConfiguration": { "Status": "Enabled" },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
         "LifecycleConfiguration": {
           "Rules": [
             {
               "Id": "ExpireReplacedBrowserArtifacts",
               "Status": "Enabled",
-              "NoncurrentVersionExpiration": { "NoncurrentDays": 30 }
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 30
+              }
             },
             {
               "Id": "AbortIncompleteUploads",
               "Status": "Enabled",
-              "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+              }
             }
           ]
         },
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-browser" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-browser"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -752,29 +839,58 @@
         },
         "BucketEncryption": {
           "ServerSideEncryptionConfiguration": [
-            { "ServerSideEncryptionByDefault": { "SSEAlgorithm": "AES256" } }
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
           ]
         },
-        "OwnershipControls": { "Rules": [{ "ObjectOwnership": "BucketOwnerEnforced" }] },
-        "VersioningConfiguration": { "Status": "Enabled" },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
         "LifecycleConfiguration": {
           "Rules": [
             {
               "Id": "ExpireReplacedSourceSnapshots",
               "Status": "Enabled",
-              "NoncurrentVersionExpiration": { "NoncurrentDays": 90 }
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 90
+              }
             },
             {
               "Id": "AbortIncompleteUploads",
               "Status": "Enabled",
-              "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+              }
             }
           ]
         },
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-snapshots" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-snapshots"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -791,29 +907,58 @@
         },
         "BucketEncryption": {
           "ServerSideEncryptionConfiguration": [
-            { "ServerSideEncryptionByDefault": { "SSEAlgorithm": "AES256" } }
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
           ]
         },
-        "OwnershipControls": { "Rules": [{ "ObjectOwnership": "BucketOwnerEnforced" }] },
-        "VersioningConfiguration": { "Status": "Enabled" },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
         "LifecycleConfiguration": {
           "Rules": [
             {
               "Id": "ExpireReplacedDeploymentArtifacts",
               "Status": "Enabled",
-              "NoncurrentVersionExpiration": { "NoncurrentDays": 30 }
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 30
+              }
             },
             {
               "Id": "AbortIncompleteUploads",
               "Status": "Enabled",
-              "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+              }
             }
           ]
         },
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-artifacts" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-artifacts"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -823,15 +968,32 @@
       "UpdateReplacePolicy": "Retain",
       "Properties": {
         "ImageTagMutability": "IMMUTABLE",
-        "ImageScanningConfiguration": { "ScanOnPush": true },
-        "EncryptionConfiguration": { "EncryptionType": "AES256" },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": true
+        },
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
         "LifecyclePolicy": {
           "LifecyclePolicyText": "{\"rules\":[{\"rulePriority\":1,\"description\":\"Keep the ten most recent catalog job images\",\"selection\":{\"tagStatus\":\"any\",\"countType\":\"imageCountMoreThan\",\"countNumber\":10},\"action\":{\"type\":\"expire\"}}]}"
         },
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-catalog" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-catalog"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
@@ -841,8 +1003,12 @@
       "UpdateReplacePolicy": "Retain",
       "Properties": {
         "ImageTagMutability": "IMMUTABLE",
-        "ImageScanningConfiguration": { "ScanOnPush": true },
-        "EncryptionConfiguration": { "EncryptionType": "AES256" },
+        "ImageScanningConfiguration": {
+          "ScanOnPush": true
+        },
+        "EncryptionConfiguration": {
+          "EncryptionType": "AES256"
+        },
         "LifecyclePolicy": {
           "LifecyclePolicyText": "{\"rules\":[{\"rulePriority\":1,\"description\":\"Keep the ten most recent recognition images\",\"selection\":{\"tagStatus\":\"any\",\"countType\":\"imageCountMoreThan\",\"countNumber\":10},\"action\":{\"type\":\"expire\"}}]}"
         },
@@ -852,7 +1018,9 @@
             {
               "Sid": "RecognitionFunctionPullsThisImage",
               "Effect": "Allow",
-              "Principal": { "Service": "lambda.amazonaws.com" },
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
               "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
               "Condition": {
                 "ArnLike": {
@@ -865,49 +1033,65 @@
           ]
         },
         "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-recognition" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
-        ]
-      }
-    },
-    "IndexingRepository": {
-      "Type": "AWS::ECR::Repository",
-      "DeletionPolicy": "Retain",
-      "UpdateReplacePolicy": "Retain",
-      "Properties": {
-        "ImageTagMutability": "IMMUTABLE",
-        "ImageScanningConfiguration": { "ScanOnPush": true },
-        "EncryptionConfiguration": { "EncryptionType": "AES256" },
-        "LifecyclePolicy": {
-          "LifecyclePolicyText": "{\"rules\":[{\"rulePriority\":1,\"description\":\"Keep the ten most recent indexing job images\",\"selection\":{\"tagStatus\":\"any\",\"countType\":\"imageCountMoreThan\",\"countNumber\":10},\"action\":{\"type\":\"expire\"}}]}"
-        },
-        "Tags": [
-          { "Key": "Name", "Value": { "Fn::Sub": "keeper-${Environment}-indexing" } },
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "keeper-${Environment}-recognition"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "AlarmTopic": {
       "Type": "AWS::SNS::Topic",
       "Properties": {
-        "TopicName": { "Fn::Sub": "keeper-${Environment}-alarms" },
-        "DisplayName": { "Fn::Sub": "keeper-${Environment} alarms" },
+        "TopicName": {
+          "Fn::Sub": "keeper-${Environment}-alarms"
+        },
+        "DisplayName": {
+          "Fn::Sub": "keeper-${Environment} alarms"
+        },
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
       }
     },
     "DatabaseCapacityAlarm": {
       "Type": "AWS::CloudWatch::Alarm",
       "Properties": {
-        "AlarmName": { "Fn::Sub": "keeper-${Environment}-database-capacity" },
+        "AlarmName": {
+          "Fn::Sub": "keeper-${Environment}-database-capacity"
+        },
         "AlarmDescription": "Aurora Serverless v2 capacity stayed at 80% of the configured maximum for 15 minutes; raise DatabaseMaximumCapacity after inspecting the workload.",
         "Namespace": "AWS/RDS",
         "MetricName": "ACUUtilization",
-        "Dimensions": [{ "Name": "DBInstanceIdentifier", "Value": { "Ref": "DatabaseInstance" } }],
+        "Dimensions": [
+          {
+            "Name": "DBInstanceIdentifier",
+            "Value": {
+              "Ref": "DatabaseInstance"
+            }
+          }
+        ],
         "Statistic": "Maximum",
         "Unit": "Percent",
         "Period": 300,
@@ -915,148 +1099,276 @@
         "ComparisonOperator": "GreaterThanOrEqualToThreshold",
         "Threshold": 80,
         "TreatMissingData": "notBreaching",
-        "AlarmActions": [{ "Ref": "AlarmTopic" }]
+        "AlarmActions": [
+          {
+            "Ref": "AlarmTopic"
+          }
+        ]
       }
     },
     "DatabaseLogGroup": {
       "Type": "AWS::Logs::LogGroup",
       "Properties": {
-        "LogGroupName": { "Fn::Sub": "/aws/rds/cluster/${DatabaseCluster}/postgresql" },
+        "LogGroupName": {
+          "Fn::Sub": "/aws/rds/cluster/${DatabaseCluster}/postgresql"
+        },
         "RetentionInDays": 30,
         "Tags": [
-          { "Key": "Environment", "Value": { "Ref": "Environment" } },
-          { "Key": "Application", "Value": "magic-collection-keeper" }
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "Application",
+            "Value": "magic-collection-keeper"
+          }
         ]
+      }
+    },
+    "CatalogReaderSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Description": {
+          "Fn::Sub": "Read-only Catalog credential of the keeper-${Environment} Aurora cluster"
+        },
+        "GenerateSecretString": {
+          "SecretStringTemplate": {
+            "Fn::Sub": "{\"username\":\"${CatalogReaderRoleName}\"}"
+          },
+          "GenerateStringKey": "password",
+          "PasswordLength": 32,
+          "ExcludeCharacters": "\"@/\\"
+        }
+      }
+    },
+    "UserCardsReaderSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Description": {
+          "Fn::Sub": "Read-only UserCards query credential of the keeper-${Environment} Aurora cluster"
+        },
+        "GenerateSecretString": {
+          "SecretStringTemplate": {
+            "Fn::Sub": "{\"username\":\"${UserCardsReaderRoleName}\"}"
+          },
+          "GenerateStringKey": "password",
+          "PasswordLength": 32,
+          "ExcludeCharacters": "\"@/\\"
+        }
       }
     }
   },
   "Outputs": {
     "VpcId": {
       "Description": "Isolated VPC of this environment.",
-      "Value": { "Ref": "Vpc" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-vpc-id" } }
+      "Value": {
+        "Ref": "Vpc"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-vpc-id"
+        }
+      }
     },
     "PublicSubnetIds": {
       "Description": "Comma-separated public subnets for tasks that need outbound HTTPS.",
-      "Value": { "Fn::Join": [",", [{ "Ref": "PublicSubnetA" }, { "Ref": "PublicSubnetB" }]] },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-public-subnet-ids" } }
+      "Value": {
+        "Fn::Join": [
+          ",",
+          [
+            {
+              "Ref": "PublicSubnetA"
+            },
+            {
+              "Ref": "PublicSubnetB"
+            }
+          ]
+        ]
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-public-subnet-ids"
+        }
+      }
     },
     "TaskSecurityGroupId": {
-      "Description": "Security group of the finite background jobs (catalog synchronization and Search indexing): outbound HTTPS only.",
-      "Value": { "Ref": "TaskSecurityGroup" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-task-security-group-id" } }
+      "Description": "Security group of the finite catalog synchronization job: outbound HTTPS only.",
+      "Value": {
+        "Ref": "TaskSecurityGroup"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-task-security-group-id"
+        }
+      }
     },
     "DatabaseClusterArn": {
       "Description": "Aurora cluster for the RDS Data API resourceArn setting.",
-      "Value": { "Fn::GetAtt": ["DatabaseCluster", "DBClusterArn"] },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-database-cluster-arn" } }
+      "Value": {
+        "Fn::GetAtt": ["DatabaseCluster", "DBClusterArn"]
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-database-cluster-arn"
+        }
+      }
     },
     "DatabaseName": {
       "Description": "Database inside the Aurora cluster.",
-      "Value": { "Ref": "DatabaseName" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-database-name" } }
-    },
-    "DatabaseReaderSecretArn": {
-      "Description": "Secrets Manager reference of the published-view reader credential.",
-      "Value": { "Ref": "ReaderSecret" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-database-reader-secret-arn" } }
+      "Value": {
+        "Ref": "DatabaseName"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-database-name"
+        }
+      }
     },
     "DatabaseUserCardsWriterSecretArn": {
       "Description": "Secrets Manager reference of the UserCards private-mutation credential.",
-      "Value": { "Ref": "UserCardsWriterSecret" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-usercards-writer-secret-arn" } }
+      "Value": {
+        "Ref": "UserCardsWriterSecret"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-usercards-writer-secret-arn"
+        }
+      }
     },
     "DatabaseCatalogWriterSecretArn": {
       "Description": "Secrets Manager reference of the Catalog private-mutation credential.",
-      "Value": { "Ref": "CatalogWriterSecret" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-catalog-writer-secret-arn" } }
-    },
-    "DatabaseSearchIndexingSecretArn": {
-      "Description": "Secrets Manager reference of the Search indexing credential.",
-      "Value": { "Ref": "SearchIndexingSecret" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-search-indexing-secret-arn" } }
-    },
-    "DatabaseSearchQuerySecretArn": {
-      "Description": "Secrets Manager reference of the Search query credential.",
-      "Value": { "Ref": "SearchQuerySecret" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-search-query-secret-arn" } }
-    },
-    "DatabaseCatalogPublicationSecretArn": {
-      "Description": "Secrets Manager reference of the Catalog publication credential.",
-      "Value": { "Ref": "CatalogPublicationSecret" },
+      "Value": {
+        "Ref": "CatalogWriterSecret"
+      },
       "Export": {
-        "Name": { "Fn::Sub": "keeper-${Environment}-catalog-publication-secret-arn" }
-      }
-    },
-    "DatabaseUserCardsPublicationSecretArn": {
-      "Description": "Secrets Manager reference of the UserCards publication credential.",
-      "Value": { "Ref": "UserCardsPublicationSecret" },
-      "Export": {
-        "Name": { "Fn::Sub": "keeper-${Environment}-usercards-publication-secret-arn" }
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-catalog-writer-secret-arn"
+        }
       }
     },
     "DatabaseMasterSecretArn": {
       "Description": "RDS-managed master credential. Only the schema bootstrap step of a deployment reads it; no runtime component uses it.",
-      "Value": { "Fn::GetAtt": ["DatabaseCluster", "MasterUserSecret.SecretArn"] }
+      "Value": {
+        "Fn::GetAtt": ["DatabaseCluster", "MasterUserSecret.SecretArn"]
+      }
     },
     "SnapshotBucketName": {
       "Description": "Private source-snapshot bucket.",
-      "Value": { "Ref": "SnapshotBucket" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-snapshot-bucket" } }
+      "Value": {
+        "Ref": "SnapshotBucket"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-snapshot-bucket"
+        }
+      }
     },
     "SnapshotPrefix": {
       "Description": "Key prefix the catalog job streams its provider snapshot from.",
-      "Value": { "Ref": "SnapshotPrefix" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-snapshot-prefix" } }
+      "Value": {
+        "Ref": "SnapshotPrefix"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-snapshot-prefix"
+        }
+      }
     },
     "BrowserBucketName": {
       "Description": "Private browser-delivery bucket behind the CloudFront distribution of the service stack.",
-      "Value": { "Ref": "BrowserBucket" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-browser-bucket" } }
+      "Value": {
+        "Ref": "BrowserBucket"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-browser-bucket"
+        }
+      }
     },
     "ArtifactsBucketName": {
       "Description": "Private deployment-artifact bucket that holds the packaged templates and function bundles.",
-      "Value": { "Ref": "ArtifactsBucket" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-artifacts-bucket" } }
+      "Value": {
+        "Ref": "ArtifactsBucket"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-artifacts-bucket"
+        }
+      }
     },
     "CatalogRepositoryArn": {
       "Description": "Container repository of the finite catalog job.",
-      "Value": { "Fn::GetAtt": ["CatalogRepository", "Arn"] },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-catalog-repository-arn" } }
+      "Value": {
+        "Fn::GetAtt": ["CatalogRepository", "Arn"]
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-catalog-repository-arn"
+        }
+      }
     },
     "CatalogRepositoryUri": {
       "Description": "Push and image-URI prefix of the catalog job repository.",
-      "Value": { "Fn::GetAtt": ["CatalogRepository", "RepositoryUri"] }
+      "Value": {
+        "Fn::GetAtt": ["CatalogRepository", "RepositoryUri"]
+      }
     },
     "CatalogRepositoryName": {
       "Description": "Name the catalog job repository has in ECR, so a push or describe-images command names the repository this stack created instead of a guessed one.",
-      "Value": { "Ref": "CatalogRepository" }
-    },
-    "IndexingRepositoryArn": {
-      "Description": "Container repository of the background indexing job.",
-      "Value": { "Fn::GetAtt": ["IndexingRepository", "Arn"] },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-indexing-repository-arn" } }
-    },
-    "IndexingRepositoryUri": {
-      "Description": "Push and image-URI prefix of the background indexing job repository.",
-      "Value": { "Fn::GetAtt": ["IndexingRepository", "RepositoryUri"] }
-    },
-    "IndexingRepositoryName": {
-      "Description": "Name the background indexing job repository has in ECR, so a push or describe-images command names the repository this stack created instead of a guessed one.",
-      "Value": { "Ref": "IndexingRepository" }
+      "Value": {
+        "Ref": "CatalogRepository"
+      }
     },
     "RecognitionRepositoryUri": {
       "Description": "Push and image-URI prefix of the recognition repository.",
-      "Value": { "Fn::GetAtt": ["RecognitionRepository", "RepositoryUri"] }
+      "Value": {
+        "Fn::GetAtt": ["RecognitionRepository", "RepositoryUri"]
+      }
     },
     "RecognitionRepositoryName": {
       "Description": "Name the recognition repository has in ECR, so a push or describe-images command names the repository this stack created instead of a guessed one.",
-      "Value": { "Ref": "RecognitionRepository" }
+      "Value": {
+        "Ref": "RecognitionRepository"
+      }
     },
     "AlarmTopicArn": {
       "Description": "Topic the alarms of this environment publish to. Subscribe an operator endpoint to it.",
-      "Value": { "Ref": "AlarmTopic" },
-      "Export": { "Name": { "Fn::Sub": "keeper-${Environment}-alarm-topic-arn" } }
+      "Value": {
+        "Ref": "AlarmTopic"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-alarm-topic-arn"
+        }
+      }
+    },
+    "DatabaseCatalogReaderSecretArn": {
+      "Description": "Secrets Manager reference of the Catalog reader credential.",
+      "Value": {
+        "Ref": "CatalogReaderSecret"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-catalog-reader-secret-arn"
+        }
+      }
+    },
+    "DatabaseUserCardsReaderSecretArn": {
+      "Description": "Secrets Manager reference of the UserCards reader credential.",
+      "Value": {
+        "Ref": "UserCardsReaderSecret"
+      },
+      "Export": {
+        "Name": {
+          "Fn::Sub": "keeper-${Environment}-usercards-reader-secret-arn"
+        }
+      }
     }
   }
 }
