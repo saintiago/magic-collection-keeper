@@ -190,9 +190,11 @@ returned by `cloudformation get-template` (not from an assumed repository revisi
    `search-query-secret-arn`, `catalog-publication-secret-arn`,
    `usercards-publication-secret-arn` and `indexing-repository-arn`, each under its existing
    `keeper-${Environment}-` name.
-2. Copy only `CatalogReaderSecret`, `UserCardsReaderSecret`,
-   `DatabaseCatalogReaderSecretArn` and `DatabaseUserCardsReaderSecretArn` from the final
-   `foundation.json` into that deployed template. Validate it and require its inspected foundation
+2. Copy the `CatalogReaderRoleName` and `UserCardsReaderRoleName` parameter definitions,
+   `CatalogReaderSecret` and `UserCardsReaderSecret` resources, and
+   `DatabaseCatalogReaderSecretArn` and `DatabaseUserCardsReaderSecretArn` outputs from the final
+   `foundation.json` into that deployed template. Preserve all deployed parameter definitions and
+   values. Validate it and require its inspected foundation
    change set to contain only those additive reader-secret resources and outputs: no replacement,
    modification or removal of an existing resource.
 3. Execute that bridge and capture its outputs. Then create and inspect the final `service.json`
