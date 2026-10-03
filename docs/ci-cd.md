@@ -168,6 +168,11 @@ as source revision and production configuration: image digests, Lambda ZIP hashe
 maps. Environment-owned repository/bucket coordinates, object versions and generated browser
 `config.json` do not participate in the cross-environment content comparison.
 
+Catalog serving verification uses a supported request to its public query contract, with a synthetic
+authenticated account. The retained Recognition compatibility search accepts only its documented
+lookup terms; it is not a free-text Catalog query endpoint. Recognition image publication emits a
+single `linux/amd64` manifest supported by Lambda, without an attestation image index.
+
 Catalog synchronization, owner-data migration and destructive cleanup are separately invoked
 operations. Neither automatic test deployment nor production promotion starts them implicitly.
 
