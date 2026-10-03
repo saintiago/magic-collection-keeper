@@ -84,6 +84,9 @@ Provide `npm run storybook` to start the [design storybook](ui/storybook.md) fro
 bound to localhost and accessible in the owner's browser. Support rapid updates when shared UI code
 or styles change. Startup requires no deployed configuration, authentication, database or API.
 
-Use a separate entry point and output from production packaging. Do not include workspace pages,
-mocks, fixtures, stepping controls or development dependencies in deployable browser/backend/job
-artifacts. Starting or updating this local workspace does not deploy anything.
+Use a separate entry point and output from production packaging. Package and load the UI-owned
+shared stylesheet and its directly referenced assets in the browser artifact, following
+[application adoption](ui/design-language.md#application-adoption). Do not include workspace pages,
+gallery-only styling or assets, mocks, fixtures, stepping controls or development dependencies in
+deployable browser/backend/job artifacts. Starting or updating this local workspace does not deploy
+anything.

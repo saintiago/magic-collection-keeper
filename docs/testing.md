@@ -312,8 +312,14 @@ For the [design language](ui/design-language.md), inspect desktop and narrow-scr
 representative hover, keyboard focus, press, selection, validation, loading and outcome feedback.
 Exercise the gallery's forms, retry and dialog actions rather than only checking static samples.
 Verify gallery loading holds for Space, reduced motion retains clear static feedback, and switching
-tabs disposes hidden demo work. Check readable contrast and local texture loading. Production
-packaging must also exclude the opt-in design preset and texture.
+tabs disposes hidden demo work. Check readable contrast and local texture loading.
+
+For [application adoption](ui/design-language.md#application-adoption), verify that the packaged
+browser page loads the same shared UI stylesheet as storybook. Inspect representative real app
+screens, sign-in and signed-out presentations at desktop and narrow widths with hover, keyboard
+focus and reduced motion. Verify ordinary asynchronous completion and authentication remain intact.
+Packaging includes shared presentation assets while excluding workspace chrome, gallery-only rules
+and assets, mock images, fixtures and manual stepping.
 
 For [Motion Design](ui/motion-design.md), inspect the before, transition and after presentations of
 hover, press, selection, related card/detail views, loading and outcomes. Check visual continuity,

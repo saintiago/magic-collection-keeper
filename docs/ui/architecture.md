@@ -119,6 +119,14 @@ The [local design storybook](storybook.md) reuses these presentation modules in 
 composition with mocked providers. It owns the design-language page and manually held presentation
 states; its tools and keyboard controls are not application runtime behavior.
 
+## Shared application presentation
+
+The current main storybook's [design language](design-language.md#application-adoption) is the
+application's shared presentation. UserInterface owns the stylesheet and semantic tokens; both the
+application browser entry and storybook load them. Workspace chrome and gallery-only rules remain
+local. Styling changes do not replace providers or alter authentication, commands or completion
+semantics.
+
 The [UI design language](design-language.md) owns visual foundations and interaction feedback.
 [Motion Design](motion-design.md) owns the presentation of movement and transitions within those
 modules. Both are explored in the local workspace before frontend deployment.
