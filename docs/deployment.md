@@ -9,7 +9,8 @@ stack has been adopted or split merely because the repository implementation exi
 Treat the current environment as test. After the recorded-baseline activation gate is enabled,
 merges to the repository's default branch, `main`, deploy changed stacks there through
 [CI/CD](ci-cd.md). Production uses manual promotion of test-verified artifacts. Classification as
-test does not authorize deleting existing data or resources, or creating a replacement environment.
+test does not authorize deleting existing data or resources. The owner has authorized the parallel
+test runtime replacement described below.
 
 ## Deployment composition
 
@@ -107,6 +108,35 @@ Inspect the actual deployed templates and change plans; repository templates alo
 the live state. Use resource-preserving migration/refactoring where supported. Retain authoritative
 storage, existing account identities, recovery artifacts and source archives. A stack move must not
 replace the database, rerun collection migration or implicitly populate the Catalog.
+
+### Parallel test runtime replacement
+
+When the current runtime stacks are locked by a failed CloudFormation refactor, create new runtime
+resources in parallel under `keeper-test-v2-{unit}` for Gateway, Web, Catalog-serving, UserCards,
+Recognition and Catalog-ingestion. Keep the application environment `test`. Reuse the healthy
+`keeper-test-foundation` stack, its Aurora cluster, owner credentials, networking and artifact bucket,
+and the existing Cognito user pool. Create a separate app client in that retained pool.
+
+Keep environment deployment bindings in one authoritative repository configuration consumed by CDK,
+planning and the deployment workflows. Separate the runtime resource/export prefix from the retained
+Foundation prefix; production retains its ordinary names. Apply the runtime prefix to every explicit
+physical name and runtime export/import, including logs and alarms. Foundation consumers retain the
+existing Foundation references. Preserve captured legacy Foundation exports while old deployed
+consumers depend on them; a normal Foundation update must not remove these compatibility exports.
+Record only public coordinates and secret references, never credential values.
+
+Inspect creation change sets and create the six runtime units without moving, modifying or deleting
+resources in the locked stacks. Establish the new image repositories before publishing digest-pinned
+images and completing their runtime stacks. Preserve old source archives; a new ingestion bucket does
+not trigger Catalog synchronization. Package the browser with the new Gateway coordinates and set
+Gateway CORS to the new browser origin. The website and API receive new generated URLs.
+
+Verify each new boundary and the authenticated browser using synthetic data before selecting the new
+stacks as the active test deployment. Capture the unchanged Foundation identity, new runtime outputs,
+parameters and immutable artifacts in the verified environment record. Seed that record and inspect
+the first selective plan before enabling automatic test deployment. Leave recovery and destructive
+cleanup of the failed stacks for a separate operation; retain all existing authoritative data and
+account identities throughout this replacement.
 
 Rollback restores the affected component's previous artifact/configuration and verifies its live
 boundary. It does not replay catalog ingestion, imports or owner-data migration. Persistent resources
