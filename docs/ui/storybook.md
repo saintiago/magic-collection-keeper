@@ -47,7 +47,8 @@ API service or external runtime assets are needed. Supply local images and other
 than reaching external services. Keep mocks, fixtures, the stepping controller and workspace tooling
 outside deployable artifacts; production startup and authorization remain unchanged.
 
-Editing shared UI code or styles updates the local workspace promptly and reaches the frontend only
-through its normal build and explicit deployment. The first design-language iteration opts into new
-presentation only in this local entry point, without changing deployed styling or application behavior. [Operations](../operations.md#local-design-workspace)
+Editing shared UI code or styles updates the local workspace promptly and reaches the frontend
+through its normal build and release process. The [application adoption](design-language.md#application-adoption)
+uses the same UI-owned presentation in both entry points. Workspace-only controls, gallery styling
+and mock assets remain outside deployable artifacts. [Operations](../operations.md#local-design-workspace)
 owns startup and packaging, and [Testing](../testing.md#local-design-storybook) owns verification.

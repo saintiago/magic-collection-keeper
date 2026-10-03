@@ -11,16 +11,27 @@ angular mirror facets. The target experience is a living arcane collection: glow
 and parallax belong to one coherent interaction language. Create an original collection interface,
 without reproducing set artwork, characters, logos or card frames.
 
-This first iteration applies to the design-language page and the local mocked app. It changes
-presentation, not application workflows or provider contracts. Enable its styles through the local
-workspace entry point only; production startup, styling and artifacts remain unchanged. Do not
-implement automatic saving, runtime UI replacement or a theme picker in this change.
+## Application adoption
+
+Apply the current main storybook's Reality Fracture colors, typography, controls, screen styling and
+implemented interaction feedback to the application. UserInterface owns one shared presentation
+stylesheet and its semantic tokens, loaded by both the application and storybook entry points.
+Keep storybook toolbar and gallery styles local to the workspace.
+
+The deployable browser artifact includes and loads the shared stylesheet and any assets it directly
+uses. Gallery-only assets, mock card images, fixtures and manual progression remain local. Styling
+must also cover the real application's sign-in and signed-out presentations.
+
+This promotion preserves workflows, provider contracts, authentication and asynchronous completion.
+It carries the existing presentation into the app; the separate game-concept page and further motion
+studies are outside this change. Automatic saving, runtime UI replacement and a theme picker remain
+outside scope. Frontend deployment follows the normal release boundary.
 
 ## Foundations
 
-Define semantic CSS custom properties in one presentation stylesheet; component rules consume them
+Define semantic CSS custom properties in the shared presentation stylesheet; component rules consume them
 instead of repeating color literals. Keep preset values separate from component rules so another
-palette can be evaluated later without rewriting components. This iteration has one preset.
+palette can be evaluated later without rewriting components. The current design has one preset.
 
 | Role           | Value     | Use                                           |
 | -------------- | --------- | --------------------------------------------- |
