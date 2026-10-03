@@ -7,7 +7,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+import { readEnvironmentDeploymentBinding } from '../../infra/deployment-bindings.js';
 import type { DeploymentConfiguration } from '../../infra/cdk/configuration.js';
+import { stackName } from '../../infra/cdk/configuration.js';
 import { CatalogIngestionStack } from '../../infra/cdk/stacks/catalog-ingestion.js';
 import { CatalogServingStack } from '../../infra/cdk/stacks/catalog-serving.js';
 import { FoundationStack } from '../../infra/cdk/stacks/foundation.js';
@@ -22,6 +24,7 @@ const configuration: DeploymentConfiguration = {
   layout: 'target',
   stage: 'complete',
   artifacts: null,
+  bindings: readEnvironmentDeploymentBinding('test'),
 };
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -101,6 +104,69 @@ describe('CDK deployment units', () => {
     expect(stacks.foundation.toJSON().Resources.TaskSecurityGroup.Properties.GroupDescription).toBe(
       'Finite background jobs (catalog synchronization and Search indexing): outbound HTTPS only, no inbound rule',
     );
+  });
+
+  it('uses replacement names for test runtimes while retaining Foundation references', () => {
+    expect(stackName(configuration, 'foundation')).toBe('keeper-test-foundation');
+    for (const unit of [
+      'gateway',
+      'web',
+      'catalog-serving',
+      'usercards',
+      'recognition',
+      'catalog-ingestion',
+    ] as const) {
+      expect(stackName(configuration, unit)).toBe(`keeper-test-v2-${unit}`);
+    }
+
+    const gateway = JSON.stringify(stacks.gateway.toJSON());
+    expect(gateway).toContain('keeper-test-v2-cognito');
+    expect(gateway).toContain('keeper-test-v2-api-server-errors');
+    expect(gateway).toContain('keeper-test-alarm-topic-arn');
+    expect(gateway).not.toContain('keeper-test-api-id');
+
+    const catalog = JSON.stringify(stacks.catalogServing.toJSON());
+    expect(catalog).toContain('/aws/lambda/keeper-test-v2-catalog-serving');
+    expect(catalog).toContain('keeper-test-v2-catalog-serving-errors');
+    expect(catalog).toContain('keeper-test-database-cluster-arn');
+    expect(catalog).toContain('keeper-test-v2-api-id');
+
+    expect(stacks.foundation.toJSON().Outputs).toMatchObject({
+      BrowserBucketName: {
+        Value: 'keeper-test-foundation-browserbucket-uimkdukgmq1u',
+        Export: { Name: 'keeper-test-browser-bucket' },
+      },
+      SnapshotBucketName: {
+        Value: 'keeper-test-foundation-snapshotbucket-o6icj1my2mvt',
+        Export: { Name: 'keeper-test-snapshot-bucket' },
+      },
+      SnapshotPrefix: {
+        Value: 'snapshots/',
+        Export: { Name: 'keeper-test-snapshot-prefix' },
+      },
+      CatalogRepositoryArn: {
+        Value:
+          'arn:aws:ecr:us-east-1:698643713254:repository/keeper-test-foundation-catalogrepository-is8meiszlxku',
+        Export: { Name: 'keeper-test-catalog-repository-arn' },
+      },
+    });
+  });
+
+  it('retains ordinary production names', () => {
+    const production = {
+      ...configuration,
+      environment: 'production' as const,
+      bindings: readEnvironmentDeploymentBinding('production'),
+    };
+    expect(stackName(production, 'gateway')).toBe('keeper-production-gateway');
+    const app = new App({ analyticsReporting: false, treeMetadata: false });
+    const gateway = Template.fromStack(
+      new GatewayStack(app, 'ProductionGateway', production, {
+        synthesizer: new BootstraplessSynthesizer(),
+      }),
+    ).toJSON();
+    expect(JSON.stringify(gateway)).toContain('keeper-production-api-id');
+    expect(JSON.stringify(gateway)).not.toContain('keeper-production-v2');
   });
 
   it('bootstraps image repositories before adding their consuming runtimes', () => {

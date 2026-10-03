@@ -21,6 +21,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
       - run: npm ci
+      - name: Resolve deployment binding
+        id: binding
+        run: npm run ci:binding -- --environment '${{ inputs.environment }}' --unit gateway --github-output "$GITHUB_OUTPUT"
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
@@ -42,10 +45,10 @@ jobs:
           npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out
           printf '{"kind":"none","values":{}}\n' > .turbo/ci/artifact.json
       - name: Inspect and deploy only GatewayStack
-        run: npm run ci:deploy-stack -- --stack keeper-${{ inputs.environment }}-gateway --template "$PWD/.turbo/cdk.out/GatewayStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
+        run: npm run ci:deploy-stack -- --stack '${{ steps.binding.outputs.stack_name }}' --template "$PWD/.turbo/cdk.out/GatewayStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
       - name: Verify gateway boundary
         run: |
-          base_url="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='ApiBaseUrl'].OutputValue | [0]" --output text)"
+          base_url="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='ApiBaseUrl'].OutputValue | [0]" --output text)"
           origin="$(jq -r .BrowserOrigin .turbo/ci/environment-parameters.json)"
           curl --silent --show-error --dump-header .turbo/ci/headers.txt --output /dev/null \
             --request OPTIONS --header "Origin: $origin" \
@@ -58,7 +61,7 @@ jobs:
         with:
           environment: ${{ inputs.environment }}
           unit: gateway
-          stack_name: keeper-${{ inputs.environment }}-gateway
+          stack_name: ${{ steps.binding.outputs.stack_name }}
           revision: ${{ inputs.revision }}
           template: .turbo/cdk.out/GatewayStack.template.json
           parameters: .turbo/ci/parameters.json

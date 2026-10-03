@@ -99,7 +99,7 @@ export class UserCardsStack extends Stack {
       },
       ['Environment', definition.codeKeyParameter, definition.codeVersionParameter],
     );
-    addLambdaService(fragment, definition);
+    addLambdaService(fragment, definition, configuration);
     fragment.addOutput('UserCardsFunctionName', { Value: { Ref: 'UserCardsFunction' } });
   }
 }

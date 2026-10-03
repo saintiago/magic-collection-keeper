@@ -19,6 +19,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
       - run: npm ci
+      - name: Resolve deployment binding
+        id: binding
+        run: npm run ci:binding -- --environment '${{ inputs.environment }}' --unit catalog-ingestion --github-output "$GITHUB_OUTPUT"
       - uses: aws-actions/configure-aws-credentials@v4
         with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1 }
       - uses: actions/download-artifact@v4
@@ -35,7 +38,7 @@ jobs:
           aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json
           aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/catalog-ingestion.json" .turbo/ci/parameters.json
           cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
-          repository="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-catalog-ingestion --query "Stacks[0].Outputs[?OutputKey=='CatalogRepositoryUri'].OutputValue | [0]" --output text)"
+          repository="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='CatalogRepositoryUri'].OutputValue | [0]" --output text)"
           printf '%s\n' "$repository" > .turbo/ci/repository
       - name: Prepare image inputs
         if: inputs.promote_from == ''
@@ -95,10 +98,10 @@ jobs:
           jq --arg image "$image_uri" '. + {CatalogJobImageUri:$image}' .turbo/ci/parameters.json > .turbo/ci/parameters.next.json
           mv .turbo/ci/parameters.next.json .turbo/ci/parameters.json
           npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out
-      - run: npm run ci:deploy-stack -- --stack keeper-${{ inputs.environment }}-catalog-ingestion --template "$PWD/.turbo/cdk.out/CatalogIngestionStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
+      - run: npm run ci:deploy-stack -- --stack '${{ steps.binding.outputs.stack_name }}' --template "$PWD/.turbo/cdk.out/CatalogIngestionStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
       - name: Verify finite task boundary without starting synchronization
         run: |
-          task_definition="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-catalog-ingestion --query "Stacks[0].Outputs[?OutputKey=='CatalogTaskDefinitionArn'].OutputValue | [0]" --output text)"
+          task_definition="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='CatalogTaskDefinitionArn'].OutputValue | [0]" --output text)"
           status="$(aws ecs describe-task-definition --task-definition "$task_definition" --query 'taskDefinition.status' --output text)"
           test "$status" = ACTIVE
           printf 'Catalog task definition %s is ACTIVE; no task was started.\n' "$task_definition" > .turbo/ci/evidence.txt
@@ -106,7 +109,7 @@ jobs:
         with:
           environment: ${{ inputs.environment }}
           unit: catalog-ingestion
-          stack_name: keeper-${{ inputs.environment }}-catalog-ingestion
+          stack_name: ${{ steps.binding.outputs.stack_name }}
           revision: ${{ inputs.revision }}
           template: .turbo/cdk.out/CatalogIngestionStack.template.json
           parameters: .turbo/ci/parameters.json

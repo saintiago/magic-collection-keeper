@@ -1,7 +1,11 @@
 import { Stack, type StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 
-import type { DeploymentConfiguration } from '../configuration.js';
+import {
+  bindRuntimeDefinition,
+  runtimeExport,
+  type DeploymentConfiguration,
+} from '../configuration.js';
 import {
   clone,
   environmentParameter,
@@ -60,16 +64,20 @@ export class GatewayStack extends Stack {
         },
       },
     };
-    fragment.addResources(definitions, resources);
+    fragment.addResources(bindRuntimeDefinition(configuration, definitions), resources);
     fragment.addOutput(
       'ApiId',
-      exportOutput({ Ref: 'HttpApi' }, 'keeper-${Environment}-api-id', 'Stable HTTP API ID.'),
+      exportOutput(
+        { Ref: 'HttpApi' },
+        runtimeExport(configuration, 'api-id'),
+        'Stable HTTP API ID.',
+      ),
     );
     fragment.addOutput(
       'AuthorizerId',
       exportOutput(
         { Ref: 'JwtAuthorizer' },
-        'keeper-${Environment}-authorizer-id',
+        runtimeExport(configuration, 'authorizer-id'),
         'JWT authorizer used by browser-facing component routes.',
       ),
     );
@@ -77,16 +85,16 @@ export class GatewayStack extends Stack {
       'ApiBaseUrl',
       exportOutput(
         { 'Fn::GetAtt': ['HttpApi', 'ApiEndpoint'] },
-        'keeper-${Environment}-api-base-url',
+        runtimeExport(configuration, 'api-base-url'),
       ),
     );
     fragment.addOutput(
       'UserPoolId',
-      exportOutput({ Ref: 'ExistingUserPoolId' }, 'keeper-${Environment}-user-pool-id'),
+      exportOutput({ Ref: 'ExistingUserPoolId' }, runtimeExport(configuration, 'user-pool-id')),
     );
     fragment.addOutput(
       'UserPoolClientId',
-      exportOutput({ Ref: 'UserPoolClient' }, 'keeper-${Environment}-user-pool-client-id'),
+      exportOutput({ Ref: 'UserPoolClient' }, runtimeExport(configuration, 'user-pool-client-id')),
     );
   }
 }

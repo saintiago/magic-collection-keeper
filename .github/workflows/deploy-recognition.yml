@@ -22,6 +22,9 @@ jobs:
         if: inputs.promote_from == ''
         with: { python-version: '3.12' }
       - run: npm ci
+      - name: Resolve deployment binding
+        id: binding
+        run: npm run ci:binding -- --environment '${{ inputs.environment }}' --unit recognition --github-output "$GITHUB_OUTPUT"
       - uses: aws-actions/configure-aws-credentials@v4
         with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1 }
       - uses: actions/download-artifact@v4
@@ -38,7 +41,7 @@ jobs:
           aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json
           aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/recognition.json" .turbo/ci/parameters.json
           cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
-          repository="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-recognition --query "Stacks[0].Outputs[?OutputKey=='RecognitionRepositoryUri'].OutputValue | [0]" --output text)"
+          repository="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='RecognitionRepositoryUri'].OutputValue | [0]" --output text)"
           printf '%s\n' "$repository" > .turbo/ci/repository
       - name: Prepare image inputs
         if: inputs.promote_from == ''
@@ -101,12 +104,12 @@ jobs:
           jq --arg image "$image_uri" '. + {RecognitionImageUri:$image}' .turbo/ci/parameters.json > .turbo/ci/parameters.next.json
           mv .turbo/ci/parameters.next.json .turbo/ci/parameters.json
           npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out
-      - run: npm run ci:deploy-stack -- --stack keeper-${{ inputs.environment }}-recognition --template "$PWD/.turbo/cdk.out/RecognitionStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
+      - run: npm run ci:deploy-stack -- --stack '${{ steps.binding.outputs.stack_name }}' --template "$PWD/.turbo/cdk.out/RecognitionStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
       - name: Verify Recognition boundary
         run: |
-          function_name="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-recognition --query "Stacks[0].Outputs[?OutputKey=='RecognitionFunctionName'].OutputValue | [0]" --output text)"
-          pool="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue | [0]" --output text)"
-          client="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue | [0]" --output text)"
+          function_name="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='RecognitionFunctionName'].OutputValue | [0]" --output text)"
+          pool="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.gateway_stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue | [0]" --output text)"
+          client="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.gateway_stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue | [0]" --output text)"
           expiry="$(( $(date +%s) + 300 ))"
           jq -n --arg iss "https://cognito-idp.us-east-1.amazonaws.com/$pool" --arg aud "$client" --argjson exp "$expiry" '{version:"2.0",routeKey:"GET /api/recognition/source",rawPath:"/api/recognition/source",requestContext:{http:{method:"GET",path:"/api/recognition/source"},authorizer:{jwt:{claims:{sub:"ci-verification",iss:$iss,aud:$aud,exp:$exp,token_use:"id"}}}}}' > .turbo/ci/request.json
           aws lambda invoke --function-name "$function_name" --payload fileb://.turbo/ci/request.json .turbo/ci/response.json > .turbo/ci/invoke.json
@@ -117,7 +120,7 @@ jobs:
         with:
           environment: ${{ inputs.environment }}
           unit: recognition
-          stack_name: keeper-${{ inputs.environment }}-recognition
+          stack_name: ${{ steps.binding.outputs.stack_name }}
           revision: ${{ inputs.revision }}
           template: .turbo/cdk.out/RecognitionStack.template.json
           parameters: .turbo/ci/parameters.json

@@ -88,6 +88,8 @@
     },
     {
       "paths": [
+        "deployment-bindings.json",
+        "infra/deployment-bindings.ts",
         "infra/cdk/app.ts",
         "infra/cdk/configuration.ts",
         "infra/cdk/stacks/legacy.ts",

@@ -49,6 +49,7 @@ export interface PlanOptions {
   readonly deployedRecord?: DeploymentRecord;
   readonly configurationIdentities?: Partial<Record<DeploymentUnit, string>>;
   readonly buildInputs?: DeploymentPlan['buildInputs'];
+  readonly targetUnits?: readonly DeploymentUnit[];
 }
 
 /**
@@ -57,6 +58,7 @@ export interface PlanOptions {
  */
 export function planDeployments(options: PlanOptions): DeploymentPlan {
   const candidates = new Set<DeploymentUnit>();
+  const targetUnits = new Set(options.targetUnits ?? deploymentUnits);
   const reasons = new Map<DeploymentUnit, Set<string>>();
   let orchestrationChanged = false;
   const deployedInputs = Object.fromEntries(
@@ -68,7 +70,9 @@ export function planDeployments(options: PlanOptions): DeploymentPlan {
     for (const rule of options.mapping.rules) {
       if (!rule.paths.some((pattern) => matches(pattern, changed))) continue;
       classified = true;
-      for (const unit of rule.stacks) addReason(candidates, reasons, unit, changed);
+      for (const unit of rule.stacks) {
+        if (targetUnits.has(unit)) addReason(candidates, reasons, unit, changed);
+      }
     }
     for (const unit of deploymentUnits) {
       const current = options.productionInputs[unit] ?? [];
@@ -78,7 +82,7 @@ export function planDeployments(options: PlanOptions): DeploymentPlan {
       ];
       if (!current.includes(changed) && !previous.includes(changed)) continue;
       classified = true;
-      addReason(candidates, reasons, unit, changed);
+      if (targetUnits.has(unit)) addReason(candidates, reasons, unit, changed);
     }
     if (options.mapping.orchestrationOnly.some((pattern) => matches(pattern, changed))) {
       classified = true;
@@ -95,6 +99,7 @@ export function planDeployments(options: PlanOptions): DeploymentPlan {
   }
 
   for (const unit of deploymentUnits) {
+    if (!targetUnits.has(unit)) continue;
     const component = options.deployedRecord?.components[unit];
     if (options.deployedRecord?.pending?.[unit] !== undefined) {
       addReason(candidates, reasons, unit, '[unverified deployment requires reconciliation]');
@@ -123,6 +128,7 @@ export function planDeployments(options: PlanOptions): DeploymentPlan {
     for (const provider of deploymentUnits) {
       if (!candidates.has(provider)) continue;
       for (const dependent of options.mapping.replanDependents[provider] ?? []) {
+        if (!targetUnits.has(dependent)) continue;
         if (!candidates.has(dependent)) addedDependent = true;
         addReason(candidates, reasons, dependent, `[provider ${provider} replanned]`);
       }

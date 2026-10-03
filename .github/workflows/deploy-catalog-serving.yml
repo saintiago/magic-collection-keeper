@@ -19,6 +19,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
       - run: npm ci
+      - name: Resolve deployment binding
+        id: binding
+        run: npm run ci:binding -- --environment '${{ inputs.environment }}' --unit catalog-serving --github-output "$GITHUB_OUTPUT"
       - uses: aws-actions/configure-aws-credentials@v4
         with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1 }
       - uses: actions/download-artifact@v4
@@ -38,7 +41,7 @@ jobs:
           aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json
           aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/catalog-serving.json" .turbo/ci/parameters.json
           cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
-          bucket="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-foundation --query "Stacks[0].Outputs[?OutputKey=='ArtifactsBucketName'].OutputValue | [0]" --output text)"
+          bucket="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.foundation_stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='ArtifactsBucketName'].OutputValue | [0]" --output text)"
           if [[ -z "$PROMOTE_FROM" ]]; then
             npm run package -- --out .turbo/release
             version="$(jq -r .version .turbo/release/manifest.json)"
@@ -72,12 +75,12 @@ jobs:
           jq -n --arg bucket "$bucket" --arg key "$key" --arg objectVersion "$object_version" --arg sha256 "$sha" --arg version "$version" --arg manifestSha256 "$manifest_sha" '{kind:"files",values:{bucket:$bucket,key:$key,objectVersion:$objectVersion,sha256:$sha256,version:$version,manifestSha256:$manifestSha256}}' > .turbo/ci/artifact.json
           npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out
       - name: Inspect and deploy only CatalogServingStack
-        run: npm run ci:deploy-stack -- --stack keeper-${{ inputs.environment }}-catalog-serving --template "$PWD/.turbo/cdk.out/CatalogServingStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
+        run: npm run ci:deploy-stack -- --stack '${{ steps.binding.outputs.stack_name }}' --template "$PWD/.turbo/cdk.out/CatalogServingStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
       - name: Verify Catalog serving boundary
         run: |
-          function_name="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-catalog-serving --query "Stacks[0].Outputs[?OutputKey=='CatalogServingFunctionName'].OutputValue | [0]" --output text)"
-          pool="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue | [0]" --output text)"
-          client="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue | [0]" --output text)"
+          function_name="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='CatalogServingFunctionName'].OutputValue | [0]" --output text)"
+          pool="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.gateway_stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue | [0]" --output text)"
+          client="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.gateway_stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue | [0]" --output text)"
           expiry="$(( $(date +%s) + 300 ))"
           jq -n --arg iss "https://cognito-idp.us-east-1.amazonaws.com/$pool" --arg aud "$client" --argjson exp "$expiry" --arg body '{"resultLevel":"card","pageSize":1}' '{version:"2.0",routeKey:"POST /api/catalog/query",rawPath:"/api/catalog/query",body:$body,requestContext:{http:{method:"POST",path:"/api/catalog/query"},authorizer:{jwt:{claims:{sub:"ci-verification",iss:$iss,aud:$aud,exp:$exp,token_use:"id"}}}}}' > .turbo/ci/request.json
           bash scripts/ci/invoke-read-probe.sh "$function_name" .turbo/ci/request.json .turbo/ci/response.json .turbo/ci/invoke.json
@@ -86,7 +89,7 @@ jobs:
         with:
           environment: ${{ inputs.environment }}
           unit: catalog-serving
-          stack_name: keeper-${{ inputs.environment }}-catalog-serving
+          stack_name: ${{ steps.binding.outputs.stack_name }}
           revision: ${{ inputs.revision }}
           template: .turbo/cdk.out/CatalogServingStack.template.json
           parameters: .turbo/ci/parameters.json

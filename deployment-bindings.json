@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "environments": {
+    "development": {
+      "foundationPrefix": "keeper-development",
+      "runtimePrefix": "keeper-development",
+      "activeUnits": [
+        "foundation",
+        "gateway",
+        "web",
+        "catalog-serving",
+        "usercards",
+        "recognition",
+        "catalog-ingestion"
+      ],
+      "stacks": {
+        "foundation": "keeper-development-foundation",
+        "gateway": "keeper-development-gateway",
+        "web": "keeper-development-web",
+        "catalog-serving": "keeper-development-catalog-serving",
+        "usercards": "keeper-development-usercards",
+        "recognition": "keeper-development-recognition",
+        "catalog-ingestion": "keeper-development-catalog-ingestion"
+      },
+      "compatibilityExports": {}
+    },
+    "test": {
+      "foundationPrefix": "keeper-test",
+      "runtimePrefix": "keeper-test-v2",
+      "activeUnits": [
+        "gateway",
+        "web",
+        "catalog-serving",
+        "usercards",
+        "recognition",
+        "catalog-ingestion"
+      ],
+      "stacks": {
+        "foundation": "keeper-test-foundation",
+        "gateway": "keeper-test-v2-gateway",
+        "web": "keeper-test-v2-web",
+        "catalog-serving": "keeper-test-v2-catalog-serving",
+        "usercards": "keeper-test-v2-usercards",
+        "recognition": "keeper-test-v2-recognition",
+        "catalog-ingestion": "keeper-test-v2-catalog-ingestion"
+      },
+      "compatibilityExports": {
+        "BrowserBucketName": "keeper-test-foundation-browserbucket-uimkdukgmq1u",
+        "SnapshotBucketName": "keeper-test-foundation-snapshotbucket-o6icj1my2mvt",
+        "SnapshotPrefix": "snapshots/",
+        "CatalogRepositoryArn": "arn:aws:ecr:us-east-1:698643713254:repository/keeper-test-foundation-catalogrepository-is8meiszlxku"
+      }
+    },
+    "production": {
+      "foundationPrefix": "keeper-production",
+      "runtimePrefix": "keeper-production",
+      "activeUnits": [
+        "foundation",
+        "gateway",
+        "web",
+        "catalog-serving",
+        "usercards",
+        "recognition",
+        "catalog-ingestion"
+      ],
+      "stacks": {
+        "foundation": "keeper-production-foundation",
+        "gateway": "keeper-production-gateway",
+        "web": "keeper-production-web",
+        "catalog-serving": "keeper-production-catalog-serving",
+        "usercards": "keeper-production-usercards",
+        "recognition": "keeper-production-recognition",
+        "catalog-ingestion": "keeper-production-catalog-ingestion"
+      },
+      "compatibilityExports": {}
+    }
+  }
+}

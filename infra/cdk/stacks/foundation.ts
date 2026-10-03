@@ -1,9 +1,10 @@
 import { Stack, type StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 
-import type { DeploymentConfiguration } from '../configuration.js';
+import { foundationExport, type DeploymentConfiguration } from '../configuration.js';
 import {
   environmentParameter,
+  exportOutput,
   readLegacyTemplate,
   TemplateFragment,
 } from '../constructs/template.js';
@@ -50,5 +51,24 @@ export class FoundationStack extends Stack {
       source.Outputs ?? {},
       Object.keys(source.Outputs ?? {}).filter((name) => !movedOutputs.has(name)),
     );
+    for (const [name, value] of Object.entries(configuration.bindings.compatibilityExports)) {
+      fragment.addOutput(
+        name,
+        exportOutput(value, foundationExport(configuration, outputSuffix(name))),
+      );
+    }
   }
+}
+
+const compatibilityOutputSuffixes = {
+  BrowserBucketName: 'browser-bucket',
+  SnapshotBucketName: 'snapshot-bucket',
+  SnapshotPrefix: 'snapshot-prefix',
+  CatalogRepositoryArn: 'catalog-repository-arn',
+} as const;
+
+function outputSuffix(name: string): string {
+  const suffix = compatibilityOutputSuffixes[name as keyof typeof compatibilityOutputSuffixes];
+  if (suffix === undefined) throw new Error(`Unknown Foundation compatibility output ${name}.`);
+  return suffix;
 }

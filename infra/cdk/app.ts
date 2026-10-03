@@ -19,40 +19,40 @@ const common = { synthesizer: new BootstraplessSynthesizer() };
 if (configuration.layout === 'legacy') {
   new LegacyFoundationStack(app, 'FoundationStack', configuration, {
     ...common,
-    stackName: stackName(configuration.environment, 'foundation'),
+    stackName: stackName(configuration, 'foundation'),
   });
   new LegacyServiceStack(app, 'ServiceStack', configuration, {
     ...common,
-    stackName: stackName(configuration.environment, 'service'),
+    stackName: `keeper-${configuration.environment}-service`,
   });
 } else {
   new FoundationStack(app, 'FoundationStack', configuration, {
     ...common,
-    stackName: stackName(configuration.environment, 'foundation'),
+    stackName: stackName(configuration, 'foundation'),
   });
   new GatewayStack(app, 'GatewayStack', configuration, {
     ...common,
-    stackName: stackName(configuration.environment, 'gateway'),
+    stackName: stackName(configuration, 'gateway'),
   });
   new WebStack(app, 'WebStack', configuration, {
     ...common,
-    stackName: stackName(configuration.environment, 'web'),
+    stackName: stackName(configuration, 'web'),
   });
   new CatalogServingStack(app, 'CatalogServingStack', configuration, {
     ...common,
-    stackName: stackName(configuration.environment, 'catalog-serving'),
+    stackName: stackName(configuration, 'catalog-serving'),
   });
   new UserCardsStack(app, 'UserCardsStack', configuration, {
     ...common,
-    stackName: stackName(configuration.environment, 'usercards'),
+    stackName: stackName(configuration, 'usercards'),
   });
   new RecognitionStack(app, 'RecognitionStack', configuration, {
     ...common,
-    stackName: stackName(configuration.environment, 'recognition'),
+    stackName: stackName(configuration, 'recognition'),
   });
   new CatalogIngestionStack(app, 'CatalogIngestionStack', configuration, {
     ...common,
-    stackName: stackName(configuration.environment, 'catalog-ingestion'),
+    stackName: stackName(configuration, 'catalog-ingestion'),
   });
 }
 

@@ -151,7 +151,9 @@ export class TemplateFragment extends Construct {
 function outputExportName(value: unknown): string {
   if (typeof value === 'string') return value;
   const substitution = (value as { readonly 'Fn::Sub'?: unknown } | null | undefined)?.['Fn::Sub'];
-  if (typeof substitution === 'string') return Fn.sub(substitution);
+  if (typeof substitution === 'string') {
+    return substitution.includes('${') ? Fn.sub(substitution) : substitution;
+  }
   throw new Error('A template output export name must be a string or Fn::Sub string.');
 }
 
