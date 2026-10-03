@@ -145,10 +145,14 @@ unreadable record is an activation error and must never be replaced with an infe
 CloudFormation updates use the intended stack only, with explicit dependencies handled by the
 planner. Avoid a blanket `cdk deploy --all`. A selected stack update may be a no-op; publishing a
 candidate artifact does not imply that it must replace the deployed version. Recognition and Catalog
-ingestion first look up their immutable package-version/revision tag and reuse a published image by
-digest. Its image label retains the packaging manifest hash, so a fresh runner can recover the full
-candidate identity without rebuilding. Only an absent image permits a build; lookup failures stop
-publication. Promotion similarly reuses an existing destination tag after checking its digest.
+ingestion hash their component Docker context, target platform and build arguments, excluding the
+packaging manifest's source labels and unrelated outputs. Recognition compares the source ZIP's
+entry contents independently of checkout timestamps; the corresponding source itself remains an
+image input. An immutable `inputs-<sha256>` tag recovers the published image by digest across retries
+and revisions. Only an absent image permits a build; lookup failures stop publication. Provenance
+stays in the packaging and deployment records, outside image content comparison. Promotion similarly
+reuses an existing destination tag after checking its digest. A no-op verification refreshes evidence
+without replacing the previous distinct deployment's rollback reference.
 
 Catalog synchronization, owner-data migration and destructive cleanup are separately invoked
 operations. Neither automatic test deployment nor production promotion starts them implicitly.

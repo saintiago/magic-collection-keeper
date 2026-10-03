@@ -34,14 +34,8 @@ jobs:
           cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
           repository="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-recognition --query "Stacks[0].Outputs[?OutputKey=='RecognitionRepositoryUri'].OutputValue | [0]" --output text)"
           printf '%s\n' "$repository" > .turbo/ci/repository
-      - name: Recover published image candidate
-        id: candidate
+      - name: Prepare image inputs
         if: inputs.promote_from == ''
-        run: |
-          version="$(jq -r .version package.json)-$(git rev-parse HEAD | cut -c1-12)"
-          bash scripts/ci/image-candidate.sh "$(cat .turbo/ci/repository)" "$version" .turbo/ci/artifact.json
-      - name: Build and publish recognition image
-        if: inputs.promote_from == '' && steps.candidate.outputs.found != 'true'
         run: |
           python -m venv .recognition-build/runtime
           .recognition-build/runtime/bin/pip install -r src/recognition/python/requirements-visual.txt
@@ -49,16 +43,23 @@ jobs:
           .recognition-build/converter/bin/pip install -r src/recognition/python/requirements-converter.txt
           npm run prepare:recognition -- --python .recognition-build/runtime/bin/python --converter-python .recognition-build/converter/bin/python
           npm run package:recognition -- --out .turbo/release
+          npx tsx scripts/ci/image-inputs.ts .turbo/release/recognition > .turbo/ci/image-inputs-sha
+      - name: Recover published image candidate
+        id: candidate
+        if: inputs.promote_from == ''
+        run: |
+          bash scripts/ci/image-candidate.sh "$(cat .turbo/ci/repository)" "$(cat .turbo/ci/image-inputs-sha)" .turbo/ci/artifact.json
+      - name: Build and publish image
+        if: inputs.promote_from == '' && steps.candidate.outputs.found != 'true'
+        run: |
           repository="$(cat .turbo/ci/repository)"
           registry="${repository%%/*}"
           aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
-          version="$(jq -r .version .turbo/release/recognition/manifest.json)"
-          manifest_sha="$(sha256sum .turbo/release/recognition/manifest.json | cut -d' ' -f1)"
-          docker build --label "keeper.manifest-sha256=$manifest_sha" --tag "$repository:$version" .turbo/release/recognition
+          inputs_sha="$(cat .turbo/ci/image-inputs-sha)"
+          version="inputs-$inputs_sha"
+          docker build --platform linux/amd64 --tag "$repository:$version" .turbo/release/recognition
           docker push "$repository:$version"
-          digest="$(aws ecr describe-images --repository-name "${repository#*/}" --image-ids imageTag="$version" --query 'imageDetails[0].imageDigest' --output text)"
-          image_uri="$repository@$digest"
-          jq -n --arg imageUri "$image_uri" --arg digest "$digest" --arg version "$version" --arg manifestSha256 "$manifest_sha" '{kind:"image",values:{imageUri:$imageUri,digest:$digest,version:$version,manifestSha256:$manifestSha256}}' > .turbo/ci/artifact.json
+          bash scripts/ci/image-candidate.sh "$repository" "$inputs_sha" .turbo/ci/artifact.json
       - name: Copy test-verified recognition image
         if: inputs.promote_from != ''
         env:
@@ -71,7 +72,6 @@ jobs:
           source_digest="${source_uri##*@}"
           target_repository="$(cat .turbo/ci/repository)"
           version="$(jq -r '.components.recognition.artifact.values.version' .turbo/ci/source.json)"
-          manifest_sha="$(jq -r '.components.recognition.artifact.values.manifestSha256' .turbo/ci/source.json)"
           if digest="$(aws ecr describe-images --repository-name "${target_repository#*/}" --image-ids imageTag="$version" --query 'imageDetails[0].imageDigest' --output text 2> .turbo/ci/image-error.txt)"; then
             test "$digest" = "$source_digest"
           else
@@ -84,7 +84,7 @@ jobs:
           fi
           test "$digest" = "$source_digest"
           image_uri="$target_repository@$digest"
-          jq -n --arg imageUri "$image_uri" --arg digest "$digest" --arg version "$version" --arg manifestSha256 "$manifest_sha" '{kind:"image",values:{imageUri:$imageUri,digest:$digest,version:$version,manifestSha256:$manifestSha256}}' > .turbo/ci/artifact.json
+          jq --arg imageUri "$image_uri" '.components["recognition"].artifact | .values.imageUri = $imageUri' .turbo/ci/source.json > .turbo/ci/artifact.json
       - name: Synthesize selected image
         run: |
           desired_digest="$(jq -r .values.digest .turbo/ci/artifact.json)"

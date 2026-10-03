@@ -112,7 +112,7 @@ jobs:
   finalize:
     needs:
       [plan, foundation, gateway, web, catalog-serving, usercards, recognition, catalog-ingestion]
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-24.04
     environment: production
     permissions: { contents: read, id-token: write }

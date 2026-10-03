@@ -156,12 +156,13 @@ if (args[0] === 's3api') {
       try {
         await mkdir(path.join(directory, 'bin'));
         const digest = `sha256:${'a'.repeat(64)}`;
-        const manifestSha256 = 'b'.repeat(64);
+        const inputsSha256 = 'b'.repeat(64);
         await writeFile(
           path.join(directory, 'bin/aws'),
           `#!/usr/bin/env bash
 set -eu
 if [[ "$2" == describe-images ]]; then
+  [[ "$*" == *"imageTag=inputs-${inputsSha256}"* ]]
   if [[ "$LOOKUP" == found ]]; then echo '${digest}';
   elif [[ "$LOOKUP" == absent ]]; then echo 'ImageNotFoundException' >&2; exit 1;
   else echo 'AccessDeniedException' >&2; exit 1; fi
@@ -169,30 +170,15 @@ else echo 'test-password'; fi
 `,
           { mode: 0o755 },
         );
-        await writeFile(
-          path.join(directory, 'bin/docker'),
-          `#!/usr/bin/env bash
-set -eu
-echo "$1" >> "$DOCKER_LOG"
-case "$1" in
- login) cat > /dev/null ;;
- pull) ;;
- inspect) echo '${manifestSha256}' ;;
- *) exit 1 ;;
-esac
-`,
-          { mode: 0o755 },
-        );
         const output = path.join(directory, 'artifact.json');
         const githubOutput = path.join(directory, 'github-output');
-        const dockerLog = path.join(directory, 'docker-log');
         const run = (lookup: string) =>
           exec(
             'bash',
             [
               path.join(root, 'scripts/ci/image-candidate.sh'),
               `registry.example/${unit}`,
-              '0.1.0-123456789abc',
+              inputsSha256,
               output,
             ],
             {
@@ -200,7 +186,6 @@ esac
               env: {
                 ...process.env,
                 LOOKUP: lookup,
-                DOCKER_LOG: dockerLog,
                 GITHUB_OUTPUT: githubOutput,
                 PATH: `${directory}/bin:${process.env['PATH']}`,
               },
@@ -216,12 +201,11 @@ esac
           values: {
             imageUri: `registry.example/${unit}@${digest}`,
             digest,
-            version: '0.1.0-123456789abc',
-            manifestSha256,
+            version: `inputs-${inputsSha256}`,
+            inputsSha256,
           },
         });
         expect(await readFile(githubOutput, 'utf8')).toBe('found=true\n');
-        expect(await readFile(dockerLog, 'utf8')).toBe('login\npull\ninspect\n');
         await writeFile(githubOutput, '');
         await expect(run('denied')).rejects.toThrow();
         expect(await readFile(githubOutput, 'utf8')).toBe('');
@@ -230,7 +214,7 @@ esac
           'utf8',
         );
         expect(workflow).toContain("steps.candidate.outputs.found != 'true'");
-        expect(workflow).toContain('--label "keeper.manifest-sha256=$manifest_sha"');
+        expect(workflow).not.toContain('keeper.manifest-sha256');
       } finally {
         await rm(directory, { recursive: true, force: true });
       }

@@ -331,6 +331,43 @@ describe('deployment evidence', () => {
     expect(final.revision).toBe('2'.repeat(40));
   });
 
+  it.each(deploymentUnits)(
+    'preserves the previous distinct %s deployment after no-op retries',
+    (unit) => {
+      const component = verifiedComponent(`keeper-test-${unit}`);
+      const first = recordVerifiedComponent(emptyDeploymentRecord('test'), unit, component);
+      const secondComponent = {
+        ...component,
+        sourceRevision: '2'.repeat(40),
+        artifact: { kind: 'image' as const, values: { digest: 'artifact-B' } },
+      };
+      const second = recordVerifiedComponent(first, unit, secondComponent);
+      const rollback = second.components[unit]?.previousRestorableVersion;
+      expect(rollback?.artifact).toEqual(component.artifact);
+      const retry = recordVerifiedComponent(second, unit, {
+        ...secondComponent,
+        sourceRevision: '3'.repeat(40),
+        evidenceUri: 's3://state/new-verification.txt',
+        verification: { ...component.verification, checkedAt: '2026-10-03T03:00:00Z' },
+      });
+      expect(retry.components[unit]?.previousRestorableVersion).toEqual(rollback);
+      expect(retry.components[unit]?.verification.checkedAt).toBe('2026-10-03T03:00:00Z');
+      expect(
+        recordVerifiedComponent(first, unit, component).components[unit]?.previousRestorableVersion,
+      ).toBeNull();
+      for (const changed of [
+        { templateSha256: 'changed-template' },
+        { configurationSha256: 'changed-configuration' },
+        { artifact: { kind: 'image' as const, values: { digest: 'artifact-C' } } },
+      ]) {
+        const next = recordVerifiedComponent(retry, unit, { ...secondComponent, ...changed });
+        expect(next.components[unit]?.previousRestorableVersion?.artifact).toEqual(
+          secondComponent.artifact,
+        );
+      }
+    },
+  );
+
   it('rejects a candidate older than a partially deployed component', async () => {
     const partial = recordVerifiedComponent(emptyDeploymentRecord('test'), 'web', {
       ...verifiedComponent('keeper-test-web'),

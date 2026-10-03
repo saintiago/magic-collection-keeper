@@ -107,16 +107,18 @@ export function recordVerifiedComponent(
   const previousRestorableVersion =
     previous === undefined
       ? null
-      : {
-          sourceRevision: previous.sourceRevision,
-          templateSha256: previous.templateSha256,
-          configurationSha256: previous.configurationSha256,
-          environmentConfigurationSha256: previous.environmentConfigurationSha256,
-          templateUri: previous.templateUri,
-          configurationUri: previous.configurationUri,
-          evidenceUri: previous.evidenceUri,
-          artifact: previous.artifact,
-        };
+      : !componentChanged(previous, component)
+        ? previous.previousRestorableVersion
+        : {
+            sourceRevision: previous.sourceRevision,
+            templateSha256: previous.templateSha256,
+            configurationSha256: previous.configurationSha256,
+            environmentConfigurationSha256: previous.environmentConfigurationSha256,
+            templateUri: previous.templateUri,
+            configurationUri: previous.configurationUri,
+            evidenceUri: previous.evidenceUri,
+            artifact: previous.artifact,
+          };
   return {
     ...record,
     components: {

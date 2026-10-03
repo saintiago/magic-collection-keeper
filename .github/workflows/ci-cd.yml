@@ -174,8 +174,18 @@ jobs:
   finalize:
     name: Record verified environment
     needs:
-      [plan, foundation, gateway, web, catalog-serving, usercards, recognition, catalog-ingestion]
-    if: ${{ !cancelled() && github.event_name == 'push' && vars.DEPLOYMENT_ENABLED == 'true' && !contains(needs.*.result, 'failure') }}
+      [
+        ci,
+        plan,
+        foundation,
+        gateway,
+        web,
+        catalog-serving,
+        usercards,
+        recognition,
+        catalog-ingestion,
+      ]
+    if: ${{ !cancelled() && needs.ci.result == 'success' && needs.plan.result == 'success' && github.event_name == 'push' && vars.DEPLOYMENT_ENABLED == 'true' && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-24.04
     environment: test
     permissions:
