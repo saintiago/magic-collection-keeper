@@ -1,0 +1,110 @@
+name: Deploy UserCardsStack
+
+on:
+  workflow_call:
+    inputs:
+      environment: { required: true, type: string }
+      revision: { required: true, type: string }
+      promote_from: { required: false, type: string, default: '' }
+
+permissions: { contents: read, id-token: write }
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.revision }}', fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1 }
+      - uses: actions/download-artifact@v4
+        with: { name: deployment-plan, path: .turbo/ci }
+      - uses: ./.github/actions/record-pending
+        with:
+          environment: ${{ inputs.environment }}
+          unit: usercards
+          revision: ${{ inputs.revision }}
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
+      - name: Package or copy the verified artifact
+        env:
+          STATE_BUCKET: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
+          PROMOTE_FROM: ${{ inputs.promote_from }}
+        run: |
+          set -euo pipefail
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/usercards.json" .turbo/ci/parameters.json
+          cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
+          bucket="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-foundation --query "Stacks[0].Outputs[?OutputKey=='ArtifactsBucketName'].OutputValue | [0]" --output text)"
+          if [[ -z "$PROMOTE_FROM" ]]; then
+            npm run package -- --out .turbo/release
+            version="$(jq -r .version .turbo/release/manifest.json)"
+            key="releases/$version/usercards.zip"
+            file=.turbo/release/usercards/api.zip
+            sha="$(jq -r .artifacts.userCards.sha256 .turbo/release/manifest.json)"
+            manifest_sha="$(sha256sum .turbo/release/manifest.json | cut -d' ' -f1)"
+          else
+            test -s .turbo/ci/source.json
+            source_bucket="$(jq -r '.components.usercards.artifact.values.bucket' .turbo/ci/source.json)"
+            key="$(jq -r '.components.usercards.artifact.values.key' .turbo/ci/source.json)"
+            source_version="$(jq -r '.components.usercards.artifact.values.objectVersion' .turbo/ci/source.json)"
+            sha="$(jq -r '.components.usercards.artifact.values.sha256' .turbo/ci/source.json)"
+            version="$(jq -r '.components.usercards.artifact.values.version' .turbo/ci/source.json)"
+            manifest_sha="$(jq -r '.components.usercards.artifact.values.manifestSha256' .turbo/ci/source.json)"
+            file=.turbo/ci/usercards.zip
+            aws s3api get-object --bucket "$source_bucket" --key "$key" --version-id "$source_version" "$file" >/dev/null
+            test "$(sha256sum "$file" | cut -d' ' -f1)" = "$sha"
+          fi
+          existing_sha="$(jq -r '.components.usercards.artifact.values.sha256 // empty' .turbo/ci/current.json 2>/dev/null || true)"
+          if [[ "$existing_sha" = "$sha" ]]; then
+            key="$(jq -r '.components.usercards.artifact.values.key' .turbo/ci/current.json)"
+            object_version="$(jq -r '.components.usercards.artifact.values.objectVersion' .turbo/ci/current.json)"
+            version="$(jq -r '.components.usercards.artifact.values.version' .turbo/ci/current.json)"
+            manifest_sha="$(jq -r '.components.usercards.artifact.values.manifestSha256' .turbo/ci/current.json)"
+          else
+            object_version="$(aws s3api put-object --bucket "$bucket" --key "$key" --body "$file" --query VersionId --output text)"
+          fi
+          jq --arg key "$key" --arg objectVersion "$object_version" '. + {UserCardsCodeKey:$key,UserCardsCodeVersion:$objectVersion}' .turbo/ci/parameters.json > .turbo/ci/parameters.next.json
+          mv .turbo/ci/parameters.next.json .turbo/ci/parameters.json
+          jq -n --arg bucket "$bucket" --arg key "$key" --arg objectVersion "$object_version" --arg sha256 "$sha" --arg version "$version" --arg manifestSha256 "$manifest_sha" '{kind:"files",values:{bucket:$bucket,key:$key,objectVersion:$objectVersion,sha256:$sha256,version:$version,manifestSha256:$manifestSha256}}' > .turbo/ci/artifact.json
+          npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out
+      - run: npm run ci:deploy-stack -- --stack keeper-${{ inputs.environment }}-usercards --template "$PWD/.turbo/cdk.out/UserCardsStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
+      - name: Verify UserCards boundary
+        run: |
+          function_name="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-usercards --query "Stacks[0].Outputs[?OutputKey=='UserCardsFunctionName'].OutputValue | [0]" --output text)"
+          pool="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue | [0]" --output text)"
+          client="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue | [0]" --output text)"
+          expiry="$(( $(date +%s) + 300 ))"
+          jq -n --arg iss "https://cognito-idp.us-east-1.amazonaws.com/$pool" --arg aud "$client" --argjson exp "$expiry" '{version:"2.0",rawPath:"/api/collection/tags",requestContext:{http:{method:"GET",path:"/api/collection/tags"},authorizer:{jwt:{claims:{sub:"ci-verification",iss:$iss,aud:$aud,exp:$exp,token_use:"id"}}}}}' > .turbo/ci/request.json
+          aws lambda invoke --function-name "$function_name" --payload fileb://.turbo/ci/request.json .turbo/ci/response.json > .turbo/ci/invoke.json
+          test "$(jq -r '.FunctionError // empty' .turbo/ci/invoke.json)" = ""
+          test "$(jq -r '.statusCode < 400' .turbo/ci/response.json)" = true
+          printf 'UserCards synthetic-account read returned status %s.\n' "$(jq -r .statusCode .turbo/ci/response.json)" > .turbo/ci/evidence.txt
+      - uses: ./.github/actions/record-verified
+        with:
+          environment: ${{ inputs.environment }}
+          unit: usercards
+          stack_name: keeper-${{ inputs.environment }}-usercards
+          revision: ${{ inputs.revision }}
+          template: .turbo/cdk.out/UserCardsStack.template.json
+          parameters: .turbo/ci/parameters.json
+          environment_parameters: .turbo/ci/environment-parameters.json
+          artifact: .turbo/ci/artifact.json
+          plan: .turbo/ci/plan.json
+          evidence: .turbo/ci/evidence.txt
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
+      - env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
+        run: aws s3 cp .turbo/ci/current.json "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json"
+      - if: failure()
+        uses: ./.github/actions/record-attempt
+        with:
+          environment: ${{ inputs.environment }}
+          unit: usercards
+          revision: ${{ inputs.revision }}
+          template: .turbo/cdk.out/UserCardsStack.template.json
+          parameters: .turbo/ci/parameters.json
+          artifact: .turbo/ci/artifact.json
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}

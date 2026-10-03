@@ -2,9 +2,11 @@
 
 ## Status and triggers
 
-This is the workflow design for the [CDK deployment units](deployment.md). GitHub Actions and
-automatic deployment are currently disabled; implementing and activating this design is subsequent
-work. The current environment is the test deployment target.
+This design is implemented by `.github/workflows/ci-cd.yml`, the reusable validation and deployment
+workflows beside it, and the planner under `scripts/ci/`. Automatic deployment remains disabled by
+default until the current test environment's CDK baseline and deployment record have been verified;
+activation is the explicit repository configuration described below. The current environment is the
+test deployment target. Committing the workflows alone does not mutate it.
 
 | Event                         | Validation                                                                 | Deployment                                                                            |
 | ----------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -93,6 +95,9 @@ object key and version.
 
 Use source imports and explicit non-code package inputs together. Account for removed/renamed files
 and previous input graphs, so removing a production dependency still selects the affected artifact.
+Credential-free planning collects the production graph from the comparison base as well as the
+current checkout. Deployment planning conservatively reconciles any component whose verified
+revision differs from the finalized baseline, including partial deployments later reverted in Git.
 If the planner cannot classify a changed input, fail planning rather than silently skip it.
 Documentation/tests for the new design do not alter deployed resources.
 
@@ -128,12 +133,76 @@ previous restorable version. A deployment failure must not overwrite its last ve
 record the actual attempted state for recovery. The environment record describes the resulting
 combination, including components still running older revisions.
 
+Before a component job can mutate resources, persist its revision and start time in the environment
+record's `pending` map without changing verified component records. Both test and production planners
+select pending units even when desired inputs match the last verified version. Clear a unit's marker
+only when publishing its verified component record; finalization refuses any remaining markers. This
+also covers interrupted jobs and failed verification after resources have already changed.
+
+Finalization publishes that combination under the immutable
+`environments/<environment>/releases/<releaseId>.json` key before updating `current.json`. The
+release ID hashes the environment, source revision and verified component records, excluding the
+finalization timestamp. Retrying finalization of that combination is idempotent, while a new
+configuration or verification record produces a separate snapshot even at the same Git revision.
+Production planning downloads the selected test release once and passes that pinned snapshot to every
+component job. Activated deployments require every state-record read to succeed; a missing or
+unreadable record is an activation error and must never be replaced with an inferred empty state.
+
 CloudFormation updates use the intended stack only, with explicit dependencies handled by the
 planner. Avoid a blanket `cdk deploy --all`. A selected stack update may be a no-op; publishing a
-candidate artifact does not imply that it must replace the deployed version.
+candidate artifact does not imply that it must replace the deployed version. Recognition and Catalog
+ingestion hash their component Docker context, target platform and build arguments, excluding the
+packaging manifest's source labels and unrelated outputs. Recognition compares the source ZIP's
+entry contents independently of checkout timestamps; the corresponding source itself remains an
+image input. An immutable `inputs-<sha256>` tag recovers the published image by digest across retries
+and revisions. Only an absent image permits a build; lookup failures stop publication. Provenance
+stays in the packaging and deployment records, outside image content comparison. Promotion similarly
+reuses an existing destination tag after checking its digest. A no-op verification refreshes evidence
+without replacing the previous distinct deployment's rollback reference.
+
+Test planning captures the digest-pinned `CATALOG_NODE_BASE_IMAGE` in the plan's external `buildInputs`.
+Compare it with the component's verified build inputs and select ingestion when it changes, even with
+unchanged Git and CloudFormation parameters. Packaging consumes that captured value, and successful
+verification retains it in the component record. Promotion compares portable artifact content as well
+as source revision and production configuration: image digests, Lambda ZIP hashes and browser path/hash
+maps. Environment-owned repository/bucket coordinates, object versions and generated browser
+`config.json` do not participate in the cross-environment content comparison.
 
 Catalog synchronization, owner-data migration and destructive cleanup are separately invoked
 operations. Neither automatic test deployment nor production promotion starts them implicitly.
+
+## Activation and deployment records
+
+Keep `DEPLOYMENT_ENABLED` unset or unequal to `true` until the current test stacks have a verified
+CDK baseline. PRs and pushes still publish the required `CI` validation and a deployment plan while
+deployment is disabled. To activate test deployment:
+
+1. Configure the `test` GitHub Environment with `AWS_DEPLOY_ROLE_ARN` and
+   `DEPLOYMENT_STATE_BUCKET`. The state bucket is versioned and retained so records and their
+   referenced evidence stay recoverable. The role uses GitHub OIDC and is limited to the intended
+   test stacks, artifact locations and verification reads. Set the digest-pinned
+   `CATALOG_NODE_BASE_IMAGE` used to package the finite ingestion job.
+2. Put the captured, non-secret CloudFormation parameters for each unit at
+   `s3://<state-bucket>/environments/test/parameters/<unit>.json`. Secrets remain stack references;
+   never place credential values in these files.
+3. Verify and seed `environments/test/current.json` as a schema-1 record for the actual deployed
+   combination. Each component records its template/configuration content identity, immutable
+   artifact references, source inputs, passing live evidence and previous restorable identity.
+4. Confirm the first plan from that recorded revision proposes only the expected units and that the
+   independently prepared change sets preserve retained resources. Then set the repository variable
+   `DEPLOYMENT_ENABLED=true`.
+
+Runs are serialized per environment without cancellation. They reject revisions older than the
+recorded environment revision and refuse removal or replacement of retained database, identity,
+bucket, repository and secret resources. A failed attempt is written under the environment's
+`attempts/` prefix while its pending marker remains in `current.json`; neither changes the last verified
+component. The planner baseline advances only after all selected units verify successfully.
+
+Configure the `production` GitHub Environment with required reviewers and its own role, state record
+and parameter files. `promote-production.yml` accepts an immutable test release ID and its exact source
+revision, with passing evidence for every component. It copies the recorded S3 object versions, browser
+bytes and ECR manifests into production-owned locations, applies production public settings and
+configuration, and does not rebuild application code or start Catalog synchronization or migration.
 
 ## Design verification
 

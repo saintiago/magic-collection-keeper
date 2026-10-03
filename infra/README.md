@@ -1,9 +1,11 @@
 # Rebuild infrastructure
 
-The [CDK deployment design](../docs/deployment.md) is implemented under `infra/cdk/`. GitHub Actions
-orchestration remains separate work ([CI/CD](../docs/ci-cd.md)); local synthesis never deploys. The
-current environment is test and has not been moved merely because these templates exist. Live
-resource moves, data migration, Catalog synchronization and deletion remain explicit operations.
+The [CDK deployment design](../docs/deployment.md) is implemented under `infra/cdk/`, with selective
+GitHub Actions orchestration under `.github/workflows/` ([CI/CD](../docs/ci-cd.md)). Local synthesis
+never deploys, and merge deployment stays gated by `DEPLOYMENT_ENABLED` until the current test
+environment baseline is verified and recorded. The current environment is test and has not been
+moved merely because these templates and workflows exist. Live resource moves, data migration,
+Catalog synchronization and deletion remain explicit operations.
 
 ## Stacks and ownership
 

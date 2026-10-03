@@ -1,0 +1,47 @@
+name: Preserve failed deployment attempt
+description: Record the attempted identity without replacing the last verified component.
+inputs:
+  environment: { required: true }
+  unit: { required: true }
+  revision: { required: true }
+  template: { required: true }
+  parameters: { required: true }
+  artifact: { required: true }
+  state_bucket: { required: true }
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        ATTEMPT_ENVIRONMENT: ${{ inputs.environment }}
+        ATTEMPT_UNIT: ${{ inputs.unit }}
+        ATTEMPT_REVISION: ${{ inputs.revision }}
+        ATTEMPT_TEMPLATE: ${{ inputs.template }}
+        ATTEMPT_PARAMETERS: ${{ inputs.parameters }}
+        ATTEMPT_ARTIFACT: ${{ inputs.artifact }}
+        STATE_BUCKET: ${{ inputs.state_bucket }}
+      run: |
+        set -euo pipefail
+        mkdir -p .turbo/ci
+        template_sha=unavailable
+        configuration_sha=unavailable
+        artifact='{"kind":"none","values":{}}'
+        [[ ! -f "$ATTEMPT_TEMPLATE" ]] || template_sha="$(sha256sum "$ATTEMPT_TEMPLATE" | cut -d' ' -f1)"
+        [[ ! -f "$ATTEMPT_PARAMETERS" ]] || configuration_sha="$(jq -cSj . "$ATTEMPT_PARAMETERS" | sha256sum | cut -d' ' -f1)"
+        [[ ! -f "$ATTEMPT_ARTIFACT" ]] || artifact="$(jq -c . "$ATTEMPT_ARTIFACT")"
+        if [[ -f .turbo/ci/source.json ]]; then
+          ATTEMPT_REVISION="$(jq -r --arg unit "$ATTEMPT_UNIT" '.components[$unit].sourceRevision' .turbo/ci/source.json)"
+        fi
+        completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        jq -n \
+          --arg environment "$ATTEMPT_ENVIRONMENT" \
+          --arg unit "$ATTEMPT_UNIT" \
+          --arg revision "$ATTEMPT_REVISION" \
+          --arg startedAt "$completed_at" \
+          --arg completedAt "$completed_at" \
+          --arg template "$template_sha" \
+          --arg configuration "$configuration_sha" \
+          --argjson artifact "$artifact" \
+          '{schema:1,environment:$environment,unit:$unit,sourceRevision:$revision,startedAt:$startedAt,completedAt:$completedAt,outcome:"failed",resultingIdentity:{templateSha256:$template,configurationSha256:$configuration,artifact:$artifact},detail:"GitHub Actions deployment job failed; inspect the retained run log."}' \
+          > .turbo/ci/attempt.json
+        aws s3 cp .turbo/ci/attempt.json "s3://$STATE_BUCKET/environments/$ATTEMPT_ENVIRONMENT/attempts/${{ github.run_id }}-$ATTEMPT_UNIT.json"

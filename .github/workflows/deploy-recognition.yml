@@ -1,0 +1,141 @@
+name: Deploy RecognitionStack
+
+on:
+  workflow_call:
+    inputs:
+      environment: { required: true, type: string }
+      revision: { required: true, type: string }
+      promote_from: { required: false, type: string, default: '' }
+
+permissions: { contents: read, id-token: write }
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.revision }}', fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - uses: actions/setup-python@v5
+        if: inputs.promote_from == ''
+        with: { python-version: '3.12' }
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1 }
+      - uses: actions/download-artifact@v4
+        with: { name: deployment-plan, path: .turbo/ci }
+      - uses: ./.github/actions/record-pending
+        with:
+          environment: ${{ inputs.environment }}
+          unit: recognition
+          revision: ${{ inputs.revision }}
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
+      - name: Prepare state and stack
+        env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
+        run: |
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json" .turbo/ci/current.json
+          aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/recognition.json" .turbo/ci/parameters.json
+          cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
+          repository="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-recognition --query "Stacks[0].Outputs[?OutputKey=='RecognitionRepositoryUri'].OutputValue | [0]" --output text)"
+          printf '%s\n' "$repository" > .turbo/ci/repository
+      - name: Prepare image inputs
+        if: inputs.promote_from == ''
+        run: |
+          python -m venv .recognition-build/runtime
+          .recognition-build/runtime/bin/pip install -r src/recognition/python/requirements-visual.txt
+          python -m venv .recognition-build/converter
+          .recognition-build/converter/bin/pip install -r src/recognition/python/requirements-converter.txt
+          npm run prepare:recognition -- --python .recognition-build/runtime/bin/python --converter-python .recognition-build/converter/bin/python
+          npm run package:recognition -- --out .turbo/release
+          npx tsx scripts/ci/image-inputs.ts .turbo/release/recognition > .turbo/ci/image-inputs-sha
+      - name: Recover published image candidate
+        id: candidate
+        if: inputs.promote_from == ''
+        run: |
+          bash scripts/ci/image-candidate.sh "$(cat .turbo/ci/repository)" "$(cat .turbo/ci/image-inputs-sha)" .turbo/ci/artifact.json
+      - name: Build and publish image
+        if: inputs.promote_from == '' && steps.candidate.outputs.found != 'true'
+        run: |
+          repository="$(cat .turbo/ci/repository)"
+          registry="${repository%%/*}"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
+          inputs_sha="$(cat .turbo/ci/image-inputs-sha)"
+          version="inputs-$inputs_sha"
+          docker build --platform linux/amd64 --tag "$repository:$version" .turbo/release/recognition
+          docker push "$repository:$version"
+          bash scripts/ci/image-candidate.sh "$repository" "$inputs_sha" .turbo/ci/artifact.json
+      - name: Copy test-verified recognition image
+        if: inputs.promote_from != ''
+        env:
+          STATE_BUCKET: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
+          PROMOTE_FROM: ${{ inputs.promote_from }}
+        run: |
+          test -s .turbo/ci/source.json
+          source_uri="$(jq -r '.components.recognition.artifact.values.imageUri' .turbo/ci/source.json)"
+          source_path="${source_uri%%@*}"
+          source_digest="${source_uri##*@}"
+          target_repository="$(cat .turbo/ci/repository)"
+          version="$(jq -r '.components.recognition.artifact.values.version' .turbo/ci/source.json)"
+          if digest="$(aws ecr describe-images --repository-name "${target_repository#*/}" --image-ids imageTag="$version" --query 'imageDetails[0].imageDigest' --output text 2> .turbo/ci/image-error.txt)"; then
+            test "$digest" = "$source_digest"
+          else
+            grep -Fq ImageNotFoundException .turbo/ci/image-error.txt
+            for registry in "${source_path%%/*}" "${target_repository%%/*}"; do aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"; done
+            docker pull "$source_uri"
+            docker tag "$source_uri" "$target_repository:$version"
+            docker push "$target_repository:$version"
+            digest="$(aws ecr describe-images --repository-name "${target_repository#*/}" --image-ids imageTag="$version" --query 'imageDetails[0].imageDigest' --output text)"
+          fi
+          test "$digest" = "$source_digest"
+          image_uri="$target_repository@$digest"
+          jq --arg imageUri "$image_uri" '.components["recognition"].artifact | .values.imageUri = $imageUri' .turbo/ci/source.json > .turbo/ci/artifact.json
+      - name: Synthesize selected image
+        run: |
+          desired_digest="$(jq -r .values.digest .turbo/ci/artifact.json)"
+          current_digest="$(jq -r '.components.recognition.artifact.values.digest // empty' .turbo/ci/current.json 2>/dev/null || true)"
+          if [[ "$desired_digest" = "$current_digest" ]]; then
+            jq '.components.recognition.artifact' .turbo/ci/current.json > .turbo/ci/artifact.json
+          fi
+          image_uri="$(jq -r .values.imageUri .turbo/ci/artifact.json)"
+          jq --arg image "$image_uri" '. + {RecognitionImageUri:$image}' .turbo/ci/parameters.json > .turbo/ci/parameters.next.json
+          mv .turbo/ci/parameters.next.json .turbo/ci/parameters.json
+          npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out
+      - run: npm run ci:deploy-stack -- --stack keeper-${{ inputs.environment }}-recognition --template "$PWD/.turbo/cdk.out/RecognitionStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
+      - name: Verify Recognition boundary
+        run: |
+          function_name="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-recognition --query "Stacks[0].Outputs[?OutputKey=='RecognitionFunctionName'].OutputValue | [0]" --output text)"
+          pool="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue | [0]" --output text)"
+          client="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue | [0]" --output text)"
+          expiry="$(( $(date +%s) + 300 ))"
+          jq -n --arg iss "https://cognito-idp.us-east-1.amazonaws.com/$pool" --arg aud "$client" --argjson exp "$expiry" '{version:"2.0",routeKey:"GET /api/recognition/source",rawPath:"/api/recognition/source",requestContext:{http:{method:"GET",path:"/api/recognition/source"},authorizer:{jwt:{claims:{sub:"ci-verification",iss:$iss,aud:$aud,exp:$exp,token_use:"id"}}}}}' > .turbo/ci/request.json
+          aws lambda invoke --function-name "$function_name" --payload fileb://.turbo/ci/request.json .turbo/ci/response.json > .turbo/ci/invoke.json
+          test "$(jq -r '.FunctionError // empty' .turbo/ci/invoke.json)" = ""
+          test "$(jq -r '.statusCode == 200' .turbo/ci/response.json)" = true
+          printf 'Recognition corresponding-source boundary returned status 200.\n' > .turbo/ci/evidence.txt
+      - uses: ./.github/actions/record-verified
+        with:
+          environment: ${{ inputs.environment }}
+          unit: recognition
+          stack_name: keeper-${{ inputs.environment }}-recognition
+          revision: ${{ inputs.revision }}
+          template: .turbo/cdk.out/RecognitionStack.template.json
+          parameters: .turbo/ci/parameters.json
+          environment_parameters: .turbo/ci/environment-parameters.json
+          artifact: .turbo/ci/artifact.json
+          plan: .turbo/ci/plan.json
+          evidence: .turbo/ci/evidence.txt
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
+      - env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
+        run: aws s3 cp .turbo/ci/current.json "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/current.json"
+      - if: failure()
+        uses: ./.github/actions/record-attempt
+        with:
+          environment: ${{ inputs.environment }}
+          unit: recognition
+          revision: ${{ inputs.revision }}
+          template: .turbo/cdk.out/RecognitionStack.template.json
+          parameters: .turbo/ci/parameters.json
+          artifact: .turbo/ci/artifact.json
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}

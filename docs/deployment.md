@@ -6,10 +6,10 @@ This design is implemented by the CDK app under `infra/cdk/`. The checked-in two
 CloudFormation definitions remain migration sources for the legacy-adoption synthesis mode; no live
 stack has been adopted or split merely because the repository implementation exists.
 
-Treat the current environment as test. Merges to the repository's default branch, `main`, will
-deploy changed stacks there through [CI/CD](ci-cd.md). Production uses manual promotion of
-test-verified artifacts. Classification as test does not authorize deleting existing data or
-resources, or creating a replacement environment.
+Treat the current environment as test. After the recorded-baseline activation gate is enabled,
+merges to the repository's default branch, `main`, deploy changed stacks there through
+[CI/CD](ci-cd.md). Production uses manual promotion of test-verified artifacts. Classification as
+test does not authorize deleting existing data or resources, or creating a replacement environment.
 
 ## Deployment composition
 
