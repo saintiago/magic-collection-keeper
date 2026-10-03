@@ -1,5 +1,7 @@
 /** Local design workspace entry point (docs/ui/storybook.md). */
 
+import '../src/ui/presentation.css';
+
 import type { AuthenticatedRequest, UserInterfaceCapabilities } from '../src/application/index.js';
 import type {
   Capture,

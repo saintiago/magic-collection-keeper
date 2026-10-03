@@ -16,6 +16,8 @@
  * backend entry point or a deployment module (docs/application.md#interface).
  */
 
+import './presentation.css';
+
 import {
   createBrowserApplication,
   resolvePublicSettings,

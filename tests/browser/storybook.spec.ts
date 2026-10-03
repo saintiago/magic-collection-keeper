@@ -9,20 +9,24 @@ import { build } from 'esbuild';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const storybookRoot = path.join(repoRoot, 'storybook');
-let bundle: Promise<string> | null = null;
+let bundle: Promise<{ readonly javascript: string; readonly sharedCss: string }> | null = null;
 
-function storybookBundle(): Promise<string> {
+function storybookBundle(): Promise<{ readonly javascript: string; readonly sharedCss: string }> {
   bundle ??= build({
     entryPoints: [path.join(storybookRoot, 'index.ts')],
     bundle: true,
     format: 'esm',
     platform: 'browser',
     target: 'es2022',
+    outdir: path.join(storybookRoot, '.test-output'),
     write: false,
   }).then((result) => {
-    const output = result.outputFiles?.[0];
-    if (output === undefined) throw new Error('esbuild produced no storybook bundle.');
-    return output.text;
+    const javascript = result.outputFiles?.find((output) => output.path.endsWith('.js'));
+    const sharedCss = result.outputFiles?.find((output) => output.path.endsWith('.css'));
+    if (javascript === undefined || sharedCss === undefined) {
+      throw new Error('esbuild did not produce the storybook script and shared stylesheet.');
+    }
+    return { javascript: javascript.text, sharedCss: sharedCss.text };
   });
   return bundle;
 }
@@ -30,7 +34,7 @@ function storybookBundle(): Promise<string> {
 async function openStorybook(page: Page, route = ''): Promise<string[]> {
   const requests: string[] = [];
   page.on('request', (request) => requests.push(request.url()));
-  const [html, css, card, atmosphere, javascript] = await Promise.all([
+  const [html, localCss, card, atmosphere, bundled] = await Promise.all([
     readFile(path.join(storybookRoot, 'index.html'), 'utf8'),
     readFile(path.join(storybookRoot, 'storybook.css'), 'utf8'),
     readFile(path.join(storybookRoot, 'card-back.svg'), 'utf8'),
@@ -40,10 +44,13 @@ async function openStorybook(page: Page, route = ''): Promise<string[]> {
   await page.route('http://keeper-storybook.test/**', (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname === '/app.js') {
-      return route.fulfill({ contentType: 'text/javascript', body: javascript });
+      return route.fulfill({ contentType: 'text/javascript', body: bundled.javascript });
+    }
+    if (pathname === '/app.css') {
+      return route.fulfill({ contentType: 'text/css', body: bundled.sharedCss });
     }
     if (pathname === '/storybook.css') {
-      return route.fulfill({ contentType: 'text/css', body: css });
+      return route.fulfill({ contentType: 'text/css', body: localCss });
     }
     if (pathname === '/card-back.svg') {
       return route.fulfill({ contentType: 'image/svg+xml', body: card });
@@ -310,6 +317,13 @@ test('shows the design language through shared card, dialog and notice presenter
     .toBe(true);
   await expect
     .poll(() =>
+      ['/app.css', '/storybook.css'].every((pathname) =>
+        requests.some((request) => new URL(request).pathname === pathname),
+      ),
+    )
+    .toBe(true);
+  await expect
+    .poll(() =>
       page.evaluate(() =>
         getComputedStyle(document.documentElement).getPropertyValue('--rf-accent').trim(),
       ),
@@ -334,6 +348,31 @@ test('keeps gallery section links separate from the mocked-app route', async ({ 
     await expect(page.getByText('Page not found')).toHaveCount(0);
     await page.getByRole('button', { name: 'Design language' }).click();
   }
+});
+
+test('keeps the mocked-app selection toolbar clear of the workspace header', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 500 });
+  await openStorybook(page, '#/catalog?level=printing');
+  await advance(page);
+  await advance(page);
+  await advance(page);
+
+  const selection = page.locator('[data-ui-select]').first();
+  await selection.check();
+  const clearSelection = page.getByRole('button', { name: 'Clear selection' });
+  await expect(clearSelection).toBeEnabled();
+  await page.evaluate(() => window.scrollTo({ top: 600, behavior: 'instant' }));
+
+  const header = page.locator('#storybook-root > header');
+  const [headerBox, clearSelectionBox] = await Promise.all([
+    header.boundingBox(),
+    clearSelection.boundingBox(),
+  ]);
+  expect(headerBox).not.toBeNull();
+  expect(clearSelectionBox).not.toBeNull();
+  expect(clearSelectionBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
+  await clearSelection.click();
+  await expect(selection).not.toBeChecked();
 });
 
 test('reflows the Reality Fracture preset and retains static feedback with reduced motion', async ({

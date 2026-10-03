@@ -216,7 +216,9 @@ describe('packaging the deployable artifacts', () => {
     expect(settings).toEqual(publicSettings);
     const page = await readFile(path.join(outDir, artifactLayout.browserPage), 'utf8');
     expect(page).toContain('./app.js');
+    expect(page).toContain('./app.css');
     const bundle = await readFile(path.join(outDir, artifactLayout.browserEntry), 'utf8');
+    const stylesheet = await readFile(path.join(outDir, artifactLayout.browserStyles), 'utf8');
     // A backend or recognition container dependency must never reach the browser bundle.
     expect(bundle).not.toContain('@aws-sdk/');
     expect(bundle).not.toContain('RDSDataClient');
@@ -224,6 +226,11 @@ describe('packaging the deployable artifacts', () => {
     // make a direct regression check that production packaging did not start from that entry.
     expect(bundle).not.toContain('keeperStorybook');
     expect(bundle).not.toContain('ManualProgression');
+    expect(stylesheet).toContain('--rf-accent: #77deed');
+    expect(stylesheet).toContain('.keeper-app');
+    expect(stylesheet).not.toContain('#storybook-root');
+    expect(stylesheet).not.toContain('.design-hero');
+    expect(stylesheet).not.toContain('fracture-atmosphere.png');
     expect(
       manifest.artifacts.browser.files.some(
         (file) =>

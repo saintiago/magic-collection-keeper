@@ -81,7 +81,7 @@ jobs:
           changed=0
           while IFS= read -r file; do
             key="${file#.turbo/release/browser/}"
-            case "$key" in *.html) content_type=text/html;; *.js|*.mjs) content_type=text/javascript;; *.json) content_type=application/json;; *.wasm) content_type=application/wasm;; *) content_type=application/octet-stream;; esac
+            case "$key" in *.html) content_type=text/html;; *.css) content_type=text/css;; *.js|*.mjs) content_type=text/javascript;; *.json) content_type=application/json;; *.wasm) content_type=application/wasm;; *) content_type=application/octet-stream;; esac
             sha="$(sha256sum "$file" | cut -d' ' -f1)"
             current_sha="$(jq -r --arg key "$key" '(.components.web.artifact.values.files // "{}" | fromjson)[$key].sha256 // empty' .turbo/ci/current.json 2>/dev/null || true)"
             recorded_version="$(jq -r --arg key "$key" '(.components.web.artifact.values.files // "{}" | fromjson)[$key].version // empty' .turbo/ci/current.json)"
@@ -115,9 +115,14 @@ jobs:
           curl --silent --show-error --fail --dump-header .turbo/ci/module-headers.txt "$browser_url/$module_key" --output .turbo/ci/served-module.mjs
           grep -Eiq '^content-type: (text|application)/javascript([;[:space:]]|$)' .turbo/ci/module-headers.txt
           test "$(sha256sum .turbo/ci/served-module.mjs | cut -d' ' -f1)" = "$(sha256sum ".turbo/release/browser/$module_key" | cut -d' ' -f1)"
+          style_key="$(find .turbo/release/browser -type f -name '*.css' -printf '%P\n' | sort | head -1)"
+          test -n "$style_key"
+          curl --silent --show-error --fail --dump-header .turbo/ci/style-headers.txt "$browser_url/$style_key" --output .turbo/ci/served-style.css
+          grep -Eiq '^content-type: text/css([;[:space:]]|$)' .turbo/ci/style-headers.txt
+          test "$(sha256sum .turbo/ci/served-style.css | cut -d' ' -f1)" = "$(sha256sum ".turbo/release/browser/$style_key" | cut -d' ' -f1)"
           files="$(jq -cS . .turbo/ci/files.json)"
           jq -n --arg bucket "$bucket" --arg files "$files" '{kind:"files",values:{bucket:$bucket,files:$files}}' > .turbo/ci/artifact.json
-          printf 'CloudFront served the exact index and JavaScript runtime module after invalidation %s.\n' "$invalidation" > .turbo/ci/evidence.txt
+          printf 'CloudFront served the exact index, JavaScript runtime module and stylesheet after invalidation %s.\n' "$invalidation" > .turbo/ci/evidence.txt
       - uses: ./.github/actions/record-verified
         with:
           environment: ${{ inputs.environment }}
