@@ -1,16 +1,7 @@
 import { createHash } from 'node:crypto';
 
-export const deploymentUnits = [
-  'foundation',
-  'gateway',
-  'web',
-  'catalog-serving',
-  'usercards',
-  'recognition',
-  'catalog-ingestion',
-] as const;
-
-export type DeploymentUnit = (typeof deploymentUnits)[number];
+export { deploymentUnits, type DeploymentUnit } from '../../infra/deployment-bindings.js';
+import type { DeploymentUnit } from '../../infra/deployment-bindings.js';
 
 export interface ArtifactIdentity {
   readonly kind: 'files' | 'image' | 'none';

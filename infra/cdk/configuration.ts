@@ -4,6 +4,11 @@ import path from 'node:path';
 import type { App } from 'aws-cdk-lib';
 
 import {
+  readEnvironmentDeploymentBinding,
+  type DeploymentUnit,
+  type EnvironmentDeploymentBinding,
+} from '../deployment-bindings.js';
+import {
   applicationEnvironments,
   type ApplicationEnvironment,
 } from '../../src/application/index.js';
@@ -18,6 +23,7 @@ export interface DeploymentConfiguration {
   readonly layout: DeploymentLayout;
   readonly stage: DeploymentStage;
   readonly artifacts: DeploymentArtifacts | null;
+  readonly bindings: EnvironmentDeploymentBinding;
 }
 
 export interface DeploymentArtifacts {
@@ -46,16 +52,47 @@ export function readDeploymentConfiguration(app: App): DeploymentConfiguration {
   if (layout === 'legacy' && stage !== 'complete') {
     throw new Error('The image-repositories stage applies only to the target layout.');
   }
+  const selectedEnvironment = environment as ApplicationEnvironment;
   return {
-    environment: environment as ApplicationEnvironment,
+    environment: selectedEnvironment,
     layout: layout as DeploymentLayout,
     stage: stage as DeploymentStage,
-    artifacts: readArtifacts(app, environment as ApplicationEnvironment),
+    artifacts: readArtifacts(app, selectedEnvironment),
+    bindings: readEnvironmentDeploymentBinding(selectedEnvironment),
   };
 }
 
-export function stackName(environment: ApplicationEnvironment, unit: string): string {
-  return `keeper-${environment}-${unit}`;
+export function stackName(configuration: DeploymentConfiguration, unit: DeploymentUnit): string {
+  return configuration.bindings.stacks[unit];
+}
+
+export function runtimeName(configuration: DeploymentConfiguration, suffix: string): string {
+  return `${configuration.bindings.runtimePrefix}-${suffix}`;
+}
+
+export function runtimeExport(configuration: DeploymentConfiguration, suffix: string): string {
+  return runtimeName(configuration, suffix);
+}
+
+export function foundationExport(configuration: DeploymentConfiguration, suffix: string): string {
+  return `${configuration.bindings.foundationPrefix}-${suffix}`;
+}
+
+/** Applies the selected runtime prefix while keeping imports owned by Foundation on its prefix. */
+export function bindRuntimeDefinition<T>(configuration: DeploymentConfiguration, value: T): T {
+  return mapValue(value, (entry) => {
+    const substitution = asRecord(entry)?.['Fn::Sub'];
+    if (typeof substitution === 'string' && !substitution.includes('${')) return substitution;
+    if (typeof entry !== 'string') return entry;
+    let bound = entry;
+    for (const suffix of foundationExportSuffixes) {
+      bound = bound.replaceAll(
+        `keeper-\${Environment}-${suffix}`,
+        foundationExport(configuration, suffix),
+      );
+    }
+    return bound.replaceAll('keeper-${Environment}', configuration.bindings.runtimePrefix);
+  }) as T;
 }
 
 function readArtifacts(app: App, environment: ApplicationEnvironment): DeploymentArtifacts | null {
@@ -120,3 +157,27 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
     ? (value as Readonly<Record<string, unknown>>)
     : null;
 }
+
+function mapValue(value: unknown, transform: (value: unknown) => unknown): unknown {
+  if (Array.isArray(value)) return transform(value.map((entry) => mapValue(entry, transform)));
+  if (typeof value !== 'object' || value === null) return transform(value);
+  return transform(
+    Object.fromEntries(
+      Object.entries(value).map(([name, entry]) => [name, mapValue(entry, transform)]),
+    ),
+  );
+}
+
+const foundationExportSuffixes = [
+  'alarm-topic-arn',
+  'artifacts-bucket',
+  'catalog-reader-secret-arn',
+  'catalog-writer-secret-arn',
+  'database-cluster-arn',
+  'database-name',
+  'public-subnet-ids',
+  'task-security-group-id',
+  'usercards-reader-secret-arn',
+  'usercards-writer-secret-arn',
+  'vpc-id',
+] as const;

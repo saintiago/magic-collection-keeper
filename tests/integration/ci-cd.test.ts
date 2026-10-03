@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { readEnvironmentDeploymentBinding } from '../../infra/deployment-bindings.js';
 import {
   assertFreshRevision,
   contentIdentity,
@@ -26,6 +27,7 @@ import {
   planDeployments,
   readStackInputMapping,
 } from '../../scripts/ci/planner.js';
+import { writeDeploymentBinding } from '../../scripts/ci/deployment-binding.js';
 
 import { planPromotion } from '../../scripts/ci/promotion-plan.js';
 
@@ -86,6 +88,81 @@ describe('selective CI/CD planning', () => {
     });
     expect(plan.candidates).toEqual(['web']);
     expect(plan.reasons.web).toEqual(['src/ui/removed-production-module.ts']);
+  });
+
+  it('keeps the retained Foundation and six replacement runtimes active in test', async () => {
+    const mapping = await readStackInputMapping(mappingFile);
+    const binding = readEnvironmentDeploymentBinding('test');
+    expect(binding.activeUnits).toEqual(deploymentUnits);
+    const bindingChange = planDeployments({
+      baseRevision: '0'.repeat(40),
+      sourceRevision: revision,
+      changedPaths: ['deployment-bindings.json'],
+      mapping,
+      productionInputs: {},
+      targetUnits: binding.activeUnits,
+    });
+    expect(bindingChange.candidates).toEqual(deploymentUnits);
+    const foundationChange = planDeployments({
+      baseRevision: '0'.repeat(40),
+      sourceRevision: revision,
+      changedPaths: ['infra/cdk/stacks/foundation.ts'],
+      mapping,
+      productionInputs: {},
+      targetUnits: binding.activeUnits,
+    });
+    expect(foundationChange.candidates).toContain('foundation');
+
+    const configuredFoundation = recordVerifiedComponent(
+      emptyDeploymentRecord('test'),
+      'foundation',
+      {
+        ...verifiedComponent('keeper-test-foundation'),
+        environmentConfigurationSha256: 'a'.repeat(64),
+      },
+    );
+    const configurationChange = planDeployments({
+      baseRevision: revision,
+      sourceRevision: revision,
+      changedPaths: [],
+      mapping,
+      productionInputs: {},
+      deployedRecord: configuredFoundation,
+      configurationIdentities: { foundation: 'b'.repeat(64) },
+      targetUnits: binding.activeUnits,
+    });
+    expect(configurationChange.reasons.foundation).toEqual(['[environment configuration changed]']);
+
+    const pendingFoundation = recordPendingComponent(
+      configuredFoundation,
+      'foundation',
+      revision,
+      '2026-10-03T00:00:00Z',
+    );
+    const reconciliation = planDeployments({
+      baseRevision: revision,
+      sourceRevision: revision,
+      changedPaths: [],
+      mapping,
+      productionInputs: {},
+      deployedRecord: pendingFoundation,
+      targetUnits: binding.activeUnits,
+    });
+    expect(reconciliation.reasons.foundation).toEqual([
+      '[unverified deployment requires reconciliation]',
+    ]);
+
+    const output = path.join(await mkdtemp(path.join(os.tmpdir(), 'keeper-binding-')), 'output');
+    try {
+      await writeDeploymentBinding({
+        environment: 'test',
+        unit: 'foundation',
+        githubOutput: output,
+      });
+      expect(await readFile(output, 'utf8')).toContain('stack_name=keeper-test-foundation');
+    } finally {
+      await rm(path.dirname(output), { recursive: true, force: true });
+    }
   });
 
   it.each(deploymentUnits)(
@@ -197,6 +274,7 @@ describe('selective CI/CD planning', () => {
       const out = path.join(directory, 'plan.json');
       await writeFile(recordFile, JSON.stringify(record));
       const options = {
+        environment: 'test' as const,
         base: head,
         head,
         record: recordFile,
@@ -272,7 +350,15 @@ describe('selective CI/CD planning', () => {
         const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
         const out = path.join(directory, 'plan.json');
         await createDeploymentPlan(
-          { base, head, out, record: null, githubOutput: null, configurationDirectory: null },
+          {
+            environment: 'test',
+            base,
+            head,
+            out,
+            record: null,
+            githubOutput: null,
+            configurationDirectory: null,
+          },
           directory,
         );
         const plan = JSON.parse(await readFile(out, 'utf8'));
@@ -366,6 +452,8 @@ describe('selective CI/CD planning', () => {
       expect(text, workflow).toContain('workflow_call:');
       expect(text, workflow).toContain('ci:deploy-stack');
       expect(text, workflow).toContain('record-verified');
+      expect(text, workflow).toContain('ci:binding');
+      expect(text, workflow).not.toContain('keeper-${{ inputs.environment }}');
       expect(text.indexOf('record-pending'), workflow).toBeGreaterThan(0);
       expect(text.indexOf('record-pending'), workflow).toBeLessThan(
         text.indexOf('ci:deploy-stack'),

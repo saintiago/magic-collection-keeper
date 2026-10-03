@@ -1,7 +1,11 @@
 import { Stack, type StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 
-import type { DeploymentConfiguration } from '../configuration.js';
+import {
+  bindRuntimeDefinition,
+  runtimeExport,
+  type DeploymentConfiguration,
+} from '../configuration.js';
 import {
   clone,
   environmentParameter,
@@ -27,18 +31,24 @@ export class WebStack extends Stack {
     fragment.addParameters({ Environment: environmentParameter(configuration.environment) }, [
       'Environment',
     ]);
-    fragment.addResource('BrowserBucket', requiredResource(foundation, 'BrowserBucket'));
+    fragment.addResource(
+      'BrowserBucket',
+      bindRuntimeDefinition(configuration, requiredResource(foundation, 'BrowserBucket')),
+    );
     const web = clone({
       OriginAccessControl: requiredResource(service, 'OriginAccessControl'),
       Distribution: requiredResource(service, 'Distribution'),
       BrowserBucketPolicy: requiredResource(service, 'BrowserBucketPolicy'),
     });
     for (const [name, resource] of Object.entries(web)) {
-      fragment.addResource(name, replaceBrowserBucketImport(resource));
+      fragment.addResource(
+        name,
+        bindRuntimeDefinition(configuration, replaceBrowserBucketImport(resource)),
+      );
     }
     fragment.addOutput(
       'BrowserBucketName',
-      exportOutput({ Ref: 'BrowserBucket' }, 'keeper-${Environment}-browser-bucket'),
+      exportOutput({ Ref: 'BrowserBucket' }, runtimeExport(configuration, 'browser-bucket')),
     );
     fragment.addOutput('BrowserUrl', {
       Value: { 'Fn::Sub': 'https://${Distribution.DomainName}' },

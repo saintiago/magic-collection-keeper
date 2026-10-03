@@ -1,7 +1,11 @@
 import { Stack, type StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 
-import type { DeploymentConfiguration } from '../configuration.js';
+import {
+  bindRuntimeDefinition,
+  runtimeExport,
+  type DeploymentConfiguration,
+} from '../configuration.js';
 import { withGatewayImports } from '../constructs/references.js';
 import {
   environmentParameter,
@@ -44,13 +48,13 @@ export class RecognitionStack extends Stack {
       ]);
       fragment.addResource(
         'RecognitionRepository',
-        requiredResource(foundation, 'RecognitionRepository'),
+        bindRuntimeDefinition(configuration, requiredResource(foundation, 'RecognitionRepository')),
       );
       fragment.addOutput(
         'RecognitionRepositoryUri',
         exportOutput(
           { 'Fn::GetAtt': ['RecognitionRepository', 'RepositoryUri'] },
-          'keeper-${Environment}-recognition-repository-uri',
+          runtimeExport(configuration, 'recognition-repository-uri'),
         ),
       );
       fragment.addOutput('RecognitionRepositoryName', {
@@ -73,16 +77,22 @@ export class RecognitionStack extends Stack {
     fragment.addConditions(service.Conditions ?? {}, ['TitleModel', 'IdentityModel']);
     fragment.addResource(
       'RecognitionRepository',
-      requiredResource(foundation, 'RecognitionRepository'),
+      bindRuntimeDefinition(configuration, requiredResource(foundation, 'RecognitionRepository')),
     );
     for (const name of recognitionResources) {
-      fragment.addResource(name, withGatewayImports(requiredResource(service, name)));
+      fragment.addResource(
+        name,
+        bindRuntimeDefinition(
+          configuration,
+          withGatewayImports(configuration, requiredResource(service, name)),
+        ),
+      );
     }
     fragment.addOutput(
       'RecognitionRepositoryUri',
       exportOutput(
         { 'Fn::GetAtt': ['RecognitionRepository', 'RepositoryUri'] },
-        'keeper-${Environment}-recognition-repository-uri',
+        runtimeExport(configuration, 'recognition-repository-uri'),
       ),
     );
     fragment.addOutput('RecognitionRepositoryName', {

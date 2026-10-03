@@ -21,6 +21,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
       - run: npm ci
+      - name: Resolve deployment binding
+        id: binding
+        run: npm run ci:binding -- --environment '${{ inputs.environment }}' --unit foundation --github-output "$GITHUB_OUTPUT"
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
@@ -43,10 +46,10 @@ jobs:
           npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out
           printf '{"kind":"none","values":{}}\n' > .turbo/ci/artifact.json
       - name: Inspect and deploy only FoundationStack
-        run: npm run ci:deploy-stack -- --stack keeper-${{ inputs.environment }}-foundation --template "$PWD/.turbo/cdk.out/FoundationStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
+        run: npm run ci:deploy-stack -- --stack '${{ steps.binding.outputs.stack_name }}' --template "$PWD/.turbo/cdk.out/FoundationStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
       - name: Verify foundation boundary
         run: |
-          cluster="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-foundation --query "Stacks[0].Outputs[?OutputKey=='DatabaseClusterArn'].OutputValue | [0]" --output text)"
+          cluster="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='DatabaseClusterArn'].OutputValue | [0]" --output text)"
           status="$(aws rds describe-db-clusters --db-cluster-identifier "$cluster" --query 'DBClusters[0].Status' --output text)"
           test "$status" = available
           printf 'Aurora cluster %s is available.\n' "$cluster" > .turbo/ci/evidence.txt
@@ -54,7 +57,7 @@ jobs:
         with:
           environment: ${{ inputs.environment }}
           unit: foundation
-          stack_name: keeper-${{ inputs.environment }}-foundation
+          stack_name: ${{ steps.binding.outputs.stack_name }}
           revision: ${{ inputs.revision }}
           template: .turbo/cdk.out/FoundationStack.template.json
           parameters: .turbo/ci/parameters.json

@@ -1,11 +1,17 @@
+import { runtimeExport, type DeploymentConfiguration } from '../configuration.js';
 import { importValue, type ResourceDefinition } from './template.js';
 
 /** Replaces references to resources now owned by another independently deployed stack. */
-export function withGatewayImports(definition: ResourceDefinition): ResourceDefinition {
+export function withGatewayImports(
+  configuration: DeploymentConfiguration,
+  definition: ResourceDefinition,
+): ResourceDefinition {
   return mapValue(definition, (value) => {
-    if (same(value, { Ref: 'HttpApi' })) return importValue('keeper-${Environment}-api-id');
+    if (same(value, { Ref: 'HttpApi' })) {
+      return importValue(runtimeExport(configuration, 'api-id'));
+    }
     if (same(value, { Ref: 'JwtAuthorizer' })) {
-      return importValue('keeper-${Environment}-authorizer-id');
+      return importValue(runtimeExport(configuration, 'authorizer-id'));
     }
     const substitution = asRecord(value)?.['Fn::Sub'];
     if (typeof substitution === 'string' && substitution.includes('${HttpApi}')) {
@@ -13,7 +19,7 @@ export function withGatewayImports(definition: ResourceDefinition): ResourceDefi
         'Fn::Sub': [
           substitution.replaceAll('${HttpApi}', '${ApiId}'),
           {
-            ApiId: importValue('keeper-${Environment}-api-id'),
+            ApiId: importValue(runtimeExport(configuration, 'api-id')),
           },
         ],
       };

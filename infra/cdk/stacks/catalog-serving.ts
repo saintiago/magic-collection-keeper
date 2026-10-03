@@ -61,7 +61,7 @@ export class CatalogServingStack extends Stack {
       },
       ['Environment', definition.codeKeyParameter, definition.codeVersionParameter],
     );
-    addLambdaService(fragment, definition);
+    addLambdaService(fragment, definition, configuration);
     fragment.addOutput('CatalogServingFunctionName', {
       Value: { Ref: 'CatalogServingFunction' },
     });

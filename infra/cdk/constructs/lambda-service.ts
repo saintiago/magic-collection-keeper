@@ -1,3 +1,4 @@
+import { bindRuntimeDefinition, type DeploymentConfiguration } from '../configuration.js';
 import type { TemplateFragment } from './template.js';
 import { importValue, type ParameterDefinition } from './template.js';
 
@@ -48,6 +49,7 @@ export function lambdaArtifactParameters(
 export function addLambdaService(
   fragment: TemplateFragment,
   definition: LambdaServiceDefinition,
+  configuration: DeploymentConfiguration,
 ): void {
   const stem = definition.logicalStem;
   const logGroup = `${stem}LogGroup`;
@@ -55,7 +57,10 @@ export function addLambdaService(
   const functionName = `${stem}Function`;
   const integration = `${stem}Integration`;
 
-  fragment.addResource(logGroup, {
+  const addRuntimeResource = (name: string, resource: Parameters<typeof fragment.addResource>[1]) =>
+    fragment.addResource(name, bindRuntimeDefinition(configuration, resource));
+
+  addRuntimeResource(logGroup, {
     Type: 'AWS::Logs::LogGroup',
     Properties: {
       LogGroupName: { 'Fn::Sub': `/aws/lambda/keeper-\${Environment}-${definition.stem}` },
@@ -63,7 +68,7 @@ export function addLambdaService(
       Tags: tags(),
     },
   });
-  fragment.addResource(role, {
+  addRuntimeResource(role, {
     Type: 'AWS::IAM::Role',
     Properties: {
       Description: `${definition.description}; credentials remain limited to this component.`,
@@ -109,7 +114,7 @@ export function addLambdaService(
       Tags: tags(),
     },
   });
-  fragment.addResource(functionName, {
+  addRuntimeResource(functionName, {
     Type: 'AWS::Lambda::Function',
     DependsOn: logGroup,
     Properties: {
@@ -130,7 +135,7 @@ export function addLambdaService(
       Tags: tags(),
     },
   });
-  fragment.addResource(integration, {
+  addRuntimeResource(integration, {
     Type: 'AWS::ApiGatewayV2::Integration',
     Properties: {
       ApiId: importValue('keeper-${Environment}-api-id'),
@@ -142,7 +147,7 @@ export function addLambdaService(
   });
   definition.routes.forEach((route, index) => {
     const routeName = `${stem}Route${index + 1}`;
-    fragment.addResource(routeName, {
+    addRuntimeResource(routeName, {
       Type: 'AWS::ApiGatewayV2::Route',
       Properties: {
         ApiId: importValue('keeper-${Environment}-api-id'),
@@ -158,7 +163,7 @@ export function addLambdaService(
       },
     });
   });
-  fragment.addResource(`${stem}FunctionPermission`, {
+  addRuntimeResource(`${stem}FunctionPermission`, {
     Type: 'AWS::Lambda::Permission',
     Properties: {
       FunctionName: { Ref: functionName },
@@ -172,7 +177,7 @@ export function addLambdaService(
       },
     },
   });
-  fragment.addResource(`${stem}FunctionErrorsAlarm`, {
+  addRuntimeResource(`${stem}FunctionErrorsAlarm`, {
     Type: 'AWS::CloudWatch::Alarm',
     Properties: {
       AlarmName: { 'Fn::Sub': `keeper-\${Environment}-${definition.stem}-errors` },

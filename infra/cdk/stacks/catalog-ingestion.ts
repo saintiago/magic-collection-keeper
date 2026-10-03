@@ -1,7 +1,11 @@
 import { Stack, type StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 
-import type { DeploymentConfiguration } from '../configuration.js';
+import {
+  bindRuntimeDefinition,
+  runtimeExport,
+  type DeploymentConfiguration,
+} from '../configuration.js';
 import { replaceImportValue, replaceImportWithRef } from '../constructs/references.js';
 import {
   environmentParameter,
@@ -36,7 +40,10 @@ export class CatalogIngestionStack extends Stack {
       fragment.addParameters({ Environment: environmentParameter(configuration.environment) }, [
         'Environment',
       ]);
-      fragment.addResource('CatalogRepository', requiredResource(foundation, 'CatalogRepository'));
+      fragment.addResource(
+        'CatalogRepository',
+        bindRuntimeDefinition(configuration, requiredResource(foundation, 'CatalogRepository')),
+      );
       fragment.addOutput('CatalogRepositoryUri', {
         Value: { 'Fn::GetAtt': ['CatalogRepository', 'RepositoryUri'] },
       });
@@ -54,8 +61,14 @@ export class CatalogIngestionStack extends Stack {
       },
       ['Environment', 'SnapshotPrefix', 'CatalogJobImageUri'],
     );
-    fragment.addResource('SnapshotBucket', requiredResource(foundation, 'SnapshotBucket'));
-    fragment.addResource('CatalogRepository', requiredResource(foundation, 'CatalogRepository'));
+    fragment.addResource(
+      'SnapshotBucket',
+      bindRuntimeDefinition(configuration, requiredResource(foundation, 'SnapshotBucket')),
+    );
+    fragment.addResource(
+      'CatalogRepository',
+      bindRuntimeDefinition(configuration, requiredResource(foundation, 'CatalogRepository')),
+    );
     for (const name of ingestionResources) {
       let resource = requiredResource(service, name);
       resource = replaceImportWithRef(
@@ -71,21 +84,21 @@ export class CatalogIngestionStack extends Stack {
         'keeper-${Environment}-snapshot-prefix',
         'SnapshotPrefix',
       );
-      fragment.addResource(name, resource);
+      fragment.addResource(name, bindRuntimeDefinition(configuration, resource));
     }
     fragment.addOutput(
       'SnapshotBucketName',
-      exportOutput({ Ref: 'SnapshotBucket' }, 'keeper-${Environment}-snapshot-bucket'),
+      exportOutput({ Ref: 'SnapshotBucket' }, runtimeExport(configuration, 'snapshot-bucket')),
     );
     fragment.addOutput(
       'SnapshotPrefix',
-      exportOutput({ Ref: 'SnapshotPrefix' }, 'keeper-${Environment}-snapshot-prefix'),
+      exportOutput({ Ref: 'SnapshotPrefix' }, runtimeExport(configuration, 'snapshot-prefix')),
     );
     fragment.addOutput(
       'CatalogRepositoryArn',
       exportOutput(
         { 'Fn::GetAtt': ['CatalogRepository', 'Arn'] },
-        'keeper-${Environment}-catalog-repository-arn',
+        runtimeExport(configuration, 'catalog-repository-arn'),
       ),
     );
     fragment.addOutput('CatalogRepositoryUri', {

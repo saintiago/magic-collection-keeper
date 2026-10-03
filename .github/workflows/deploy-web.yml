@@ -22,6 +22,9 @@ jobs:
         if: inputs.promote_from == ''
         with: { python-version: '3.12' }
       - run: npm ci
+      - name: Resolve deployment binding
+        id: binding
+        run: npm run ci:binding -- --environment '${{ inputs.environment }}' --unit web --github-output "$GITHUB_OUTPUT"
       - uses: aws-actions/configure-aws-credentials@v4
         with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1 }
       - uses: actions/download-artifact@v4
@@ -39,8 +42,8 @@ jobs:
           aws s3 cp "s3://$STATE_BUCKET/environments/${{ inputs.environment }}/parameters/web.json" .turbo/ci/parameters.json
           cp .turbo/ci/parameters.json .turbo/ci/environment-parameters.json
           npm run synth -- --context environment=${{ inputs.environment }} --context layout=target --output .turbo/cdk.out
-          aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query 'Stacks[0].Outputs' --output json > .turbo/ci/gateway-outputs.json
-          if aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-recognition --query 'Stacks[0].Outputs' --output json > .turbo/ci/recognition-outputs.json; then
+          aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.gateway_stack_name }}' --query 'Stacks[0].Outputs' --output json > .turbo/ci/gateway-outputs.json
+          if aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.recognition_stack_name }}' --query 'Stacks[0].Outputs' --output json > .turbo/ci/recognition-outputs.json; then
             jq -s 'add' .turbo/ci/gateway-outputs.json .turbo/ci/recognition-outputs.json > .turbo/ci/outputs.json
           else
             cp .turbo/ci/gateway-outputs.json .turbo/ci/outputs.json
@@ -71,12 +74,12 @@ jobs:
           done < <(jq -r '.components.web.artifact.values.files | fromjson | to_entries[] | select(.key != "config.json") | [.key,.value.version,.value.sha256] | @tsv' .turbo/ci/source.json)
           npm run ci:public-settings -- .turbo/ci/outputs.json ${{ inputs.environment }} .turbo/release/browser/config.json
       - name: Inspect and deploy only WebStack
-        run: npm run ci:deploy-stack -- --stack keeper-${{ inputs.environment }}-web --template "$PWD/.turbo/cdk.out/WebStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
+        run: npm run ci:deploy-stack -- --stack '${{ steps.binding.outputs.stack_name }}' --template "$PWD/.turbo/cdk.out/WebStack.template.json" --parameters .turbo/ci/parameters.json --current-record .turbo/ci/current.json --revision '${{ inputs.revision }}'
       - name: Publish and verify browser
         run: |
-          bucket="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-web --query "Stacks[0].Outputs[?OutputKey=='BrowserBucketName'].OutputValue | [0]" --output text)"
-          distribution="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-web --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue | [0]" --output text)"
-          browser_url="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-web --query "Stacks[0].Outputs[?OutputKey=='BrowserUrl'].OutputValue | [0]" --output text)"
+          bucket="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='BrowserBucketName'].OutputValue | [0]" --output text)"
+          distribution="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue | [0]" --output text)"
+          browser_url="$(aws cloudformation describe-stacks --stack-name '${{ steps.binding.outputs.stack_name }}' --query "Stacks[0].Outputs[?OutputKey=='BrowserUrl'].OutputValue | [0]" --output text)"
           printf '{}' > .turbo/ci/files.json
           changed=0
           while IFS= read -r file; do
@@ -127,7 +130,7 @@ jobs:
         with:
           environment: ${{ inputs.environment }}
           unit: web
-          stack_name: keeper-${{ inputs.environment }}-web
+          stack_name: ${{ steps.binding.outputs.stack_name }}
           revision: ${{ inputs.revision }}
           template: .turbo/cdk.out/WebStack.template.json
           parameters: .turbo/ci/parameters.json

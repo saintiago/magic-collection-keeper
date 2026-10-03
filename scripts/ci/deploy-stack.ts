@@ -132,8 +132,13 @@ export async function deployStack(command: CommandLine): Promise<'deployed' | 'n
         `(replacement: ${resource?.Replacement ?? 'n/a'})`,
     );
   }
-  if (changes.length === 0)
-    throw new Error('CloudFormation returned an empty executable change set.');
+  // Output/template-only updates can be executable without resource changes.
+  // AWS reports genuine no-ops through the FAILED response handled above.
+  if (description.ExecutionStatus !== 'AVAILABLE') {
+    throw new Error(
+      `${command.stack} change set is not executable: ${description.ExecutionStatus ?? 'unknown'}.`,
+    );
+  }
   const protectedReplacement = changes.find(({ ResourceChange: resource }) => {
     return resource !== undefined && isDestructiveProtectedChange(resource, template);
   });

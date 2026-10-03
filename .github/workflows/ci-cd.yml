@@ -39,7 +39,7 @@ jobs:
           BASE_REVISION: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
           mkdir -p .turbo/ci
-          npm run ci:plan -- --base "$BASE_REVISION" --head "$GITHUB_SHA" --out .turbo/ci/plan.json
+          npm run ci:plan -- --environment test --base "$BASE_REVISION" --head "$GITHUB_SHA" --out .turbo/ci/plan.json
           jq . .turbo/ci/plan.json
       - uses: actions/upload-artifact@v4
         with:
@@ -91,7 +91,7 @@ jobs:
           BASE_REVISION: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
           mkdir -p .turbo/ci
-          args=(--base "$BASE_REVISION" --head "$GITHUB_SHA" --out .turbo/ci/plan.json --github-output "$GITHUB_OUTPUT" --catalog-node-base-image "$CATALOG_NODE_BASE_IMAGE")
+          args=(--environment test --base "$BASE_REVISION" --head "$GITHUB_SHA" --out .turbo/ci/plan.json --github-output "$GITHUB_OUTPUT" --catalog-node-base-image "$CATALOG_NODE_BASE_IMAGE")
           if [[ -f .turbo/ci/current.json ]]; then args+=(--record .turbo/ci/current.json); fi
           if [[ -d .turbo/ci/environment-parameters ]]; then args+=(--configuration-dir .turbo/ci/environment-parameters); fi
           npm run ci:plan -- "${args[@]}"

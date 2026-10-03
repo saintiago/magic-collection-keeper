@@ -15,6 +15,7 @@ import {
 } from './deployment-record.js';
 import { collectProductionInputs, planDeployments, readStackInputMapping } from './planner.js';
 import { assertPinnedNodeBaseImage } from './image-inputs.js';
+import { readEnvironmentDeploymentBinding } from '../../infra/deployment-bindings.js';
 
 const execFileAsync = promisify(execFile);
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
@@ -27,6 +28,7 @@ interface CommandLine {
   readonly githubOutput: string | null;
   readonly configurationDirectory: string | null;
   readonly catalogNodeBaseImage?: string;
+  readonly environment: 'test' | 'production';
 }
 
 export async function createDeploymentPlan(command: CommandLine, root = repoRoot): Promise<void> {
@@ -39,8 +41,12 @@ export async function createDeploymentPlan(command: CommandLine, root = repoRoot
       : (deployedRecord?.revision ?? command.base);
   const changedPaths = await diffPaths(base, command.head, root);
   const mapping = await readStackInputMapping(path.join(root, 'scripts/ci/stack-inputs.json'));
+  const binding = readEnvironmentDeploymentBinding(command.environment);
   const productionInputs = await collectProductionInputs(root);
-  const configurationIdentities = await readConfigurationIdentities(command.configurationDirectory);
+  const configurationIdentities = await readConfigurationIdentities(
+    command.configurationDirectory,
+    binding.activeUnits,
+  );
   const plan = planDeployments({
     baseRevision: base,
     sourceRevision: command.head,
@@ -55,6 +61,7 @@ export async function createDeploymentPlan(command: CommandLine, root = repoRoot
             'catalog-ingestion': { NODE_BASE_IMAGE: command.catalogNodeBaseImage },
           },
     previousProductionInputs: await collectInputsAtRevision(root, base),
+    targetUnits: binding.activeUnits,
     ...(deployedRecord === undefined ? {} : { deployedRecord }),
   });
   await writeFile(command.out, `${JSON.stringify(plan, null, 2)}\n`, 'utf8');
@@ -136,6 +143,7 @@ function readCommandLine(argv: readonly string[]): CommandLine {
   return {
     base,
     head,
+    environment: deploymentEnvironment(required(values, '--environment')),
     record: values.get('--record') ?? null,
     out: values.get('--out') ?? 'artifacts/deployment-plan.json',
     githubOutput: values.get('--github-output') ?? process.env['GITHUB_OUTPUT'] ?? null,
@@ -146,13 +154,21 @@ function readCommandLine(argv: readonly string[]): CommandLine {
   };
 }
 
+function deploymentEnvironment(value: string): 'test' | 'production' {
+  if (value !== 'test' && value !== 'production') {
+    throw new Error('--environment must be test or production.');
+  }
+  return value;
+}
+
 async function readConfigurationIdentities(
   directory: string | null,
+  units: readonly (typeof deploymentUnits)[number][],
 ): Promise<Partial<Record<(typeof deploymentUnits)[number], string>>> {
   if (directory === null) return {};
   return Object.fromEntries(
     await Promise.all(
-      deploymentUnits.map(async (unit) => {
+      units.map(async (unit) => {
         const value = JSON.parse(
           await readFile(path.join(directory, `${unit}.json`), 'utf8'),
         ) as unknown;
