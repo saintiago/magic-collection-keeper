@@ -63,8 +63,7 @@ jobs:
           aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
           inputs_sha="$(cat .turbo/ci/image-inputs-sha)"
           version="inputs-$inputs_sha"
-          docker build --platform linux/amd64 --tag "$repository:$version" .turbo/release/recognition
-          docker push "$repository:$version"
+          docker buildx build --platform linux/amd64 --provenance=false --push --tag "$repository:$version" .turbo/release/recognition
           bash scripts/ci/image-candidate.sh "$repository" "$inputs_sha" .turbo/ci/artifact.json
       - name: Copy test-verified recognition image
         if: inputs.promote_from != ''

@@ -57,8 +57,7 @@ jobs:
           inputs_sha="$(cat .turbo/ci/image-inputs-sha)"
           version="inputs-$inputs_sha"
           NODE_BASE_IMAGE="$(jq -er '.buildInputs["catalog-ingestion"].NODE_BASE_IMAGE' .turbo/ci/plan.json)"
-          docker build --platform linux/amd64 --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" --tag "$repository:$version" .turbo/release/catalog-ingestion
-          docker push "$repository:$version"
+          docker buildx build --platform linux/amd64 --provenance=false --push --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" --tag "$repository:$version" .turbo/release/catalog-ingestion
           bash scripts/ci/image-candidate.sh "$repository" "$inputs_sha" .turbo/ci/artifact.json
       - name: Copy test-verified ingestion image
         if: inputs.promote_from != ''

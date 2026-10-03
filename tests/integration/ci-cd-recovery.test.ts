@@ -168,6 +168,74 @@ require('node:child_process').execFileSync(process.execPath, [${JSON.stringify(p
     }
   });
 
+  it('retries only temporary unavailable read probes and requires a successful final response', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'keeper-read-probe-'));
+    try {
+      await mkdir(path.join(directory, 'bin'));
+      await writeFile(path.join(directory, 'request.json'), '{}');
+      await writeFile(
+        path.join(directory, 'bin/aws'),
+        `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] !== 'lambda' || args[1] !== 'invoke') throw new Error('Unexpected AWS call');
+const countFile = process.env.MOCK_COUNT;
+const count = fs.existsSync(countFile) ? Number(fs.readFileSync(countFile, 'utf8')) : 0;
+const responses = process.env.MOCK_RESPONSES.split(',');
+const response = responses[Math.min(count, responses.length - 1)];
+fs.writeFileSync(countFile, String(count + 1));
+const output = args[args.length - 1];
+const statusCode = response === 'success' || response === 'function-error' ? 200 : response === 'unavailable' ? 503 : 400;
+const code = response === 'unavailable' ? 'unavailable' : 'invalid-request';
+fs.writeFileSync(output, JSON.stringify({statusCode, body: JSON.stringify({error: {code}})}));
+process.stdout.write(JSON.stringify(response === 'function-error' ? {FunctionError: 'Unhandled'} : {}));
+`,
+        { mode: 0o755 },
+      );
+      const count = path.join(directory, 'count');
+      const run = (responses: string, attempts = 6) =>
+        exec(
+          'bash',
+          [
+            path.join(root, 'scripts/ci/invoke-read-probe.sh'),
+            'keeper-test-read',
+            'request.json',
+            'response.json',
+            'invoke.json',
+          ],
+          {
+            cwd: directory,
+            env: {
+              ...process.env,
+              PATH: `${directory}/bin:${process.env['PATH']}`,
+              MOCK_COUNT: count,
+              MOCK_RESPONSES: responses,
+              READ_PROBE_ATTEMPTS: String(attempts),
+              READ_PROBE_RETRY_SECONDS: '0',
+            },
+          },
+        );
+
+      await run('unavailable,unavailable,success');
+      expect(await readFile(count, 'utf8')).toBe('3');
+      expect(
+        JSON.parse(await readFile(path.join(directory, 'response.json'), 'utf8')),
+      ).toMatchObject({ statusCode: 200 });
+
+      for (const [responses, attempts, expectedCount] of [
+        ['unavailable', 3, '3'],
+        ['invalid', 6, '1'],
+        ['function-error', 6, '1'],
+      ] as const) {
+        await rm(count, { force: true });
+        await expect(run(responses, attempts)).rejects.toThrow();
+        expect(await readFile(count, 'utf8')).toBe(expectedCount);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it.each(['test', 'production'] as const)(
     'retries %s snapshot publication after current.json fails, preserving previous releases',
     async (environment) => {

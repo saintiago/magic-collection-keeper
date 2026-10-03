@@ -98,6 +98,9 @@ describe('CDK deployment units', () => {
         }),
       ]),
     });
+    expect(stacks.foundation.toJSON().Resources.TaskSecurityGroup.Properties.GroupDescription).toBe(
+      'Finite background jobs (catalog synchronization and Search indexing): outbound HTTPS only, no inbound rule',
+    );
   });
 
   it('bootstraps image repositories before adding their consuming runtimes', () => {
