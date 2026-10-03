@@ -171,7 +171,9 @@ maps. Environment-owned repository/bucket coordinates, object versions and gener
 Catalog serving verification uses a supported request to its public query contract, with a synthetic
 authenticated account. The retained Recognition compatibility search accepts only its documented
 lookup terms; it is not a free-text Catalog query endpoint. Recognition image publication emits a
-single `linux/amd64` manifest supported by Lambda, without an attestation image index.
+single `linux/amd64` manifest supported by Lambda, without an attestation image index. Read-only
+live probes may retry a temporary service-unavailable response while paused Aurora resumes;
+verification still requires a successful final response and fails on persistent or invalid requests.
 
 Catalog synchronization, owner-data migration and destructive cleanup are separately invoked
 operations. Neither automatic test deployment nor production promotion starts them implicitly.
