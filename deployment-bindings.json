@@ -28,6 +28,7 @@
       "foundationPrefix": "keeper-test",
       "runtimePrefix": "keeper-test-v2",
       "activeUnits": [
+        "foundation",
         "gateway",
         "web",
         "catalog-serving",
