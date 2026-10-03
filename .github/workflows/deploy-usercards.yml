@@ -79,9 +79,7 @@ jobs:
           client="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue | [0]" --output text)"
           expiry="$(( $(date +%s) + 300 ))"
           jq -n --arg iss "https://cognito-idp.us-east-1.amazonaws.com/$pool" --arg aud "$client" --argjson exp "$expiry" '{version:"2.0",rawPath:"/api/collection/tags",requestContext:{http:{method:"GET",path:"/api/collection/tags"},authorizer:{jwt:{claims:{sub:"ci-verification",iss:$iss,aud:$aud,exp:$exp,token_use:"id"}}}}}' > .turbo/ci/request.json
-          aws lambda invoke --function-name "$function_name" --payload fileb://.turbo/ci/request.json .turbo/ci/response.json > .turbo/ci/invoke.json
-          test "$(jq -r '.FunctionError // empty' .turbo/ci/invoke.json)" = ""
-          test "$(jq -r '.statusCode < 400' .turbo/ci/response.json)" = true
+          bash scripts/ci/invoke-read-probe.sh "$function_name" .turbo/ci/request.json .turbo/ci/response.json .turbo/ci/invoke.json
           printf 'UserCards synthetic-account read returned status %s.\n' "$(jq -r .statusCode .turbo/ci/response.json)" > .turbo/ci/evidence.txt
       - uses: ./.github/actions/record-verified
         with:

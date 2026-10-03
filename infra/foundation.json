@@ -613,7 +613,7 @@
     "TaskSecurityGroup": {
       "Type": "AWS::EC2::SecurityGroup",
       "Properties": {
-        "GroupDescription": "Finite Catalog synchronization job: outbound HTTPS only, no inbound rule",
+        "GroupDescription": "Finite background jobs (catalog synchronization and Search indexing): outbound HTTPS only, no inbound rule",
         "VpcId": {
           "Ref": "Vpc"
         },

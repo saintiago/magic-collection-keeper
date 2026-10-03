@@ -388,8 +388,35 @@ describe('selective CI/CD planning', () => {
       'utf8',
     );
     expect(recognition).toContain('routeKey:"GET /api/recognition/source"');
+    expect(recognition).toContain(
+      'docker buildx build --platform linux/amd64 --provenance=false --push',
+    );
     expect(recognition).toContain('docker pull "$source_uri"');
     expect(recognition).not.toContain('put-image');
+
+    const catalogServing = await readFile(
+      path.join(root, '.github/workflows/deploy-catalog-serving.yml'),
+      'utf8',
+    );
+    expect(catalogServing).toContain('routeKey:"POST /api/catalog/query"');
+    expect(catalogServing).toContain('body \'{"resultLevel":"card","pageSize":1}\'');
+    expect(catalogServing).not.toContain('rawPath:"/api/search"');
+
+    const catalogIngestion = await readFile(
+      path.join(root, '.github/workflows/deploy-catalog-ingestion.yml'),
+      'utf8',
+    );
+    expect(catalogIngestion).toContain(
+      'docker buildx build --platform linux/amd64 --provenance=false --push',
+    );
+
+    const userCards = await readFile(
+      path.join(root, '.github/workflows/deploy-usercards.yml'),
+      'utf8',
+    );
+    for (const workflow of [catalogServing, userCards]) {
+      expect(workflow).toContain('scripts/ci/invoke-read-probe.sh');
+    }
 
     const gateway = await readFile(path.join(root, '.github/workflows/deploy-gateway.yml'), 'utf8');
     expect(gateway).toContain('Access-Control-Request-Method: GET');

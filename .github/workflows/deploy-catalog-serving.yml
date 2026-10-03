@@ -79,10 +79,8 @@ jobs:
           pool="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue | [0]" --output text)"
           client="$(aws cloudformation describe-stacks --stack-name keeper-${{ inputs.environment }}-gateway --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue | [0]" --output text)"
           expiry="$(( $(date +%s) + 300 ))"
-          jq -n --arg iss "https://cognito-idp.us-east-1.amazonaws.com/$pool" --arg aud "$client" --argjson exp "$expiry" '{version:"2.0",rawPath:"/api/search",rawQueryString:"q=Lightning%20Bolt",queryStringParameters:{q:"Lightning Bolt"},requestContext:{http:{method:"GET",path:"/api/search"},authorizer:{jwt:{claims:{sub:"ci-verification",iss:$iss,aud:$aud,exp:$exp,token_use:"id"}}}}}' > .turbo/ci/request.json
-          aws lambda invoke --function-name "$function_name" --payload fileb://.turbo/ci/request.json .turbo/ci/response.json > .turbo/ci/invoke.json
-          test "$(jq -r '.FunctionError // empty' .turbo/ci/invoke.json)" = ""
-          test "$(jq -r '.statusCode < 400' .turbo/ci/response.json)" = true
+          jq -n --arg iss "https://cognito-idp.us-east-1.amazonaws.com/$pool" --arg aud "$client" --argjson exp "$expiry" --arg body '{"resultLevel":"card","pageSize":1}' '{version:"2.0",routeKey:"POST /api/catalog/query",rawPath:"/api/catalog/query",body:$body,requestContext:{http:{method:"POST",path:"/api/catalog/query"},authorizer:{jwt:{claims:{sub:"ci-verification",iss:$iss,aud:$aud,exp:$exp,token_use:"id"}}}}}' > .turbo/ci/request.json
+          bash scripts/ci/invoke-read-probe.sh "$function_name" .turbo/ci/request.json .turbo/ci/response.json .turbo/ci/invoke.json
           printf 'Catalog query Lambda returned status %s without a function error.\n' "$(jq -r .statusCode .turbo/ci/response.json)" > .turbo/ci/evidence.txt
       - uses: ./.github/actions/record-verified
         with:
