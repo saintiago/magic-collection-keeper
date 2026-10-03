@@ -414,6 +414,11 @@
   display: none;
 }
 
+/* Leave room for the workspace header above the shared sticky selection toolbar. */
+.mocked-app [data-ui-toolbar] {
+  top: 5rem;
+}
+
 @keyframes rf-panel-enter {
   from {
     opacity: 0;

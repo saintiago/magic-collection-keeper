@@ -350,6 +350,31 @@ test('keeps gallery section links separate from the mocked-app route', async ({ 
   }
 });
 
+test('keeps the mocked-app selection toolbar clear of the workspace header', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 500 });
+  await openStorybook(page, '#/catalog?level=printing');
+  await advance(page);
+  await advance(page);
+  await advance(page);
+
+  const selection = page.locator('[data-ui-select]').first();
+  await selection.check();
+  const clearSelection = page.getByRole('button', { name: 'Clear selection' });
+  await expect(clearSelection).toBeEnabled();
+  await page.evaluate(() => window.scrollTo({ top: 600, behavior: 'instant' }));
+
+  const header = page.locator('#storybook-root > header');
+  const [headerBox, clearSelectionBox] = await Promise.all([
+    header.boundingBox(),
+    clearSelection.boundingBox(),
+  ]);
+  expect(headerBox).not.toBeNull();
+  expect(clearSelectionBox).not.toBeNull();
+  expect(clearSelectionBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
+  await clearSelection.click();
+  await expect(selection).not.toBeChecked();
+});
+
 test('reflows the Reality Fracture preset and retains static feedback with reduced motion', async ({
   page,
 }) => {
