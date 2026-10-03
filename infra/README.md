@@ -36,6 +36,12 @@ There is no Search schema, projection, indexing image/job, scheduler or publicat
 the target stack. Private edits become queryable on commit. Ordinary database indexes belong to each
 owner and require no asynchronous Search job.
 
+The authorized [parallel test replacement](../docs/deployment.md#parallel-test-runtime-replacement)
+reuses the healthy Foundation and retained Cognito pool, and creates the six runtime stacks under
+`keeper-test-v2-{unit}`. Their physical names and runtime exports use the replacement prefix. CDK
+and CI/CD share repository-owned environment bindings; the environment remains `test`. Preserve the
+old stacks and their required Foundation exports until separately authorized recovery and cleanup.
+
 ## Environment inputs
 
 Instantiate the CDK app once per environment. `Environment` is fixed by CDK context; PostgreSQL and

@@ -185,10 +185,13 @@ Keep `DEPLOYMENT_ENABLED` unset or unequal to `true` until the current test stac
 CDK baseline. PRs and pushes still publish the required `CI` validation and a deployment plan while
 deployment is disabled. To activate test deployment:
 
-1. Configure the `test` GitHub Environment with `AWS_DEPLOY_ROLE_ARN` and
+1. Select the active stack names and reference prefixes from the repository-owned environment
+   deployment bindings ([parallel replacement](deployment.md#parallel-test-runtime-replacement)).
+   Configure the `test` GitHub Environment with `AWS_DEPLOY_ROLE_ARN` and
    `DEPLOYMENT_STATE_BUCKET`. The state bucket is versioned and retained so records and their
    referenced evidence stay recoverable. The role uses GitHub OIDC and is limited to the intended
-   test stacks, artifact locations and verification reads. Set the digest-pinned
+   test stacks, artifact locations and verification reads. For the replacement, scope runtime operations
+   to the new stacks and retain only the required Foundation permissions; do not target locked stacks. Set the digest-pinned
    `CATALOG_NODE_BASE_IMAGE` used to package the finite ingestion job.
 2. Put the captured, non-secret CloudFormation parameters for each unit at
    `s3://<state-bucket>/environments/test/parameters/<unit>.json`. Secrets remain stack references;
