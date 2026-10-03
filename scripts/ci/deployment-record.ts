@@ -36,6 +36,8 @@ export interface ComponentDeploymentRecord {
   readonly evidenceUri: string;
   readonly artifact: ArtifactIdentity;
   readonly inputs: readonly string[];
+  /** External build settings captured by planning and used by the verified build. */
+  readonly buildInputs?: Readonly<Record<string, string>>;
   readonly verification: VerificationRecord;
   readonly previousRestorableVersion: RestorableVersion | null;
 }
@@ -60,6 +62,10 @@ export interface DeploymentRecord {
   /** Immutable finalized combination identity, independent of source revision. */
   readonly releaseId?: string;
   readonly components: Partial<Record<DeploymentUnit, ComponentDeploymentRecord>>;
+  /** Written before mutation; cleared only together with a verified component. */
+  readonly pending?: Partial<
+    Record<DeploymentUnit, { readonly sourceRevision: string; readonly startedAt: string }>
+  >;
 }
 
 export interface DeploymentAttempt {
@@ -80,6 +86,40 @@ export interface DeploymentAttempt {
 
 export function contentIdentity(value: unknown): string {
   return createHash('sha256').update(stableJson(value)).digest('hex');
+}
+
+/** Compare application bytes across environment-owned repositories, buckets and object versions. */
+export function portableArtifactIdentity(artifact: ArtifactIdentity): string {
+  if (artifact.kind === 'none') return contentIdentity({ kind: 'none' });
+  if (artifact.kind === 'image') {
+    if (!artifact.values['digest']) throw new Error('An image artifact requires its digest.');
+    return contentIdentity({ kind: 'image', digest: artifact.values['digest'] });
+  }
+  if (artifact.values['files'] !== undefined) {
+    const files = JSON.parse(artifact.values['files']) as Record<string, { sha256: string }>;
+    const content = Object.fromEntries(
+      Object.entries(files)
+        .filter(([key]) => key !== 'config.json')
+        .map(([key, value]) => {
+          if (!value.sha256) throw new Error(`Browser artifact ${key} requires its content hash.`);
+          return [key, value.sha256];
+        }),
+    );
+    // config.json is generated from target-environment public settings during promotion.
+    return contentIdentity({ kind: 'files', files: content });
+  }
+  if (!artifact.values['sha256']) throw new Error('A file artifact requires its content hash.');
+  return contentIdentity({ kind: 'files', sha256: artifact.values['sha256'] });
+}
+
+export function recordPendingComponent(
+  record: DeploymentRecord,
+  unit: DeploymentUnit,
+  sourceRevision: string,
+  startedAt: string,
+): DeploymentRecord {
+  assertRevision(sourceRevision);
+  return { ...record, pending: { ...record.pending, [unit]: { sourceRevision, startedAt } } };
 }
 
 export function componentChanged(
@@ -104,6 +144,8 @@ export function recordVerifiedComponent(
   component: Omit<ComponentDeploymentRecord, 'previousRestorableVersion'>,
 ): DeploymentRecord {
   const previous = record.components[unit];
+  const pending = { ...record.pending };
+  delete pending[unit];
   const previousRestorableVersion =
     previous === undefined
       ? null
@@ -121,6 +163,7 @@ export function recordVerifiedComponent(
           };
   return {
     ...record,
+    pending,
     components: {
       ...record.components,
       [unit]: { ...component, previousRestorableVersion },
@@ -135,6 +178,7 @@ export function finalizeDeploymentRecord(
   updatedAt: string,
 ): DeploymentRecord {
   assertRevision(revision);
+  assertNoPendingDeployments(record);
   if (!Number.isFinite(Date.parse(updatedAt))) throw new Error('updatedAt must be an ISO instant.');
   const releaseId = contentIdentity({
     environment: record.environment,
@@ -144,7 +188,13 @@ export function finalizeDeploymentRecord(
   return { ...record, revision, updatedAt, releaseId };
 }
 
-/** Rejects a revision that would move either the finalized baseline or a verified component back. */
+export function assertNoPendingDeployments(record: DeploymentRecord): void {
+  const pending = Object.keys(record.pending ?? {});
+  if (pending.length > 0)
+    throw new Error(`Unverified deployments require reconciliation: ${pending.join(', ')}.`);
+}
+
+/** Rejects revisions older than the finalized baseline, verified components or pending attempts. */
 export async function assertFreshRevision(
   record: DeploymentRecord,
   revision: string,
@@ -154,6 +204,7 @@ export async function assertFreshRevision(
   const deployedRevisions = new Set([
     record.revision,
     ...Object.values(record.components).map((component) => component.sourceRevision),
+    ...Object.values(record.pending ?? {}).map((component) => component.sourceRevision),
   ]);
   deployedRevisions.delete('0000000000000000000000000000000000000000');
   for (const deployed of deployedRevisions) {

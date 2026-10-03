@@ -17,6 +17,125 @@ const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../..', import.meta.url));
 
 describe('deployment shell recovery', () => {
+  it('persists recovery before mutation and clears it only with published verification', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'keeper-pending-'));
+    try {
+      await mkdir(path.join(directory, 'bin'));
+      await mkdir(path.join(directory, '.turbo/ci'), { recursive: true });
+      const git = (args: string[]) => exec('git', args, { cwd: directory });
+      await git(['init', '-q']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test']);
+      const revisions: string[] = [];
+      for (const value of ['A', 'B', 'A']) {
+        await writeFile(path.join(directory, 'source'), value);
+        await git(['add', 'source']);
+        await git(['commit', '-qm', value]);
+        revisions.push((await git(['rev-parse', 'HEAD'])).stdout.trim());
+      }
+      const initial = { ...emptyDeploymentRecord('test'), revision: revisions[0]! };
+      const remote = path.join(directory, 'store/environments/test/current.json');
+      await mkdir(path.dirname(remote), { recursive: true });
+      await writeFile(remote, JSON.stringify(initial));
+      await writeFile(
+        path.join(directory, 'bin/aws'),
+        `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args[0] !== 's3' || args[1] !== 'cp') throw new Error('Unexpected AWS call');
+// S3 keys permit path segments longer than a local filesystem's 255-byte limit.
+const resolve = value => value.startsWith('s3://state/') ? path.join(process.env.MOCK_STORE, ...value.slice('s3://state/'.length).split('/').map(part => part.length > 200 ? require('node:crypto').createHash('sha256').update(part).digest('hex') : part)) : value;
+const from = resolve(args[2]);
+const to = resolve(args[3]);
+if (process.env.FAIL_STATE_WRITE === 'true' && args[3].startsWith('s3://') && args[3].endsWith('/current.json')) process.exit(1);
+fs.mkdirSync(path.dirname(to), {recursive:true});
+fs.copyFileSync(from, to);
+`,
+        { mode: 0o755 },
+      );
+      await writeFile(
+        path.join(directory, 'bin/npm'),
+        `#!/usr/bin/env node
+require('node:child_process').execFileSync(process.execPath, [${JSON.stringify(path.join(root, 'node_modules/tsx/dist/cli.mjs'))}, ${JSON.stringify(path.join(root, 'scripts/ci/record-deployment.ts'))}, ...process.argv.slice(5)], {stdio:'inherit'});
+`,
+        { mode: 0o755 },
+      );
+      const action = async (name: string) =>
+        (await readFile(path.join(root, `.github/actions/${name}/action.yml`), 'utf8')).split(
+          '      run: |\n',
+        )[1]!;
+      const pendingScript = await action('record-pending');
+      const verifiedScript = await action('record-verified');
+      const env = {
+        ...process.env,
+        PATH: `${directory}/bin:${process.env['PATH']}`,
+        MOCK_STORE: path.join(directory, 'store'),
+        STATE_BUCKET: 'state',
+        RECORD_ENVIRONMENT: 'test',
+        RECORD_UNIT: 'catalog-ingestion',
+        RECORD_REVISION: revisions[1]!,
+        RECORD_STACK: 'keeper-test-catalog-ingestion',
+        RECORD_TEMPLATE: '.turbo/ci/template.json',
+        RECORD_PARAMETERS: '.turbo/ci/parameters.json',
+        RECORD_ENVIRONMENT_PARAMETERS: '.turbo/ci/parameters.json',
+        RECORD_ARTIFACT: '.turbo/ci/artifact.json',
+        RECORD_PLAN: '.turbo/ci/plan.json',
+        RECORD_EVIDENCE: '.turbo/ci/evidence.txt',
+      };
+      const run = (script: string, extra = {}) =>
+        exec('bash', ['-euo', 'pipefail', '-c', script], {
+          cwd: directory,
+          env: { ...env, ...extra },
+        });
+      // An unpersisted marker stops the job before it can mutate resources.
+      await expect(
+        run(`${pendingScript}\nprintf B > live`, { FAIL_STATE_WRITE: 'true' }),
+      ).rejects.toThrow();
+      await expect(readFile(path.join(directory, 'live'))).rejects.toThrow();
+      expect(JSON.parse(await readFile(remote, 'utf8'))).toEqual(initial);
+      // Deployment succeeds, then verification fails (or the runner is interrupted).
+      await expect(run(`${pendingScript}\nprintf B > live\nfalse`)).rejects.toThrow();
+      const failed = JSON.parse(await readFile(remote, 'utf8'));
+      expect(failed.components).toEqual(initial.components);
+      expect(failed.pending['catalog-ingestion'].sourceRevision).toBe(revisions[1]);
+      await rm(path.join(directory, '.turbo/ci'), { recursive: true });
+      env.RECORD_REVISION = revisions[2]!;
+      await run(pendingScript);
+      expect(
+        JSON.parse(await readFile(remote, 'utf8')).pending['catalog-ingestion'].sourceRevision,
+      ).toBe(revisions[2]);
+      const baseImage = `node@sha256:${'a'.repeat(64)}`;
+      for (const [name, value] of Object.entries({
+        'template.json': {},
+        'parameters.json': {},
+        'artifact.json': { kind: 'image', values: { digest: 'sha256:A' } },
+        'plan.json': {
+          productionInputs: {},
+          buildInputs: { 'catalog-ingestion': { NODE_BASE_IMAGE: baseImage } },
+        },
+      }))
+        await writeFile(path.join(directory, '.turbo/ci', name), JSON.stringify(value));
+      await writeFile(path.join(directory, '.turbo/ci/evidence.txt'), 'Restored A and verified');
+      await run(`printf A > live\n${verifiedScript}`);
+      const local = JSON.parse(
+        await readFile(path.join(directory, '.turbo/ci/current.json'), 'utf8'),
+      );
+      expect(local.pending).toEqual({});
+      expect(local.components['catalog-ingestion'].buildInputs).toEqual({
+        NODE_BASE_IMAGE: baseImage,
+      });
+      const publish =
+        'aws s3 cp .turbo/ci/current.json "s3://$STATE_BUCKET/environments/test/current.json"';
+      await expect(run(publish, { FAIL_STATE_WRITE: 'true' })).rejects.toThrow();
+      expect(JSON.parse(await readFile(remote, 'utf8')).pending['catalog-ingestion']).toBeDefined();
+      await run(publish);
+      expect(JSON.parse(await readFile(remote, 'utf8'))).toEqual(local);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('accepts CRLF preflight headers and compares the configured origin literally', async () => {
     const workflow = await readFile(
       path.join(root, '.github/workflows/deploy-gateway.yml'),

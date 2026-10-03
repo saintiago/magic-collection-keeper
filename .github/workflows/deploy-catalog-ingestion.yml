@@ -23,6 +23,12 @@ jobs:
         with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1 }
       - uses: actions/download-artifact@v4
         with: { name: deployment-plan, path: .turbo/ci }
+      - uses: ./.github/actions/record-pending
+        with:
+          environment: ${{ inputs.environment }}
+          unit: catalog-ingestion
+          revision: ${{ inputs.revision }}
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
       - name: Prepare state and stack
         env: { STATE_BUCKET: '${{ vars.DEPLOYMENT_STATE_BUCKET }}' }
         run: |
@@ -33,9 +39,9 @@ jobs:
           printf '%s\n' "$repository" > .turbo/ci/repository
       - name: Prepare image inputs
         if: inputs.promote_from == ''
-        env: { NODE_BASE_IMAGE: '${{ vars.CATALOG_NODE_BASE_IMAGE }}' }
         run: |
           npm run package -- --out .turbo/release
+          NODE_BASE_IMAGE="$(jq -er '.buildInputs["catalog-ingestion"].NODE_BASE_IMAGE' .turbo/ci/plan.json)"
           npx tsx scripts/ci/image-inputs.ts .turbo/release/catalog-ingestion "$NODE_BASE_IMAGE" > .turbo/ci/image-inputs-sha
       - name: Recover published image candidate
         id: candidate
@@ -44,13 +50,13 @@ jobs:
           bash scripts/ci/image-candidate.sh "$(cat .turbo/ci/repository)" "$(cat .turbo/ci/image-inputs-sha)" .turbo/ci/artifact.json
       - name: Build and publish image
         if: inputs.promote_from == '' && steps.candidate.outputs.found != 'true'
-        env: { NODE_BASE_IMAGE: '${{ vars.CATALOG_NODE_BASE_IMAGE }}' }
         run: |
           repository="$(cat .turbo/ci/repository)"
           registry="${repository%%/*}"
           aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
           inputs_sha="$(cat .turbo/ci/image-inputs-sha)"
           version="inputs-$inputs_sha"
+          NODE_BASE_IMAGE="$(jq -er '.buildInputs["catalog-ingestion"].NODE_BASE_IMAGE' .turbo/ci/plan.json)"
           docker build --platform linux/amd64 --build-arg NODE_BASE_IMAGE="$NODE_BASE_IMAGE" --tag "$repository:$version" .turbo/release/catalog-ingestion
           docker push "$repository:$version"
           bash scripts/ci/image-candidate.sh "$repository" "$inputs_sha" .turbo/ci/artifact.json

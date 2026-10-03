@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertFreshRevision,
+  contentIdentity,
+  recordPendingComponent,
   deploymentUnits,
   emptyDeploymentRecord,
   finalizeDeploymentRecord,
@@ -24,6 +26,8 @@ import {
   planDeployments,
   readStackInputMapping,
 } from '../../scripts/ci/planner.js';
+
+import { planPromotion } from '../../scripts/ci/promotion-plan.js';
 
 import { createDeploymentPlan } from '../../scripts/ci/plan.js';
 
@@ -108,6 +112,118 @@ describe('selective CI/CD planning', () => {
       expect(plan.candidates).toContain(unit);
     },
   );
+
+  it.each(deploymentUnits)(
+    'reconciles applied but unverified %s after a revert in both environments',
+    async (unit) => {
+      const mapping = await readStackInputMapping(mappingFile);
+      let baseline = emptyDeploymentRecord('test');
+      for (const componentUnit of deploymentUnits) {
+        baseline = recordVerifiedComponent(
+          baseline,
+          componentUnit,
+          verifiedComponent(`keeper-test-${componentUnit}`),
+        );
+      }
+      baseline = finalizeDeploymentRecord(baseline, revision, '2026-10-03T00:00:00Z');
+      // B applies, but its live verification fails. The verified component remains at A.
+      const pending = recordPendingComponent(
+        baseline,
+        unit,
+        '2'.repeat(40),
+        '2026-10-03T01:00:00Z',
+      );
+      expect(pending.components).toEqual(baseline.components);
+      const plan = planDeployments({
+        baseRevision: revision,
+        sourceRevision: '3'.repeat(40),
+        changedPaths: [],
+        mapping,
+        productionInputs: {},
+        deployedRecord: pending,
+      });
+      expect(plan.candidates).toContain(unit);
+      expect(() =>
+        finalizeDeploymentRecord(pending, '3'.repeat(40), '2026-10-03T02:00:00Z'),
+      ).toThrow(/Unverified deployments/);
+      const configuration = Object.fromEntries(
+        deploymentUnits.map((name) => [name, 'c'.repeat(64)]),
+      );
+      expect(
+        planPromotion(baseline, { ...pending, environment: 'production' }, revision, configuration)
+          .candidates,
+      ).toEqual([unit]);
+      expect(() =>
+        planPromotion(pending, { ...baseline, environment: 'production' }, revision, configuration),
+      ).toThrow(/Unverified deployments/);
+      await expect(
+        assertFreshRevision(pending, revision, async (deployed) => deployed === revision),
+      ).rejects.toThrow(/Refusing stale/);
+      // C restores A's bytes and verifies: only then may recovery be cleared and finalized.
+      const recovered = recordVerifiedComponent(pending, unit, {
+        ...verifiedComponent(`keeper-test-${unit}`),
+        sourceRevision: '3'.repeat(40),
+      });
+      expect(recovered.pending).toEqual({});
+      expect(recovered.components[unit]?.artifact).toEqual(baseline.components[unit]?.artifact);
+      expect(
+        finalizeDeploymentRecord(recovered, '3'.repeat(40), '2026-10-03T02:00:00Z').revision,
+      ).toBe('3'.repeat(40));
+    },
+  );
+
+  it('captures a changed Catalog base image with unchanged Git and CloudFormation settings', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'keeper-build-input-plan-'));
+    try {
+      const head = (await exec('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim();
+      const firstImage = `node@sha256:${'a'.repeat(64)}`;
+      const nextImage = `node@sha256:${'b'.repeat(64)}`;
+      const component = {
+        ...verifiedComponent('keeper-test-catalog-ingestion'),
+        sourceRevision: head,
+        environmentConfigurationSha256: contentIdentity({}),
+        buildInputs: { NODE_BASE_IMAGE: firstImage },
+      };
+      let record = emptyDeploymentRecord('test');
+      for (const unit of deploymentUnits) {
+        record = recordVerifiedComponent(record, unit, {
+          ...component,
+          buildInputs: unit === 'catalog-ingestion' ? component.buildInputs : {},
+        });
+        await writeFile(path.join(directory, `${unit}.json`), '{}');
+      }
+      record = finalizeDeploymentRecord(record, head, '2026-10-03T00:00:00Z');
+      const recordFile = path.join(directory, 'current.json');
+      const out = path.join(directory, 'plan.json');
+      await writeFile(recordFile, JSON.stringify(record));
+      const options = {
+        base: head,
+        head,
+        record: recordFile,
+        out,
+        githubOutput: null,
+        configurationDirectory: directory,
+      };
+      await createDeploymentPlan({ ...options, catalogNodeBaseImage: firstImage });
+      expect(JSON.parse(await readFile(out, 'utf8')).candidates).toEqual([]);
+      await createDeploymentPlan({ ...options, catalogNodeBaseImage: nextImage });
+      const plan = JSON.parse(await readFile(out, 'utf8'));
+      expect(plan.candidates).toEqual(['catalog-ingestion']);
+      expect(plan.buildInputs['catalog-ingestion']).toEqual({ NODE_BASE_IMAGE: nextImage });
+      const verified = recordVerifiedComponent(record, 'catalog-ingestion', {
+        ...component,
+        buildInputs: plan.buildInputs['catalog-ingestion'],
+      });
+      await writeFile(recordFile, JSON.stringify(verified));
+      await createDeploymentPlan({ ...options, catalogNodeBaseImage: nextImage });
+      expect(JSON.parse(await readFile(out, 'utf8')).candidates).toEqual([]);
+      await expect(
+        createDeploymentPlan({ ...options, catalogNodeBaseImage: 'node:latest' }),
+      ).rejects.toThrow(/pinned by digest/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 
   it.each(['delete', 'rename'])(
     'plans a credential-free module %s using the real base graph',
@@ -249,6 +365,10 @@ describe('selective CI/CD planning', () => {
       expect(text, workflow).toContain('workflow_call:');
       expect(text, workflow).toContain('ci:deploy-stack');
       expect(text, workflow).toContain('record-verified');
+      expect(text.indexOf('record-pending'), workflow).toBeGreaterThan(0);
+      expect(text.indexOf('record-pending'), workflow).toBeLessThan(
+        text.indexOf('ci:deploy-stack'),
+      );
     }
   });
 
@@ -278,6 +398,110 @@ describe('selective CI/CD planning', () => {
     expect(web).toContain('*.js|*.mjs) content_type=text/javascript');
     expect(web).toContain('head-object --bucket "$bucket"');
     expect(web).toContain('served-module.mjs');
+  });
+});
+
+describe('promotion content selection', () => {
+  it('selects changed images and files at the same Git revision while ignoring environment locations', () => {
+    let source = emptyDeploymentRecord('test');
+    let target = emptyDeploymentRecord('production');
+    for (const unit of deploymentUnits) {
+      const common = verifiedComponent(`keeper-test-${unit}`);
+      let artifact = common.artifact;
+      let deployedArtifact = common.artifact;
+      if (unit === 'recognition' || unit === 'catalog-ingestion') {
+        artifact = {
+          kind: 'image',
+          values: {
+            digest: 'sha256:image-A',
+            imageUri: 'test/repo@sha256:image-A',
+            version: 'test-tag',
+          },
+        };
+        deployedArtifact = {
+          kind: 'image',
+          values: {
+            digest: 'sha256:image-A',
+            imageUri: 'production/repo@sha256:image-A',
+            version: 'prod-tag',
+          },
+        };
+      } else if (unit === 'web') {
+        artifact = {
+          kind: 'files',
+          values: {
+            bucket: 'test',
+            files: JSON.stringify({
+              'index.html': { sha256: 'index-A', version: 'test-version' },
+              'config.json': { sha256: 'test-settings', version: 'test-settings-version' },
+            }),
+          },
+        };
+        deployedArtifact = {
+          kind: 'files',
+          values: {
+            bucket: 'production',
+            files: JSON.stringify({
+              'config.json': {
+                sha256: 'production-settings',
+                version: 'production-settings-version',
+              },
+              'index.html': { sha256: 'index-A', version: 'production-version' },
+            }),
+          },
+        };
+      } else if (unit === 'catalog-serving' || unit === 'usercards') {
+        artifact = {
+          kind: 'files',
+          values: {
+            sha256: 'zip-A',
+            bucket: 'test',
+            key: 'test-key',
+            objectVersion: 'test-version',
+            manifestSha256: 'test-manifest',
+          },
+        };
+        deployedArtifact = {
+          kind: 'files',
+          values: {
+            sha256: 'zip-A',
+            bucket: 'production',
+            key: 'production-key',
+            objectVersion: 'production-version',
+            manifestSha256: 'production-manifest',
+          },
+        };
+      }
+      source = recordVerifiedComponent(source, unit, { ...common, artifact });
+      target = recordVerifiedComponent(target, unit, { ...common, artifact: deployedArtifact });
+    }
+    const firstRelease = finalizeDeploymentRecord(source, revision, '2026-10-03T00:00:00Z');
+    const configuration = Object.fromEntries(deploymentUnits.map((unit) => [unit, 'c'.repeat(64)]));
+    expect(planPromotion(firstRelease, target, revision, configuration).candidates).toEqual([]);
+    for (const unit of [
+      'recognition',
+      'catalog-ingestion',
+      'catalog-serving',
+      'usercards',
+      'web',
+    ] as const) {
+      const component = firstRelease.components[unit]!;
+      const values = { ...component.artifact.values };
+      if (component.artifact.kind === 'image') values['digest'] = 'sha256:image-B';
+      else if (unit === 'web')
+        values['files'] = JSON.stringify({ 'index.html': { sha256: 'index-B', version: 'new' } });
+      else values['sha256'] = 'zip-B';
+      const changed = recordVerifiedComponent(firstRelease, unit, {
+        ...component,
+        artifact: { ...component.artifact, values },
+      });
+      const secondRelease = finalizeDeploymentRecord(changed, revision, '2026-10-03T01:00:00Z');
+      expect(secondRelease.releaseId).not.toBe(firstRelease.releaseId);
+      expect(secondRelease.revision).toBe(firstRelease.revision);
+      expect(planPromotion(secondRelease, target, revision, configuration).candidates).toEqual([
+        unit,
+      ]);
+    }
   });
 });
 

@@ -14,6 +14,7 @@ import {
   type DeploymentRecord,
 } from './deployment-record.js';
 import { collectProductionInputs, planDeployments, readStackInputMapping } from './planner.js';
+import { assertPinnedNodeBaseImage } from './image-inputs.js';
 
 const execFileAsync = promisify(execFile);
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
@@ -25,9 +26,12 @@ interface CommandLine {
   readonly out: string;
   readonly githubOutput: string | null;
   readonly configurationDirectory: string | null;
+  readonly catalogNodeBaseImage?: string;
 }
 
 export async function createDeploymentPlan(command: CommandLine, root = repoRoot): Promise<void> {
+  if (command.catalogNodeBaseImage !== undefined)
+    assertPinnedNodeBaseImage(command.catalogNodeBaseImage);
   const deployedRecord = await optionalRecord(command.record);
   const base =
     deployedRecord?.revision === zeroRevision
@@ -44,6 +48,12 @@ export async function createDeploymentPlan(command: CommandLine, root = repoRoot
     mapping,
     productionInputs,
     configurationIdentities,
+    buildInputs:
+      command.catalogNodeBaseImage === undefined
+        ? {}
+        : {
+            'catalog-ingestion': { NODE_BASE_IMAGE: command.catalogNodeBaseImage },
+          },
     previousProductionInputs: await collectInputsAtRevision(root, base),
     ...(deployedRecord === undefined ? {} : { deployedRecord }),
   });
@@ -130,6 +140,9 @@ function readCommandLine(argv: readonly string[]): CommandLine {
     out: values.get('--out') ?? 'artifacts/deployment-plan.json',
     githubOutput: values.get('--github-output') ?? process.env['GITHUB_OUTPUT'] ?? null,
     configurationDirectory: values.get('--configuration-dir') ?? null,
+    ...(values.has('--catalog-node-base-image')
+      ? { catalogNodeBaseImage: values.get('--catalog-node-base-image')! }
+      : {}),
   };
 }
 

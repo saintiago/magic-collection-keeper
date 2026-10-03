@@ -1,0 +1,23 @@
+name: Record pending deployment
+description: Persist recovery intent before any resource mutation, retaining verified components.
+inputs:
+  environment: { required: true }
+  unit: { required: true }
+  revision: { required: true }
+  state_bucket: { required: true }
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        RECORD_ENVIRONMENT: ${{ inputs.environment }}
+        RECORD_UNIT: ${{ inputs.unit }}
+        RECORD_REVISION: ${{ inputs.revision }}
+        STATE_BUCKET: ${{ inputs.state_bucket }}
+      run: |
+        set -euo pipefail
+        mkdir -p .turbo/ci
+        aws s3 cp "s3://$STATE_BUCKET/environments/$RECORD_ENVIRONMENT/current.json" .turbo/ci/current.json
+        npm run ci:record -- begin --record .turbo/ci/current.json --environment "$RECORD_ENVIRONMENT" --unit "$RECORD_UNIT" --revision "$RECORD_REVISION" --out .turbo/ci/pending.json
+        aws s3 cp .turbo/ci/pending.json "s3://$STATE_BUCKET/environments/$RECORD_ENVIRONMENT/current.json"
+        mv .turbo/ci/pending.json .turbo/ci/current.json

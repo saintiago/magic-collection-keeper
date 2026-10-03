@@ -133,6 +133,12 @@ previous restorable version. A deployment failure must not overwrite its last ve
 record the actual attempted state for recovery. The environment record describes the resulting
 combination, including components still running older revisions.
 
+Before a component job can mutate resources, persist its revision and start time in the environment
+record's `pending` map without changing verified component records. Both test and production planners
+select pending units even when desired inputs match the last verified version. Clear a unit's marker
+only when publishing its verified component record; finalization refuses any remaining markers. This
+also covers interrupted jobs and failed verification after resources have already changed.
+
 Finalization publishes that combination under the immutable
 `environments/<environment>/releases/<releaseId>.json` key before updating `current.json`. The
 release ID hashes the environment, source revision and verified component records, excluding the
@@ -153,6 +159,14 @@ and revisions. Only an absent image permits a build; lookup failures stop public
 stays in the packaging and deployment records, outside image content comparison. Promotion similarly
 reuses an existing destination tag after checking its digest. A no-op verification refreshes evidence
 without replacing the previous distinct deployment's rollback reference.
+
+Test planning captures the digest-pinned `CATALOG_NODE_BASE_IMAGE` in the plan's external `buildInputs`.
+Compare it with the component's verified build inputs and select ingestion when it changes, even with
+unchanged Git and CloudFormation parameters. Packaging consumes that captured value, and successful
+verification retains it in the component record. Promotion compares portable artifact content as well
+as source revision and production configuration: image digests, Lambda ZIP hashes and browser path/hash
+maps. Environment-owned repository/bucket coordinates, object versions and generated browser
+`config.json` do not participate in the cross-environment content comparison.
 
 Catalog synchronization, owner-data migration and destructive cleanup are separately invoked
 operations. Neither automatic test deployment nor production promotion starts them implicitly.
@@ -181,8 +195,8 @@ deployment is disabled. To activate test deployment:
 Runs are serialized per environment without cancellation. They reject revisions older than the
 recorded environment revision and refuse removal or replacement of retained database, identity,
 bucket, repository and secret resources. A failed attempt is written under the environment's
-`attempts/` prefix but does not replace `current.json`; the planner baseline advances only after all
-selected units verify successfully.
+`attempts/` prefix while its pending marker remains in `current.json`; neither changes the last verified
+component. The planner baseline advances only after all selected units verify successfully.
 
 Configure the `production` GitHub Environment with required reviewers and its own role, state record
 and parameter files. `promote-production.yml` accepts an immutable test release ID and its exact source

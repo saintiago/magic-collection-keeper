@@ -23,6 +23,12 @@ jobs:
         with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1 }
       - uses: actions/download-artifact@v4
         with: { name: deployment-plan, path: .turbo/ci }
+      - uses: ./.github/actions/record-pending
+        with:
+          environment: ${{ inputs.environment }}
+          unit: catalog-serving
+          revision: ${{ inputs.revision }}
+          state_bucket: ${{ vars.DEPLOYMENT_STATE_BUCKET }}
       - name: Package or copy the verified artifact
         env:
           STATE_BUCKET: ${{ vars.DEPLOYMENT_STATE_BUCKET }}

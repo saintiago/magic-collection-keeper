@@ -5,6 +5,7 @@ import { build, type BuildOptions } from 'esbuild';
 
 import {
   deploymentUnits,
+  contentIdentity,
   type DeploymentRecord,
   type DeploymentUnit,
 } from './deployment-record.js';
@@ -35,6 +36,7 @@ export interface DeploymentPlan {
   readonly reasons: Partial<Record<DeploymentUnit, readonly string[]>>;
   readonly productionInputs: Partial<Record<DeploymentUnit, readonly string[]>>;
   readonly orchestrationChanged: boolean;
+  readonly buildInputs: Partial<Record<DeploymentUnit, Readonly<Record<string, string>>>>;
 }
 
 export interface PlanOptions {
@@ -46,6 +48,7 @@ export interface PlanOptions {
   readonly previousProductionInputs?: Partial<Record<DeploymentUnit, readonly string[]>>;
   readonly deployedRecord?: DeploymentRecord;
   readonly configurationIdentities?: Partial<Record<DeploymentUnit, string>>;
+  readonly buildInputs?: DeploymentPlan['buildInputs'];
 }
 
 /**
@@ -93,6 +96,16 @@ export function planDeployments(options: PlanOptions): DeploymentPlan {
 
   for (const unit of deploymentUnits) {
     const component = options.deployedRecord?.components[unit];
+    if (options.deployedRecord?.pending?.[unit] !== undefined) {
+      addReason(candidates, reasons, unit, '[unverified deployment requires reconciliation]');
+    }
+    const buildInputs = options.buildInputs?.[unit];
+    if (
+      buildInputs !== undefined &&
+      contentIdentity(buildInputs) !== contentIdentity(component?.buildInputs ?? {})
+    ) {
+      addReason(candidates, reasons, unit, '[external build inputs changed]');
+    }
     if (component !== undefined && component.sourceRevision !== options.baseRevision) {
       addReason(candidates, reasons, unit, '[component differs from finalized baseline]');
     }
@@ -129,6 +142,7 @@ export function planDeployments(options: PlanOptions): DeploymentPlan {
         .map((unit) => [unit, [...new Set(options.productionInputs[unit])].sort()]),
     ),
     orchestrationChanged,
+    buildInputs: options.buildInputs ?? {},
   };
 }
 

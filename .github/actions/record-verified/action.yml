@@ -70,9 +70,10 @@ runs:
           --arg evidenceUri "$evidence_uri" \
           --arg checkedAt "$checked_at" \
           --argjson artifact "$(jq -c . "$RECORD_ARTIFACT")" \
+          --argjson buildInputs "$(jq -c --arg unit "$RECORD_UNIT" '.buildInputs[$unit] // {}' "$RECORD_PLAN")" \
           --argjson inputs "$(jq -c --arg unit "$RECORD_UNIT" '.productionInputs[$unit] // []' "$RECORD_PLAN")" \
           --argjson evidence "$(jq -Rc '[inputs]' "$RECORD_EVIDENCE")" \
-          '{sourceRevision:$revision,stackName:$stack,templateSha256:$template,configurationSha256:$configuration,environmentConfigurationSha256:$environmentConfiguration,templateUri:$templateUri,configurationUri:$configurationUri,evidenceUri:$evidenceUri,artifact:$artifact,inputs:$inputs,verification:{status:"passed",checkedAt:$checkedAt,evidence:$evidence}}' \
+          '{sourceRevision:$revision,stackName:$stack,templateSha256:$template,configurationSha256:$configuration,environmentConfigurationSha256:$environmentConfiguration,templateUri:$templateUri,configurationUri:$configurationUri,evidenceUri:$evidenceUri,artifact:$artifact,inputs:$inputs,buildInputs:$buildInputs,verification:{status:"passed",checkedAt:$checkedAt,evidence:$evidence}}' \
           > .turbo/ci/component.json
         npm run ci:record -- verified \
           --record .turbo/ci/current.json \

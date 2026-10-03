@@ -7,6 +7,12 @@ import JSZip from 'jszip';
 
 import { contentIdentity } from './deployment-record.js';
 
+export function assertPinnedNodeBaseImage(baseImage: string): void {
+  if (!/@sha256:[0-9a-f]{64}$/.test(baseImage)) {
+    throw new Error('The Node base image must be pinned by digest.');
+  }
+}
+
 /** Hash the complete component context and build arguments, excluding source labels. */
 export async function imageInputsIdentity(
   directory: string,
@@ -57,9 +63,7 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
   const directory = process.argv[2];
   if (!directory) throw new Error('An image context directory is required.');
   const baseImage = process.argv[3];
-  if (baseImage !== undefined && !/@sha256:[0-9a-f]{64}$/.test(baseImage)) {
-    throw new Error('The Node base image must be pinned by digest.');
-  }
+  if (baseImage !== undefined) assertPinnedNodeBaseImage(baseImage);
   console.log(
     await imageInputsIdentity(
       directory,

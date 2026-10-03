@@ -9,6 +9,7 @@ import {
   assertFreshRevision,
   finalizeDeploymentRecord,
   recordVerifiedComponent,
+  recordPendingComponent,
   readDeploymentRecord,
   type ComponentDeploymentRecord,
   type DeploymentRecord,
@@ -35,7 +36,7 @@ export async function recordDeployment(argv: readonly string[]): Promise<void> {
     await writeRecord(output, recordVerifiedComponent(record, unit, component));
     return;
   }
-  if (command === 'finalize') {
+  if (command === 'begin' || command === 'finalize') {
     const revision = required(values, '--revision');
     await assertFreshRevision(record, revision, async (deployed, candidate) => {
       try {
@@ -47,11 +48,22 @@ export async function recordDeployment(argv: readonly string[]): Promise<void> {
     });
     await writeRecord(
       output,
-      finalizeDeploymentRecord(record, revision, values.get('--at') ?? new Date().toISOString()),
+      command === 'begin'
+        ? recordPendingComponent(
+            record,
+            requiredUnit(values, '--unit'),
+            revision,
+            values.get('--at') ?? new Date().toISOString(),
+          )
+        : finalizeDeploymentRecord(
+            record,
+            revision,
+            values.get('--at') ?? new Date().toISOString(),
+          ),
     );
     return;
   }
-  throw new Error('Use record-deployment verified or record-deployment finalize.');
+  throw new Error('Use record-deployment begin, verified or finalize.');
 }
 
 async function readRequiredRecord(
