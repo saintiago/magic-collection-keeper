@@ -99,7 +99,8 @@ Stack selection and publication follow [CI/CD's input mapping](ci-cd.md#path-and
 
 First establish CDK management of the deployed templates while preserving stack/resource identities
 and settings. Then split resources into the target stacks as separately reviewed refactoring steps.
-Do not combine resource moves with application behavior changes. Existing exported values remain
+Do not combine resource moves with application behavior changes. Preserve replacement-sensitive
+resource properties when only their descriptive wording changes. Existing exported values remain
 available while deployed consumers and rollback versions depend on them.
 
 Inspect the actual deployed templates and change plans; repository templates alone do not establish

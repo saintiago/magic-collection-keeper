@@ -168,6 +168,14 @@ as source revision and production configuration: image digests, Lambda ZIP hashe
 maps. Environment-owned repository/bucket coordinates, object versions and generated browser
 `config.json` do not participate in the cross-environment content comparison.
 
+Catalog serving verification uses a supported request to its public query contract, with a synthetic
+authenticated account. The retained Recognition compatibility search accepts only its documented
+lookup terms; it is not a free-text Catalog query endpoint. Recognition and Catalog ingestion image
+publication emits a single `linux/amd64` manifest, without an attestation image index, so Lambda
+accepts Recognition images and promotion preserves either component's image digest. Read-only
+live probes may retry a temporary service-unavailable response while paused Aurora resumes;
+verification still requires a successful final response and fails on persistent or invalid requests.
+
 Catalog synchronization, owner-data migration and destructive cleanup are separately invoked
 operations. Neither automatic test deployment nor production promotion starts them implicitly.
 
