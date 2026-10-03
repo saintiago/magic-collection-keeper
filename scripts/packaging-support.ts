@@ -43,6 +43,7 @@ export const artifactLayout = {
   userCardsEntry: 'usercards/index.mjs',
   browserDirectory: 'browser',
   browserEntry: 'browser/app.js',
+  browserStyles: 'browser/app.css',
   browserPage: 'browser/index.html',
   browserSettings: 'browser/config.json',
   catalogIngestionEntry: 'catalog-ingestion/job.mjs',

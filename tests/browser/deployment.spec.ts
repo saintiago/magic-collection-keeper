@@ -105,9 +105,11 @@ async function serveArtifact(route: Route): Promise<void> {
         ? 'text/html; charset=utf-8'
         : extension === '.js'
           ? 'text/javascript; charset=utf-8'
-          : extension === '.json'
-            ? 'application/json'
-            : 'application/octet-stream',
+          : extension === '.css'
+            ? 'text/css; charset=utf-8'
+            : extension === '.json'
+              ? 'application/json'
+              : 'application/octet-stream',
     body,
   });
 }
@@ -128,10 +130,22 @@ test('the packaged browser artifact signs in on its page and reaches the API wit
 
   // The published page boots from the artifact's own config.json and offers the sign-in page.
   const signedOut = page.getByRole('main');
-  await signedOut.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(7, 19, 31)');
+  await expect(signedOut.getByRole('heading', { name: 'Sign in' })).toHaveCSS(
+    'font-family',
+    /Georgia/,
+  );
+  const signInButton = signedOut.getByRole('button', { name: 'Sign in' });
+  await signInButton.hover();
+  await expect(signInButton).toHaveCSS('border-color', 'rgb(119, 222, 237)');
+  await page.keyboard.press('Tab');
+  await expect(signInButton).toBeFocused();
+  await expect(signInButton).toHaveCSS('outline-color', 'rgb(119, 222, 237)');
+  await signInButton.click();
   await fillCredentials(page, 'correct horse battery staple');
 
   await expect(page.locator('header')).toContainText('Alice');
+  await expect(page.locator('header')).toHaveCSS('background-color', 'rgb(16, 35, 50)');
   // The signed-in page is the destination the visitor opened.
   await expect(page.getByRole('main').getByRole('heading', { name: 'Catalog' })).toBeVisible();
   expect(signIn).toEqual([
@@ -153,6 +167,42 @@ test('the packaged browser artifact signs in on its page and reaches the API wit
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.getByRole('main').getByRole('button', { name: 'Sign in' })).toBeVisible();
   await expect(page.locator('header')).not.toContainText('Alice');
+});
+
+test('the packaged sign-in and application presentation reflow with reduced motion', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 760 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await installArtifactRoutes(page, [], []);
+  await page.goto(`${artifactOrigin}/#/catalog`);
+
+  const signIn = page.getByRole('main').getByRole('button', { name: 'Sign in' });
+  await expect(signIn).toHaveCSS('min-height', '44px');
+  expect(
+    await signIn.evaluate(
+      (element) => Number.parseFloat(getComputedStyle(element).transitionDuration) * 1_000,
+    ),
+  ).toBe(0.01);
+  expect(
+    await page.evaluate(() => ({
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: document.documentElement.clientWidth,
+    })),
+  ).toEqual({ documentWidth: 360, viewportWidth: 360 });
+
+  await signIn.click();
+  const region = page.getByRole('main');
+  await expect(region.getByLabel('Username')).toHaveCSS('width', '328px');
+  await fillCredentials(page, 'correct horse battery staple');
+  await expect(page.locator('header')).toContainText('Alice');
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+  expect(
+    await page.evaluate(() => ({
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: document.documentElement.clientWidth,
+    })),
+  ).toEqual({ documentWidth: 360, viewportWidth: 360 });
 });
 
 test('the sign-in page reports a refusal and offers the journey again', async ({ page }) => {
@@ -291,8 +341,11 @@ test('disposing a browser deployment prevents pending sign-in from restoring cre
     bundle: true,
     format: 'esm',
     platform: 'browser',
+    outdir: path.join(workspace, 'pending-sign-in-bundle'),
     write: false,
   });
+  const script = bundle.outputFiles?.find((output) => output.path.endsWith('.js'));
+  if (script === undefined) throw new Error('esbuild produced no browser deployment script.');
   await page.route(`${artifactOrigin}/**`, (route) =>
     route.fulfill({
       contentType: 'text/html',
@@ -300,7 +353,7 @@ test('disposing a browser deployment prevents pending sign-in from restoring cre
     }),
   );
   await page.goto(artifactOrigin);
-  await page.addScriptTag({ content: bundle.outputFiles[0]!.text, type: 'module' });
+  await page.addScriptTag({ content: script.text, type: 'module' });
   await page.waitForFunction(
     () => typeof Reflect.get(globalThis, 'createTestDeployment') === 'function',
   );

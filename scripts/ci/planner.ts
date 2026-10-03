@@ -236,6 +236,9 @@ function bundleOptions(root: string, platform: 'browser' | 'node', entry: string
     target: platform === 'node' ? 'node24' : 'es2022',
     mainFields: platform === 'node' ? ['module', 'main'] : ['browser', 'module', 'main'],
     metafile: true,
+    // A browser entry may emit a stylesheet beside its script. The graph is kept in memory, but
+    // esbuild still needs an output directory to assign paths to multiple output files.
+    outdir: path.join(root, '.turbo', 'ci-input-graph'),
     write: false,
     logLevel: 'silent',
   };

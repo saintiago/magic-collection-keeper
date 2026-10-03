@@ -121,6 +121,8 @@ export function createNavigation(options: NavigationOptions): Navigation {
   if (candidates === null) {
     throw new TypeError('The UserInterface requires a document with a browsing context.');
   }
+  const hadPresentationClass = root.classList.contains('keeper-app');
+  root.classList.add('keeper-app');
   const browser: Window = candidates;
   const history = browser.history;
   const previousScrollRestoration = history.scrollRestoration;
@@ -263,6 +265,9 @@ export function createNavigation(options: NavigationOptions): Navigation {
     releaseDevice();
     history.scrollRestoration = previousScrollRestoration;
     root.replaceChildren();
+    if (!hadPresentationClass) {
+      root.classList.remove('keeper-app');
+    }
   }
 
   /**

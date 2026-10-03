@@ -288,6 +288,7 @@ describe('selective CI/CD planning', () => {
   it('maps Recognition preparation and packaging helpers to every artifact they affect', async () => {
     const mapping = await readStackInputMapping(mappingFile);
     const productionInputs = await collectProductionInputs(root);
+    expect(productionInputs.web).toContain('src/ui/presentation.css');
     const browserPreparation = planDeployments({
       baseRevision: '0'.repeat(40),
       sourceRevision: revision,
@@ -395,9 +396,11 @@ describe('selective CI/CD planning', () => {
     expect(gateway).toContain('Origin: $origin');
 
     const web = await readFile(path.join(root, '.github/workflows/deploy-web.yml'), 'utf8');
+    expect(web).toContain('*.css) content_type=text/css');
     expect(web).toContain('*.js|*.mjs) content_type=text/javascript');
     expect(web).toContain('head-object --bucket "$bucket"');
     expect(web).toContain('served-module.mjs');
+    expect(web).toContain('served-style.css');
   });
 });
 

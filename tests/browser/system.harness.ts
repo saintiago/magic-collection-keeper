@@ -191,7 +191,12 @@ export async function startSystemJourney(): Promise<SystemJourney> {
     }
     if (url.pathname === '/keeper.js') {
       outgoing.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
-      outgoing.end(await journeyBundle());
+      outgoing.end((await journeyBundle()).javascript);
+      return;
+    }
+    if (url.pathname === '/keeper.css') {
+      outgoing.writeHead(200, { 'content-type': 'text/css; charset=utf-8' });
+      outgoing.end((await journeyBundle()).css);
       return;
     }
     if (!url.pathname.startsWith('/api/')) {
@@ -296,6 +301,7 @@ function journeyPage(settings: PublicApplicationSettings): string {
   <head>
     <meta charset="utf-8" />
     <title>Keeper</title>
+    <link rel="stylesheet" href="/keeper.css" />
   </head>
   <body>
     <div id="keeper-root"></div>
@@ -306,13 +312,13 @@ function journeyPage(settings: PublicApplicationSettings): string {
 `;
 }
 
-let bundle: Promise<string> | null = null;
+let bundle: Promise<{ readonly javascript: string; readonly css: string }> | null = null;
 
 /**
  * Bundles the browser deployment of this build, as the packaged artifact bundles it: validated
  * public settings, the environment's sign-in, the device and the pages behind one shell.
  */
-function journeyBundle(): Promise<string> {
+function journeyBundle(): Promise<{ readonly javascript: string; readonly css: string }> {
   bundle ??= (async () => {
     const deploymentPath = path.join(repoRoot, 'src', 'ui', 'deployment.ts');
     const result = await build({
@@ -332,13 +338,15 @@ function journeyBundle(): Promise<string> {
       bundle: true,
       format: 'esm',
       platform: 'browser',
+      outdir: path.join(repoRoot, '.turbo', 'system-journey'),
       write: false,
     });
-    const [output] = result.outputFiles ?? [];
-    if (output === undefined) {
-      throw new Error('esbuild produced no browser deployment bundle.');
+    const javascript = result.outputFiles?.find((output) => output.path.endsWith('.js'));
+    const css = result.outputFiles?.find((output) => output.path.endsWith('.css'));
+    if (javascript === undefined || css === undefined) {
+      throw new Error('esbuild did not produce the browser deployment script and stylesheet.');
     }
-    return output.text;
+    return { javascript: javascript.text, css: css.text };
   })();
   return bundle;
 }
