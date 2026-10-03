@@ -62,7 +62,7 @@ describe('selective CI/CD planning', () => {
     const validationOnly = planDeployments({
       baseRevision: '0'.repeat(40),
       sourceRevision: revision,
-      changedPaths: ['docs/ci-cd.md', 'tests/integration/ci-cd.test.ts'],
+      changedPaths: ['docs/ci-cd.md', 'tests/integration/ci-cd.test.ts', 'src/styles.d.ts'],
       mapping,
       productionInputs,
     });
